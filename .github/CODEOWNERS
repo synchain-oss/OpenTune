@@ -1,0 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# CODEOWNERS（仅 fork 使用；上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR）。
+# 单一维护者。分支保护不要求 code owner 审批，所以本文件只起「自动请求 review」的作用；
+# 真正的机器强制在 fork-gate / branch-gate 与本机护栏。
+
+*       @DLsnows

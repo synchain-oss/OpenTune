@@ -51,7 +51,7 @@ jobs:
           # 先删再建：PR 可能自带 .ot-review/ 下的符号链接，> 会顺着链接写到工作区外。
           rm -rf .ot-review
           mkdir .ot-review
-          # GitHub 的 diff 接口超过 20,000 行时返回 406：降级为逐文件 patch（大文件的 patch 可能被省略），
+          # gh pr diff 任何失败（最常见的是 diff 超过 20,000 行时接口返回 406）都降级为逐文件 patch（大文件的 patch 可能被省略），
           # 并留下 DIFF_PARTIAL 标记，让 bot 在总结里写明 diff 不完整，而不是让 job 直接失败。
           if ! gh pr diff "$PR_NUMBER" -R "$REPO" > .ot-review/pr.diff; then
             echo "full diff unavailable; per-file patches only" > .ot-review/DIFF_PARTIAL
@@ -142,10 +142,11 @@ jobs:
           #   ③ diff 由上一步预先写成文件。黑名单要随 action 升级复查。
           # - 读取用 deny 规则收紧：工作区 .git/（tag 模式会把 GITHUB_TOKEN 写进 origin 的 remote URL，
           #   persist-credentials: false 管不到这一步）、/proc（进程环境变量）、/sys、/run、/tmp、/etc、
-          #   runner 的 _temp 与家目录下的点目录。
+          #   runner 安装目录（含 .credentials 与诊断日志）、runner 的 _temp 与家目录下的点目录。
+          #   路径黑名单要随 runner 镜像与 action 升级复查。
           # - 真正挡住推送的最后一道是 job 级 contents: read——不要改成 write。
           claude_args: |
             --model claude-opus-5-5
             --tools "Read,Glob,Grep"
             --allowedTools "mcp__github_inline_comment__create_inline_comment,Read,Glob,Grep"
-            --disallowedTools "Bash,Edit,MultiEdit,Write,NotebookEdit,WebFetch,WebSearch,Agent,Task,RemoteTrigger,CronCreate,CronDelete,CronList,PushNotification,SendMessage,ScheduleWakeup,Monitor,Workflow,Skill,Read(./.git/**),Read(//home/runner/work/**/.git/**),Read(//proc/**),Read(//sys/**),Read(//run/**),Read(//tmp/**),Read(//etc/**),Read(//home/runner/work/_temp/**),Read(//home/runner/.*/**)"
+            --disallowedTools "Bash,Edit,MultiEdit,Write,NotebookEdit,WebFetch,WebSearch,Agent,Task,RemoteTrigger,CronCreate,CronDelete,CronList,PushNotification,SendMessage,ScheduleWakeup,Monitor,Workflow,Skill,Read(./.git/**),Read(//home/runner/work/**/.git/**),Read(//proc/**),Read(//sys/**),Read(//run/**),Read(//tmp/**),Read(//etc/**),Read(//home/runner/work/_temp/**),Read(//home/runner/actions-runner/**),Read(//home/runner/.*/**)"

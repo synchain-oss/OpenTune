@@ -301,6 +301,27 @@ describe('layer', () => {
     assert.ok(parseLayerFromBody('## 层\n<!-- - [x] L0 -->\n- [ ] L2\n').error);
     assert.ok(parseLayerFromBody('').error);
   });
+
+  test('parseLayerFromBody: the section is the template heading, not any heading containing 层', () => {
+    const template = '## 层（单选；一张卡只属于一个层）\n\n- [x] L0 fork 专用\n- [ ] L2 读取与通道\n';
+    // unrelated headings with 层 in them come first and carry their own checked boxes
+    const body = `## 这个 PR 做了什么\n\n### 分层设计\n\n- [x] L2 示意\n\n### 层次说明\n\n- [x] L3 示意\n\n${template}\n## 变更类型\n- [x] L4 not a layer box\n`;
+    assert.deepEqual(parseLayerFromBody(body), { layer: 'L0' });
+    assert.deepEqual(parseLayerFromBody('### 层(单选)\n- [x] L2\n'), { layer: 'L2' });
+    assert.deepEqual(parseLayerFromBody('## 层\r\n- [x] L5\r\n'), { layer: 'L5' });
+  });
+
+  test('parseLayerFromBody: without the 层 heading the body is not scanned', () => {
+    const r = parseLayerFromBody('## 说明\n\n- [x] L0 fork 专用\n\n### 层次说明\n- [x] L2\n');
+    assert.match(r.error, /PR 正文缺少「层」小节/);
+    assert.equal(r.layer, undefined);
+  });
+
+  test('a PR body whose only 层-like heading is unrelated fails the layer check', async () => {
+    const head = repo.change({ '.github/x.yml': 'x\n' });
+    const r = await expectStatus('layer', head, 'FAIL', { layer: undefined, pr: { title: 't', body: '### 分层设计\n\n- [x] L0\n' } });
+    assert.match(r.detail, /缺少「层」小节/);
+  });
 });
 
 describe('spec-copy', () => {
@@ -309,10 +330,33 @@ describe('spec-copy', () => {
     await expectStatus('spec-copy', repo.change({ '.github/spec.lock': '{}\n' }), 'FAIL');
   });
 
-  test('spec-sync/* may change it; external PRs may not', async () => {
+  test('spec-sync/* may change it into any base; external PRs may not', async () => {
+    repo.ref('refs/remotes/origin/dev', repo.forkBase);
     const head = repo.change({ 'Tests/Control/spec/otcp/v1/methods.md': 'x\n', '.github/spec.lock': '{}\n' });
     await expectStatus('spec-copy', head, 'PASS', { headBranch: 'spec-sync/v1.0.0' });
+    await expectStatus('spec-copy', head, 'PASS', { headBranch: 'spec-sync/v1.0.0', base: 'origin/dev' });
     await expectStatus('spec-copy', head, 'FAIL', { headBranch: 'spec-sync/v1.0.0', external: true });
+  });
+
+  test('integration branches carry spec changes only into dev (upstream-pr/* only into review-base/*)', async () => {
+    for (const ref of ['dev', 'feature/other', 'review-base/7']) repo.ref(`refs/remotes/origin/${ref}`, repo.forkBase);
+    const head = repo.change({ 'Tests/Control/spec/otcp/v1/methods.md': 'y\n' });
+    const into = (headBranch, base, status, extra = {}) => expectStatus('spec-copy', head, status, { headBranch, base: `origin/${base}`, layer: 'L2', ...extra });
+    // the main line and a sync candidate into dev carry merged spec changes
+    await into('feature/control-api', 'dev', 'PASS');
+    await into('sync/20261101', 'dev', 'PASS');
+    // ... but a feature/** or sync/* PR into another base would bypass spec-sync/*
+    const r = await into('feature/foo', 'feature/control-api', 'FAIL');
+    assert.match(r.detail, /当前 feature\/foo → feature\/control-api/);
+    await into('feature/control-api', 'feature/other', 'FAIL');
+    await into('sync/20261101', 'feature/control-api', 'FAIL');
+    // upstream PRs only into their review base
+    await into('upstream-pr/7', 'review-base/7', 'PASS');
+    await into('upstream-pr/7', 'dev', 'FAIL');
+    // other branches never, whatever the base; an external PR never
+    await into('dev', 'review-base/7', 'FAIL');
+    await into('feat/F99-x', 'dev', 'FAIL');
+    await into('feature/control-api', 'dev', 'FAIL', { external: true });
   });
 
   test('changes elsewhere pass', async () => {

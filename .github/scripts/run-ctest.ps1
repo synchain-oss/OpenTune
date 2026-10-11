@@ -49,7 +49,8 @@ $results = foreach ($name in $tests) {
     $env:OPENTUNE_DATA_DIR = $dir
     $log = Join-Path $DataRoot "$name.log"
     $sw = [Diagnostics.Stopwatch]::StartNew()
-    & ctest --test-dir $BuildDir -C $Config -R "^$name`$" --output-on-failure --no-tests=error *> $log
+    # Escape the name: a '.' in a test name must not act as a regex wildcard in ctest -R.
+    & ctest --test-dir $BuildDir -C $Config -R "^$([regex]::Escape($name))`$" --output-on-failure --no-tests=error *> $log
     $code = $LASTEXITCODE
     $sw.Stop()
     Write-Host ('{0,-40} {1,-6} {2,6:N2} s' -f $name, $(if ($code -eq 0) { 'Passed' } else { 'FAILED' }), $sw.Elapsed.TotalSeconds)

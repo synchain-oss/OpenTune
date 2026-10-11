@@ -169,24 +169,30 @@ export function checkAttributionTexts(attr, commits, pr) {
 }
 
 /**
- * Layer from the PR body: the checked box in the "层" section (`- [x] L0 ...`). HTML comments are
- * ignored. Returns { layer } or { error }.
+ * Heading of the layer section in the PR template ("## 层（单选；…）"): the heading text must start
+ * with 层 followed by a bracket, a space or the end of the line, so headings such as "层次说明" or
+ * "分层设计" elsewhere in the body are not taken for it.
+ */
+export const LAYER_HEADING = /^#{1,6}\s*层(?:[（(]|\s|$)/;
+
+/**
+ * Layer from the PR body: the checked box in the "层" section (`- [x] L0 ...`), i.e. between the first
+ * LAYER_HEADING and the next heading. HTML comments are ignored; the rest of the body is never
+ * scanned. Returns { layer } or { error }.
  */
 export function parseLayerFromBody(body) {
   const text = String(body ?? '').replace(/<!--[\s\S]*?-->/g, '');
   const lines = text.split(/\r?\n/);
-  let start = lines.findIndex((l) => /^#{1,6}\s.*层/.test(l));
-  let end = lines.length;
-  if (start >= 0) {
-    const next = lines.findIndex((l, i) => i > start && /^#{1,6}\s/.test(l));
-    if (next > 0) end = next;
-  } else start = -1;
+  const start = lines.findIndex((l) => LAYER_HEADING.test(l));
+  if (start < 0) return { error: 'PR 正文缺少「层」小节（模板中的「## 层（单选；…）」标题）' };
+  const next = lines.findIndex((l, i) => i > start && /^#{1,6}\s/.test(l));
+  const end = next > 0 ? next : lines.length;
   const checked = [];
   for (const line of lines.slice(start + 1, end)) {
     const m = /^\s*[-*+]\s*\[([xX])\]\s*(L\d+)\b/.exec(line);
     if (m) checked.push(m[2].toUpperCase());
   }
-  if (!checked.length) return { error: 'PR 正文的「层」未勾选' };
+  if (!checked.length) return { error: 'PR 正文的「层」小节未勾选' };
   if (checked.length > 1) return { error: `PR 正文勾选了多个层（${checked.join('、')}），只能单选` };
   return { layer: checked[0] };
 }
@@ -566,7 +572,7 @@ export async function runChecks(opts = {}) {
       const rangeNote = `${range.baseRef}${range.note}…HEAD 共 ${range.files.length} 个文件`;
       const multi = { baseBranch: branchOfRef(range.baseRef), headBranch, external: Boolean(opts.external) };
       if (want('layer')) add(layerCheck(opts, range.files, rangeNote, isMultiLayerPr(multi) ? multi : null));
-      if (want('spec-copy')) add(specCheck(opts, headBranch, range.files, rangeNote));
+      if (want('spec-copy')) add(specCheck(opts, multi, range.files, rangeNote));
     }
   }
 
@@ -737,16 +743,30 @@ function layerCheck(opts, files, rangeNote, multi) {
     : result(id, titleOf(id), 'PASS', `层 ${layer}（来自${source}）；${rangeNote}均符合`);
 }
 
-const SPEC_WRITER_BRANCHES = ['spec-sync/*', 'feature/**', 'sync/*', 'upstream-pr/*', 'dev'];
+/**
+ * May this pull request change the spec copy and .github/spec.lock? Only spec-sync/* introduces spec
+ * changes, into any base. The manager's integration PRs only carry spec changes that were already
+ * merged through spec-sync/*: the main line (feature/**) or a sync candidate (sync/*) into dev, and
+ * an upstream PR (upstream-pr/*) into its review base (review-base/*). The same branches into any
+ * other base, every other branch (feat/* included) and any PR from another repository may not.
+ */
+export function mayChangeSpec({ headBranch, baseBranch, external }) {
+  if (external || !headBranch) return false;
+  if (matchesAny(headBranch, ['spec-sync/*'])) return true;
+  if (matchesAny(headBranch, ['feature/**', 'sync/*'])) return baseBranch === 'dev';
+  if (matchesAny(headBranch, ['upstream-pr/*'])) return Boolean(baseBranch) && matchesAny(baseBranch, ['review-base/*']);
+  return false;
+}
 
-function specCheck(opts, headBranch, files, rangeNote) {
+function specCheck(opts, { headBranch, baseBranch }, files, rangeNote) {
   const id = 'spec-copy';
   const touched = files.filter((f) => matchesAny(f.path, SPEC_PATTERNS)).map((f) => f.path);
   if (!touched.length) return result(id, titleOf(id), 'PASS', `${rangeNote}，未改动规范副本与 .github/spec.lock`);
-  const allowed = !opts.external && headBranch && matchesAny(headBranch, SPEC_WRITER_BRANCHES);
-  return allowed
-    ? result(id, titleOf(id), 'PASS', `分支 ${headBranch} 可以更新规范副本（${touched.length} 个文件）`)
-    : result(id, titleOf(id), 'FAIL', `只有 spec-sync/* 分支可以改规范副本与 .github/spec.lock（当前 ${opts.external ? '外部 PR' : headBranch ?? '未知分支'}）`, touched);
+  const external = Boolean(opts.external);
+  const pr = `${external ? '外部 PR ' : ''}${headBranch ?? '未知分支'} → ${baseBranch || '未知 base'}`;
+  return mayChangeSpec({ headBranch, baseBranch, external })
+    ? result(id, titleOf(id), 'PASS', `${pr} 可以更新规范副本（${touched.length} 个文件）`)
+    : result(id, titleOf(id), 'FAIL', `只有 spec-sync/* 可以改规范副本与 .github/spec.lock；feature/**、sync/* 只在合入 dev、upstream-pr/* 只在合入 review-base/* 时可以带入已合入的规范变更（当前 ${pr}）`, touched);
 }
 
 /** null when `uses:` is acceptable, otherwise the reason. */

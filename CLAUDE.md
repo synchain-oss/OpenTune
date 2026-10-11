@@ -63,7 +63,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - 实时（音频）路径上不加锁、不分配内存、不做 I/O。
 - 内容修改只在消息线程进行，唯一入口是 `ControlDispatcher::runOnMessageThread`。网络线程等待主线程时，绝不持有 `CompletionCallbackLease`。关闭合同见 `Source/Control/README.md`。
 - 测试：每个文件一个 `main()`，用 CMake `add_test` 注册，不用 gtest / Catch2。生命周期测试沿用上游 `Tests/LifecycleWatchdog.h`。超时不够时用命名常量。
-- 新文件首行写 SPDX：`// SPDX-License-Identifier: AGPL-3.0-or-later`（规范副本目录除外）。
+- 新文件首行写 SPDX：`// SPDX-License-Identifier: AGPL-3.0-or-later`（规范副本目录除外）。豁免与 fork-gate 的 `spdx` 检查一致：无法加注释头的文件（`.json`、`.txt`、`.sha256` 等数据文件；`CMakeLists.txt` 不豁免）、规范副本目录 `Tests/Control/spec/**`，以及与维护者正本逐字节一致的署名规则副本（`.github/scripts/check-attribution.mjs`、`attribution-patterns.txt`）。Markdown 用 HTML 注释形式写 SPDX。
 - `Source/Control/**`、`Tests/Control/**`、`ControlEditorBridge*` 的新文件用 clang-format 18.1.8 格式化（fork 专用配置）。
 - **绝不格式化上游文件。** 只写需要的那几行。不改上游文件的缩进、空白、include 顺序、换行符或编码；部分上游文件带 UTF-8 BOM，必须保留。fork-gate 会检查上游文件新增行的空白。
 - `Source/Control/**` 里每个公开类与函数都要有英文 doc 注释，写明职责、线程要求和错误语义。调用上游函数的地方，注明调用的是哪个函数、为什么调用。

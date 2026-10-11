@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 > 本文件是 AI 编码代理与贡献者在本 fork 内的常驻法条。它只存在于 fork（`dev` 及其派生分支），**永不进入上游 PR**。上游 `.gitignore` 忽略 `CLAUDE.md`，本文件以 `git add -f -- CLAUDE.md` 入库。与维护者书面指令冲突时以维护者为准。
 >
-> 文中提到的脚本与检查（`scripts/gates.ps1`、`check-ignored-delta.ps1`、`.github/scripts/attribution-patterns.txt`、fork-gate、branch-gate、`sync-dryrun.yml` 等）随后续 PR 陆续加入，路径以合入后为准；加入之前以本机护栏与人工检查代替。
+> fork 专用脚本一律放在 `.github/scripts/`（上游已经跟踪 `scripts/`）。本地 gates、`check-ignored-delta.ps1`、署名规则副本、fork-gate 与 branch-gate 已经就位；文中其余脚本与检查（`sync-dryrun.yml`、`build-windows.yml` 等）随后续 PR 陆续加入，路径以合入后为准，加入之前以本机护栏与人工检查代替。
 
 ## 0. 基本约定
 
@@ -136,20 +136,20 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 - 不修改 `.gitignore`。上游的忽略模式不锚定（如 `.*/`、`docs/`、`tools/`、`specs/`、`research/`、`spike/`、`Logs/`、`knowledge/`、`Python/`、`openspec/`、`build-*/`、`CLAUDE.md`、`AGENTS.md`），我们的新目录要避开这些名字。
 - 本 fork 需要 force-add 的文件有：`.github/` 下的每个新文件、根目录 `CLAUDE.md`、`docs/control-api.md`、`docs/control-api.en.md`。每个都用 `git add -f -- <精确路径>` 暂存。
-- 每次暂存后运行 `check-ignored-delta.ps1`：确认 force-add 的路径都在允许清单内，并且没有误加被忽略的构建产物、依赖或模型。
+- 每次暂存后运行 `pwsh .github/scripts/check-ignored-delta.ps1`：确认 force-add 的路径都在允许清单内，并且没有误加被忽略的构建产物、依赖或模型。
 
 ## 8. 本地 gates（开 PR 前必跑）
 
-> 以下脚本随后续 PR 加入，路径以合入后为准。
+> 脚本都在 `.github/scripts/`，`gates.ps1` 按下列顺序执行。真机启动与真 Standalone 契约测试随后续 PR 加入，加入之前 gates 对它们报 SKIP。下列之外还有两步：构建之后删除 POST_BUILD 生成的 `models\` 并断言它已不存在（原因见 §11）；署名与身份检查之后，用 gitleaks 扫描增量的提交与文件。`OPENTUNE_DATA_DIR` 钩子合入之前第 4 项无法生效，gates 用「测试数据隔离」一行如实报告 ctest 是否写入了真实用户目录。
 
-- 一键运行 `pwsh scripts/gates.ps1`（在 lane 内）。它输出带 SHA 的 PASS/FAIL/SKIP 汇总表，原样贴进 PR。依次执行：
+- 一键运行 `pwsh .github/scripts/gates.ps1 -Layer <层>`（在 lane 内；只改文档或脚本时加 `-SkipBuild`）。它输出带 SHA 的 PASS/FAIL/SKIP 汇总表，原样贴进 PR。依次执行：
   1. LFS 设置检查：`lfs.fetchexclude=*`，模型文件仍是未 smudge 的指针。
-  2. configure / build / ctest / 真机启动，全部经 `with-build-slot.ps1`：全机一个构建槽，命名互斥锁，空闲内存检查，显式 `--parallel 8`。
+  2. configure / build / ctest / 真机启动，全部经 `.github/scripts/with-build-slot.ps1`：全机一个构建槽，命名互斥锁，空闲内存检查，显式 `--parallel 8`。
   3. `ctest -R Control`，再加上游已有测试，用 `-E ARALifecycleContractTests` 排除一项。该测试依赖 ARA_DRAFT 的 `persistentID`，在锁定的 ARA SDK 2.3.0 下编不过，属于上游问题。
   4. 所有测试都使用临时 `OPENTUNE_DATA_DIR`，因为上游 ctest 会写真实的 `%APPDATA%\OpenTune`。
   5. 真 Standalone 测试环境就绪后：改到 Dispatcher / Jobs / Ops / Edit / bridge 或 `spec.lock` 的 PR，还要跑真 Standalone 的契约与场景测试。这一步持 E2E 互斥锁，并先快照、再恢复 `OpenTune.settings` 与 AppPreferences。
-  6. 署名与身份检查。
-  7. `check-ignored-delta.ps1`。
+  6. 署名与身份检查（`.github/scripts/fork-checks.mjs`，与 fork-gate 同一份实现）。
+  7. `.github/scripts/check-ignored-delta.ps1`。
 - **构建**：JUCE 9.0.3（8.0.15 为已验证的备选），Ninja Multi-Config。lane、gates 与 CI 测试一律用 RelWithDebInfo。Release（LTCG）只用于出包与 E2E，不在 Release 下构建测试。依赖由 `bootstrap-deps.ps1` 按 `deps.lock.json` 拉取并逐个校验 sha256，绝不下载模型。
 - **CI 分档**：子 PR（base=`feature/**`）只跑轻量门禁，即 fork-gate；改到原生代码时才跑 build-windows。所以本地 gates 是第一道编译门，不要指望 CI 替你发现编译错误。PR→`dev` 跑完整套件。
 

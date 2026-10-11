@@ -1,0 +1,133 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: Fork Gate
+
+# 轻量门禁（ubuntu，秒级到一两分钟）：只检查「我们的增量」——相对锁定的上游基点
+# （upstream-mirror + upstream/* tag）我们新增的提交与文件。检查实现都在 .github/scripts/，
+# 与本地 gates（.github/scripts/gates.ps1）共用同一份代码。
+# 聚合 job `fork-gate` 将来是 dev 的必需检查：不加 paths 过滤、不改名。
+# 外部 fork 发来的 PR 同样运行（无 secrets、只读 token）；任何 workflow 一律不用 pull_request 的 target 变体
+# （CLAUDE.md §0 第 4 条）。
+on:
+  pull_request:
+    branches: [dev, 'feature/**', 'review-base/**']
+    # edited：PR 正文里的「层」勾选与署名检查要随正文更新重跑。
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  push:
+    branches: [dev]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 门禁脚本自身的单测：每项检查都有「植入违规 → FAIL，去掉 → PASS」用例（在 /tmp 的临时仓库里）。
+  self-test:
+    name: self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # lfs: false —— 绝不下载模型权重（CLAUDE.md §11）。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Fetch pinned tools (sha256 verified)
+        id: tools
+        run: |
+          gl=$(node .github/scripts/fetch-tool.mjs gitleaks --dest "$RUNNER_TEMP/ot-tools")
+          echo "gitleaks=$gl" >> "$GITHUB_OUTPUT"
+          if cf=$(node .github/scripts/fetch-tool.mjs clang-format --dest "$RUNNER_TEMP/ot-tools"); then
+            echo "clang_format=$cf" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::clang-format 18.1.8 could not be installed; its real-tool test is skipped"
+          fi
+      - name: Unit tests of the gate scripts
+        env:
+          GITLEAKS: ${{ steps.tools.outputs.gitleaks }}
+          CLANG_FORMAT: ${{ steps.tools.outputs.clang_format }}
+        run: node --test ".github/scripts/test/*.test.mjs"
+
+  delta-checks:
+    name: delta-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: false
+          persist-credentials: false
+      # 增量的定义依赖锁定的上游基点：显式取 upstream-mirror 分支与 upstream/* tag。
+      - name: Fetch the upstream mirror and snapshot tags
+        run: >-
+          git fetch --no-tags --force origin
+          '+refs/heads/upstream-mirror:refs/remotes/origin/upstream-mirror'
+          '+refs/tags/upstream/*:refs/tags/upstream/*'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Fetch pinned tools (sha256 verified)
+        id: tools
+        run: |
+          gl=$(node .github/scripts/fetch-tool.mjs gitleaks --dest "$RUNNER_TEMP/ot-tools")
+          echo "gitleaks=$gl" >> "$GITHUB_OUTPUT"
+          if cf=$(node .github/scripts/fetch-tool.mjs clang-format --dest "$RUNNER_TEMP/ot-tools"); then
+            echo "clang_format=$cf" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::clang-format 18.1.8 could not be installed; fork-checks fails if C++ files need checking"
+          fi
+      # PR 标题、正文、分支名都是不可信文本：只经 env 传给脚本，脚本只拿它们与固定规则比对，绝不执行。
+      - name: fork-checks (DCO, identity, attribution, path guards, layer, SPDX, whitespace, clang-format)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref || github.ref_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          CLANG_FORMAT: ${{ steps.tools.outputs.clang_format }}
+        run: |
+          args=(--ci --require-tools --head-branch "$HEAD_REF")
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            args+=(--pr --base "origin/$BASE_REF")
+            if [ "$HEAD_REPO" != "$THIS_REPO" ]; then
+              args+=(--external)
+            fi
+          fi
+          node .github/scripts/fork-checks.mjs "${args[@]}"
+      - name: gitleaks (delta commits and delta files)
+        if: ${{ !cancelled() }}
+        env:
+          GITLEAKS: ${{ steps.tools.outputs.gitleaks }}
+        run: node .github/scripts/gitleaks-delta.mjs --ci --gitleaks "$GITLEAKS"
+
+  # 唯一的必需检查上下文：任一依赖失败、取消或被跳过即失败。
+  fork-gate:
+    name: fork-gate
+    if: always()
+    needs: [self-test, delta-checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: All fork-gate jobs must succeed
+        env:
+          SELF_TEST: ${{ needs.self-test.result }}
+          DELTA_CHECKS: ${{ needs.delta-checks.result }}
+        run: |
+          echo "self-test: $SELF_TEST"
+          echo "delta-checks: $DELTA_CHECKS"
+          if [ "$SELF_TEST" != "success" ] || [ "$DELTA_CHECKS" != "success" ]; then
+            echo "::error::fork-gate failed (self-test: $SELF_TEST, delta-checks: $DELTA_CHECKS)"
+            exit 1
+          fi

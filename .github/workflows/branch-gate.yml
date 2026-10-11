@@ -1,0 +1,54 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: Branch Gate
+
+# 进入 dev 的 PR（将来是 dev 的必需检查）：
+#   本仓  feature/* | feat/* | spec-sync/* | sync/*  ->  dev
+#   外部 fork 的 PR：允许，但不得使用受保护的分支名（dev、feature/*、feat/*、spec-sync/*、sync/* 等）
+#   DCO：PR 的每个非合并提交都有 Signed-off-by；本仓 PR 另要求提交身份在白名单内
+#   PR 标题、正文与提交信息无 AI 署名
+# 子 PR（base = feature/*）不受本门禁约束，由 fork-gate 把关。检查实现在 .github/scripts/branch-gate.mjs。
+on:
+  pull_request:
+    branches: [dev]
+    # edited：改 PR 标题/正文后重新做署名检查。
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: branch-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  branch-gate:
+    name: branch-gate # 必需检查上下文：永不改名，永不加 if:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # lfs: false —— 绝不下载模型权重（CLAUDE.md §11）。fetch-depth: 0 以便列出 PR 的全部提交。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # PR 标题、正文、分支名都是不可信文本：只经 env 传给脚本，脚本只拿它们与固定规则比对，绝不执行。
+      - name: Branch naming, DCO, identity and attribution
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: >-
+          node .github/scripts/branch-gate.mjs --ci --pr
+          --base "$BASE_REF" --head-branch "$HEAD_REF" --head "$HEAD_SHA"
+          --head-repo "$HEAD_REPO" --this-repo "$THIS_REPO" --base-ref "origin/$BASE_REF"

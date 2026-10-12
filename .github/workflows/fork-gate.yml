@@ -1,0 +1,206 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: Fork Gate
+
+# 轻量门禁（ubuntu，秒级到一两分钟）：只检查「我们的增量」——相对锁定的上游基点
+# （upstream-mirror + upstream/* tag）我们新增的提交与文件。检查实现都在 .github/scripts/，
+# 与本地 gates（.github/scripts/gates.ps1）共用同一份代码。
+# 门禁不由 PR 自己的脚本判自己：delta-checks 用 base 分支上的 .github/scripts（含署名规则副本、
+# attribution.sha256 与 tools.lock.json）检查 PR 的 HEAD；base 上还没有 .github/scripts 时（首次
+# 引入门禁）回退到 PR 自带的脚本（自举），并在 job summary 里写明。PR 自带的脚本由 self-test 单测。
+# 聚合 job `fork-gate` 将来是 dev 的必需检查：不加 paths 过滤、不改名。
+# 外部 fork 发来的 PR 同样运行（无 secrets、只读 token）；任何 workflow 一律不用 pull_request 的 target 变体
+# （CLAUDE.md §0 第 4 条）。
+on:
+  pull_request:
+    branches: [dev, 'feature/**', 'review-base/**']
+    # edited：PR 正文里的「层」勾选与署名检查要随正文更新重跑。
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+  # 主支线（feature/**）上的 squash 合并提交在合入当下就检查：它进入之后每个子 PR 的累计增量，
+  # 缺 Signed-off-by 或身份不对的合并提交会让之后所有子 PR 的 dco-identity 失败。
+  push:
+    branches: [dev, 'feature/**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-gate-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # PR 自带的门禁脚本的单测：每项检查都有「植入违规 → FAIL，去掉 → PASS」用例（在 /tmp 的临时仓库里）。
+  # delta-checks 用的是 base 上的脚本，所以改动门禁脚本的 PR 靠这里证明新脚本可用。
+  self-test:
+    name: self-test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # lfs: false —— 绝不下载模型权重（CLAUDE.md §11）。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Fetch pinned tools (sha256 verified)
+        id: tools
+        run: |
+          gl=$(node .github/scripts/fetch-tool.mjs gitleaks --dest "$RUNNER_TEMP/ot-tools")
+          echo "gitleaks=$gl" >> "$GITHUB_OUTPUT"
+          if cf=$(node .github/scripts/fetch-tool.mjs clang-format --dest "$RUNNER_TEMP/ot-tools"); then
+            echo "clang_format=$cf" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::clang-format 18.1.8 could not be installed; its real-tool test is skipped"
+          fi
+      - name: Unit tests of the gate scripts
+        env:
+          GITLEAKS: ${{ steps.tools.outputs.gitleaks }}
+          CLANG_FORMAT: ${{ steps.tools.outputs.clang_format }}
+        run: node --test ".github/scripts/test/*.test.mjs"
+
+  delta-checks:
+    name: delta-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: false
+          persist-credentials: false
+      # 增量的定义依赖锁定的上游基点：显式取 upstream-mirror 分支与 upstream/* tag。
+      - name: Fetch the upstream mirror and snapshot tags
+        run: >-
+          git fetch --no-tags --force origin
+          '+refs/heads/upstream-mirror:refs/remotes/origin/upstream-mirror'
+          '+refs/tags/upstream/*:refs/tags/upstream/*'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # 门禁脚本取自 base（origin/$BASE_REF），解到 $RUNNER_TEMP/gate，再对 PR 的 HEAD（工作区）运行：
+      # 一个 PR 改不了检查它自己的规则、署名规则副本与工具的 sha256。
+      #   - base 上还没有 .github/scripts（首次引入门禁）：用 PR 自带的脚本（自举），job summary 里醒目写明。
+      #   - push（dev、feature/**）：被推送的提交已经过 PR 门禁合入受保护分支，用它自身的脚本。
+      #   - base 上有 .github/scripts 却缺少本 job 调用的入口脚本：失败。新增入口脚本或改变脚本的命令行
+      #     参数要分两步：先合入脚本，再改 workflow 的调用。
+      - name: Select the gate scripts (base branch; bootstrap from the PR when the base has none)
+        id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          gate="$RUNNER_TEMP/gate"
+          rm -rf "$gate"
+          mkdir -p "$gate"
+          bootstrap=false
+          if [ "$EVENT_NAME" != "pull_request" ]; then
+            src=HEAD
+            note="push 事件：被推送的提交（${GITHUB_SHA::7}）已经过 PR 门禁合入受保护分支，使用它自身的门禁脚本。"
+          else
+            base="origin/$BASE_REF"
+            if ! git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
+              echo "::error::无法解析 $base，取不到 base 上的门禁脚本"
+              exit 1
+            fi
+            if [ -n "$(git ls-tree --name-only "$base" -- .github/scripts)" ]; then
+              src="$base"
+              note="门禁脚本取自 base（$base @ $(git rev-parse --short "$base")）；PR 自带的脚本只由 self-test 单测。"
+              if ! git diff --quiet "$base" HEAD -- .github/scripts; then
+                note="$note 本 PR 修改了 .github/scripts：本次仍按 base 上的门禁检查，新脚本合入后才生效。"
+              fi
+            else
+              src=HEAD
+              bootstrap=true
+              note="$base 上还没有 .github/scripts，本次用 PR 自带的门禁脚本检查 PR 自己。"
+            fi
+          fi
+          for f in fork-checks.mjs gitleaks-delta.mjs fetch-tool.mjs; do
+            if ! git cat-file -e "$src:.github/scripts/$f" 2> /dev/null; then
+              echo "::error::门禁脚本 $src:.github/scripts/$f 不存在。新增的入口脚本要先合入 base，再在 workflow 里调用"
+              exit 1
+            fi
+          done
+          git archive --format=tar "$src" .github/scripts | tar -x -C "$gate"
+          echo "dir=$gate/.github/scripts" >> "$GITHUB_OUTPUT"
+          {
+            echo "### 门禁脚本来源"
+            echo
+            if [ "$bootstrap" = true ]; then
+              echo "> [!WARNING]"
+              echo "> **base 上无门禁脚本，本次用 PR 自带脚本（自举）**"
+              echo ">"
+              echo "> $note"
+            else
+              echo "$note"
+            fi
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$bootstrap" = true ]; then
+            echo "::warning title=fork-gate 自举::base 上无门禁脚本，本次用 PR 自带脚本（自举）"
+          fi
+          echo "$note"
+      - name: Fetch pinned tools (sha256 verified)
+        id: tools
+        env:
+          GATE: ${{ steps.gate.outputs.dir }}
+        run: |
+          gl=$(node "$GATE/fetch-tool.mjs" gitleaks --dest "$RUNNER_TEMP/ot-tools")
+          echo "gitleaks=$gl" >> "$GITHUB_OUTPUT"
+          if cf=$(node "$GATE/fetch-tool.mjs" clang-format --dest "$RUNNER_TEMP/ot-tools"); then
+            echo "clang_format=$cf" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::clang-format 18.1.8 could not be installed; fork-checks fails if C++ files need checking"
+          fi
+      # PR 标题、正文、分支名都是不可信文本：只经 env 传给脚本，脚本只拿它们与固定规则比对，绝不执行。
+      - name: fork-checks (DCO, identity, attribution, path guards, layer, SPDX, whitespace, clang-format)
+        env:
+          GATE: ${{ steps.gate.outputs.dir }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref || github.ref_name }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          CLANG_FORMAT: ${{ steps.tools.outputs.clang_format }}
+        run: |
+          args=(--ci --require-tools --head-branch "$HEAD_REF")
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            args+=(--pr --base "origin/$BASE_REF")
+            if [ "$HEAD_REPO" != "$THIS_REPO" ]; then
+              args+=(--external)
+            fi
+          fi
+          node "$GATE/fork-checks.mjs" "${args[@]}"
+      - name: gitleaks (delta commits and delta files)
+        if: ${{ !cancelled() && steps.gate.outputs.dir != '' }}
+        env:
+          GATE: ${{ steps.gate.outputs.dir }}
+          GITLEAKS: ${{ steps.tools.outputs.gitleaks }}
+        run: node "$GATE/gitleaks-delta.mjs" --ci --gitleaks "$GITLEAKS"
+
+  # 唯一的必需检查上下文：任一依赖失败、取消或被跳过即失败。
+  fork-gate:
+    name: fork-gate
+    if: always()
+    needs: [self-test, delta-checks]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: All fork-gate jobs must succeed
+        env:
+          SELF_TEST: ${{ needs.self-test.result }}
+          DELTA_CHECKS: ${{ needs.delta-checks.result }}
+        run: |
+          echo "self-test: $SELF_TEST"
+          echo "delta-checks: $DELTA_CHECKS"
+          if [ "$SELF_TEST" != "success" ] || [ "$DELTA_CHECKS" != "success" ]; then
+            echo "::error::fork-gate failed (self-test: $SELF_TEST, delta-checks: $DELTA_CHECKS)"
+            exit 1
+          fi

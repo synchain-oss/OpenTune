@@ -5,7 +5,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 synchain-oss/OpenTune（fork）PR 模板。子 PR 的 base 必须是 feature/control-api（或其他 feature/*）。
 标题与正文用中文；正文与提交信息不得含任何 AI 署名行（规则见 .github/scripts/attribution-patterns.txt）。
 规则全文见根目录 CLAUDE.md。
-文中的 gates 脚本、check-ignored-delta.ps1、attribution-patterns.txt 与 CI 检查随后续 PR 加入；加入之前对应项按人工检查勾选，并在汇总表里写明 SKIP 原因。
+gates 脚本、check-ignored-delta.ps1 与署名规则都在 .github/scripts/；尚未加入的检查（如真 Standalone 契约测试）在汇总表里写明 SKIP 原因。
 -->
 
 ## 这个 PR 做了什么
@@ -27,7 +27,7 @@ synchain-oss/OpenTune（fork）PR 模板。子 PR 的 base 必须是 feature/con
 - [ ] L7 高级曲线、EQ、包络、音符拓扑（波次 C，暂不接受）
 - [ ] L8 工程、首选项、音频设备、应用
 
-<!-- 不单独设 L1：接入钩子随第一个需要它的层提交。 -->
+<!-- 不单独设 L1：接入钩子随第一个需要它的层提交。集成 PR（feature/* 或 sync/* → dev）与 spec-sync/* PR 不属于单一层，不勾选；fork-gate 对它们跳过层的单选，只做累计改动范围检查。 -->
 
 ## 变更类型
 
@@ -37,17 +37,17 @@ synchain-oss/OpenTune（fork）PR 模板。子 PR 的 base 必须是 feature/con
 
 <!-- 没有就写「无」。有则逐行列出：文件 → 钩子（见 CLAUDE.md §1 表）→ 新增/修改行数 -->
 
-## 本地 gates（`pwsh scripts/gates.ps1`，逐项勾选并贴汇总表）
+## 本地 gates（`pwsh .github/scripts/gates.ps1 -Layer <层>`，逐项勾选并贴汇总表）
 
 - [ ] LFS 设置检查通过（`lfs.fetchexclude=*`，模型为未 smudge 的指针）
-- [ ] configure + build（RelWithDebInfo，经 `with-build-slot.ps1`）成功
+- [ ] configure + build（RelWithDebInfo，经 `.github/scripts/with-build-slot.ps1`）成功
 - [ ] `ctest -R Control` 全绿
 - [ ] 上游已有测试全绿（`-E ARALifecycleContractTests`，原因见 CLAUDE.md §8）
 - [ ] 所有测试使用临时 `OPENTUNE_DATA_DIR`，没有写真实用户目录
 - [ ] 改到 Dispatcher / Jobs / Ops / Edit / bridge 或 `spec.lock`：已跑真 Standalone 契约与场景（真 Standalone 测试环境就绪后必填；不涉及请写「不涉及」）
 - [ ] 新文件 clang-format 18.1.8 无差异，且都有 SPDX 头
 - [ ] 署名与身份检查通过
-- [ ] `check-ignored-delta.ps1` 通过（被忽略路径中的新增都是显式 `git add -f -- <精确路径>`）
+- [ ] `.github/scripts/check-ignored-delta.ps1` 通过（被忽略路径中的新增都是显式 `git add -f -- <精确路径>`）
 
 ```text
 （在此粘贴 gates 输出的 PASS/FAIL/SKIP 汇总表，含 SHA）

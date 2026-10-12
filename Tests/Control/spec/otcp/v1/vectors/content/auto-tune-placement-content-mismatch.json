@@ -1,0 +1,68 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/auto-tune-placement-content-mismatch",
+  "type": "request",
+  "description": "AUTO in reference mode names the content of one clip and the placement of another clip. That placement has a reference binding, but it does not show the named content: INVALID_ARGUMENT(placement_content_mismatch), and nothing changes.",
+  "capability": "edit.v1",
+  "extraCapabilities": ["reference.v1"],
+  "since": "1.0",
+  "method": "content.autoTune",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ]
+      },
+      {
+        "bind": "other",
+        "trackId": 2,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "referenceClip": "ref"
+      },
+      {
+        "bind": "ref",
+        "trackId": 1,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.autoTune",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "mode": "reference",
+      "expectedRevision": { "$ref": "clip.revision" },
+      "placementId": { "$ref": "other.placementId" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32602,
+      "message": "INVALID_ARGUMENT",
+      "data": {
+        "kind": "INVALID_ARGUMENT",
+        "reason": "placement_content_mismatch",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

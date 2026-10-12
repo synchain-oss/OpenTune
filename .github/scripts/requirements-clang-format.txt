@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# clang-format 18.1.8 for the fork gates, installed by fetch-tool.mjs with
+#   pip install --require-hashes --only-binary :all: --no-deps --target <dir> -r <this file>
+# Hashes are the PyPI sha256 digests of the platform wheels (linux x86_64/aarch64, macOS, Windows).
+clang-format==18.1.8 \
+    --hash=sha256:2de122b8aa78ba49e326f974131caab2c79f4ae877c227cd4e3e5d82a98d21e5 \
+    --hash=sha256:d2db077523bd4517b41fa6adb2e5ee63fc91bc7b641dc6e28b959fa8050cf41b \
+    --hash=sha256:7c41e2521b7e6ba706cc5d1c3e95eed9a41c1522244e23624e1518991f02a604 \
+    --hash=sha256:4be2b5d983a0cc1ef90a224b599f5928d82ce31154ba69accfdcb670aea62f40 \
+    --hash=sha256:6ca6768270e291495174faa6d8c082aa0181722b29ef8e36558b397069fa4a2d

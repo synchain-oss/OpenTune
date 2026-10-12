@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Fork-only. The attribution rules are verbatim copies of the maintainer's canonical files and are
+# verified by sha256 before use, so they must be checked out byte for byte (LF) on every platform,
+# including Windows clones with core.autocrlf=true.
+scripts/check-attribution.mjs     -text
+scripts/attribution-patterns.txt  -text
+scripts/attribution.sha256        -text

@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/prefs.get.schema.json",
+  "title": "prefs.get",
+  "description": "Returns OpenTune's preferences: the processing settings, whether the first-run onboarding was shown, the UI language (read-only through this protocol) and the recent projects. Preferences are user-global: they belong to the OpenTune installation, not to the project, so the result carries no asOf. processing members that cannot be determined are null and named in processing.nullReasons. Recent project paths are untrusted data (PROTOCOL.md section 20.2).",
+  "x-otcp": {
+    "method": "prefs.get",
+    "layer": "L2",
+    "capability": "read.v1",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "plain",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "result": {
+      "type": "object",
+      "required": [
+        "processing",
+        "onboardingShown",
+        "language",
+        "recentProjects"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "processing": {
+          "type": "object",
+          "required": [
+            "tuningHz",
+            "editingScheme",
+            "hybridMode",
+            "vocoderWeight",
+            "f0Model",
+            "renderingPriority",
+            "experimentalFeatures",
+            "referenceAlignMode"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "tuningHz": { "type": "number", "minimum": 400, "maximum": 500 },
+            "editingScheme": {
+              "$ref": "../schemas/common.schema.json#/$defs/editingScheme"
+            },
+            "hybridMode": { "type": "boolean" },
+            "vocoderWeight": {
+              "anyOf": [
+                { "type": "string", "maxLength": 64 },
+                { "type": "null" }
+              ]
+            },
+            "f0Model": {
+              "anyOf": [
+                { "type": "string", "maxLength": 64 },
+                { "type": "null" }
+              ]
+            },
+            "renderingPriority": {
+              "anyOf": [
+                { "type": "string", "maxLength": 64 },
+                { "type": "null" }
+              ]
+            },
+            "experimentalFeatures": { "type": "boolean" },
+            "referenceAlignMode": {
+              "anyOf": [
+                { "type": "string", "maxLength": 64 },
+                { "type": "null" }
+              ]
+            },
+            "nullReasons": {
+              "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
+            }
+          }
+        },
+        "onboardingShown": { "type": "boolean" },
+        "language": { "type": "string", "maxLength": 32 },
+        "recentProjects": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["path", "exists"],
+            "additionalProperties": false,
+            "properties": {
+              "path": { "$ref": "../schemas/common.schema.json#/$defs/path" },
+              "exists": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    }
+  }
+}

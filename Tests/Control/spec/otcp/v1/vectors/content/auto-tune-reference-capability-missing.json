@@ -1,0 +1,61 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/auto-tune-reference-capability-missing",
+  "type": "request",
+  "description": "Without the capability reference.v1, AUTO in reference mode gets UNSUPPORTED(capability_missing); the other modes of content.autoTune need only edit.v1.",
+  "capability": "edit.v1",
+  "since": "1.0",
+  "method": "content.autoTune",
+  "session": "authenticated",
+  "given": {
+    "withoutCapabilities": ["reference.v1"],
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ],
+        "referenceClip": "ref"
+      },
+      {
+        "bind": "ref",
+        "trackId": 1,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.autoTune",
+    "params": {
+      "contentId": { "$ref": "clip.contentId" },
+      "mode": "reference",
+      "expectedRevision": { "$ref": "clip.revision" },
+      "placementId": { "$ref": "clip.placementId" }
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "error": {
+      "code": -32000,
+      "message": "UNSUPPORTED",
+      "data": {
+        "kind": "UNSUPPORTED",
+        "reason": "capability_missing",
+        "retryable": false,
+        "detail": { "$any": "string" },
+        "executed": false
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

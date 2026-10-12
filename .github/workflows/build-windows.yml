@@ -1,0 +1,342 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: Build Windows
+
+# Windows 编译与测试：windows-2022，Ninja Multi-Config + RelWithDebInfo，sccache，依赖由
+# .github/scripts/bootstrap-deps.ps1 按 deps.lock.json 拉取并逐个校验 sha256（绝不下载模型）。
+# 编译什么由 detect-native 决定（实现见 .github/scripts/detect-native.mjs）：
+#   PR → dev                完整编译与测试（控制接口选项 ON）
+#   PR → feature/**         只有 PR 改到原生代码（Source/**、Tests/**、cmake/**、CMakeLists.txt）或构建
+#                           流水线本身才编译；否则不编译，聚合 job 给出一个跳过的成功结果
+#   PR → review-base/**     选项 ON 与 OFF 各编译、测试一次
+#   push → dev、feature/control-api；workflow_dispatch；workflow_call    完整编译与测试
+# 聚合 job `build-windows` 是稳定的检查上下文（将来设为 dev 的必需检查）：不加 paths 过滤、不改名。
+# 外部 fork 发来的 PR 同样运行（只读 token、无 secrets）；任何 workflow 一律不用 pull_request 的 target 变体
+# （CLAUDE.md §0 第 4 条）。
+on:
+  pull_request:
+    branches: [dev, 'feature/**', 'review-base/**']
+  push:
+    branches: [dev, feature/control-api]
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-native:
+    name: detect-native
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      build: ${{ steps.decide.outputs.build }}
+      variants: ${{ steps.decide.outputs.variants }}
+      reason: ${{ steps.decide.outputs.reason }}
+    steps:
+      # lfs: false —— 绝不下载模型权重（CLAUDE.md §11）。fetch-depth: 0 以便计算 PR 的改动范围。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: Decide what to build
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/detect-native.mjs --event "$EVENT_NAME" --base "$BASE_REF" --github-output "$GITHUB_OUTPUT"
+
+  compile-test:
+    name: compile-test (control-api ${{ matrix.control-api }})
+    needs: detect-native
+    if: needs.detect-native.outputs.build == 'true'
+    runs-on: windows-2022
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        control-api: ${{ fromJSON(needs.detect-native.outputs.variants) }}
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      GIT_LFS_SKIP_SMUDGE: '1'
+      OT_CONFIG: RelWithDebInfo
+      SCCACHE_CACHE_SIZE: 2G
+      SCCACHE_IDLE_TIMEOUT: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # 工作目录都在 RUNNER_TEMP 下（job 级 env 里取不到 runner 上下文，所以在这里写入 GITHUB_ENV）。
+      - name: Set work paths
+        run: |
+          @(
+            "OT_DEPS=$env:RUNNER_TEMP\ot-deps"
+            "OT_BUILD=$env:RUNNER_TEMP\ot-build"
+            "OT_TEST_DATA=$env:RUNNER_TEMP\ot-test-data"
+            "OT_STAGE=$env:RUNNER_TEMP\ot-stage"
+            "SCCACHE_DIR=$env:RUNNER_TEMP\sccache"
+          ) >> $env:GITHUB_ENV
+
+      # 依赖缓存只放解压后的依赖目录（下载的归档放在缓存目录之外）；key 含 deps.lock.json 的 sha256。
+      # 命中缓存时 bootstrap-deps 仍核对每个依赖的戳记（固定 commit / 归档 sha256）与校验路径。
+      - name: Restore dependency cache
+        id: deps-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.OT_DEPS }}
+          key: ot-deps-windows-${{ hashFiles('.github/scripts/deps.lock.json') }}
+      - name: Bootstrap dependencies (sha256 verified) and link them into the tree
+        run: |
+          pwsh -NoProfile -File .github/scripts/bootstrap-deps.ps1 -DepsRoot $env:OT_DEPS `
+            -DownloadsDir "$env:RUNNER_TEMP\ot-deps-downloads" -LinkInto $env:GITHUB_WORKSPACE
+          if ($LASTEXITCODE -ne 0) { throw "bootstrap-deps failed ($LASTEXITCODE)" }
+      - name: Save dependency cache
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.OT_DEPS }}
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+
+      # 上游 POST_BUILD 无条件复制声码器文件：放一个 0 字节占位，不下载任何模型（路径在上游 gitignore 里）。
+      - name: Vocoder placeholder (0 bytes)
+        run: |
+          $voc = Join-Path $env:GITHUB_WORKSPACE 'pc_nsf_hifigan_44.1k_ONNX\pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx'
+          if (Test-Path -LiteralPath $voc) { throw "unexpected file at the vocoder path: $voc" }
+          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $voc) | Out-Null
+          New-Item -ItemType File -Path $voc | Out-Null
+
+      # sccache 的版本与 sha256 锁在 .github/scripts/tools.lock.json，由 fetch-tool.mjs 下载并校验。
+      - name: Fetch sccache (pinned in tools.lock.json)
+        id: sccache
+        run: |
+          $out = node .github/scripts/fetch-tool.mjs sccache --dest "$env:RUNNER_TEMP\ot-tools"
+          if ($LASTEXITCODE -ne 0 -or -not $out) { throw "fetch-tool sccache failed ($LASTEXITCODE)" }
+          $exe = ([string]($out | Select-Object -Last 1)).Trim()
+          "path=$($exe -replace '\\', '/')" >> $env:GITHUB_OUTPUT
+      - name: Restore sccache cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: ot-sccache-windows-rwdi-${{ matrix.control-api }}-${{ github.sha }}
+          restore-keys: |
+            ot-sccache-windows-rwdi-${{ matrix.control-api }}-
+
+      # configure / build / ctest 都经 with-build-slot.ps1 -VsDevShell（导入 MSVC 环境；runner 上构建槽只有本 job）。
+      - name: Configure (Ninja Multi-Config, RelWithDebInfo, sccache)
+        env:
+          SCCACHE: ${{ steps.sccache.outputs.path }}
+          CONTROL_API: ${{ matrix.control-api }}
+        run: |
+          $ninja = (Get-Command ninja -ErrorAction SilentlyContinue)?.Source
+          if (-not $ninja) {
+            $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+            $ninja = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
+          }
+          if (-not (Test-Path -LiteralPath $ninja)) { throw "ninja.exe not found" }
+          # sccache 只能缓存 /Z7 目标文件：CMP0141=NEW 让 CMAKE_MSVC_DEBUG_INFORMATION_FORMAT 生效
+          # （上游声明 cmake_minimum_required(3.22)，不设的话 RelWithDebInfo 用 /Zi）。
+          $configure = @(
+            'cmake', '-S', $env:GITHUB_WORKSPACE, '-B', $env:OT_BUILD, '-G', 'Ninja Multi-Config',
+            "-DCMAKE_MAKE_PROGRAM=$($ninja -replace '\\', '/')",
+            "-DCMAKE_CONFIGURATION_TYPES=$env:OT_CONFIG",
+            '-DOPENTUNE_BUILD_TESTS=ON',
+            "-DOPENTUNE_ENABLE_CONTROL_API=$env:CONTROL_API",
+            "-DCMAKE_C_COMPILER_LAUNCHER=$env:SCCACHE",
+            "-DCMAKE_CXX_COMPILER_LAUNCHER=$env:SCCACHE",
+            '-DCMAKE_POLICY_DEFAULT_CMP0141=NEW',
+            '-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded'
+          )
+          pwsh -NoProfile -File .github/scripts/with-build-slot.ps1 -VsDevShell -MinFreeMB 2048 -WaitMinutes 10 -- @configure
+          if ($LASTEXITCODE -ne 0) { throw "configure failed ($LASTEXITCODE)" }
+
+      # 目标：Standalone、VST3 与所有已注册测试的可执行文件，不含 ARALifecycleContractTests（它给 ARA_DRAFT 的
+      # persistentID 赋值，在锁定的 ARA SDK 2.3.0 下编不过，属上游问题）。测试与目标的对应关系读自生成的
+      # CTestTestfile.cmake，解析方式与 gates.ps1 的 Get-TestTargets 相同。
+      - name: Build (RelWithDebInfo, --parallel = runner cores)
+        id: build
+        run: |
+          $excluded = @('ARALifecycleContractTests')
+          function Get-TestTargets([string]$Dir, $Map) {
+            $file = Join-Path $Dir 'CTestTestfile.cmake'
+            if (-not (Test-Path -LiteralPath $file)) { return }
+            $text = Get-Content -LiteralPath $file -Raw
+            foreach ($m in [regex]::Matches($text, 'add_test\(\s*(?:\[=\[([^\]]+)\]=\]|([^\s"]+))\s+"([^"]+)"')) {
+              $name = if ($m.Groups[1].Success) { $m.Groups[1].Value } else { $m.Groups[2].Value }
+              if (-not $Map.Contains($name)) { $Map[$name] = [System.IO.Path]::GetFileNameWithoutExtension($m.Groups[3].Value) }
+            }
+            foreach ($m in [regex]::Matches($text, 'subdirs\(\s*"([^"]+)"\s*\)')) {
+              $sub = $m.Groups[1].Value
+              Get-TestTargets $(if ([System.IO.Path]::IsPathRooted($sub)) { $sub } else { Join-Path $Dir $sub }) $Map
+            }
+          }
+          $tests = [ordered]@{}
+          Get-TestTargets $env:OT_BUILD $tests
+          if ($tests.Count -eq 0) { throw 'no tests registered in CTestTestfile.cmake (OPENTUNE_BUILD_TESTS=ON?)' }
+          $targets = [System.Collections.Generic.List[string]]::new()
+          foreach ($t in @('OpenTuneStandalone_Standalone', 'OpenTune_VST3')) { $targets.Add($t) }
+          foreach ($name in @($tests.Keys)) {
+            if ($excluded -contains [string]$name) { continue }
+            $exe = [string]$tests[$name]
+            if ($exe -and -not $targets.Contains($exe)) { $targets.Add($exe) }
+          }
+          $jobs = [Environment]::ProcessorCount
+          Write-Host "targets ($($targets.Count)): $($targets -join ', '); --parallel $jobs"
+          $build = @('cmake', '--build', $env:OT_BUILD, '--config', $env:OT_CONFIG, '--parallel', "$jobs", '--target') + $targets
+          pwsh -NoProfile -File .github/scripts/with-build-slot.ps1 -VsDevShell -MinFreeMB 2048 -WaitMinutes 10 -- @build
+          if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
+
+      # 与 `ctest -C RelWithDebInfo -E ARALifecycleContractTests --output-on-failure` 等价，但每个测试有独立的
+      # OPENTUNE_DATA_DIR（run-ctest.ps1，与本地 gates 同一份脚本）。失败测试的输出打印到日志。
+      - name: ctest (-E ARALifecycleContractTests, per-test OPENTUNE_DATA_DIR)
+        id: ctest
+        run: |
+          $summary = "$env:RUNNER_TEMP\ot-ctest-summary.json"
+          pwsh -NoProfile -File .github/scripts/with-build-slot.ps1 -VsDevShell -MinFreeMB 1024 -WaitMinutes 10 -- `
+            pwsh -NoProfile -File .github/scripts/run-ctest.ps1 -BuildDir $env:OT_BUILD -Config $env:OT_CONFIG `
+            -DataRoot $env:OT_TEST_DATA -SummaryPath $summary
+          $code = $LASTEXITCODE
+          if (Test-Path -LiteralPath $summary) {
+            $s = Get-Content -LiteralPath $summary -Raw | ConvertFrom-Json
+            $lines = @("### ctest（control-api $env:MATRIX_CONTROL_API）", '', "$($s.passed)/$($s.total) 通过；排除 $(@($s.excluded) -join '、')；$($s.seconds) s", '', '| 测试 | 结果 | 秒 |', '|---|---|---|')
+            foreach ($t in @($s.tests)) { $lines += "| $($t.name) | $(if ($t.passed) { 'PASS' } else { 'FAIL' }) | $($t.seconds) |" }
+            $lines -join "`n" >> $env:GITHUB_STEP_SUMMARY
+            foreach ($name in @($s.failed)) {
+              Write-Host "::group::$name output"
+              Get-Content -LiteralPath (Join-Path $env:OT_TEST_DATA "$name.log") -ErrorAction SilentlyContinue | Write-Host
+              Write-Host '::endgroup::'
+            }
+          }
+          if ($code -ne 0) { throw "ctest failed ($code)" }
+        env:
+          MATRIX_CONTROL_API: ${{ matrix.control-api }}
+
+      # 上游 POST_BUILD 在产物旁边生成的 models\（LFS 指针 + 0 字节声码器占位）会遮住官方安装的模型：
+      # 删除它，并断言 build 输出里已不存在任何 models\。
+      - name: Remove POST_BUILD models\ and assert it is gone
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          function Find-ModelDirs { @(Get-ChildItem -LiteralPath $env:OT_BUILD -Directory -Recurse -Force -Filter 'models' -ErrorAction SilentlyContinue | Where-Object { $_.Name -ieq 'models' }) }
+          $found = Find-ModelDirs
+          foreach ($d in $found) {
+            Remove-Item -LiteralPath $d.FullName -Recurse -Force
+            Write-Host "removed $($d.FullName)"
+          }
+          $left = Find-ModelDirs
+          if ($left.Count) { throw "models\ still present: $(($left | ForEach-Object FullName) -join '; ')" }
+          Write-Host "removed $($found.Count) models\ director$(if ($found.Count -eq 1) { 'y' } else { 'ies' }); none left"
+
+      # 产物按白名单暂存：OpenTune.exe、ORT DLL、DirectML.dll 与两者的 LICENSE、测试日志。然后递归、大小写不敏感地
+      # 扫描暂存目录：出现 *.onnx、models\、LFS 指针、D3D12\、D3D12*.dll 或 d3dconfig.exe 即失败。
+      - name: Stage artifacts (allow-list) and scan them
+        id: stage
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: |
+          $app = Join-Path $env:OT_BUILD "OpenTuneStandalone_artefacts\$env:OT_CONFIG\Standalone"
+          if (Test-Path -LiteralPath $env:OT_STAGE) { Remove-Item -LiteralPath $env:OT_STAGE -Recurse -Force }
+          New-Item -ItemType Directory -Force -Path "$env:OT_STAGE\app", "$env:OT_STAGE\test-logs" | Out-Null
+          $allow = @(
+            @((Join-Path $app 'OpenTune.exe'), 'app\OpenTune.exe'),
+            @((Join-Path $app 'OpenTuneOnnxRuntime_1_24_4.dll'), 'app\OpenTuneOnnxRuntime_1_24_4.dll'),
+            @((Join-Path $app 'DirectML.dll'), 'app\DirectML.dll'),
+            @((Join-Path $env:OT_DEPS 'microsoft.ai.directml.1.15.4\LICENSE.txt'), 'app\DirectML-LICENSE.txt'),
+            @((Join-Path $env:OT_DEPS 'onnxruntime-dml-1.24.4\LICENSE'), 'app\onnxruntime-LICENSE.txt')
+          )
+          foreach ($pair in $allow) {
+            if (-not (Test-Path -LiteralPath $pair[0] -PathType Leaf)) { throw "allow-listed file missing: $($pair[0])" }
+            Copy-Item -LiteralPath $pair[0] -Destination (Join-Path $env:OT_STAGE $pair[1])
+          }
+          if (Test-Path -LiteralPath $env:OT_TEST_DATA) {
+            Get-ChildItem -LiteralPath $env:OT_TEST_DATA -File -Filter '*.log' | Copy-Item -Destination "$env:OT_STAGE\test-logs"
+          }
+          $summary = "$env:RUNNER_TEMP\ot-ctest-summary.json"
+          if (Test-Path -LiteralPath $summary) { Copy-Item -LiteralPath $summary -Destination "$env:OT_STAGE\test-logs\ctest-summary.json" }
+
+          $problems = @()
+          foreach ($i in @(Get-ChildItem -LiteralPath $env:OT_STAGE -Recurse -Force)) {
+            $rel = $i.FullName.Substring($env:OT_STAGE.Length).TrimStart('\')
+            if ($i.PSIsContainer) {
+              if ($i.Name -ieq 'models' -or $i.Name -ieq 'D3D12') { $problems += "forbidden directory: $rel" }
+              continue
+            }
+            if ($i.Name -like '*.onnx' -or $i.Name -like 'D3D12*.dll' -or $i.Name -ieq 'd3dconfig.exe') { $problems += "forbidden file: $rel" }
+            if ($i.Length -le 1024) {
+              $head = [System.Text.Encoding]::ASCII.GetString([System.IO.File]::ReadAllBytes($i.FullName))
+              if ($head.StartsWith('version https://git-lfs.github.com/spec/')) { $problems += "LFS pointer: $rel" }
+            }
+          }
+          if ($problems.Count) { throw "artifact scan failed: $($problems -join '; ')" }
+          Write-Host "staged and scanned $(@(Get-ChildItem -LiteralPath $env:OT_STAGE -Recurse -File).Count) files; no models, LFS pointers or D3D12 runtime"
+      - name: Upload artifacts (3 days)
+        if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: opentune-windows-rwdi-control-api-${{ matrix.control-api }}
+          path: ${{ env.OT_STAGE }}
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: sccache statistics
+        if: ${{ always() && steps.sccache.outputs.path != '' }}
+        env:
+          SCCACHE: ${{ steps.sccache.outputs.path }}
+        run: |
+          & $env:SCCACHE --show-stats
+          & $env:SCCACHE --stop-server
+          exit 0
+      - name: Save sccache cache
+        if: ${{ always() && steps.sccache.outputs.path != '' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.SCCACHE_DIR }}
+          key: ot-sccache-windows-rwdi-${{ matrix.control-api }}-${{ github.sha }}
+
+  # 稳定的检查上下文：detect-native 判定不需要编译时给出跳过的成功结果；否则每个 compile-test 都必须成功。
+  build-windows:
+    name: build-windows
+    if: always()
+    needs: [detect-native, compile-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: compile-test must succeed unless detect-native skipped it
+        env:
+          DETECT: ${{ needs.detect-native.result }}
+          BUILD: ${{ needs.detect-native.outputs.build }}
+          REASON: ${{ needs.detect-native.outputs.reason }}
+          COMPILE: ${{ needs.compile-test.result }}
+        run: |
+          echo "detect-native: $DETECT (build=$BUILD)"
+          echo "reason: $REASON"
+          echo "compile-test: $COMPILE"
+          if [ "$DETECT" != "success" ]; then
+            echo "::error::detect-native $DETECT"
+            exit 1
+          fi
+          if [ "$BUILD" != "true" ]; then
+            printf '### build-windows：跳过编译（成功）\n\n%s\n' "$REASON" >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$COMPILE" != "success" ]; then
+            echo "::error::compile-test $COMPILE"
+            exit 1
+          fi
+          printf '### build-windows：编译与测试通过\n\n%s\n' "$REASON" >> "$GITHUB_STEP_SUMMARY"

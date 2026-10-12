@@ -1,5 +1,5 @@
 {
-  "comment": "Pinned binary tools for the fork gates. fetch-tool.mjs downloads, verifies sha256 and extracts them. gitleaks hashes come from the official gitleaks_8.30.1_checksums.txt (whose own sha256 is recorded too) and match the GitHub release digests. clang-format is installed from PyPI with pip --require-hashes.",
+  "comment": "Pinned binary tools for the fork gates. fetch-tool.mjs downloads, verifies sha256 and extracts them. gitleaks hashes come from the official gitleaks_8.30.1_checksums.txt (whose own sha256 is recorded too) and match the GitHub release digests. The sccache hash (used by build-windows) matches the GitHub release digest. clang-format is installed from PyPI with pip --require-hashes.",
   "tools": {
     "gitleaks": {
       "version": "8.30.1",
@@ -41,6 +41,20 @@
           "name": "gitleaks_8.30.1_windows_arm64.zip",
           "url": "https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_windows_arm64.zip",
           "sha256": "b95f5e4f5c425cedca7ee203d9afd29597e692c4924a12ed42f970537c72cc0f"
+        }
+      }
+    },
+    "sccache": {
+      "version": "0.17.0",
+      "kind": "archive",
+      "binary": "sccache-v0.17.0-x86_64-pc-windows-msvc/sccache",
+      "versionArgs": ["--version"],
+      "release": "https://github.com/mozilla/sccache/releases/tag/v0.17.0",
+      "assets": {
+        "win32-x64": {
+          "name": "sccache-v0.17.0-x86_64-pc-windows-msvc.zip",
+          "url": "https://github.com/mozilla/sccache/releases/download/v0.17.0/sccache-v0.17.0-x86_64-pc-windows-msvc.zip",
+          "sha256": "e94cfc5b58cbe439302f586c1d1bd7980c2cd371d47bdf385ade657411e6f3ac"
         }
       }
     },

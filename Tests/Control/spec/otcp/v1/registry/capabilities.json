@@ -1,0 +1,84 @@
+{
+  "$schema": "../schemas/registry.schema.json",
+  "registry": "capabilities",
+  "description": "Capability strings reported by session.hello and session.info. Every method declares exactly one capability in its schema file; a method may be called only when the instance reports that capability. Append-only within protocol major 1; clients must ignore capabilities they do not know.",
+  "entries": [
+    {
+      "code": "session.v1",
+      "since": "1.0",
+      "description": "session.hello and session.info. Always reported."
+    },
+    {
+      "code": "jobs.v1",
+      "since": "1.0",
+      "description": "job.get and job.cancel."
+    },
+    {
+      "code": "read.v1",
+      "since": "1.0",
+      "description": "Reads of the project, contents, transport, preferences and log."
+    },
+    { "code": "import.v1", "since": "1.0", "description": "import.start." },
+    {
+      "code": "export.v1",
+      "since": "1.0",
+      "description": "export.start and the export contract."
+    },
+    {
+      "code": "edit.v1",
+      "since": "1.0",
+      "description": "Content writes: key, AUTO, note edits and pitch shift."
+    },
+    {
+      "code": "history.v1",
+      "since": "1.0",
+      "description": "edit.getHistory, edit.undo and edit.redo."
+    },
+    {
+      "code": "timing.v1",
+      "since": "1.0",
+      "description": "content.shiftTiming and content.editTimeGrid."
+    },
+    {
+      "code": "ui.bridge",
+      "since": "1.0",
+      "description": "ui.getState, ui.dismiss and ui.setSelection, which need the OpenTune editor window."
+    },
+    {
+      "code": "ui.onboardingClose",
+      "since": "1.0",
+      "description": "ui.dismiss can close a first-run onboarding overlay that is already showing (not only prevent it)."
+    },
+    {
+      "code": "transport.v1",
+      "since": "1.0",
+      "description": "transport.control, transport.setTempo and transport.setLoop."
+    },
+    {
+      "code": "arrangement.v1",
+      "since": "1.0",
+      "description": "arrangement.edit and arrangement.copy."
+    },
+    {
+      "code": "tracks.v1",
+      "since": "1.0",
+      "description": "track.set, track.add, track.duplicate and track.delete."
+    },
+    {
+      "code": "reference.v1",
+      "since": "1.0",
+      "description": "content.analyzeReference and reference-based AUTO."
+    },
+    {
+      "code": "project.io",
+      "since": "1.0",
+      "description": "project.save, project.saveAs, project.open and project.clearRecent."
+    },
+    { "code": "prefs.write", "since": "1.0", "description": "prefs.set." },
+    {
+      "code": "audio.device",
+      "since": "1.0",
+      "description": "audio.get and audio.set."
+    }
+  ]
+}

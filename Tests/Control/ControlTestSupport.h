@@ -243,9 +243,13 @@ private:
 /**
  * Stands in for the dispatcher. session.info is answered with an empty result (its real result is
  * the dispatcher's job) and with INVALID_ARGUMENT(invalid_params) when params has members. job.get is
- * held until release(), so that requests stay in flight. project.get answers with a result of
- * bigResultBytes, to produce output faster than a client reads. Everything else is answered with
- * UNSUPPORTED(capability_missing).
+ * held until release(), so that requests stay in flight. transport.get is held too, and in addition
+ * keeps the connection thread inside handleRequest until unblock(), so that later lines arrive without
+ * being read. project.get answers with a result of bigResultBytes, to produce output faster than a
+ * client reads. Everything else is answered with UNSUPPORTED(capability_missing).
+ *
+ * serverStopping() runs onStopping (if set), then, with endHeldOnStop, ends every held request with
+ * SHUTTING_DOWN as the dispatcher ends its waiting job.get requests.
  */
 class TestHandler : public ControlRequestHandler
 {
@@ -273,6 +277,14 @@ public:
             heldChanged_.notify_all();
             return;
         }
+        if (request.method == "transport.get") {
+            std::unique_lock<std::mutex> lock(mutex_);
+            held_.push_back(completion);
+            ++blocked_;
+            heldChanged_.notify_all();
+            heldChanged_.wait_for(lock, std::chrono::milliseconds(kReadTimeoutMs), [this] { return unblocked_; });
+            return;
+        }
         if (request.method == "project.get") {
             auto result = JsonValue::object();
             result.appendMember("pad", JsonValue::string(std::string(bigResultBytes, 'p')));
@@ -282,7 +294,21 @@ public:
         completion.respondError("UNSUPPORTED", "capability_missing", "not implemented by the test handler", false);
     }
 
-    void serverStopping() override { ++stoppingCalls; }
+    void serverStopping() override
+    {
+        if (onStopping)
+            onStopping();
+        if (endHeldOnStop) {
+            std::vector<ControlCompletion> held;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                held.swap(held_);
+            }
+            for (const auto& completion : held)
+                completion.respondError("SHUTTING_DOWN", {}, "the control API is stopping", false);
+        }
+        ++stoppingCalls;
+    }
 
     /** Waits until at least count requests are held. */
     bool waitForHeld(std::size_t count, int timeoutMs = kReadTimeoutMs)
@@ -290,6 +316,23 @@ public:
         std::unique_lock<std::mutex> lock(mutex_);
         return heldChanged_.wait_for(lock, std::chrono::milliseconds(timeoutMs),
                                      [this, count] { return held_.size() >= count; });
+    }
+
+    /** Waits until a transport.get request keeps a connection thread inside handleRequest. */
+    bool waitForBlocked(int timeoutMs = kReadTimeoutMs)
+    {
+        std::unique_lock<std::mutex> lock(mutex_);
+        return heldChanged_.wait_for(lock, std::chrono::milliseconds(timeoutMs), [this] { return blocked_ > 0; });
+    }
+
+    /** Lets every transport.get request, current and future, return from handleRequest. */
+    void unblock()
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            unblocked_ = true;
+        }
+        heldChanged_.notify_all();
     }
 
     /** Answers every held request with an empty result. */
@@ -306,12 +349,17 @@ public:
 
     std::size_t bigResultBytes = 1024 * 1024;
     std::atomic<int> stoppingCalls{0};
+    /** Set before stop(); both are read on the thread that calls stop(). */
+    bool endHeldOnStop = false;
+    std::function<void()> onStopping;
 
 private:
     std::vector<std::string> capabilities_;
     std::mutex mutex_;
     std::condition_variable heldChanged_;
     std::vector<ControlCompletion> held_;
+    int blocked_ = 0;
+    bool unblocked_ = false;
 };
 
 inline ControlBuildIdentity testBuildIdentity()
@@ -397,6 +445,8 @@ public:
 
     ~ServerFixture()
     {
+        if (handler)
+            handler->unblock();
         if (server)
             server->stop();
         if (handler)

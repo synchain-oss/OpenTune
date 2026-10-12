@@ -78,8 +78,9 @@ public:
      */
     virtual void handleRequest(ControlRequest request, ControlCompletion completion) = 0;
 
-    /** Called by ControlServer::stop() before connections close, so that pending waits can end with
-        SHUTTING_DOWN. */
+    /** Called by ControlServer::stop() after the stop flag is set (new requests already get
+        SHUTTING_DOWN) and before any session closes, so that pending waits can end with SHUTTING_DOWN:
+        responses sent from here still reach their clients. Sessions close after it returns. */
     virtual void serverStopping() {}
 };
 
@@ -135,9 +136,11 @@ public:
     bool start(std::string& error);
 
     /**
-     * Sets the stop flag, tells the handler, stops accepting, closes every connection (in-flight
-     * responses are discarded), joins the threads with a bounded wait and deletes the discovery file.
-     * Idempotent.
+     * PROTOCOL.md section 3.6 rule 2: sets the stop flag (new requests are answered with SHUTTING_DOWN
+     * and nothing new is accepted), tells the handler (serverStopping()), then lets every session
+     * answer the lines that already arrived, send its pending output for a bounded time and close
+     * (responses of requests still in flight after that are discarded). Joins the threads with a
+     * bounded wait and deletes the discovery file. Idempotent.
      */
     void stop();
 

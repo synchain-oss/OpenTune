@@ -13,7 +13,9 @@
 #include "Control/ControlPathPolicy.h"
 
 #include <cmath>
+#include <cstdlib>
 #include <map>
+#include <new>
 #include <set>
 
 #if defined(_WIN32)
@@ -33,6 +35,42 @@
 using namespace OpenTune;
 using namespace OpenTune::ControlTest;
 
+// --------------------------------------------------------------------------------------------------
+// Allocation failure injection
+// --------------------------------------------------------------------------------------------------
+// The connection exception test makes a connection thread fail the way a huge request line can fail
+// on a loaded machine: with std::bad_alloc from its growing read buffer. While armed, the first
+// allocation of at least the armed size fails and disarms; otherwise this is plain malloc and free.
+
+namespace {
+std::atomic<std::size_t> failAllocationAtLeast{0};
+} // namespace
+
+void* operator new(std::size_t size)
+{
+    std::size_t threshold = failAllocationAtLeast.load();
+    if (threshold != 0 && size >= threshold && failAllocationAtLeast.compare_exchange_strong(threshold, 0))
+        throw std::bad_alloc();
+    for (;;) {
+        if (void* memory = std::malloc(size != 0 ? size : 1))
+            return memory;
+        const std::new_handler handler = std::get_new_handler();
+        if (handler == nullptr)
+            throw std::bad_alloc();
+        handler();
+    }
+}
+
+void operator delete(void* memory) noexcept
+{
+    std::free(memory);
+}
+
+void operator delete(void* memory, std::size_t) noexcept
+{
+    std::free(memory);
+}
+
 namespace {
 
 // Timing bounds of the server tests.
@@ -47,6 +85,16 @@ constexpr int kFloodConnectionsPerThread = 50;
 constexpr int kFloodResponseBoundMs = 2000;
 constexpr int kCounterSettleMs = 3000;
 constexpr int kCompletionBoundMs = 200;
+/** Longer than two poll intervals of the server: a session that closed on the stop flag alone would
+    be gone after this wait inside serverStopping(). */
+constexpr int kStopWindowWaitMs = 600;
+/** Time for bytes sent over loopback to reach the server, and for a stop step to follow. */
+constexpr int kLoopbackSettleMs = 100;
+/** A request line shorter than maxLineBytes whose read buffer meets the injected allocation failure. */
+constexpr std::size_t kInjectedLineBytes = 3 * 1024 * 1024;
+constexpr std::size_t kInjectedFailureBytes = 2 * 1024 * 1024;
+/** Time for a connection thread to end (and its stack to be released) after its counters dropped. */
+constexpr int kThreadExitSettleMs = 200;
 
 // Appendix A of PROTOCOL.md, with id 1.
 const char* const kAuthFailedId1 =
@@ -974,6 +1022,107 @@ void testStopWithBusyConnections()
     CONTROL_CHECK(!late.connect(fixture.port) || closesSilently(late, kPromptCloseMs));
 }
 
+void testStopAnswersBeforeClosing()
+{
+    ServerFixture fixture;
+    if (!fixture.start("stop-order", {}, {"session.v1", "jobs.v1"}))
+        return;
+    TestClient session;
+    CONTROL_CHECK(fixture.authenticate(session).has_value());
+    CONTROL_CHECK(session.sendLine(requestLine("1", "job.get")));
+    if (!CONTROL_CHECK(fixture.handler->waitForHeld(1)))
+        return;
+    // Inside serverStopping(): wait longer than two poll intervals of the server, send a new request in
+    // the stop window, then end the waiting job.get with SHUTTING_DOWN.
+    std::optional<std::string> inWindow;
+    fixture.handler->onStopping = [&session, &inWindow] {
+        sleepMs(kStopWindowWaitMs);
+        if (session.sendLine(requestLine("2", "session.info")))
+            inWindow = session.readLine(kPromptCloseMs);
+    };
+    fixture.handler->endHeldOnStop = true;
+    const auto started = Clock::now();
+    fixture.server->stop();
+    const auto elapsed = millisecondsSince(started);
+    CONTROL_CHECK(isError(inWindow, "SHUTTING_DOWN", "") && responseIdText(inWindow) == "2");
+    // The response that serverStopping() sent arrives, and only after it does the connection close.
+    const auto waited = session.readLine(kPromptCloseMs);
+    CONTROL_CHECK(isError(waited, "SHUTTING_DOWN", "") && responseIdText(waited) == "1");
+    std::size_t bytes = 0;
+    CONTROL_CHECK(session.waitClosed(kPromptCloseMs, bytes) && bytes == 0);
+    CONTROL_CHECK(elapsed < kStopWindowWaitMs + kStopBoundMs);
+    CONTROL_CHECK(fixture.handler->stoppingCalls == 1 && fixture.server->sessionCount() == 0);
+}
+
+void testStopAnswersArrivedRequests()
+{
+    ServerFixture fixture;
+    if (!fixture.start("stop-arrived", {}, {"session.v1", "read.v1"}))
+        return;
+    fixture.handler->endHeldOnStop = true;
+    TestClient session;
+    CONTROL_CHECK(fixture.authenticate(session).has_value());
+    // transport.get keeps the connection thread inside the handler, so that request 2 arrives but is
+    // not read until the sessions close.
+    CONTROL_CHECK(session.sendLine(requestLine("1", "transport.get")));
+    if (!CONTROL_CHECK(fixture.handler->waitForBlocked()))
+        return;
+    CONTROL_CHECK(session.sendLine(requestLine("2", "session.info")));
+    sleepMs(kLoopbackSettleMs);
+    std::thread stopper([&fixture] { fixture.server->stop(); });
+    // serverStopping() ends request 1; the sessions close as soon as it returns.
+    CONTROL_CHECK(waitUntil([&fixture] { return fixture.handler->stoppingCalls == 1; }, kReadTimeoutMs));
+    sleepMs(kLoopbackSettleMs);
+    fixture.handler->unblock();
+    stopper.join();
+    const auto first = session.readLine(kPromptCloseMs);
+    CONTROL_CHECK(isError(first, "SHUTTING_DOWN", "") && responseIdText(first) == "1");
+    const auto second = session.readLine(kPromptCloseMs);
+    CONTROL_CHECK(isError(second, "SHUTTING_DOWN", "") && responseIdText(second) == "2");
+    std::size_t bytes = 0;
+    CONTROL_CHECK(session.waitClosed(kPromptCloseMs, bytes) && bytes == 0);
+}
+
+void testConnectionExceptionClosesChannel()
+{
+    ServerFixture fixture;
+    if (!fixture.start("connection-exception", {}, {"session.v1", "jobs.v1"}))
+        return;
+    TestClient session;
+    CONTROL_CHECK(fixture.authenticate(session).has_value());
+    CONTROL_CHECK(session.sendLine(requestLine("1", "job.get")));
+    if (!CONTROL_CHECK(fixture.handler->waitForHeld(1)))
+        return;
+
+    // A line shorter than maxLineBytes and without an LF: the server keeps reading it, and its growing
+    // read buffer meets the injected allocation failure, which ends run() with an exception.
+    const std::string partialLine(kInjectedLineBytes, 'a');
+    failAllocationAtLeast = kInjectedFailureBytes;
+    session.sendRaw(partialLine); // fails once the server has dropped the connection
+    CONTROL_CHECK(waitUntil([&fixture] { return fixture.server->sessionCount() == 0; }, kCounterSettleMs));
+    CONTROL_CHECK(failAllocationAtLeast.exchange(0) == 0);
+    std::size_t bytes = 0;
+    CONTROL_CHECK(session.waitClosed(kPromptCloseMs, bytes) && bytes == 0);
+    const auto lines = fixture.logLines();
+    CONTROL_CHECK(std::any_of(lines.begin(), lines.end(), [](const std::string& line) {
+        return line.find("unexpected error") != std::string::npos;
+    }));
+
+    // The connection thread has ended, so its socket no longer exists. Completing the request still in
+    // flight must not reach that socket and must not block: the channel is closed and the response is
+    // discarded.
+    sleepMs(kThreadExitSettleMs);
+    const auto releaseStarted = Clock::now();
+    fixture.handler->releaseAll();
+    CONTROL_CHECK(millisecondsSince(releaseStarted) < kCompletionBoundMs);
+
+    // The server still serves new sessions.
+    TestClient next;
+    CONTROL_CHECK(fixture.authenticate(next).has_value());
+    CONTROL_CHECK(next.sendLine(requestLine("2", "session.info")));
+    CONTROL_CHECK(responseIdText(next.readLine()) == "2");
+}
+
 void testStartFailures()
 {
     const auto root = freshDirectory("start-failure");
@@ -1384,6 +1533,9 @@ int main(int argc, char** argv)
         {"line limits", testLineLimits},
         {"idle timeout", testIdleTimeout},
         {"stop with busy connections", testStopWithBusyConnections},
+        {"stop answers before closing", testStopAnswersBeforeClosing},
+        {"stop answers arrived requests", testStopAnswersArrivedRequests},
+        {"connection exception", testConnectionExceptionClosesChannel},
         {"start failures", testStartFailures},
         {"session vectors", testSessionVectors},
     };

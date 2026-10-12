@@ -23,12 +23,18 @@ constexpr std::size_t kReadChunkBytes = 64 * 1024;
 constexpr std::size_t kOutputHighWaterBytes = 1024 * 1024;
 /** How long a final response may take to leave before the connection closes anyway. */
 constexpr int kCloseFlushMs = 1000;
+/** While the server stops, how long a connection may take to answer the lines that already arrived
+    and to send its last responses before it closes anyway. */
+constexpr int kStopFlushMs = 500;
 /** After the server ends a connection, it reads and discards at most this much for at most this long,
     so that unread client data does not turn the close into a reset that could destroy the response. */
 constexpr int kCloseDrainMs = 250;
 constexpr std::size_t kCloseDrainBytes = 64 * 1024;
 /** How long stop() waits for connection threads before it detaches the ones still running. */
 constexpr int kStopJoinTimeoutMs = 2000;
+static_assert(kStopFlushMs < kCloseFlushMs, "closing for a stop must not wait longer than a normal close");
+static_assert(kPollIntervalMs + kStopFlushMs < kStopJoinTimeoutMs,
+              "a connection must notice the stop and close before stop() stops waiting for it");
 /** Size of the 128-bit values and of the token, in bytes. */
 constexpr std::size_t kTokenBytes = 32;
 constexpr std::size_t kServerProofBytes = 16;
@@ -71,7 +77,11 @@ struct ControlServer::Shared
     std::string instanceId;
     std::string appVersion;
     std::int64_t pid = 0;
+    /** Set first by stop(): new requests are answered with SHUTTING_DOWN, nothing new is accepted. */
     std::atomic<bool> stopping{false};
+    /** Set by stop() after the handler ended its waiting requests: sessions answer what already
+        arrived, send their pending output and close (PROTOCOL.md section 3.6 rule 2). */
+    std::atomic<bool> closing{false};
 
     mutable std::mutex mutex;
     std::condition_variable connectionFinished;
@@ -234,6 +244,20 @@ public:
         channel_->maxLineBytes = shared_->limits.maxLineBytes;
     }
 
+    /** However run() ended, an exception included, the channel stops referring to socket_ here:
+        completions that arrive later (from any thread) find it closed and discard their responses. */
+    ~ControlConnectionWorker()
+    {
+        std::lock_guard<std::mutex> lock(channel_->mutex);
+        channel_->open = false;
+        channel_->socket = nullptr;
+        channel_->pending.clear();
+        channel_->pendingSent = 0;
+    }
+
+    ControlConnectionWorker(const ControlConnectionWorker&) = delete;
+    ControlConnectionWorker& operator=(const ControlConnectionWorker&) = delete;
+
     void run()
     {
         if (runBeforeAuthentication())
@@ -247,6 +271,15 @@ private:
     };
 
     bool stopping() const { return shared_->stopping.load(); }
+    bool closing() const { return shared_->closing.load(); }
+
+    /** The time by which this connection closes while the server stops; fixed when first asked. */
+    Clock::time_point stopDeadline()
+    {
+        if (!stopDeadline_)
+            stopDeadline_ = Clock::now() + std::chrono::milliseconds(kStopFlushMs);
+        return *stopDeadline_;
+    }
 
     void sendError(const ControlRequestId& id, std::string_view kind, std::string_view reason, std::string_view detail,
                    std::optional<bool> retryable = std::nullopt)
@@ -255,7 +288,8 @@ private:
     }
 
     /** Waits until pending output has left (or the deadline passes), then closes the connection. With
-        flush false nothing more is sent: used for every close that must not send a byte. */
+        flush false nothing more is sent: used for every close that must not send a byte. While the
+        server stops, the wait ends by the stop deadline (kStopFlushMs). */
     void closeConnection(bool flush)
     {
         {
@@ -263,15 +297,17 @@ private:
             channel_->open = false;
         }
         if (flush) {
-            const auto deadline = Clock::now() + std::chrono::milliseconds(kCloseFlushMs);
+            auto deadline = Clock::now() + std::chrono::milliseconds(kCloseFlushMs);
             for (;;) {
+                if (stopping())
+                    deadline = std::min(deadline, stopDeadline());
                 std::size_t unsent = 0;
                 {
                     std::lock_guard<std::mutex> lock(channel_->mutex);
                     channel_->flushLocked();
                     unsent = channel_->broken ? 0 : channel_->unsentBytesLocked();
                 }
-                if (unsent == 0 || stopping() || Clock::now() >= deadline)
+                if (unsent == 0 || Clock::now() >= deadline)
                     break;
                 socket_.poll(false, true, millisecondsUntil(deadline));
             }
@@ -429,8 +465,11 @@ private:
         }
         const auto idleTimeout = std::chrono::milliseconds(shared_->limits.idleTimeoutMs);
         for (;;) {
-            if (stopping()) {
-                closeConnection(false);
+            // While the server stops but before closing, the session keeps reading: handleLine answers
+            // new requests with SHUTTING_DOWN, and responses the handler sends from serverStopping()
+            // still go out.
+            if (closing()) {
+                closeForStop();
                 return;
             }
             std::size_t unsent = 0;
@@ -475,6 +514,32 @@ private:
                 return;
             }
         }
+    }
+
+    /**
+     * PROTOCOL.md section 3.6 rule 2, after the handler ended its waiting requests: answers the
+     * complete lines that already arrived with SHUTTING_DOWN (handleLine does so while the server
+     * stops), without waiting for more, then sends the pending output and closes, all within
+     * kStopFlushMs.
+     */
+    void closeForStop()
+    {
+        const auto deadline = stopDeadline();
+        Next next = Next::Continue;
+        while (next == Next::Continue && Clock::now() < deadline) {
+            {
+                std::lock_guard<std::mutex> lock(channel_->mutex);
+                if (channel_->broken || channel_->unsentBytesLocked() >= kOutputHighWaterBytes)
+                    break;
+            }
+            // wouldBlock: nothing more has arrived; 0 or failed: the peer closed or the connection failed.
+            const long received = socket_.receive(readBuffer_.data(), readBuffer_.size());
+            if (received <= 0)
+                break;
+            buffer_.append(readBuffer_.data(), static_cast<std::size_t>(received));
+            next = processBufferedLines();
+        }
+        closeConnection(true);
     }
 
     /** Splits the buffered bytes into lines and handles each complete line. */
@@ -591,6 +656,7 @@ private:
     /** Bytes at the start of buffer_ already known to contain no LF. */
     std::size_t scanned_ = 0;
     bool& authenticated_;
+    std::optional<Clock::time_point> stopDeadline_;
 };
 
 namespace {
@@ -748,8 +814,12 @@ void ControlServer::stop()
 void ControlServer::shutDown()
 {
     stopped_ = true;
+    // PROTOCOL.md section 3.6 rule 2, in its order: from here on new requests are answered with
+    // SHUTTING_DOWN; the handler ends its waiting requests with SHUTTING_DOWN; only then do the
+    // sessions send their last responses and close.
     shared_->stopping = true;
     shared_->handler->serverStopping();
+    shared_->closing = true;
     if (acceptThread_.joinable())
         acceptThread_.join();
     {

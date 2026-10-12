@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# Fork-only formatting for NEW control-API files (Source/Control/**, Tests/Control/**,
+# Source/Standalone/ControlEditorBridge*). clang-format 18.1.8 syntax. Never run it on upstream files.
+# Always name this file explicitly, because Tests/Control/** and ControlEditorBridge* are outside this
+# directory and a plain `clang-format -i` would fall back to the LLVM default there:
+#   clang-format --style=file:Source/Control/.clang-format -i <file>
+#
+# Derived from the existing upstream code (all 287 .h/.cpp files under Source/ were sampled; the
+# counts below are line occurrences at the locked upstream base). Where upstream is mixed, the
+# majority in the newer subsystems (Content, Render, Runtime, ARA, Plugin, Standalone/UI) wins.
+#   - C++17; 4-space indent, no tabs (0 tab-indented lines).
+#   - Function definitions: brace on its own line (about 1300 vs 180).
+#   - Control statements: brace on the same line (2395 vs 1039); `} else {` cuddled (268 vs 223).
+#   - class / struct: brace on its own line in the newer subsystems (mixed overall: 202 vs 260,
+#     the attached ones are mostly small Utils structs); enum class braces attached (54 vs 36).
+#   - namespace OpenTune { ... } not indented, closed with `} // namespace OpenTune`.
+#   - public:/private: at column 0 of the class (308 vs 31); case labels indented inside switch.
+#   - Pointers and references bind to the type (`Foo* p`, 3952 vs 15).
+#   - Constructor initialisers break before the comma (`: a_(x)` then `, b_(y)`).
+#   - Continuation arguments align after the open bracket (592 vs 85); binary operators start the
+#     continuation line (684 vs 17); inheritance lists break after the comma (16 vs 3).
+#   - Lines rarely exceed 120 columns (99th percentile 115); braced init without a space
+#     (`cursor_{0}`); `template <typename T>` on its own line.
+#   - Includes are not sorted upstream, so they are left as written.
+Language: Cpp
+BasedOnStyle: LLVM
+Standard: c++17
+ColumnLimit: 120
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+ConstructorInitializerIndentWidth: 4
+AccessModifierOffset: -4
+IndentCaseLabels: true
+IndentPPDirectives: None
+NamespaceIndentation: None
+FixNamespaceComments: true
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterCaseLabel: false
+  AfterClass: true
+  AfterControlStatement: Never
+  AfterEnum: false
+  AfterExternBlock: false
+  AfterFunction: true
+  AfterNamespace: false
+  AfterStruct: true
+  AfterUnion: true
+  BeforeCatch: false
+  BeforeElse: false
+  BeforeLambdaBody: false
+  BeforeWhile: false
+  IndentBraces: false
+  SplitEmptyFunction: false
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortBlocksOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
+AllowShortLambdasOnASingleLine: All
+AlignAfterOpenBracket: Align
+AlignTrailingComments:
+  Kind: Always
+  OverEmptyLines: 0
+SpacesBeforeTrailingComments: 1
+BreakBeforeBinaryOperators: NonAssignment
+BreakBeforeTernaryOperators: true
+BreakConstructorInitializers: BeforeComma
+PackConstructorInitializers: CurrentLine
+BreakInheritanceList: AfterComma
+AlwaysBreakTemplateDeclarations: Yes
+PointerAlignment: Left
+DerivePointerAlignment: false
+ReferenceAlignment: Pointer
+Cpp11BracedListStyle: true
+SpaceBeforeParens: ControlStatements
+SpaceAfterTemplateKeyword: true
+SpacesInAngles: Never
+SortIncludes: Never
+IncludeBlocks: Preserve
+MaxEmptyLinesToKeep: 1
+KeepEmptyLinesAtTheStartOfBlocks: false
+InsertNewlineAtEOF: true
+LineEnding: DeriveLF
+ReflowComments: true

@@ -1,0 +1,110 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: Branch Gate
+
+# 进入 dev 的 PR（将来是 dev 的必需检查）：
+#   本仓  feature/* | feat/* | spec-sync/* | sync/*  ->  dev
+#   外部 fork 的 PR：允许，但不得使用受保护的分支名（dev、feature/*、feat/*、spec-sync/*、sync/* 等）
+#   DCO：PR 的每个非合并提交都有 Signed-off-by；本仓 PR 另要求提交身份在白名单内
+#   PR 标题、正文与提交信息无 AI 署名
+# 子 PR（base = feature/*）不受本门禁约束，由 fork-gate 把关。检查实现在 .github/scripts/branch-gate.mjs
+# （复用 fork-checks.mjs 的身份、DCO 与署名检查）。与 fork-gate 一样，门禁不由 PR 自己的脚本判自己：
+# 用 base（dev）上的 .github/scripts 检查 PR；dev 上还没有 .github/scripts 时（首次引入门禁）回退到
+# PR 自带的脚本（自举），并在 job summary 里写明。
+on:
+  pull_request:
+    branches: [dev]
+    # edited：改 PR 标题/正文后重新做署名检查。
+    types: [opened, synchronize, reopened, ready_for_review, edited]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: branch-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  branch-gate:
+    name: branch-gate # 必需检查上下文：永不改名，永不加 if:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # lfs: false —— 绝不下载模型权重（CLAUDE.md §11）。fetch-depth: 0 以便列出 PR 的全部提交。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # 门禁脚本取自 base（origin/$BASE_REF），解到 $RUNNER_TEMP/gate，再对 PR 的提交运行：一个 PR 改不了
+      # 检查它自己的规则与署名规则副本。base 上还没有 .github/scripts 时用 PR 自带的脚本（自举）；
+      # base 上有 .github/scripts 却缺少 branch-gate.mjs 时失败（新增入口脚本要先合入 base）。
+      - name: Select the gate scripts (base branch; bootstrap from the PR when the base has none)
+        id: gate
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          gate="$RUNNER_TEMP/gate"
+          rm -rf "$gate"
+          mkdir -p "$gate"
+          base="origin/$BASE_REF"
+          if ! git rev-parse --verify --quiet "$base^{commit}" > /dev/null; then
+            echo "::error::无法解析 $base，取不到 base 上的门禁脚本"
+            exit 1
+          fi
+          bootstrap=false
+          if [ -n "$(git ls-tree --name-only "$base" -- .github/scripts)" ]; then
+            src="$base"
+            note="门禁脚本取自 base（$base @ $(git rev-parse --short "$base")）。"
+            if ! git diff --quiet "$base" HEAD -- .github/scripts; then
+              note="$note 本 PR 修改了 .github/scripts：本次仍按 base 上的门禁检查，新脚本合入后才生效。"
+            fi
+          else
+            src=HEAD
+            bootstrap=true
+            note="$base 上还没有 .github/scripts，本次用 PR 自带的门禁脚本检查 PR 自己。"
+          fi
+          if ! git cat-file -e "$src:.github/scripts/branch-gate.mjs" 2> /dev/null; then
+            echo "::error::门禁脚本 $src:.github/scripts/branch-gate.mjs 不存在。新增的入口脚本要先合入 base，再在 workflow 里调用"
+            exit 1
+          fi
+          git archive --format=tar "$src" .github/scripts | tar -x -C "$gate"
+          echo "dir=$gate/.github/scripts" >> "$GITHUB_OUTPUT"
+          {
+            echo "### 门禁脚本来源"
+            echo
+            if [ "$bootstrap" = true ]; then
+              echo "> [!WARNING]"
+              echo "> **base 上无门禁脚本，本次用 PR 自带脚本（自举）**"
+              echo ">"
+              echo "> $note"
+            else
+              echo "$note"
+            fi
+            echo
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$bootstrap" = true ]; then
+            echo "::warning title=branch-gate 自举::base 上无门禁脚本，本次用 PR 自带脚本（自举）"
+          fi
+          echo "$note"
+      # PR 标题、正文、分支名都是不可信文本：只经 env 传给脚本，脚本只拿它们与固定规则比对，绝不执行。
+      - name: Branch naming, DCO, identity and attribution
+        env:
+          GATE: ${{ steps.gate.outputs.dir }}
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          THIS_REPO: ${{ github.repository }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: >-
+          node "$GATE/branch-gate.mjs" --ci --pr
+          --base "$BASE_REF" --head-branch "$HEAD_REF" --head "$HEAD_SHA"
+          --head-repo "$HEAD_REPO" --this-repo "$THIS_REPO" --base-ref "origin/$BASE_REF"

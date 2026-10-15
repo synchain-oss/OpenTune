@@ -189,6 +189,12 @@ void scenarioDispatchShutdown();
 void scenarioDispatchTimeout();
 /** The specification's vectors of the implemented methods, against the real dispatcher. */
 void scenarioVectors();
+/** content.getDetails, transport.get, prefs.get and app.getLog (including the redaction of the log) against
+    the real dispatcher, with the clips, analysis failures and preferences they report. */
+void scenarioDetails();
+/** Every method of every capability the instance reports is registered in OpsRegistry, apart from an
+    explicit list of exemptions that must be empty before dev is merged. */
+void scenarioCompleteness();
 
 } // namespace ControlTest
 } // namespace OpenTune

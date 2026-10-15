@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "SessionOps.h"
 
+#include "OpsJson.h"
 #include "OpsSupport.h"
 
 #include "Audio/AudioFormatRegistry.h"
@@ -47,30 +48,6 @@ const char* archName()
 #else
     return "unknown";
 #endif
-}
-
-const char* languageTag(Language language)
-{
-    switch (language) {
-        case Language::English:
-            return "en";
-        case Language::Chinese:
-            return "zh";
-        case Language::Japanese:
-            return "ja";
-        case Language::Russian:
-            return "ru";
-        case Language::Spanish:
-            return "es";
-        case Language::Count:
-            break;
-    }
-    return "en";
-}
-
-const char* editingSchemeName(AudioEditingScheme::Scheme scheme)
-{
-    return scheme == AudioEditingScheme::Scheme::NotesPrimary ? "openDyne" : "openTune";
 }
 
 const char* backendName(AccelerationDetector::AccelBackend backend)
@@ -140,7 +117,7 @@ JsonValue processingJson(const SharedPreferencesState& preferences)
     auto nullReasons = JsonValue::object();
     // TuningConfig::currentTuningHz(): the A4 frequency every *Midi value of this API refers to.
     json.appendMember("tuningHz", controlJsonNumber(TuningConfig::currentTuningHz(), 3));
-    json.appendMember("editingScheme", JsonValue::string(editingSchemeName(preferences.audioEditingScheme)));
+    json.appendMember("editingScheme", JsonValue::string(controlEditingSchemeName(preferences.audioEditingScheme)));
     // The "hybrid" (light pitch correction) switch of the processing preferences.
     json.appendMember("hybridMode", JsonValue::boolean(preferences.lightPitchCorrectionEnabled));
     const auto& weight = preferences.vocoderModelWeight;
@@ -214,7 +191,7 @@ Result<JsonValue> runSessionInfo(ControlOpContext& context, const ControlNoParam
 
     result.appendMember("audioDevice", audioDeviceJson(context));
     result.appendMember("processing", processingJson(preferences));
-    result.appendMember("language", JsonValue::string(languageTag(preferences.language)));
+    result.appendMember("language", JsonValue::string(controlLanguageTag(preferences.language)));
 
     auto capabilities = JsonValue::array();
     for (const auto& capability : facts.capabilities)

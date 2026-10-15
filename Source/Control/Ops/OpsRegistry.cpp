@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "OpsRegistry.h"
 
+#include "AppReadOps.h"
+#include "ContentDetailsOps.h"
 #include "ContentReadOps.h"
 #include "ProjectReadOps.h"
 #include "SessionOps.h"
@@ -23,10 +25,11 @@ void registerControlMethods(ControlMethodTable& table)
 {
     // One line per group, in the order of the layers. A method that is not registered is answered with
     // UNSUPPORTED(capability_missing). Groups that later parts add have a placeholder line.
-    registerSessionOps(table);     // session.info (ControlServer answers session.hello itself)
-    registerProjectReadOps(table); // project.get; later also transport.get, prefs.get, app.getLog
-    registerContentReadOps(table); // content.getNotes, content.getPitchCurve, content.segmentNotes;
-                                   // later also content.getDetails
+    registerSessionOps(table);        // session.info (ControlServer answers session.hello itself)
+    registerProjectReadOps(table);    // project.get, transport.get
+    registerContentReadOps(table);    // content.getNotes, content.getPitchCurve, content.segmentNotes
+    registerContentDetailsOps(table); // content.getDetails
+    registerAppReadOps(table);        // prefs.get, app.getLog
     // registerJobOps(table);          job.get, job.cancel
     // registerImportOps(table);       import.start
     // registerExportOps(table);       export.start

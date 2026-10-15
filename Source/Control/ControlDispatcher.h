@@ -76,6 +76,10 @@ public:
         loop runs any request. Message thread. */
     void setInstanceId(std::string instanceId);
 
+    /** The session token and the server proof, for redacting app.getLog; set once after
+        ControlServer::start(), like the instance id. Message thread. */
+    void setRedactionSecrets(std::vector<std::string> secrets);
+
     /** True once serverStopping() was called. Thread-safe. */
     bool isStopping() const noexcept { return stopping_.load(); }
     /** True when this build implements the method. Thread-safe. */

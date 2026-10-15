@@ -31,7 +31,9 @@ without this directory.
 | `ControlDispatcher.*` | The request handler of the listener: parameter checks, execution on the message thread, timeout, stop, error mapping. |
 | `Ops/OpsRegistry.*` | The method table (one registration line per group), the operation context with its thread check, the error mapping. |
 | `Ops/OpsSupport.*` | What the operations share: parameter reader, handle resolution, the world revision vector and `asOf`, number and text output. |
-| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*` | The methods, one file per group (see "Method table"). |
+| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*` | The methods, one file per group (see "Method table"). |
+| `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme). |
+| `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
 
 The channel files (options to server) use only the standard library and the operating system; the
 unit tests (`Tests/Control/ControlUnitTests.cpp`) compile them on their own. The service files and every
@@ -101,6 +103,8 @@ option, so a build with the option OFF compiles exactly the upstream code.
 | `Source/Utils/AppPreferences.cpp` (include, `resolveSettingsDirectory`) | `OPENTUNE_DATA_DIR` replaces the per-user OpenTune folder | Preferences of tests stay in the test's directory. | Tests read and write the user's real preferences. |
 | `Source/Utils/AppLogger.cpp` (include, `initialize`) | `OPENTUNE_DATA_DIR` replaces the per-user OpenTune folder | Logs of tests stay in the test's directory. | Tests write into the user's real log folder. |
 | `Source/Content/StandaloneContentRepository.h` (end of the class) | Member `contentEpoch_` and public `getContentEpoch()` | The content epoch of the handles (PROTOCOL.md section 9). | Handles cannot tell the contents of a project opened later from earlier ones. |
+| `Source/PluginProcessor.h` (public, before the private section; control block at the end of the class) | `recordF0FailureReason()`; `getReferenceFeatureProducer()`, `getContentF0FailureReason()`, member `contentF0FailureReasons_` | The reason the pitch analysis of a content failed, and the reference feature producer this instance would use, for `content.getDetails`. `recordF0FailureReason()` is declared for every build and does nothing without the control API. | `content.getDetails` cannot tell why an analysis failed (it reports `f0_failed`) nor whether reference alignment data is current. |
+| `Source/PluginProcessor.cpp` (definitions near `resolveReferenceFeatureProducer()`; six calls in `requestContentRefresh`) | `recordF0FailureReason(key, reason)` where the analysis starts (clear), fails (`f0_empty` for the extractor's unvoiced result, else `f0_failed`) and succeeds (clear) | Remembers the last failure reason per content on the message thread. | As above. |
 | `Source/Content/StandaloneContentRepository.cpp` (`clear()`) | `contentEpoch_` is incremented | `clear()` discards every content when a project is opened (`ProjectSession::commitPreparedOpen`) and clip ids restart at 1, so handles from before become `NOT_FOUND(stale_handle)` instead of naming new contents. | Old handles would silently name the contents of the newly opened project. |
 
 ## Request handling
@@ -196,8 +200,14 @@ contents get a pitch analysis made of synthetic F0, committed the way OpenTune c
 analysis, so no model is needed. `Reads` covers the methods with and without an editor bridge, pagination
 and cursors, every analysis state, the errors and a reopened project; `ThreadProbe` the message-thread
 check; `DispatchShutdown` and `DispatchTimeout` a request that waits for the message thread when the
-service stops or its dispatch timeout passes; `Vectors` runs the specification's vectors of the
-implemented methods against the real dispatcher (the others are listed as skipped, with the reason).
+service stops or its dispatch timeout passes; `Details` covers `content.getDetails` (time grid, reference
+binding, AUTO modes, analysis failures), `transport.get`, `prefs.get` and `app.getLog` including the
+redaction of a log with the session token, the server proof and the home directory planted in it;
+`Completeness` checks that every method of every reported capability is registered (an exemption list
+exists and must be empty before dev is merged; `read.v1` may never be on it); `Vectors` runs the
+specification's vectors of the implemented methods against the real dispatcher and requires every vector of
+an explicit list (`kMustRunVectors`) to run and pass, instead of counting; the others are listed as
+skipped, with the reason. `ControlUnitTests` also tests the log redaction and the log tail on files.
 
 ## Capabilities and protocol versions
 
@@ -206,8 +216,8 @@ method table: `session.v1` always, and the capability of every registered method
 first read is registered). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
-method of a capability it reports: while `content.getDetails`, `transport.get`, `prefs.get` and
-`app.getLog` are still missing, `read.v1` is reported with those four answering `capability_missing`.
+method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
+`ControlProcessorTests.Completeness` fails when a reported capability has a method that is not registered.
 
 ## Method table
 
@@ -219,3 +229,7 @@ method of a capability it reports: while `content.getDetails`, `transport.get`, 
 | `content.getNotes` | `read.v1` | `Ops/ContentReadOps.cpp` | `ControlProcessorTests.Reads`, `.Vectors` | `methods/content.getNotes.schema.json` |
 | `content.getPitchCurve` | `read.v1` | `Ops/ContentReadOps.cpp` | `ControlProcessorTests.Reads`, `.Vectors` | `methods/content.getPitchCurve.schema.json` |
 | `content.segmentNotes` | `read.v1` | `Ops/ContentReadOps.cpp` | `ControlProcessorTests.Reads`, `.Vectors` | `methods/content.segmentNotes.schema.json` |
+| `content.getDetails` | `read.v1` | `Ops/ContentDetailsOps.cpp` | `ControlProcessorTests.Details`, `.Vectors` | `methods/content.getDetails.schema.json` |
+| `transport.get` | `read.v1` | `Ops/ProjectReadOps.cpp` | `ControlProcessorTests.Details`, `.Vectors` | `methods/transport.get.schema.json` |
+| `prefs.get` | `read.v1` | `Ops/AppReadOps.cpp` | `ControlProcessorTests.Details`, `.Vectors` | `methods/prefs.get.schema.json` |
+| `app.getLog` | `read.v1` | `Ops/AppReadOps.cpp` (tail and redaction in `ControlLogTail.cpp`) | `ControlProcessorTests.Details`, `ControlUnitTests` | `methods/app.getLog.schema.json` |

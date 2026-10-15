@@ -53,6 +53,12 @@ void ControlDispatcher::setInstanceId(std::string instanceId)
     facts_.instanceId = std::move(instanceId);
 }
 
+void ControlDispatcher::setRedactionSecrets(std::vector<std::string> secrets)
+{
+    std::lock_guard<std::mutex> lock(factsMutex_);
+    facts_.redactionSecrets = std::move(secrets);
+}
+
 void ControlDispatcher::serverStopping()
 {
     // Requests that reach handleRequest() from now on answer themselves with SHUTTING_DOWN (they may have

@@ -6,7 +6,9 @@
 namespace OpenTune {
 
 /**
- * The project reads the dispatcher runs: project.get (methods/project.get.schema.json).
+ * The project reads the dispatcher runs: project.get (methods/project.get.schema.json) and transport.get
+ * (methods/transport.get.schema.json: the transport object of project.get, with an asOf that lists no
+ * content).
  *
  * project.get reports, from one message-thread step, the project file and its unsaved-changes flag
  * (through the editor's bridge), every track slot, every live placement, a summary of every live

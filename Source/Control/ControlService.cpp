@@ -170,6 +170,7 @@ bool ControlService::startListening()
     }
     // Requests run on this thread, after this function returned, so they always see the instance id.
     dispatcher->setInstanceId(server->instanceId());
+    dispatcher->setRedactionSecrets(server->secrets());
     dispatcher_ = std::move(dispatcher);
     discoveryFile_ = server->discoveryFilePath();
     port_ = server->port();

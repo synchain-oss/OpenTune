@@ -48,6 +48,9 @@ struct ControlInstanceFacts
     ControlBuildIdentity build;
     /** The capabilities the instance reports, in the order session.hello lists them. */
     std::vector<std::string> capabilities;
+    /** The session token and the server proof: texts that leave the process (app.getLog) are redacted
+        with them. Never reported, logged or stored elsewhere. */
+    std::vector<std::string> redactionSecrets;
 };
 
 /**

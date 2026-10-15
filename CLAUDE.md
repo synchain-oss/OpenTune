@@ -38,7 +38,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 | ControlService 成员；构造末尾受保护的 callAsync 启动；析构**第一句** `stop()`；getter（Standalone 宏 + 选项宏） | `Source/PluginProcessor.h/.cpp` | 与下一行合计约 33（.h 21 + .cpp 12） |
 | 公开 `ensureRuntimeInitialized()` | `Source/PluginProcessor.h/.cpp` | 含在上一行的合计内 |
 | `OPENTUNE_DATA_DIR` 重定向 | `Source/Utils/AppPreferences.cpp`（+ `AppLogger.cpp`） | `AppPreferences.cpp` 与 `AppLogger.cpp` 各约 8 |
-| `contentEpoch` + getter | `Source/Content/StandaloneContentRepository.h/.cpp` | 4–6 |
+| `contentEpoch` + getter | `Source/Content/StandaloneContentRepository.h/.cpp` | 约 11（含 `#if`/`#endif` 与访问说明符） |
 | `friend class ControlEditorBridge;` + 成员；构造后创建，析构时先注销 | `Source/Standalone/PluginEditor.h/.cpp` | ~6 |
 | 导出锁（UI 与 API 共用）、master 导出错误信息、按 placementId 导出 clip | `Source/PluginProcessor.*`、`Source/Standalone/PluginEditor.cpp` | 15–25 |
 | 抽出 `afterUndoRedo()`（纯重构）+ bridge 调用 | `Source/Standalone/PluginEditor.cpp` | 5–8 |
@@ -145,7 +145,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - 一键运行 `pwsh .github/scripts/gates.ps1 -Layer <层>`（在 lane 内；只改文档或脚本时加 `-SkipBuild`）。它输出带 SHA 的 PASS/FAIL/SKIP 汇总表，原样贴进 PR。依次执行：
   1. LFS 设置检查：`lfs.fetchexclude=*`，模型文件仍是未 smudge 的指针。
   2. configure / build / ctest / 真机启动，全部经 `.github/scripts/with-build-slot.ps1`：全机默认 2 个构建槽（环境变量 `OPENTUNE_BUILD_SLOTS` 或 `gates.ps1 -BuildSlots` 可调，范围 1–8），命名互斥锁，每个槽拿到后检查空闲内存，每个槽显式 `--parallel 8`。
-  3. `ctest -R Control`，再加上游已有测试，用 `-E ARALifecycleContractTests` 排除一项。该测试依赖 ARA_DRAFT 的 `persistentID`，在锁定的 ARA SDK 2.3.0 下编不过，属于上游问题。
+  3. `ctest -R Control`，再加上游已有测试，用 `-E ARALifecycleContractTests` 排除一项。该测试依赖 ARA_DRAFT 的 `persistentID`，在锁定的 ARA SDK 2.3.0 下编不过，属于上游问题。`-Layer` 为 L2 及以上时，gates 还会在 `<构建目录>\control-on` 用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` 再 configure / build / `ctest -R Control` 一遍（单独一行，Control 测试数为 0 即 FAIL），因为 lane 默认构建目录的控制接口是关闭的；L0 与 `-SkipBuild` 时该行 SKIP。
   4. 所有测试都使用临时 `OPENTUNE_DATA_DIR`，因为上游 ctest 会写真实的 `%APPDATA%\OpenTune`。
   5. 真 Standalone 测试环境就绪后：改到 Dispatcher / Jobs / Ops / Edit / bridge 或 `spec.lock` 的 PR，还要跑真 Standalone 的契约与场景测试。这一步持 E2E 互斥锁，并先快照、再恢复 `OpenTune.settings` 与 AppPreferences。
   6. 署名与身份检查（`.github/scripts/fork-checks.mjs`，与 fork-gate 同一份实现）。

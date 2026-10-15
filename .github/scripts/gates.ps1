@@ -14,6 +14,8 @@
      (all registered tests except ARALifecycleContractTests), each through with-build-slot.ps1 (machine-wide
      build slots: 2 by default, -BuildSlots or OPENTUNE_BUILD_SLOTS to change; free-memory check). Every test runs with its own OPENTUNE_DATA_DIR under
      <build>\ot-test-data.
+     From -Layer L2 up, a second build in <build>\control-on (-DOPENTUNE_ENABLE_CONTROL_API=ON) builds and runs
+     the Control tests (ctest -R Control) as its own row; zero Control tests there is FAIL. SKIP for L0 and -SkipBuild.
   3. Test data isolation: ctest runs in two passes (tests whose name contains Control, then the rest) and
      %APPDATA%\OpenTune is snapshotted (files, sizes, write times) around each. Only a change during the
      Control pass is FAIL (those tests set their own OPENTUNE_DATA_DIR); what the other upstream tests
@@ -228,7 +230,10 @@ function Get-TestTargets([string]$Dir, $Map = $null) {
 
 function Find-ModelDirs {
     if (-not (Test-Path -LiteralPath $BuildDir)) { return @() }
-    $found = foreach ($root in @(Get-ChildItem -LiteralPath $BuildDir -Directory -Filter '*_artefacts' -ErrorAction SilentlyContinue)) {
+    $roots = @(Get-ChildItem -LiteralPath $BuildDir -Directory -Filter '*_artefacts' -ErrorAction SilentlyContinue)
+    $controlOn = Join-Path $BuildDir 'control-on'
+    if (Test-Path -LiteralPath $controlOn) { $roots += @(Get-ChildItem -LiteralPath $controlOn -Directory -Filter '*_artefacts' -ErrorAction SilentlyContinue) }
+    $found = foreach ($root in $roots) {
         Get-ChildItem -LiteralPath $root.FullName -Directory -Recurse -Filter 'models' -ErrorAction SilentlyContinue
     }
     return @($found)
@@ -369,7 +374,7 @@ function Invoke-BuildSteps {
                 $ctestCodeControl = $ctestControl.Code
                 $summary = [pscustomobject]@{
                     passed = [int]$summary.passed + [int]$sc.passed; total = [int]$summary.total + [int]$sc.total
-                    failed = @(@($summary.failed) + @($sc.failed)); excluded = @($summary.excluded)
+                    failed = @(@($summary.failed) + @($sc.failed)); excluded = @(@($summary.excluded) | Where-Object { $ExcludedTests -contains $_ })
                 }
                 if ($ctestCodeControl -ne 0) { $ctest = [pscustomobject]@{ Code = $ctestCodeControl; Log = $ctest.Log } }
             }
@@ -382,6 +387,64 @@ function Invoke-BuildSteps {
                 Add-Row 'ctest' 'FAIL' "exit $($ctest.Code)；日志 $($ctest.Log)：$(Get-LogTail $ctest)"
             }
         }
+    }
+}
+
+# Layer L2 and above: the lane build directory is control-API-off by default, so a change that only touches
+# test code could run no Control test at all. Configure, build and run the Control tests once more in
+# <build>\control-on with the control API switched on; zero Control tests counts as FAIL. One row.
+$ControlOnStep = 'control-on（OPENTUNE_ENABLE_CONTROL_API=ON：configure / build / ctest -R Control）'
+function Invoke-ControlOnSteps {
+    $dir = Join-Path $BuildDir 'control-on'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $cmakeArgs = @()
+    $laneJson = Join-Path $BuildDir 'lane.json'
+    if (Test-Path -LiteralPath $laneJson) {
+        $cfg = Get-Content -LiteralPath $laneJson -Raw | ConvertFrom-Json
+        if ($cfg.PSObject.Properties['cmakeArgs']) {
+            $src = @($cfg.cmakeArgs)
+            for ($i = 0; $i -lt $src.Count; $i++) {
+                if ($src[$i] -in @('-S', '-B')) { $i++; continue }
+                if ([string]$src[$i] -like '-DOPENTUNE_ENABLE_CONTROL_API=*' -or [string]$src[$i] -like '-DOPENTUNE_BUILD_TESTS=*') { continue }
+                $cmakeArgs += [string]$src[$i]
+            }
+        }
+    }
+    if (-not ($cmakeArgs -contains '-G')) { $cmakeArgs += @('-G', 'Ninja Multi-Config', "-DCMAKE_MAKE_PROGRAM=$((Find-Ninja) -replace '\\', '/')") }
+    if (-not ($cmakeArgs | Where-Object { $_ -like '-DCMAKE_CONFIGURATION_TYPES=*' })) { $cmakeArgs += "-DCMAKE_CONFIGURATION_TYPES=$Config;Release" }
+    $cmakeArgs += @('-DOPENTUNE_ENABLE_CONTROL_API=ON', '-DOPENTUNE_BUILD_TESTS=ON')
+
+    $configure = Invoke-InSlot 'control-on-configure' (@('cmake', '-S', $laneRoot, '-B', $dir) + $cmakeArgs) -VsDevShell
+    if ($configure.Code -ne 0) {
+        Add-Row $ControlOnStep 'FAIL' "configure exit $($configure.Code)；日志 $($configure.Log)：$(Get-LogTail $configure)"
+        return
+    }
+    $testTargets = Get-TestTargets $dir
+    $controlNames = @($testTargets.Keys | ForEach-Object { [string]$_ } | Where-Object { $_ -match 'Control' -and $ExcludedTests -notcontains $_ })
+    if ($controlNames.Count -eq 0) {
+        Add-Row $ControlOnStep 'FAIL' '控制接口打开的构建里没有名字含 Control 的测试（0 个）'
+        return
+    }
+    $targets = @($controlNames | ForEach-Object { [string]$testTargets[$_] } | Where-Object { $_ } | Select-Object -Unique)
+    $build = Invoke-InSlot 'control-on-build' (@('cmake', '--build', $dir, '--config', $Config, '--parallel', "$Parallel", '--target') + $targets) -VsDevShell
+    if ($build.Code -ne 0) {
+        Add-Row $ControlOnStep 'FAIL' "build exit $($build.Code)；日志 $($build.Log)：$(Get-LogTail $build)"
+        return
+    }
+    $summaryPath = Join-Path $logDir 'ctest-summary-control-on.json'
+    Remove-Item -LiteralPath $summaryPath -ErrorAction SilentlyContinue
+    $ctest = Invoke-InSlot 'control-on-ctest' @('pwsh', '-NoProfile', '-File', (Join-Path $scripts 'run-ctest.ps1'), '-BuildDir', $dir, '-Config', $Config,
+        '-Include', 'Control', '-Exclude', ($ExcludedTests -join ','), '-DataRoot', (Join-Path $dir 'ot-test-data'), '-SummaryPath', $summaryPath)
+    $summary = $null
+    if (Test-Path -LiteralPath $summaryPath) { $summary = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json }
+    if (-not $summary) {
+        Add-Row $ControlOnStep 'FAIL' "ctest exit $($ctest.Code)；日志 $($ctest.Log)：$(Get-LogTail $ctest)"
+    } elseif ([int]$summary.total -eq 0) {
+        Add-Row $ControlOnStep 'FAIL' '运行了 0 个 Control 测试'
+    } elseif ($ctest.Code -ne 0) {
+        Add-Row $ControlOnStep 'FAIL' "失败：$(@($summary.failed) -join '、')（$($summary.passed)/$($summary.total) 通过）；日志在 <build>\control-on\ot-test-data；$(Format-Timing $ctest)"
+    } else {
+        Add-Row $ControlOnStep 'PASS' "$($summary.passed)/$($summary.total) 个 Control 测试通过（构建 $($targets.Count) 个目标；$(Format-Timing $build)；$(Format-Timing $ctest)）"
     }
 }
 
@@ -425,6 +488,17 @@ try {
             Invoke-BuildSteps
         } catch {
             Add-Row 'configure / build / ctest' 'FAIL' "$($_.Exception.Message)（$($_.InvocationInfo.PositionMessage -replace '\r?\n', ' ')）"
+        }
+    }
+
+    # 2b. control API ON build with the Control tests (L2 and above)
+    if ($Layer -eq 'L0' -or $SkipBuild) {
+        Add-Row $ControlOnStep 'SKIP' $(if ($SkipBuild) { '-SkipBuild（只改了文档或脚本）' } else { 'L0 层不涉及原生代码' })
+    } else {
+        try {
+            Invoke-ControlOnSteps
+        } catch {
+            Add-Row $ControlOnStep 'FAIL' "$($_.Exception.Message)（$($_.InvocationInfo.PositionMessage -replace '\r?\n', ' ')）"
         }
     }
 

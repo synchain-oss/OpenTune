@@ -793,7 +793,8 @@ export function verifySpecLock(top, rev) {
   }
   lines.sort((a, b) => Buffer.compare(a.rel, b.rel));
   // `sha256sum` writes "<hex>  <path>" in text mode and "<hex> *<path>" in binary mode (the default of
-  // GNU coreutils on Windows). The recorded lock was produced in binary mode, so both listings are accepted.
+  // GNU coreutils on Windows). Both formats are accepted: the rc.1 lock was produced in binary mode (space + asterisk); from rc.2 on the lock
+  // uses the two-space format named by its sha256Method field.
   const listing = (sep) => sha256Hex(Buffer.from(lines.map((l) => `${l.hex}${sep}${l.name}\n`).join(''), 'utf8'));
   const candidates = [listing('  '), listing(' *')];
   const sha256 = candidates.includes(lock.sha256) ? lock.sha256 : candidates[0];

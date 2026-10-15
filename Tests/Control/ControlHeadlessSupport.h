@@ -4,10 +4,19 @@
 // Headless processor test framework: the JUCE message loop without a window, a re-entrant message
 // pump, the isolated data directory of the test process and the process environment.
 //
-// The pump calls juce::detail::dispatchNextMessageOnSystemQueue in a loop. It does not use
+// The pump loops over a platform-specific "dispatch one round of messages" step. It does not use
 // MessageManager::runDispatchLoop() with callAsync(stopDispatchLoop): in JUCE 9.0.3 stopDispatchLoop()
 // latches for the rest of the process (every later posted message is dropped and runDispatchLoop()
 // returns at once), so that pattern works only once per process.
+//
+// Windows and Linux: juce::detail::dispatchNextMessageOnSystemQueue(true), which dispatches one message
+// and returns false at once when none is pending. JUCE defines it only for those platforms, so it
+// cannot be linked on macOS.
+// macOS: one CFRunLoopRunInMode() round on the main run loop. JUCE's message queue on macOS is a
+// CFRunLoopSource on that run loop, so this dispatches the posted messages without relying on any JUCE
+// configuration macro (MessageManager::runDispatchLoopUntil() exists only with
+// JUCE_MODAL_LOOPS_PERMITTED, which the product does not enable). It never posts a quit message, so
+// the stopDispatchLoop() latch is not engaged.
 
 #include "ControlTestSupport.h"
 
@@ -17,6 +26,10 @@
 
 #include <juce_events/juce_events.h>
 
+#if JUCE_MAC
+#include <CoreFoundation/CoreFoundation.h>
+#endif
+
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
@@ -25,6 +38,7 @@
 #include <optional>
 #include <string>
 
+#if !JUCE_MAC
 namespace juce {
 namespace detail {
 // JUCE's platform message loop (juce_events): dispatches one message of this thread's queue; with
@@ -32,6 +46,7 @@ namespace detail {
 bool dispatchNextMessageOnSystemQueue(bool returnIfNoPendingMessages);
 } // namespace detail
 } // namespace juce
+#endif
 
 namespace OpenTune {
 namespace ControlTest {
@@ -52,8 +67,14 @@ inline bool pumpMessagesUntil(const std::function<bool()>& condition, int timeou
             return true;
         if (Clock::now() >= deadline)
             return false;
+#if JUCE_MAC
+        // Handles at most one source and returns; waits up to kPumpIdleMs while idle, so no extra
+        // sleep is needed.
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, kPumpIdleMs / 1000.0, true);
+#else
         if (!juce::detail::dispatchNextMessageOnSystemQueue(true))
             sleepMs(kPumpIdleMs);
+#endif
     }
 }
 

@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 > 本文件是 AI 编码代理与贡献者在本 fork 内的常驻法条。它只存在于 fork（`dev` 及其派生分支），**永不进入上游 PR**。上游 `.gitignore` 忽略 `CLAUDE.md`，本文件以 `git add -f -- CLAUDE.md` 入库。与维护者书面指令冲突时以维护者为准。
 >
-> fork 专用脚本一律放在 `.github/scripts/`（上游已经跟踪 `scripts/`）。本地 gates、`check-ignored-delta.ps1`、署名规则副本、fork-gate 与 branch-gate 已经就位；文中其余脚本与检查（`sync-dryrun.yml`、`build-windows.yml` 等）随后续 PR 陆续加入，路径以合入后为准，加入之前以本机护栏与人工检查代替。
+> fork 专用脚本一律放在 `.github/scripts/`（上游已经跟踪 `scripts/`）。本地 gates、`check-ignored-delta.ps1`、署名规则副本、fork-gate、branch-gate、`build-windows.yml`、`asan.yml`、`build-macos.yml`、`control-sanitizers.yml`、`sync-dryrun.yml`（试 rebase 脚本 `try-rebase.mjs`）与 `runner-probe.yml` 已经就位；文中其余脚本与检查随后续 PR 陆续加入，路径以合入后为准，加入之前以本机护栏与人工检查代替。
 
 ## 0. 基本约定
 
@@ -33,11 +33,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - **新增代码的位置**（`namespace OpenTune`，PascalCase 文件名）：`Source/Control/**`、`Source/Standalone/ControlEditorBridge*`、`Tests/Control/**`、`cmake/OpenTuneControl.cmake`。fork 专用测试放 `Tests/ControlFork/**`。
 - **已声明的钩子**：这是对上游已有文件的全部改动。每处钩子都要加标记 `// OpenTune Control API hook: <purpose>, see Source/Control/README.md#hooks`。
 
-| 钩子 | 文件 | 约行数 |
+| 钩子 | 文件 | 约行数（含 `#if`/`#endif`/include 等条件编译行） |
 |---|---|---|
-| ControlService 成员；构造末尾受保护的 callAsync 启动；析构**第一句** `stop()`；getter（Standalone 宏 + 选项宏） | `Source/PluginProcessor.h/.cpp` | 20–25 |
-| 公开 `ensureRuntimeInitialized()` | `Source/PluginProcessor.h/.cpp` | 6–8 |
-| `OPENTUNE_DATA_DIR` 重定向 | `Source/Utils/AppPreferences.cpp`（+ `AppLogger.cpp`） | 5（+3） |
+| ControlService 成员；构造末尾受保护的 callAsync 启动；析构**第一句** `stop()`；getter（Standalone 宏 + 选项宏） | `Source/PluginProcessor.h/.cpp` | 与下一行合计约 33（.h 21 + .cpp 12） |
+| 公开 `ensureRuntimeInitialized()` | `Source/PluginProcessor.h/.cpp` | 含在上一行的合计内 |
+| `OPENTUNE_DATA_DIR` 重定向 | `Source/Utils/AppPreferences.cpp`（+ `AppLogger.cpp`） | `AppPreferences.cpp` 与 `AppLogger.cpp` 各约 8 |
 | `contentEpoch` + getter | `Source/Content/StandaloneContentRepository.h/.cpp` | 4–6 |
 | `friend class ControlEditorBridge;` + 成员；构造后创建，析构时先注销 | `Source/Standalone/PluginEditor.h/.cpp` | ~6 |
 | 导出锁（UI 与 API 共用）、master 导出错误信息、按 placementId 导出 clip | `Source/PluginProcessor.*`、`Source/Standalone/PluginEditor.cpp` | 15–25 |
@@ -144,7 +144,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 - 一键运行 `pwsh .github/scripts/gates.ps1 -Layer <层>`（在 lane 内；只改文档或脚本时加 `-SkipBuild`）。它输出带 SHA 的 PASS/FAIL/SKIP 汇总表，原样贴进 PR。依次执行：
   1. LFS 设置检查：`lfs.fetchexclude=*`，模型文件仍是未 smudge 的指针。
-  2. configure / build / ctest / 真机启动，全部经 `.github/scripts/with-build-slot.ps1`：全机一个构建槽，命名互斥锁，空闲内存检查，显式 `--parallel 8`。
+  2. configure / build / ctest / 真机启动，全部经 `.github/scripts/with-build-slot.ps1`：全机默认 2 个构建槽（环境变量 `OPENTUNE_BUILD_SLOTS` 或 `gates.ps1 -BuildSlots` 可调，范围 1–8），命名互斥锁，每个槽拿到后检查空闲内存，每个槽显式 `--parallel 8`。
   3. `ctest -R Control`，再加上游已有测试，用 `-E ARALifecycleContractTests` 排除一项。该测试依赖 ARA_DRAFT 的 `persistentID`，在锁定的 ARA SDK 2.3.0 下编不过，属于上游问题。
   4. 所有测试都使用临时 `OPENTUNE_DATA_DIR`，因为上游 ctest 会写真实的 `%APPDATA%\OpenTune`。
   5. 真 Standalone 测试环境就绪后：改到 Dispatcher / Jobs / Ops / Edit / bridge 或 `spec.lock` 的 PR，还要跑真 Standalone 的契约与场景测试。这一步持 E2E 互斥锁，并先快照、再恢复 `OpenTune.settings` 与 AppPreferences。

@@ -11,7 +11,10 @@ name: Build Windows
 #   PR → feature/**         只有 PR 改到原生代码（Source/**、Tests/**、cmake/**、CMakeLists.txt）或构建
 #                           流水线本身才编译；否则不编译，聚合 job 给出一个跳过的成功结果
 #   PR → review-base/**     选项 ON 与 OFF 各编译、测试一次
-#   push → dev、feature/control-api；workflow_dispatch；workflow_call    完整编译与测试
+#   push → dev、feature/control-api；workflow_dispatch    完整编译与测试
+#   workflow_call           被调用时 github.event_name / base_ref 是调用方的事件，不会是 workflow_call。
+#                           所以由输入 `full`（默认 true）显式决定：true 完整编译与测试；false 则继承调用方的
+#                           事件与 base 分支按上面的分档决定
 # 聚合 job `build-windows` 是稳定的检查上下文（将来设为 dev 的必需检查）：不加 paths 过滤、不改名。
 # 外部 fork 发来的 PR 同样运行（只读 token、无 secrets）；任何 workflow 一律不用 pull_request 的 target 变体
 # （CLAUDE.md §0 第 4 条）。
@@ -22,12 +25,18 @@ on:
     branches: [dev, feature/control-api]
   workflow_dispatch:
   workflow_call:
+    inputs:
+      full:
+        description: 'true（默认）：无论调用方是什么事件都完整编译与测试；false：继承调用方的事件与 base 分支分档'
+        type: boolean
+        default: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: build-windows-${{ github.event.pull_request.number || github.ref }}
+  # 含 github.workflow：被调用时它是调用方的 workflow 名，调用与自身触发的两次运行不会互相取消。
+  group: build-windows-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -52,7 +61,8 @@ jobs:
       - name: Decide what to build
         id: decide
         env:
-          EVENT_NAME: ${{ github.event_name }}
+          # 被调用且 inputs.full 为 true 时显式传 workflow_call（完整编译）；其余情况用实际事件。
+          EVENT_NAME: ${{ inputs.full == true && 'workflow_call' || github.event_name }}
           BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
@@ -96,14 +106,15 @@ jobs:
             "SCCACHE_DIR=$env:RUNNER_TEMP\sccache"
           ) >> $env:GITHUB_ENV
 
-      # 依赖缓存只放解压后的依赖目录（下载的归档放在缓存目录之外）；key 含 deps.lock.json 的 sha256。
-      # 命中缓存时 bootstrap-deps 仍核对每个依赖的戳记（固定 commit / 归档 sha256）与校验路径。
+      # 依赖缓存只放解压后的依赖目录（下载的归档放在缓存目录之外）；key 含 deps.lock.json 与
+      # bootstrap-deps.ps1 的 sha256（解压逻辑变了，旧缓存树不再复用）。命中缓存时 bootstrap-deps 核对每个
+      # 依赖的戳记与校验路径；git 依赖另用 git rev-parse HEAD 核对固定的 commit。
       - name: Restore dependency cache
         id: deps-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.OT_DEPS }}
-          key: ot-deps-windows-${{ hashFiles('.github/scripts/deps.lock.json') }}
+          key: ot-deps-windows-${{ hashFiles('.github/scripts/deps.lock.json', '.github/scripts/bootstrap-deps.ps1') }}
       - name: Bootstrap dependencies (sha256 verified) and link them into the tree
         run: |
           pwsh -NoProfile -File .github/scripts/bootstrap-deps.ps1 -DepsRoot $env:OT_DEPS `
@@ -232,6 +243,7 @@ jobs:
       # 上游 POST_BUILD 在产物旁边生成的 models\（LFS 指针 + 0 字节声码器占位）会遮住官方安装的模型：
       # 删除它，并断言 build 输出里已不存在任何 models\。
       - name: Remove POST_BUILD models\ and assert it is gone
+        id: models
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           function Find-ModelDirs { @(Get-ChildItem -LiteralPath $env:OT_BUILD -Directory -Recurse -Force -Filter 'models' -ErrorAction SilentlyContinue | Where-Object { $_.Name -ieq 'models' }) }
@@ -248,7 +260,7 @@ jobs:
       # 扫描暂存目录：出现 *.onnx、models\、LFS 指针、D3D12\、D3D12*.dll 或 d3dconfig.exe 即失败。
       - name: Stage artifacts (allow-list) and scan them
         id: stage
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.models.outcome == 'success' }}
         run: |
           $app = Join-Path $env:OT_BUILD "OpenTuneStandalone_artefacts\$env:OT_CONFIG\Standalone"
           if (Test-Path -LiteralPath $env:OT_STAGE) { Remove-Item -LiteralPath $env:OT_STAGE -Recurse -Force }
@@ -302,8 +314,10 @@ jobs:
           & $env:SCCACHE --show-stats
           & $env:SCCACHE --stop-server
           exit 0
+      # 只在 push（dev、feature/control-api）时保存：PR 只恢复，避免每次运行新增最多 2G 而挤掉依赖缓存
+      # （仓库缓存上限 10 GB，LRU 淘汰）。
       - name: Save sccache cache
-        if: ${{ always() && steps.sccache.outputs.path != '' }}
+        if: ${{ always() && github.event_name == 'push' && steps.sccache.outputs.path != '' }}
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.SCCACHE_DIR }}

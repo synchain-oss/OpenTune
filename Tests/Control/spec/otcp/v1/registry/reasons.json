@@ -54,7 +54,7 @@
       "code": "confirm_required",
       "scope": "INVALID_ARGUMENT",
       "since": "1.0",
-      "description": "The request is destructive (for example it deletes a track, or saves over an existing file other than the current project file) and needs confirm: true."
+      "description": "The request is destructive (for example it deletes a track or clips, or saves over an existing file other than the current project file) and needs confirm: true."
     },
     {
       "code": "path_not_absolute",
@@ -445,7 +445,7 @@
       "code": "track_capacity",
       "scope": "INVALID_ARGUMENT",
       "since": "1.0",
-      "description": "The import needs more tracks after the target track than OpenTune has."
+      "description": "The import needs more tracks after the target track than OpenTune has, or it asked for a track without clips (newTrack) and every track holds clips."
     },
     {
       "code": "reference_not_bound",
@@ -488,6 +488,84 @@
       "scope": "INVALID_ARGUMENT",
       "since": "1.0",
       "description": "The request names the same time-grid handle more than once, for example twice in the moves of content.editTimeGrid. Nothing was changed."
+    },
+    {
+      "code": "dialog_commits_on_close",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "Closing an open dialog would commit the value it shows, as closing the track-colour dialog does, or the server cannot tell whether it would; the request did not accept that with confirm: true. Nothing was closed."
+    },
+    {
+      "code": "split_out_of_range",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The split position is not strictly inside the clip."
+    },
+    {
+      "code": "merge_not_possible",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The clips cannot be merged: they must be on one track, the trailing clip must start where the leading clip ends, and both must show adjacent parts of one content with equal gain. detail names the condition that fails."
+    },
+    {
+      "code": "trim_out_of_range",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The trim would move a clip edge beyond the audio of the clip's content or past the clip's other edge."
+    },
+    {
+      "code": "reference_ineligible",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The clip cannot be bound to that reference clip: it is the clip itself, it does not overlap the clip in time, or the binding would form a cycle."
+    },
+    {
+      "code": "duplicate_track",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The request names the same track more than once. Nothing was changed."
+    },
+    {
+      "code": "track_limit",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "Every track slot is visible already, or fewer hidden track slots remain than the request needs."
+    },
+    {
+      "code": "target_track_occupied",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The track slot that a duplicated track would go to, the first hidden slot, already holds clips."
+    },
+    {
+      "code": "last_track",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The track is the only visible track, which OpenTune does not delete."
+    },
+    {
+      "code": "track_hidden",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The track is hidden; OpenTune deletes only visible tracks."
+    },
+    {
+      "code": "no_project_path",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The project was never saved, so it has no project file to save to. Saving it under a path (project.saveAs) works."
+    },
+    {
+      "code": "audio_setting_unavailable",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The requested audio device type, output device, sample rate, buffer size or output channel pair is not offered by the instance; audio.get lists the values it offers."
+    },
+    {
+      "code": "device_open_failed",
+      "scope": "IO_ERROR",
+      "since": "1.0",
+      "description": "The audio device could not be opened with the requested setup. The previous setup was restored, unless executed is true."
     }
   ]
 }

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://otcp.invalid/v1/methods/content.editTimeGrid.schema.json",
   "title": "content.editTimeGrid",
-  "description": "Edits the time grid of a content, as OpenTune's time tool does. op seed places the initial handles, as OpenTune does when the time tool is picked; it runs as a job of kind timeGridSeed, does not change how the content sounds, and, as in the UI, cannot be undone or reverted (undo reason ui_parity, revert null, warning IRREVERSIBLE in the job's result). Seeding a grid that already has handles is a no-op. op moveHandles moves handles to new output positions; each handle may appear in moves only once (else INVALID_ARGUMENT(duplicate_handle), and nothing moves); an unknown handleId gives NOT_FOUND(unknown_handle) and a grid without handles NOT_READY(grid_not_seeded). Moves are limited as in OpenTune's time tool, in two passes, by the minimum spacing to the neighbouring handles; a limited move is applied as far as allowed and reported in clamped and with the warning CLAMPED (subject: the handle; data: {field: outputSec, requested, applied}). One moveHandles call is one undo step and queues rendering again (sideEffects.reRenderQueued).",
+  "description": "Edits the time grid of a content, as OpenTune's time tool does. op seed places the initial handles, as OpenTune does when the time tool is picked; it runs as a job of kind timeGridSeed, does not change how the content sounds, and, as in the UI, cannot be undone or reverted (undo reason ui_parity, revert null, warning IRREVERSIBLE in the job's result). Seeding a grid that already has handles is a no-op. Where the seeded handles lie, like the minimum spacing that moves keep, is implementation-defined and the same as in OpenTune's time tool; clients do not assume particular positions or spacings and read the handles with content.getDetails (timeGrid.handles, and timeGrid.minHandleSpacingSec when present). The seed job checks again when it runs, before it writes anything, that the content still exists (else the job fails with NOT_FOUND(unknown_handle)), that the UI is not busy (else BUSY, with the reason of PROTOCOL.md section 13.2) and that the analysis is ready (else NOT_READY, with the reason of section 11); a job that fails writes no handle. op moveHandles moves handles to new output positions; each handle may appear in moves only once (else INVALID_ARGUMENT(duplicate_handle), and nothing moves); an unknown handleId gives NOT_FOUND(unknown_handle) and a grid without handles NOT_READY(grid_not_seeded). Moves are limited as in OpenTune's time tool, in two passes, by the minimum spacing to the neighbouring handles; a limited move is applied as far as allowed and reported in clamped and with the warning CLAMPED (subject: the handle; data: {field: outputSec, requested, applied}). One moveHandles call is one undo step and queues rendering again (sideEffects.reRenderQueued).",
   "x-otcp": {
     "method": "content.editTimeGrid",
     "layer": "L5",
@@ -24,7 +24,7 @@
       "SHUTTING_DOWN",
       "INTERNAL"
     ],
-    "jobErrors": ["CANCELLED", "INTERNAL"]
+    "jobErrors": ["NOT_FOUND", "NOT_READY", "BUSY", "CANCELLED", "INTERNAL"]
   },
   "$defs": {
     "params": {

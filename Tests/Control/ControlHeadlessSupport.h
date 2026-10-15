@@ -4,10 +4,18 @@
 // Headless processor test framework: the JUCE message loop without a window, a re-entrant message
 // pump, the isolated data directory of the test process and the process environment.
 //
-// The pump calls juce::detail::dispatchNextMessageOnSystemQueue in a loop. It does not use
+// The pump loops over a platform-specific "dispatch one round of messages" step. It does not use
 // MessageManager::runDispatchLoop() with callAsync(stopDispatchLoop): in JUCE 9.0.3 stopDispatchLoop()
 // latches for the rest of the process (every later posted message is dropped and runDispatchLoop()
 // returns at once), so that pattern works only once per process.
+//
+// Windows and Linux: juce::detail::dispatchNextMessageOnSystemQueue(true), which dispatches one message
+// and returns false at once when none is pending. JUCE defines it only for those platforms, so it
+// cannot be linked on macOS.
+// macOS: MessageManager::runDispatchLoopUntil(kPumpIdleMs), the public JUCE entry that runs the
+// platform loop for a short time and returns. It only reports whether a quit message was posted and
+// never posts one itself, so it does not engage the stopDispatchLoop() latch; the pump never calls
+// stopDispatchLoop().
 
 #include "ControlTestSupport.h"
 
@@ -25,6 +33,7 @@
 #include <optional>
 #include <string>
 
+#if !JUCE_MAC
 namespace juce {
 namespace detail {
 // JUCE's platform message loop (juce_events): dispatches one message of this thread's queue; with
@@ -32,6 +41,7 @@ namespace detail {
 bool dispatchNextMessageOnSystemQueue(bool returnIfNoPendingMessages);
 } // namespace detail
 } // namespace juce
+#endif
 
 namespace OpenTune {
 namespace ControlTest {
@@ -52,8 +62,13 @@ inline bool pumpMessagesUntil(const std::function<bool()>& condition, int timeou
             return true;
         if (Clock::now() >= deadline)
             return false;
+#if JUCE_MAC
+        // Blocks for up to kPumpIdleMs while idle, so no extra sleep is needed.
+        juce::MessageManager::getInstance()->runDispatchLoopUntil(kPumpIdleMs);
+#else
         if (!juce::detail::dispatchNextMessageOnSystemQueue(true))
             sleepMs(kPumpIdleMs);
+#endif
     }
 }
 

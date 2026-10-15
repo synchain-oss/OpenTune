@@ -2,8 +2,9 @@
 //
 // Unit tests of the control API channel: run-time options, path rules, CSPRNG, JSON, request ids,
 // fixed responses, discovery and ready files, the listener with its rules before and after
-// authentication, and the content handles, revision tokens and cursors. The session vectors of the specification copy
-// (Tests/Control/spec/otcp/v1/vectors/ session) are read and run against a real server with a stand-in request handler.
+// authentication, the content handles, revision tokens and cursors, and the redacting log tail. The session vectors of
+// the specification copy (Tests/Control/spec/otcp/v1/vectors/ session) are read and run against a real server with a
+// stand-in request handler.
 //
 // Every file goes to a fresh directory under OPENTUNE_DATA_DIR (set per test by the gates) or under
 // the build directory, never to the user's real data directories.
@@ -11,10 +12,12 @@
 #include "ControlTestSupport.h"
 
 #include "Control/ContentHandles.h"
+#include "Control/ControlLogTail.h"
 #include "Control/ControlPathPolicy.h"
 
 #include <cmath>
 #include <cstdlib>
+#include <fstream>
 #include <map>
 #include <new>
 #include <set>
@@ -1197,6 +1200,108 @@ bool matchesRevisionTokenPattern(const std::string& text)
                   == std::string::npos;
 }
 
+void writeBinaryFile(const std::filesystem::path& path, const std::string& bytes)
+{
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+}
+
+/** 32 hexadecimal digits made at run time, so that no literal in the sources looks like a key. */
+std::string fakeSecret(unsigned seed)
+{
+    static const char digits[] = "0123456789abcdef";
+    std::string out;
+    for (unsigned i = 0; i < 32; ++i)
+        out.push_back(digits[(seed + i * 5 + i / 3) % 16]);
+    return out;
+}
+
+/** The redaction of log lines and the tail of a log file (app.getLog). */
+void testLogTail()
+{
+    const std::string token = fakeSecret(3);
+    const std::string proof = fakeSecret(11);
+    CONTROL_CHECK(token != proof);
+    std::string upperToken = token;
+    for (auto& c : upperToken)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    const std::vector<std::string> secrets{token, proof};
+    const std::string home = "C:\\Users\\someone";
+    const auto spellings = controlHomeDirectorySpellings(home);
+    CONTROL_CHECK(
+        (spellings == std::vector<std::string>{"C:\\\\Users\\\\someone", "C:\\Users\\someone", "C:/Users/someone"}));
+    // A root or nothing is not a home directory: replacing it would mangle every path.
+    CONTROL_CHECK(controlHomeDirectorySpellings("").empty() && controlHomeDirectorySpellings("/").empty());
+    CONTROL_CHECK((controlHomeDirectorySpellings("/home/someone/")
+                   == std::vector<std::string>{"\\\\home\\\\someone", "/home/someone", "\\home\\someone"}));
+
+    // Secrets and the home directory in every spelling, also upper case and several times in a line.
+    CONTROL_CHECK(controlRedactLogLine("token=" + token + " proof=" + proof, secrets, spellings)
+                  == "token=<redacted> proof=<redacted>");
+    CONTROL_CHECK(controlRedactLogLine("TOKEN=" + upperToken + " " + token, secrets, spellings)
+                  == "TOKEN=<redacted> <redacted>");
+    CONTROL_CHECK(controlRedactLogLine("open C:\\Users\\someone\\a.wav and c:/users/someone/b.wav and "
+                                       "{\"p\":\"C:\\\\Users\\\\someone\\\\c.wav\"}",
+                                       secrets, spellings)
+                  == "open ~\\a.wav and ~/b.wav and {\"p\":\"~\\\\c.wav\"}");
+    CONTROL_CHECK(controlRedactLogLine("nothing to see", secrets, spellings) == "nothing to see");
+    // A short secret would match ordinary text and is ignored.
+    CONTROL_CHECK(controlRedactLogLine("abc abc", {"abc"}, {}) == "abc abc");
+    // Invalid UTF-8 becomes '?'; valid multi-byte text stays.
+    CONTROL_CHECK(controlRedactLogLine(std::string("a\xff") + "b\xc3\xa9\xe2\x82", {}, {}) == "a?b\xc3\xa9??");
+    // The cut comes after the replacement, at a code point: a secret at the cut never leaves its start.
+    const auto longLine =
+        std::string(4090, 'x') + token + "\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9\xc3\xa9";
+    const auto cut = controlRedactLogLine(longLine, secrets, spellings);
+    CONTROL_CHECK(utf8CodePointCount(cut) == kControlLogLineMaxCodePoints && isValidUtf8(cut));
+    CONTROL_CHECK(cut == std::string(4090, 'x') + "<redac");
+
+    // The tail of a file.
+    const auto directory = freshDirectory("log-tail");
+    const auto file = directory / "OpenTune.log";
+    CONTROL_CHECK(!controlReadLogTail(directory / "missing.log", 10, secrets, spellings).readable);
+    writeBinaryFile(file, "");
+    auto tail = controlReadLogTail(file, 10, secrets, spellings);
+    CONTROL_CHECK(tail.readable && tail.lines.empty() && !tail.truncated);
+    // CRLF and LF line ends, a blank line, a last line that is still being written, redaction inside.
+    writeBinaryFile(file, "one\r\ntwo " + token + "\n\nthree C:\\Users\\someone\\x\r\nfour");
+    tail = controlReadLogTail(file, 10, secrets, spellings);
+    CONTROL_CHECK(tail.readable && !tail.truncated);
+    CONTROL_CHECK((tail.lines == std::vector<std::string>{"one", "two <redacted>", "", "three ~\\x", "four"}));
+    tail = controlReadLogTail(file, 2, secrets, spellings);
+    CONTROL_CHECK(tail.truncated && (tail.lines == std::vector<std::string>{"three ~\\x", "four"}));
+    // A final line end does not make an empty line.
+    writeBinaryFile(file, "a\nb\n");
+    tail = controlReadLogTail(file, 5, secrets, spellings);
+    CONTROL_CHECK(!tail.truncated && (tail.lines == std::vector<std::string>{"a", "b"}));
+
+    // A file longer than the window: only whole lines from its end, however long the file is.
+    std::string big;
+    constexpr std::size_t kLineBytes = 100;
+    for (int i = 0; big.size() < kControlLogTailWindowBytes + 5 * kLineBytes + 37; ++i) {
+        std::string line = "L" + std::to_string(1000000 + i) + " ";
+        line.resize(kLineBytes - 1, '.');
+        big += line + "\n";
+    }
+    writeBinaryFile(file, big);
+    tail = controlReadLogTail(file, 1000, secrets, spellings);
+    CONTROL_CHECK(tail.truncated && tail.lines.size() == 1000);
+    bool whole = true;
+    for (const auto& line : tail.lines)
+        whole = whole && line.size() == kLineBytes - 1 && line[0] == 'L';
+    CONTROL_CHECK(whole);
+    CONTROL_CHECK(
+        tail.lines.back().rfind("L" + std::to_string(1000000 + static_cast<int>(big.size() / kLineBytes) - 1), 0) == 0);
+    // Asking for more lines than the window holds returns the window's whole lines and says it is cut.
+    tail = controlReadLogTail(file, 1000000, secrets, spellings);
+    CONTROL_CHECK(tail.truncated && tail.lines.size() >= kControlLogTailWindowBytes / kLineBytes - 1
+                  && tail.lines.size() <= kControlLogTailWindowBytes / kLineBytes + 1);
+    whole = true;
+    for (const auto& line : tail.lines)
+        whole = whole && line.size() == kLineBytes - 1 && line[0] == 'L';
+    CONTROL_CHECK(whole);
+}
+
 void testHandles()
 {
     // Format and parse round trip; the forms follow the schema patterns.
@@ -1465,6 +1570,7 @@ int main(int argc, char** argv)
         {"connection exception", testConnectionExceptionClosesChannel},
         {"start failures", testStartFailures},
         {"handles", testHandles},
+        {"log tail", testLogTail},
         {"session vectors", testSessionVectors},
     };
     if (!ControlSocket::acquireNetworking()) {

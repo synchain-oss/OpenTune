@@ -221,7 +221,8 @@ void scenarioStartAndHello()
         CONTROL_CHECK(memberOf(*hello, "pid").asDouble() == static_cast<double>(controlCurrentProcessId()));
         CONTROL_CHECK(memberOf(*hello, "appVersion").text() == ControlService::buildIdentity().appVersion);
         // session.v1 and the capabilities of the methods the dispatcher implements.
-        CONTROL_CHECK(toJsonString(memberOf(*hello, "capabilities")) == R"(["session.v1","read.v1","jobs.v1"])");
+        CONTROL_CHECK(toJsonString(memberOf(*hello, "capabilities"))
+                      == R"(["session.v1","read.v1","jobs.v1","import.v1"])");
     }
     // The runtime was initialised before the listener started: the logger writes under the data dir.
     checkLogInsideDataDirectory();
@@ -524,10 +525,16 @@ const Scenario kScenarios[] = {
     {"DispatchShutdown", scenarioDispatchShutdown, true},
     // Waits longer than dispatchTimeoutMs, beyond the watchdog's bound.
     {"DispatchTimeout", scenarioDispatchTimeout, false},
+    {"Details", scenarioDetails, false},
+    {"Completeness", scenarioCompleteness, false},
     {"Vectors", scenarioVectors, false},
+    {"OffMainThread", scenarioOffMainThread, false},
     {"Jobs", scenarioJobs, false},
     {"JobShutdown", scenarioJobShutdown, true},
     {"WriteEnvelope", scenarioWriteEnvelope, false},
+    {"Import", scenarioImport, false},
+    {"ImportAfterOpen", scenarioImportAfterOpen, false},
+    {"ImportCancel", scenarioImportCancel, false},
     {"JobVectors", scenarioJobVectors, false},
 };
 
@@ -549,6 +556,12 @@ int runScenario(const Scenario& scenario)
             return 1;
         }
         scenario.run();
+        // Before the message manager goes away: a dialog left open would be deleted at its shutdown,
+        // where an upstream dialog uses its freed content (see closeLeftoverModalWindows).
+        const int closedWindows = closeLeftoverModalWindows();
+        CONTROL_CHECK(closedWindows >= 0);
+        if (closedWindows > 0)
+            note("closed " + std::to_string(closedWindows) + " modal window(s) left open");
         ControlSocket::releaseNetworking();
     }
     // Never the user's real discovery file; preferences and logs were checked inside the data dir.

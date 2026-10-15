@@ -62,20 +62,38 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/ProjectReadOps.h
         Source/Control/Ops/ContentReadOps.cpp
         Source/Control/Ops/ContentReadOps.h
+        # The rest of the reads: content details, preferences and the log, the wire forms they share
+        # with the other reads, and the redacting log tail (standard library only).
+        Source/Control/Ops/OpsJson.cpp
+        Source/Control/Ops/OpsJson.h
+        Source/Control/Ops/ContentDetailsOps.cpp
+        Source/Control/Ops/ContentDetailsOps.h
+        Source/Control/Ops/AppReadOps.cpp
+        Source/Control/Ops/AppReadOps.h
+        Source/Control/ControlLogTail.cpp
+        Source/Control/ControlLogTail.h
         # Jobs, import, export and the editor bridge: the jobs registry (tick on the message thread, long
         # poll on a thread of its own, retention), the write envelope and the busy checks that every write
-        # shares, job.get and job.cancel. Import, export and the editor's side of the bridge: added later.
+        # shares, job.get and job.cancel, and import.start. The editor's side of the bridge is below.
         Source/Control/ControlJobs.cpp
         Source/Control/ControlJobs.h
         Source/Control/Ops/WriteEnvelope.cpp
         Source/Control/Ops/WriteEnvelope.h
         Source/Control/Ops/JobOps.cpp
         Source/Control/Ops/JobOps.h
+        Source/Control/Ops/ImportOps.cpp
+        Source/Control/Ops/ImportOps.h
         # Note edits, undo and redo: added later.
         # Time grid: added later.
     )
 
     target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_CONTROL_SOURCES})
+    # The editor's side of the bridge belongs to the application wrapper, like the editor itself
+    # (OPENTUNE_STANDALONE_APP_SOURCES in CMakeLists.txt); the headless tests use a bridge of their own.
+    target_sources(OpenTuneStandalone_Standalone PRIVATE
+        Source/Standalone/ControlEditorBridge.cpp
+        Source/Standalone/ControlEditorBridge.h
+    )
     # PUBLIC, so that every target that compiles or links the SharedCode sees the same class layouts.
     target_compile_definitions(OpenTuneStandalone PUBLIC OPENTUNE_ENABLE_CONTROL_API=1)
     if(WIN32)
@@ -122,6 +140,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # Unit tests of the channel: standard library and the channel sources only.
         # Handles and tokens are standard library only as well.
         set(OPENTUNE_CONTROL_TEST_SOURCES ${OPENTUNE_CONTROL_CHANNEL_SOURCES} Source/Control/ContentHandles.cpp)
+        # The log tail and its redaction are standard library only as well.
+        list(APPEND OPENTUNE_CONTROL_TEST_SOURCES Source/Control/ControlLogTail.cpp)
         list(FILTER OPENTUNE_CONTROL_TEST_SOURCES INCLUDE REGEX "\\.cpp$")
         add_executable(OpenTuneControlUnitTests
             Tests/Control/ControlUnitTests.cpp
@@ -176,7 +196,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             # The test message pump drives the main CFRunLoop directly.
             target_link_libraries(OpenTuneControlProcessorTests PRIVATE "-framework CoreFoundation")
         endif()
-        # Jobs and the write envelope.
+        # Jobs, import and the write envelope.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlJobTests.cpp)
         if(MSVC)
             target_compile_options(OpenTuneControlProcessorTests PRIVATE /utf-8 /EHsc /bigobj)
@@ -210,14 +230,20 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ThreadProbe|--control-api"
             "DispatchShutdown|--control-api"
             "DispatchTimeout|--control-api"
+            "Details|--control-api"
+            "Completeness|--control-api"
             "Vectors|--control-api"
+            "OffMainThread|--control-api"
         )
         file(TO_NATIVE_PATH "${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces" _opentune_control_trace_dir)
-        # Jobs and the write envelope (Tests/Control/ControlJobTests.cpp).
+        # Jobs, import and the write envelope (Tests/Control/ControlJobTests.cpp).
         list(APPEND _opentune_control_scenarios
             "Jobs|--control-api"
             "JobShutdown|--control-api"
             "WriteEnvelope|--control-api"
+            "Import|--control-api"
+            "ImportAfterOpen|--control-api"
+            "ImportCancel|--control-api"
             "JobVectors|--control-api"
         )
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
@@ -243,5 +269,6 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         endforeach()
         # Every vector starts a processor of its own.
         set_tests_properties(ControlProcessorTests.Vectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.JobVectors PROPERTIES TIMEOUT 300)
     endif()
 endif()

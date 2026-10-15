@@ -11,6 +11,9 @@
 #include "Control/ControlService.h"
 #include "PluginProcessor.h"
 
+#include <juce_gui_basics/juce_gui_basics.h>
+
+#include <algorithm>
 #include <atomic>
 #include <filesystem>
 #include <memory>
@@ -18,6 +21,7 @@
 #include <string>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace OpenTune {
 namespace ControlTest {
@@ -34,6 +38,8 @@ constexpr int kCloseSeenMs = 1000;
 constexpr int kWaiterSettleMs = 2000;
 /** Bound of one exchange of a client thread while the message thread pumps; longer than kReadTimeoutMs. */
 constexpr int kClientExchangeMs = 15000;
+/** Bound of closing the modal windows a scenario left open, until they are deleted. */
+constexpr int kCloseWindowsMs = 2000;
 
 /** A member of an object, or a null value when absent. */
 inline const JsonValue& memberOf(const JsonValue& object, const char* name)
@@ -102,6 +108,52 @@ bool runWhilePumping(Exchange&& exchange, int timeoutMs = kClientExchangeMs)
     const bool finished = pumpMessagesUntil([&done] { return done.load(); }, timeoutMs);
     client.join();
     return finished;
+}
+
+/**
+ * Closes the modal windows still open on this (the message) thread and pumps messages until they are
+ * deleted. Returns how many windows it closed, or -1 when one was not deleted within kCloseWindowsMs.
+ * runScenario calls it after every scenario, once the scenario's processors are destroyed and before the
+ * ScopedJuceInitialiser_GUI goes away, so that no window outlives the scenario that opened it.
+ *
+ * Why: without the models a render fails, and upstream ProcessRenderRuntime::notifyApplicationRenderFailure()
+ * then posts ConfirmDialogContent::showDiagnostic(), a modal DialogWindow (deleted when dismissed) that no
+ * one closes in a headless test, so ~ModalComponentManager deletes it at shutdown. ConfirmDialogContent
+ * listens to its DialogWindow and stops listening in its destructor through
+ * Component::SafePointer<DialogWindow>, whose getComponent() is a dynamic_cast. The window deletes the
+ * content it owns in ~ResizableWindow, when it is no longer a DialogWindow: the cast yields null, the
+ * listener stays registered, and ~Component of the window then calls it on the freed content
+ * (heap-use-after-free under ASan). Dismissing the window (exitModalState, cancelAllModalComponents)
+ * deletes it the same way, so that alone does not help. clearContentComponent() while the window is still
+ * whole deletes the content first, which lets it stop listening; the empty window is then dismissed and
+ * deleted.
+ */
+inline int closeLeftoverModalWindows()
+{
+    std::vector<juce::Component::SafePointer<juce::Component>> closing;
+    int closed = 0;
+    const bool deleted = pumpMessagesUntil(
+        [&closing, &closed] {
+            // Every round, so that a window opened by a message this pump dispatched is closed as well.
+            std::vector<juce::Component::SafePointer<juce::Component>> open;
+            if (auto* manager = juce::ModalComponentManager::getInstanceWithoutCreating())
+                for (int i = 0; i < manager->getNumModalComponents(); ++i)
+                    open.emplace_back(manager->getModalComponent(i));
+            for (const auto& window : open) {
+                if (auto* resizable = dynamic_cast<juce::ResizableWindow*>(window.getComponent()))
+                    resizable->clearContentComponent();
+                if (auto* component = window.getComponent())
+                    component->exitModalState(0);
+                closing.push_back(window);
+                ++closed;
+            }
+            closing.erase(std::remove_if(closing.begin(), closing.end(),
+                                         [](const auto& window) { return window.getComponent() == nullptr; }),
+                          closing.end());
+            return closing.empty();
+        },
+        kCloseWindowsMs);
+    return deleted ? closed : -1;
 }
 
 /** An authenticated session of a started processor that sends requests and reads their responses. */
@@ -189,8 +241,17 @@ void scenarioDispatchShutdown();
 void scenarioDispatchTimeout();
 /** The specification's vectors of the implemented methods, against the real dispatcher. */
 void scenarioVectors();
+/** content.getDetails, transport.get, prefs.get and app.getLog (including the redaction of the log) against
+    the real dispatcher, with the clips, analysis failures and preferences they report. */
+void scenarioDetails();
+/** Every method of every capability the instance reports is registered in OpsRegistry, apart from an
+    explicit list of exemptions that must be empty before dev is merged. */
+void scenarioCompleteness();
+/** The methods run off the message thread exactly when their schema says mainThread false, and
+    app.getLog answers while the message thread is held, without TIMEOUT. */
+void scenarioOffMainThread();
 
-// Scenarios of the jobs and the write envelope (ControlJobTests.cpp).
+// Scenarios of the jobs, the write envelope and import.start (ControlJobTests.cpp).
 
 /** job.get and job.cancel: answered without the message thread, the long poll (also while the session
     sends other requests), cancellation per state, retention and eviction, and `executed` of errors. */
@@ -200,7 +261,14 @@ void scenarioJobs();
 void scenarioJobShutdown();
 /** The write envelope in its four states, the IRREVERSIBLE rule, the UI snapshot and the busy checks. */
 void scenarioWriteEnvelope();
-/** The specification's vectors of job.get and job.cancel, against the real dispatcher. */
+/** import.start in both editing schemes and all layouts, focus and note generation, revealed tracks,
+    item failures, the checks before the job, the busy checks and idempotency. */
+void scenarioImport();
+/** Importing after a project was opened succeeds although OpenTune reuses clip ids then. */
+void scenarioImportAfterOpen();
+/** A three-file import cancelled after its first commit reports the committed clip. */
+void scenarioImportCancel();
+/** The specification's vectors of job.get, job.cancel and import.start, against the real dispatcher. */
 void scenarioJobVectors();
 
 } // namespace ControlTest

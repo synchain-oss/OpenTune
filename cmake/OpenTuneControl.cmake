@@ -11,9 +11,10 @@
 
 if(OPENTUNE_ENABLE_CONTROL_API)
     # Explicit, ordered source list. Each part of the control API adds its own block.
-    set(OPENTUNE_CONTROL_SOURCES
-        # Channel: run-time options, path rules, CSPRNG, JSON, protocol framing, sockets, discovery
-        # file and the listener with authentication and limits.
+    # Channel: run-time options, path rules, CSPRNG, JSON, protocol framing, sockets, discovery file and
+    # the listener with authentication and limits. Standard library and operating system only: the unit
+    # tests compile these files on their own.
+    set(OPENTUNE_CONTROL_CHANNEL_SOURCES
         Source/Control/ControlApiOptions.cpp
         Source/Control/ControlApiOptions.h
         Source/Control/ControlPathPolicy.cpp
@@ -30,7 +31,19 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/ControlDiscovery.h
         Source/Control/ControlServer.cpp
         Source/Control/ControlServer.h
-        # Service, processor start/stop and data-directory redirection: added later.
+    )
+    set(OPENTUNE_CONTROL_SOURCES
+        ${OPENTUNE_CONTROL_CHANNEL_SOURCES}
+        # Service, processor start/stop and data-directory redirection: the service facade, the
+        # message-thread marshalling with its liveness token, the editor bridge interface and
+        # OPENTUNE_DATA_DIR. These and every later part use JUCE and the processor.
+        Source/Control/ControlDataDirectory.cpp
+        Source/Control/ControlDataDirectory.h
+        Source/Control/ControlMessageThread.cpp
+        Source/Control/ControlMessageThread.h
+        Source/Control/ControlUiBridge.h
+        Source/Control/ControlService.cpp
+        Source/Control/ControlService.h
         # Dispatcher and the read methods: added later.
         # Jobs, import, export and the editor bridge: added later.
         # Note edits, undo and redo: added later.
@@ -45,9 +58,44 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_link_libraries(OpenTuneStandalone PRIVATE ws2_32 bcrypt)
     endif()
 
+    # Build identity published in the discovery file (PROTOCOL.md section 5.3). By default the commit
+    # and its exact tag are read from git each time CMake configures; builds that are distributed pass
+    # the values explicitly. Only ControlService.cpp sees them, so a new commit recompiles one file.
+    set(OPENTUNE_CONTROL_BUILD_COMMIT "" CACHE STRING
+        "Commit id the control API publishes (40 hexadecimal digits; empty: git HEAD at configure time)")
+    set(OPENTUNE_CONTROL_COMMIT_TAG "" CACHE STRING
+        "Version-control tag of that commit (empty: the exact git tag at configure time, if any)")
+    set(OPENTUNE_CONTROL_BUILD_TAG "" CACHE STRING "Distribution label of this binary (empty: none)")
+    set(OPENTUNE_CONTROL_SOURCE_URL "https://github.com/YuFeng926/OpenTune" CACHE STRING
+        "Where the corresponding source code of this build can be obtained (https URL)")
+    set(_opentune_control_commit "${OPENTUNE_CONTROL_BUILD_COMMIT}")
+    set(_opentune_control_commit_tag "${OPENTUNE_CONTROL_COMMIT_TAG}")
+    find_package(Git QUIET)
+    if(GIT_FOUND AND _opentune_control_commit STREQUAL "")
+        execute_process(COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            OUTPUT_VARIABLE _opentune_control_commit OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(_opentune_control_commit_tag STREQUAL "")
+            execute_process(COMMAND "${GIT_EXECUTABLE}" describe --tags --exact-match HEAD
+                WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+                OUTPUT_VARIABLE _opentune_control_commit_tag OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        endif()
+    endif()
+    string(TOLOWER "${_opentune_control_commit}" _opentune_control_commit)
+    if(NOT _opentune_control_commit MATCHES "^[0-9a-f]+$")
+        set(_opentune_control_commit "")
+    endif()
+    string(LENGTH "${_opentune_control_commit}" _opentune_control_commit_length)
+    if(NOT _opentune_control_commit_length EQUAL 40)
+        message(STATUS "Control API: the commit id is unknown; the discovery file reports 40 zeros")
+        set(_opentune_control_commit "0000000000000000000000000000000000000000")
+    endif()
+    set_source_files_properties(Source/Control/ControlService.cpp PROPERTIES COMPILE_DEFINITIONS
+        "OPENTUNE_CONTROL_BUILD_COMMIT=\"${_opentune_control_commit}\";OPENTUNE_CONTROL_COMMIT_TAG=\"${_opentune_control_commit_tag}\";OPENTUNE_CONTROL_BUILD_TAG=\"${OPENTUNE_CONTROL_BUILD_TAG}\";OPENTUNE_CONTROL_SOURCE_URL=\"${OPENTUNE_CONTROL_SOURCE_URL}\"")
+
     if(OPENTUNE_BUILD_TESTS)
-        # Unit tests of the channel: standard library and the control sources only.
-        set(OPENTUNE_CONTROL_TEST_SOURCES ${OPENTUNE_CONTROL_SOURCES})
+        # Unit tests of the channel: standard library and the channel sources only.
+        set(OPENTUNE_CONTROL_TEST_SOURCES ${OPENTUNE_CONTROL_CHANNEL_SOURCES})
         list(FILTER OPENTUNE_CONTROL_TEST_SOURCES INCLUDE REGEX "\\.cpp$")
         add_executable(OpenTuneControlUnitTests
             Tests/Control/ControlUnitTests.cpp
@@ -70,5 +118,81 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         endif()
         add_test(NAME ControlUnitTests COMMAND OpenTuneControlUnitTests)
         set_tests_properties(ControlUnitTests PROPERTIES TIMEOUT 300)
+
+        # Processor tests without a window or an audio device: the real OpenTuneAudioProcessor of the
+        # Standalone SharedCode with its control service. The executable links the SharedCode and no
+        # source of the application wrapper (the test defines the createOpenTuneEditor stub). It copies
+        # the SharedCode's compile definitions (JucePlugin_Build_* and the rest, JUCE_SHARED_CODE
+        # excepted) and include directories: PluginProcessor.h changes its class layout with them, and
+        # a test compiled without them would break the one-definition rule without any diagnostic. The
+        # language standard and the MSVC runtime come from the directory scope, as for the SharedCode.
+        add_executable(OpenTuneControlProcessorTests
+            Tests/Control/ControlProcessorTests.cpp
+            Tests/Control/ControlHeadlessSupport.h
+            Tests/Control/TestUiBridge.h
+            Tests/Control/ControlTestSupport.h
+        )
+        target_compile_definitions(OpenTuneControlProcessorTests PRIVATE
+            $<FILTER:$<TARGET_PROPERTY:OpenTuneStandalone,COMPILE_DEFINITIONS>,EXCLUDE,^JUCE_SHARED_CODE>
+            OPENTUNE_CONTROL_TEST_DATA_DIR="${CMAKE_CURRENT_BINARY_DIR}/ot-test-data/ControlProcessorTests"
+        )
+        target_include_directories(OpenTuneControlProcessorTests PRIVATE
+            $<TARGET_PROPERTY:OpenTuneStandalone,INCLUDE_DIRECTORIES>
+            ${OPENTUNE_JUCE_DIR}/modules
+            ${CMAKE_CURRENT_SOURCE_DIR}/Source
+            ${CMAKE_CURRENT_SOURCE_DIR}/Tests
+        )
+        target_link_libraries(OpenTuneControlProcessorTests PRIVATE OpenTuneStandalone)
+        if(MSVC)
+            target_compile_options(OpenTuneControlProcessorTests PRIVATE /utf-8 /EHsc /bigobj)
+        endif()
+        if(WIN32)
+            # Without /DELAYLOAD the inference runtime is loaded at start, as for the upstream tests.
+            add_custom_command(TARGET OpenTuneControlProcessorTests POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${ONNXRUNTIME_DLL}"
+                    "$<TARGET_FILE_DIR:OpenTuneControlProcessorTests>/${OPENTUNE_ORT_DLL_NAME}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${DIRECTML_DLL}"
+                    "$<TARGET_FILE_DIR:OpenTuneControlProcessorTests>/DirectML.dll"
+                COMMENT "Copying inference runtime DLLs to OpenTuneControlProcessorTests...")
+        endif()
+        # One process per scenario, each with its own OPENTUNE_DATA_DIR (<build>/ot-test-data/<test>).
+        # The scenario name comes first; the control API reads the other arguments from the process
+        # command line, as in the application. @DATA@ stands for the test's data directory. Paths are
+        # native: the control API accepts only the platform's absolute form (PROTOCOL.md section 20.1).
+        set(_opentune_control_scenarios
+            "StartAndHello|--control-api|--control-api-launch-nonce=headless-test-nonce-0123456789|--control-api-ready-file=@DATA@/ready.json"
+            "Disabled|--control-api-dir=not/absolute"
+            "RuntimeInitFailure|--control-api"
+            "InvalidOption|--control-api|--control-api-dir=not/absolute"
+            "DataDirectory"
+            "UiBridge"
+            "DestroyBeforeStart|--control-api"
+            "RepeatedStop|--control-api"
+            "Shutdown|--control-api"
+        )
+        file(TO_NATIVE_PATH "${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces" _opentune_control_trace_dir)
+        foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
+            string(REPLACE "|" ";" _opentune_control_scenario "${_opentune_control_scenario}")
+            list(GET _opentune_control_scenario 0 _opentune_control_name)
+            set(_opentune_control_test "ControlProcessorTests.${_opentune_control_name}")
+            set(_opentune_control_data "${CMAKE_CURRENT_BINARY_DIR}/ot-test-data/${_opentune_control_test}")
+            set(_opentune_control_arguments)
+            foreach(_opentune_control_argument IN LISTS _opentune_control_scenario)
+                if(_opentune_control_argument MATCHES "@DATA@")
+                    string(REPLACE "@DATA@" "${_opentune_control_data}" _opentune_control_argument
+                        "${_opentune_control_argument}")
+                    file(TO_NATIVE_PATH "${_opentune_control_argument}" _opentune_control_argument)
+                endif()
+                list(APPEND _opentune_control_arguments "${_opentune_control_argument}")
+            endforeach()
+            file(TO_NATIVE_PATH "${_opentune_control_data}" _opentune_control_data)
+            add_test(NAME ${_opentune_control_test}
+                COMMAND OpenTuneControlProcessorTests ${_opentune_control_arguments})
+            set_tests_properties(${_opentune_control_test} PROPERTIES
+                TIMEOUT 60
+                ENVIRONMENT "OPENTUNE_DATA_DIR=${_opentune_control_data};OPENTUNE_LIFECYCLE_TRACE_DIR=${_opentune_control_trace_dir}")
+        endforeach()
     endif()
 endif()

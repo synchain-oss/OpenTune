@@ -160,6 +160,10 @@ struct PluginPianoRollSessionState
 
 struct PluginProcessorTransportTestAccessor;  // forward decl for test access to transport fields
 
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+class ControlService;  // OpenTune Control API hook: control service type, see Source/Control/README.md#hooks
+#endif
+
 #if !JucePlugin_Build_Standalone
 namespace Capture {
     class CaptureSession;  // forward decl; full type in Source/Plugin/Capture/CaptureSession.h
@@ -984,6 +988,23 @@ private:
     // Message-thread only: setStateInformation and the replay entry points all
     // run on the message thread, so no locking is required.
     juce::MemoryBlock pendingState_;
+
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+public:
+    // OpenTune Control API hook: public runtime initialisation and the control service, see Source/Control/README.md#hooks
+    // Message thread. The sequence of the host entry points: initialise, then replay the deferred state.
+    bool ensureRuntimeInitialized() noexcept
+    {
+        const bool ready = initializeRuntimeState();
+        if (ready)
+            replayDeferredState();
+        return ready;
+    }
+    ControlService& getControlService() noexcept { return *controlService_; }
+
+private:
+    std::unique_ptr<ControlService> controlService_;
+#endif
 
 public:
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneAudioProcessor)

@@ -14,6 +14,7 @@ class ThreadPool;
 namespace OpenTune {
 
 class ProjectSession;
+struct NoteGeneratorParams;
 
 /**
  * Narrow interface through which the control API reaches what only the Standalone editor owns: the
@@ -82,6 +83,20 @@ public:
 
     /** A project was opened or the project was reloaded. Default: nothing. */
     virtual void onProjectReloaded() {}
+
+    // ---- View changes that a write makes as the UI does ----------------------------------------
+
+    /** Shows a placement the way the editor does after its own import: it becomes the active track's
+        selected placement and the piano roll shows its content. Returns false when not supported. */
+    virtual bool focusPlacement(int /*trackId*/, std::uint64_t /*placementId*/) { return false; }
+
+    /** Makes the arrangement show at least count track slots, as the editor does when an import fills
+        tracks beyond the visible ones. Returns false when not supported. */
+    virtual bool revealTracks(int /*count*/) { return false; }
+
+    /** The note generation parameters the editor would use for an AUTO or for the notes of an import
+        right now. Returns false, leaving out unchanged, when not supported. */
+    virtual bool currentNoteGenerationParams(NoteGeneratorParams& /*out*/) const { return false; }
 
     // ---- View ---------------------------------------------------------------------------------
 

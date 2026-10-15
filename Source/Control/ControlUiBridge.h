@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <vector>
 
 namespace juce {
 class AudioDeviceManager;
@@ -90,6 +91,9 @@ public:
 
     /** The view; nullopt when not supported. */
     virtual std::optional<ViewState> viewState() const { return std::nullopt; }
+
+    /** The placements selected in the arrangement, in the editor's order; nullopt when not supported. */
+    virtual std::optional<std::vector<std::uint64_t>> selectedPlacementIds() const { return std::nullopt; }
 
     /** Number of tracks the arrangement shows; nullopt when not supported. */
     virtual std::optional<int> visibleTrackCount() const { return std::nullopt; }

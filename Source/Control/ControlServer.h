@@ -54,12 +54,14 @@ private:
 };
 
 /**
- * Runs the requests that passed the server's framing and session rules. The future dispatcher
- * implements this interface; without one the server answers every request other than session.hello
- * with UNSUPPORTED(capability_missing).
+ * Runs the requests that passed the server's framing and session rules. ControlDispatcher implements
+ * this interface in OpenTune; without a handler the server answers every request other than
+ * session.hello with UNSUPPORTED(capability_missing).
  *
  * Threading: called on connection threads, concurrently for different sessions; implementations
- * must be thread-safe and must not block a connection thread for long (queue the work instead).
+ * must be thread-safe and must not block a connection thread for long. ControlDispatcher waits at most
+ * dispatchTimeoutMs for a method to start on the message thread and then for that method only, which
+ * returns quickly; longer work is queued instead.
  */
 class ControlRequestHandler
 {

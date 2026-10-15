@@ -1,0 +1,104 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/analyze-reference-job",
+  "type": "scenario",
+  "description": "The referenceAnalysis job ends with the alignment data in place: its result names the binding and reports alignmentReady true, which content.getDetails reports from then on.",
+  "capability": "reference.v1",
+  "extraCapabilities": ["jobs.v1", "read.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "referenceClip": "ref"
+      },
+      {
+        "bind": "ref",
+        "trackId": 1,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "content.analyzeReference",
+        "params": { "placementId": { "$ref": "clip.placementId" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": { "$capture": "refJob", "$any": "string" },
+            "kind": "referenceAnalysis",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "refJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "refJob" },
+            "kind": "referenceAnalysis",
+            "state": "succeeded",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": {
+              "placementId": { "$ref": "clip.placementId" },
+              "referencePlacementId": { "$ref": "ref.placementId" },
+              "alignmentReady": true
+            },
+            "error": null
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "content.getDetails",
+        "params": { "placementId": { "$ref": "clip.placementId" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 3,
+        "result": {
+          "reference": {
+            "referencePlacementId": { "$ref": "ref.placementId" },
+            "alignmentReady": true
+          }
+        }
+      }
+    }
+  ]
+}

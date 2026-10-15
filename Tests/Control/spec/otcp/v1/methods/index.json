@@ -119,7 +119,7 @@
       "capability": "ui.bridge",
       "write": "no",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "ui.dismiss",
@@ -127,7 +127,7 @@
       "capability": "ui.bridge",
       "write": "conditional",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "content.setKey",
@@ -207,7 +207,7 @@
       "capability": "transport.v1",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "transport.setTempo",
@@ -215,7 +215,7 @@
       "capability": "transport.v1",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "transport.setLoop",
@@ -223,7 +223,7 @@
       "capability": "transport.v1",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "arrangement.edit",
@@ -231,7 +231,7 @@
       "capability": "arrangement.v1",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "arrangement.copy",
@@ -239,7 +239,7 @@
       "capability": "arrangement.v1",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "track.set",
@@ -247,7 +247,7 @@
       "capability": "tracks.v1",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "track.add",
@@ -255,7 +255,7 @@
       "capability": "tracks.v1",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "track.duplicate",
@@ -263,7 +263,7 @@
       "capability": "tracks.v1",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "track.delete",
@@ -271,7 +271,7 @@
       "capability": "tracks.v1",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "ui.setSelection",
@@ -279,7 +279,7 @@
       "capability": "ui.bridge",
       "write": "conditional",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "content.analyzeReference",
@@ -287,7 +287,7 @@
       "capability": "reference.v1",
       "write": "no",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "project.save",
@@ -295,7 +295,7 @@
       "capability": "project.io",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "project.saveAs",
@@ -303,7 +303,7 @@
       "capability": "project.io",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "project.open",
@@ -311,7 +311,7 @@
       "capability": "project.io",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "project.clearRecent",
@@ -319,7 +319,7 @@
       "capability": "project.io",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "prefs.set",
@@ -327,7 +327,7 @@
       "capability": "prefs.write",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "audio.get",
@@ -335,7 +335,7 @@
       "capability": "audio.device",
       "write": "no",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     },
     {
       "method": "audio.set",
@@ -343,7 +343,7 @@
       "capability": "audio.device",
       "write": "yes",
       "since": "1.0",
-      "schema": "planned"
+      "schema": "defined"
     }
   ]
 }

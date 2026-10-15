@@ -17,9 +17,14 @@ describe('list-test-targets', { skip: !HAVE_PWSH && 'pwsh is not installed' }, (
   let dir;
   before(() => {
     dir = makeTempDir('list-targets');
+    // The three spellings CMake uses for the same call: plain, "quoted" and [=[bracketed]=].
     fs.writeFileSync(path.join(dir, 'CTestTestfile.cmake'), [
-      'add_test(ControlUnitTests "C:/b/RelWithDebInfo/OpenTuneControlUnitTests.exe")',
-      'add_test([=[OtherTests]=] "/b/OtherTests")',
+      'if(CTEST_CONFIGURATION_TYPE MATCHES "^([Rr][Ee][Ll][Ww][Ii][Tt][Hh][Dd][Ee][Bb][Ii][Nn][Ff][Oo])$")',
+      '  add_test(ControlUnitTests "C:/b/RelWithDebInfo/OpenTuneControlUnitTests.exe")',
+      'endif()',
+      'add_test([=[OtherTests]=] [=[/b/OtherTests]=])',
+      'add_test([=[PlainBracketTests]=] "/b/PlainBracketTests" )',
+      'add_test("QuotedTests" "/b/QuotedTests")',
       'subdirs("sub")',
       '',
     ].join('\n'));
@@ -29,19 +34,25 @@ describe('list-test-targets', { skip: !HAVE_PWSH && 'pwsh is not installed' }, (
   after(() => removeDir(dir));
 
   const run = (...args) => spawnSync('pwsh', ['-NoProfile', '-File', SCRIPT, '-BuildDir', dir, ...args], { encoding: 'utf8' });
+  const lines = (r) => r.stdout.split(/\r?\n/).filter(Boolean);
 
   test('-Include Control lists every matching test target, including those in subdirectories', () => {
     const r = run('-Include', 'Control');
     assert.equal(r.status, 0, r.stderr);
-    assert.deepEqual(r.stdout.split(/\r?\n/).filter(Boolean), ['OpenTuneControlUnitTests', 'OpenTuneControlProcessorTests']);
+    assert.deepEqual(lines(r), ['OpenTuneControlUnitTests', 'OpenTuneControlProcessorTests']);
   });
 
-  test('no filter lists all; -Exclude removes by test name', () => {
-    assert.equal(run().stdout.split(/\r?\n/).filter(Boolean).length, 3);
-    assert.deepEqual(run('-Exclude', 'OtherTests,ControlProcessorTests').stdout.split(/\r?\n/).filter(Boolean), ['OpenTuneControlUnitTests']);
+  test('plain, quoted and bracketed spellings are all read', () => {
+    assert.deepEqual(lines(run()).sort(), ['OpenTuneControlProcessorTests', 'OpenTuneControlUnitTests', 'OtherTests', 'PlainBracketTests', 'QuotedTests']);
   });
 
-  test('a pattern without matches exits 1', () => {
-    assert.equal(run('-Include', 'Nothing').status, 1);
+  test('-Exclude removes by test name', () => {
+    assert.deepEqual(lines(run('-Include', 'Control', '-Exclude', 'ControlProcessorTests')), ['OpenTuneControlUnitTests']);
+  });
+
+  test('a pattern without matches exits 1 and shows what was parsed', () => {
+    const r = run('-Include', 'Nothing');
+    assert.equal(r.status, 1);
+    assert.match(r.stderr, /parsed 5 test/);
   });
 });

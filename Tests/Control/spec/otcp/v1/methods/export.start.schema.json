@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://otcp.invalid/v1/methods/export.start.schema.json",
   "title": "export.start",
-  "description": "Writes a WAV file of a clip (kind clip, target.placementId), a track (kind track, target.trackId) or the master mix (kind master, no target) as a job of kind export, under the export contract of PROTOCOL.md section 19: the path is checked before the job starts; loaded source files and project media are never written (INVALID_ARGUMENT(target_is_loaded_media)); ifExists decides what happens to an existing target: with error, a target that already exists makes the call fail at once with ALREADY_EXISTS(target_exists), starting no job, and a target that appears before the final rename makes the job fail with the same error; the UI and this API share one export lock (BUSY(export_in_progress)); the job waits for analysis and rendering to settle (NOT_READY(export_wait_timeout), ANALYSIS_FAILED(f0_failed), RENDER_FAILED(render_chunk_failed)); the revision of every content is recorded once all contents are ready and the file starts to be written, so a revision that changes while the job waits (for example because an analysis finishes) is no conflict, while a revision that changes after it was recorded, before the final check, fails the job with REVISION_CONFLICT(changed_during_export) and leaves the target untouched; contents exported uncorrected are listed in dryContents. A call with the same normalized params as an export job that is not terminal returns that job. The call itself changes no project state: its result hands the work to the job, whose result is jobResult. dryContents[].reason is unvoiced (no voiced audio), nothingToRender, or analysisFailed (with allowDry). processing members that cannot be determined are null and named in processing.nullReasons.",
+  "description": "Writes a WAV file of a clip (kind clip, target.placementId), a track (kind track, target.trackId) or the master mix (kind master, no target) as a job of kind export, under the export contract of PROTOCOL.md section 19: the path is checked before the job starts; loaded source files and project media are never written (INVALID_ARGUMENT(target_is_loaded_media)); ifExists decides what happens to an existing target: with error, a target that already exists makes the call fail at once with ALREADY_EXISTS(target_exists), starting no job, and a target that appears before the final rename makes the job fail with the same error; the UI and this API share one export lock (BUSY(export_in_progress)); the job waits for analysis and rendering to settle (NOT_READY(export_wait_timeout), ANALYSIS_FAILED(f0_failed), RENDER_FAILED(render_chunk_failed)); the revision of every content is recorded once all contents are ready and the file starts to be written, so a revision that changes while the job waits (for example because an analysis finishes) is no conflict, while a revision that changes after it was recorded, before the final check, fails the job with REVISION_CONFLICT(changed_during_export) and leaves the target untouched; contents exported uncorrected are listed in dryContents. contents lists the revision of every content in the file, as the job recorded it when all contents were ready, so that a client can tell whether edits made after export.start are in the file. A call with the same normalized params as an export job that is not terminal returns that job. The call itself changes no project state: its result hands the work to the job, whose result is jobResult. dryContents[].reason is unvoiced (no voiced audio), nothingToRender, or analysisFailed (with allowDry). processing members that cannot be determined are null and named in processing.nullReasons.",
   "x-otcp": {
     "method": "export.start",
     "layer": "L3",
@@ -115,6 +115,7 @@
         "sampleFormat",
         "durationSec",
         "startTimelineSec",
+        "contents",
         "dryContents",
         "processing"
       ],
@@ -135,6 +136,23 @@
         "startTimelineSec": {
           "description": "0 for master and track exports, the clip's start for a clip export.",
           "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
+        },
+        "contents": {
+          "description": "The revision of every content the file holds, recorded when all contents were ready (PROTOCOL.md section 19 rule 8).",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["contentId", "revision"],
+            "additionalProperties": false,
+            "properties": {
+              "contentId": {
+                "$ref": "../schemas/common.schema.json#/$defs/contentId"
+              },
+              "revision": {
+                "$ref": "../schemas/common.schema.json#/$defs/revisionToken"
+              }
+            }
+          }
         },
         "dryContents": {
           "type": "array",

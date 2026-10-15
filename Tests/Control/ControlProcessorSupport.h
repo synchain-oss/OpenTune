@@ -190,5 +190,18 @@ void scenarioDispatchTimeout();
 /** The specification's vectors of the implemented methods, against the real dispatcher. */
 void scenarioVectors();
 
+// Scenarios of the jobs and the write envelope (ControlJobTests.cpp).
+
+/** job.get and job.cancel: answered without the message thread, the long poll (also while the session
+    sends other requests), cancellation per state, retention and eviction, and `executed` of errors. */
+void scenarioJobs();
+/** A job.get waits for a running job when the processor is destroyed: SHUTTING_DOWN within the shutdown
+    bound, and no job work runs afterwards. */
+void scenarioJobShutdown();
+/** The write envelope in its four states, the IRREVERSIBLE rule, the UI snapshot and the busy checks. */
+void scenarioWriteEnvelope();
+/** The specification's vectors of job.get and job.cancel, against the real dispatcher. */
+void scenarioJobVectors();
+
 } // namespace ControlTest
 } // namespace OpenTune

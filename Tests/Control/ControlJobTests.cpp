@@ -79,16 +79,20 @@ struct FixtureJob
 {
     std::atomic<bool> release{false};
     std::atomic<int> steps{0};
+    /** While set, a requested cancellation waits, so that the job stays running and cancel-requested. */
+    std::atomic<bool> holdCancellation{false};
 };
 
 ControlJobWork fixtureWork(std::shared_ptr<FixtureJob> fixture)
 {
     return [fixture](ControlJobStep& step) {
         ++fixture->steps;
-        if (step.cancelRequested())
-            step.cancel();
-        else if (fixture->release.load())
+        if (step.cancelRequested()) {
+            if (!fixture->holdCancellation.load())
+                step.cancel();
+        } else if (fixture->release.load()) {
             step.succeed(JsonValue::object());
+        }
     };
 }
 
@@ -237,13 +241,17 @@ void scenarioJobs()
     // A cancellable job: requested at once (cancellable turns false), idempotent, then cancelled at its
     // next step.
     auto analysing = std::make_shared<FixtureJob>();
+    analysing->holdCancellation = true;
     const auto analysingId = jobs->start("referenceAnalysis", true, fixtureWork(analysing)).jobId;
+    CONTROL_CHECK(pumpMessagesUntil([&analysing] { return analysing->steps.load() > 0; }, kReadTimeoutMs));
     {
         const auto first = api.result("job.cancel", json(R"({"jobId":)" + quoted(analysingId) + "}"));
         CONTROL_CHECK(memberOf(first, "cancelRequested").asBoolean()
                       && !memberOf(memberOf(first, "job"), "cancellable").asBoolean());
         const auto again = api.result("job.cancel", json(R"({"jobId":)" + quoted(analysingId) + "}"));
-        CONTROL_CHECK(memberOf(again, "cancelRequested").asBoolean());
+        CONTROL_CHECK(memberOf(again, "cancelRequested").asBoolean()
+                      && memberOf(memberOf(again, "job"), "state").text() == "running");
+        analysing->holdCancellation = false;
         const auto job = waitJob(api, analysingId);
         CONTROL_CHECK(memberOf(job, "state").text() == "cancelled" && !memberOf(job, "cancellable").asBoolean());
         CONTROL_CHECK(errorKindOf(memberOf(job, "error")).text() == "CANCELLED"

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/prefs.set.schema.json",
+  "title": "prefs.set",
+  "description": "Changes OpenTune's processing preferences, as its preferences window does: tuningHz, the frequency of A4 that all *Midi values refer to (PROTOCOL.md section 8.2); editingScheme (section 21); hybridMode; and experimentalFeatures, which shows or hides OpenTune's experimental features such as reference binding. Preferences are user-global: they apply to every project and outlive the session. Every changed preference is listed in changes (entity preference) and named in the warning GLOBAL_PREFERENCE (data {preferences}); as in OpenTune there is no undo entry (undo reason ui_parity), and the revert recipe sets the previous values with prefs.set. Values equal to the current ones are a no-op. tuningHz applies to analysis and rendering from now on and does not recompute existing results (warning NOT_RETROACTIVE). hybridMode makes OpenTune render every content again (sideEffects.reRenderQueued {contentIds, revert: null}). OpenTune applies a new editing scheme to its editor asynchronously, so a call that changes editingScheme hands all its changes to a job of kind prefsApply, which ends when the editor has applied the scheme and cannot be cancelled; the job's result (jobResult) is the write envelope. Switching to openDyne may make OpenTune generate notes for the clip open in the piano roll (section 21 rule 4), with no undo entry: sideEffects.notesGenerated {contentId, noteCount, revert: null} with the warnings SCHEME_GENERATED_NOTES and IRREVERSIBLE, and the project is marked as changed. The other preferences take effect when the call returns. The vocoder weight, the rendering priority, the pitch model and the reference alignment mode cannot be set in this version.",
+  "x-otcp": {
+    "method": "prefs.set",
+    "layer": "L8",
+    "capability": "prefs.write",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": "prefsApply",
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ],
+    "jobErrors": ["INTERNAL"]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": false,
+      "properties": {
+        "tuningHz": {
+          "description": "Frequency of A4.",
+          "type": "number",
+          "minimum": 400,
+          "maximum": 500
+        },
+        "editingScheme": { "enum": ["openTune", "openDyne"] },
+        "hybridMode": { "type": "boolean" },
+        "experimentalFeatures": { "type": "boolean" }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    },
+    "jobResult": {
+      "description": "The result of the prefsApply job: the write envelope of the preferences it applied.",
+      "$ref": "#/$defs/result"
+    }
+  }
+}

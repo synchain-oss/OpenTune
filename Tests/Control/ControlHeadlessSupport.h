@@ -48,8 +48,31 @@ bool dispatchNextMessageOnSystemQueue(bool returnIfNoPendingMessages);
 } // namespace juce
 #endif
 
+#if !JUCE_WINDOWS
+namespace juce {
+// JUCE's copy of the process arguments (juce_core); declared the same way as in juce_ApplicationBase.cpp.
+extern const char* const* juce_argv;
+extern int juce_argc;
+} // namespace juce
+#endif
+
 namespace OpenTune {
 namespace ControlTest {
+
+/**
+ * Makes the process arguments visible to juce::JUCEApplicationBase::getCommandLineParameterArray().
+ * On Windows JUCE parses GetCommandLineW(), so this does nothing. Elsewhere JUCE reads juce::juce_argv
+ * and juce::juce_argc, which only JUCEApplicationBase::main() assigns; a headless test has its own
+ * main() and never goes through it, so without this call the control API sees no command line options.
+ * Call it first thing in main(), before any ControlService or processor exists.
+ */
+inline void publishCommandLineToJuce([[maybe_unused]] int argc, [[maybe_unused]] char** argv)
+{
+#if !JUCE_WINDOWS
+    juce::juce_argc = argc;
+    juce::juce_argv = argv;
+#endif
+}
 
 /** Sleep of the message pump when no message is pending. */
 constexpr int kPumpIdleMs = 2;

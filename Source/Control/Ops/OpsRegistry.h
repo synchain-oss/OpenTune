@@ -9,6 +9,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -16,6 +17,7 @@
 
 namespace OpenTune {
 
+class ControlJobs;
 class ControlUiBridge;
 class OpenTuneAudioProcessor;
 
@@ -61,17 +63,37 @@ struct ControlInstanceFacts
 };
 
 /**
- * What an operation may use while it runs on the message thread: the processor, the editor's bridge
- * and the facts of the instance. Every access to the processor or the bridge checks the thread, so an
- * operation can never read or change content anywhere but on the message thread.
+ * What an operation needs to make a ControlOpContext again on a later message-thread step, for the steps
+ * of a job it started: the processor, the accessor of the editor's bridge (the bridge can come and go
+ * between steps), the facts of the instance, the thread probe and the jobs. Valid while the job's work
+ * exists: ControlJobs::stop() destroys every work before the dispatcher and the processor go away.
+ */
+struct ControlOpEnvironment
+{
+    OpenTuneAudioProcessor* processor = nullptr;
+    std::function<ControlUiBridge*()> bridge;
+    ControlInstanceFacts facts;
+    ControlThreadProbe* probe = nullptr;
+    ControlJobs* jobs = nullptr;
+};
+
+/**
+ * What an operation may use while it runs on the message thread: the processor, the editor's bridge,
+ * the facts of the instance and the jobs registry. Every access to the processor or the bridge checks
+ * the thread, so an operation can never read or change content anywhere but on the message thread.
  *
- * Threading: created by ControlDispatcher on the message thread for one request; not shared.
+ * Threading: created by ControlDispatcher (or by the step of a job) on the message thread; not shared.
  */
 class ControlOpContext
 {
 public:
+    /** jobs and bridgeAccessor may be empty: such a context cannot start jobs. */
     ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiBridge* bridge, const ControlInstanceFacts& facts,
-                     ControlThreadProbe& probe);
+                     ControlThreadProbe& probe, ControlJobs* jobs = nullptr,
+                     std::function<ControlUiBridge*()> bridgeAccessor = {});
+    /** A context for one step of a job, from the environment that the operation which started it kept;
+        the environment must outlive the context. */
+    explicit ControlOpContext(const ControlOpEnvironment& environment);
 
     /** The processor. Throws ControlThreadViolation off the message thread. */
     OpenTuneAudioProcessor& processor();
@@ -82,6 +104,11 @@ public:
     const ControlInstanceFacts& facts() const noexcept { return facts_; }
     /** The first 8 characters of the instance id, the instance part of every handle. */
     const std::string& instanceShort() const noexcept { return instanceShort_; }
+    /** The jobs registry, or nullptr. Throws ControlThreadViolation off the message thread. */
+    ControlJobs* jobs();
+    /** What a job started by this operation needs for its later steps. Throws ControlThreadViolation off
+        the message thread. */
+    ControlOpEnvironment environment();
 
 private:
     void requireMessageThread();
@@ -90,6 +117,8 @@ private:
     ControlUiBridge* bridge_;
     const ControlInstanceFacts& facts_;
     ControlThreadProbe& probe_;
+    ControlJobs* jobs_;
+    std::function<ControlUiBridge*()> bridgeAccessor_;
     std::string instanceShort_;
 };
 
@@ -98,8 +127,19 @@ private:
  * in Error::context as "otcp:<KIND>:<reason>" (reason may be empty) and the diagnostic text in
  * Error::message. Only ControlDispatcher maps errors to the protocol (controlMapError). detail must be
  * printable ASCII and must never contain secrets or text taken from files or projects.
+ *
+ * The error states that nothing changed (`executed` false, PROTOCOL.md section 17.4 rule 1): a write
+ * returns it only from its checks, before its first change. An error after the first change is made with
+ * controlOpErrorAfterChange.
  */
 Error controlOpError(std::string_view kind, std::string_view reason, std::string detail);
+
+/**
+ * As controlOpError, for an error of a write after it began to change state and did not take the change
+ * back completely: `executed` true (section 17.4 rule 3), so that the client reads the state again
+ * before it decides what to do. The context is "otcp!<KIND>:<reason>".
+ */
+Error controlOpErrorAfterChange(std::string_view kind, std::string_view reason, std::string detail);
 
 /** Error kind, reason and detail that ControlDispatcher sends for an Error. */
 struct ControlErrorReply
@@ -107,13 +147,18 @@ struct ControlErrorReply
     std::string kind;
     std::string reason;
     std::string detail;
+    /** `executed` as the operation stated it (controlOpError: false, controlOpErrorAfterChange: true);
+        empty for other OpenTune errors, for which the dispatcher assumes that a write may have changed
+        state. */
+    std::optional<bool> executed;
 };
 
 /**
- * Maps an Error to the protocol: errors made by controlOpError keep their kind, reason and detail;
- * other OpenTune errors are mapped by their ErrorCode (InvalidParameter: INVALID_ARGUMENT, NotInitialized:
- * NOT_READY, model and session failures: MODEL_UNAVAILABLE, OperationCancelled: CANCELLED, the rest:
- * INTERNAL), with the fixed text of the code as detail, never the error's own message.
+ * Maps an Error to the protocol: errors made by controlOpError and controlOpErrorAfterChange keep their
+ * kind, reason, detail and executed; other OpenTune errors are mapped by their ErrorCode
+ * (InvalidParameter: INVALID_ARGUMENT, NotInitialized: NOT_READY, model and session failures:
+ * MODEL_UNAVAILABLE, OperationCancelled: CANCELLED, the rest: INTERNAL), with the fixed text of the code
+ * as detail, never the error's own message.
  */
 ControlErrorReply controlMapError(const Error& error);
 
@@ -126,24 +171,32 @@ ControlErrorReply controlMapError(const Error& error);
  *
  * run runs on the message thread with what parse kept, and returns the result object or an Error.
  *
- * A method whose schema says x-otcp.mainThread false (app.getLog) has runOffMainThread instead of run: it
- * runs on the connection thread, never waits for the message thread and so never answers TIMEOUT. It
- * gets only the instance facts (an immutable snapshot) and what parse kept, never the processor or the
- * editor bridge, so it cannot read or change project content.
+ * A method whose schema says x-otcp.mainThread false has one of two functions instead of run, and both
+ * run on the connection thread, never wait for the message thread and so never answer TIMEOUT:
+ * - runOffMainThread (app.getLog) gets only the instance facts (an immutable snapshot) and what parse
+ *   kept, never the processor or the editor bridge, so it cannot read or change project content;
+ * - runWithoutMessageThread (job.get, job.cancel) gets the jobs registry and may answer later.
  */
 struct ControlMethod
 {
     std::string name;
     /** Runs on the message thread (x-otcp.mainThread of the schema): run is set when true,
-        runOffMainThread when false. */
+        runOffMainThread or runWithoutMessageThread when false. */
     bool mainThread = true;
-    /** Changes state (x-otcp.write is not "no"): decides `executed` of an error after the start. */
+    /** Changes state (x-otcp.write is not "no"): decides `executed` of an error that does not state it
+        (an exception, or an OpenTune error that is not a controlOpError). */
     bool write = false;
     std::function<bool(const JsonValue& params, std::shared_ptr<const void>& parsed, std::string& why)> parse;
     std::function<Result<JsonValue>(ControlOpContext& context, const void* parsed)> run;
     /** Any thread; must not block for long, read files only within a fixed bound, and reach no OpenTune
         state other than what is thread-safe by its own contract (for example AppLogger). */
     std::function<Result<JsonValue>(const ControlInstanceFacts& facts, const void* parsed)> runOffMainThread;
+    /** Answers the request exactly once, possibly later and from another thread. */
+    using Reply = std::function<void(Result<JsonValue>)>;
+    /** Instead of run, for a method with mainThread false (job.get, job.cancel): runs on the connection
+        thread with the jobs registry and reaches no OpenTune state. It copies what it needs of parsed
+        before it returns, and never waits for the message thread or blocks the connection thread. */
+    std::function<void(ControlJobs& jobs, const void* parsed, Reply reply)> runWithoutMessageThread;
 };
 
 /**
@@ -182,6 +235,38 @@ ControlMethod controlOffMainThreadReadMethod(std::string name, bool (*parse)(con
     method.run = nullptr;
     method.runOffMainThread = [run](const ControlInstanceFacts& facts, const void* parsed) {
         return run(facts, *static_cast<const Params*>(parsed));
+    };
+    return method;
+}
+
+/** A write method (x-otcp.write "yes") from typed functions, as controlReadMethod. */
+template <typename Params>
+ControlMethod controlWriteMethod(std::string name, bool (*parse)(const JsonValue&, Params&, std::string&),
+                                 Result<JsonValue> (*run)(ControlOpContext&, const Params&))
+{
+    auto method = controlReadMethod<Params>(std::move(name), parse, run);
+    method.write = true;
+    return method;
+}
+
+/** A method that never waits for the message thread (x-otcp.mainThread false) from typed functions:
+    parse and run on the connection thread, run with the jobs registry. */
+template <typename Params>
+ControlMethod controlJobMethod(std::string name, bool (*parse)(const JsonValue&, Params&, std::string&),
+                               void (*run)(ControlJobs&, const Params&, ControlMethod::Reply))
+{
+    ControlMethod method;
+    method.name = std::move(name);
+    method.mainThread = false;
+    method.parse = [parse](const JsonValue& params, std::shared_ptr<const void>& parsed, std::string& why) {
+        auto value = std::make_shared<Params>();
+        if (!parse(params, *value, why))
+            return false;
+        parsed = std::move(value);
+        return true;
+    };
+    method.runWithoutMessageThread = [run](ControlJobs& jobs, const void* parsed, ControlMethod::Reply reply) {
+        run(jobs, *static_cast<const Params*>(parsed), std::move(reply));
     };
     return method;
 }

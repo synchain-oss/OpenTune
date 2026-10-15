@@ -401,7 +401,7 @@ void checkSessionInfo(ApiSession& api)
     CONTROL_CHECK(memberOf(memberOf(info, "runtime"), "pid").asDouble()
                   == static_cast<double>(controlCurrentProcessId()));
     // Only the capabilities this build implements are reported.
-    CONTROL_CHECK(toJsonString(memberOf(info, "capabilities")) == R"(["session.v1","read.v1"])");
+    CONTROL_CHECK(toJsonString(memberOf(info, "capabilities")) == R"(["session.v1","read.v1","jobs.v1"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");
@@ -806,7 +806,7 @@ void checkErrors(ApiSession& api, const ClipHandles& handles)
     CONTROL_CHECK(api.fails("project.get", json(R"({"verbose":true})"), "INVALID_ARGUMENT", "invalid_params"));
     // A method of a capability this build does not report (a later part implements it), and a method the
     // protocol does not define.
-    CONTROL_CHECK(api.fails("job.get", json(R"({"jobId":"j:00000000:1"})"), "UNSUPPORTED", "capability_missing"));
+    CONTROL_CHECK(api.fails("export.start", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
     CONTROL_CHECK(api.fails("track.rename", JsonValue::object(), "UNSUPPORTED", "unknown_method"));
 }
 
@@ -1272,6 +1272,8 @@ const std::set<std::string> kImplementedMethods = {"session.info",
                                                    "transport.get",
                                                    "prefs.get",
                                                    "app.getLog"};
+/** The capabilities whose vectors this runner runs; ControlJobTests.cpp (JobVectors) runs those of
+    jobs.v1. */
 const std::set<std::string> kReportedCapabilities = {"session.v1", "read.v1"};
 
 /**
@@ -1821,7 +1823,8 @@ void scenarioCompleteness()
         return;
     const auto& methods = memberOf(parsed.value, "methods");
     const auto reported = dispatcher->capabilities();
-    CONTROL_CHECK(!reported.empty());
+    for (const char* capability : {"session.v1", "read.v1", "jobs.v1"})
+        CONTROL_CHECK(std::find(reported.begin(), reported.end(), capability) != reported.end());
 
     // The listener answers session.hello itself, so the dispatcher's method table has no entry for it.
     int checked = 0;
@@ -1849,7 +1852,8 @@ void scenarioCompleteness()
         const char* capability = controlMethodCapability(method);
         CONTROL_CHECK(capability == nullptr || std::string(capability) != "read.v1");
     }
-    CONTROL_CHECK(checked >= 8);
+    // session.info, the eight reads, job.get and job.cancel.
+    CONTROL_CHECK(checked >= 11);
     if (!kUnimplementedReportedMethods.empty())
         note("exempt methods remain; the list must be empty before dev is merged");
     note(std::to_string(checked) + " methods of the reported capabilities are registered");
@@ -1880,13 +1884,18 @@ void scenarioOffMainThread()
         const auto& mainThread = memberOf(memberOf(schema.value, "x-otcp"), "mainThread");
         if (!CONTROL_CHECK(mainThread.isBoolean() && mainThread.asBoolean() == method->mainThread))
             note(name + ": mainThread of the method table differs from its schema");
-        CONTROL_CHECK(method->mainThread ? (method->run && !method->runOffMainThread)
-                                         : (method->runOffMainThread && !method->run && !method->write));
+        // Off the message thread: exactly one of the two functions, the facts one (app.getLog) or the jobs
+        // one (job.get, job.cancel).
+        const bool withFacts = static_cast<bool>(method->runOffMainThread);
+        const bool withJobs = static_cast<bool>(method->runWithoutMessageThread);
+        CONTROL_CHECK(method->mainThread ? (method->run && !withFacts && !withJobs)
+                                         : (withFacts != withJobs && !method->run && !method->write));
         if (!method->mainThread)
             offMainThread.push_back(name);
     }
-    CONTROL_CHECK(registered >= 9);
-    CONTROL_CHECK(std::find(offMainThread.begin(), offMainThread.end(), "app.getLog") != offMainThread.end());
+    CONTROL_CHECK(registered >= 11);
+    for (const char* name : {"app.getLog", "job.get", "job.cancel"})
+        CONTROL_CHECK(std::find(offMainThread.begin(), offMainThread.end(), name) != offMainThread.end());
 
     auto processor = startedProcessor();
     auto& service = processor->getControlService();

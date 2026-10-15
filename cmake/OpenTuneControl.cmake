@@ -72,7 +72,15 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/AppReadOps.h
         Source/Control/ControlLogTail.cpp
         Source/Control/ControlLogTail.h
-        # Jobs, import, export and the editor bridge: added later.
+        # Jobs, import, export and the editor bridge: the jobs registry (tick on the message thread, long
+        # poll on a thread of its own, retention), the write envelope and the busy checks that every write
+        # shares, job.get and job.cancel. Import, export and the editor's side of the bridge: added later.
+        Source/Control/ControlJobs.cpp
+        Source/Control/ControlJobs.h
+        Source/Control/Ops/WriteEnvelope.cpp
+        Source/Control/Ops/WriteEnvelope.h
+        Source/Control/Ops/JobOps.cpp
+        Source/Control/Ops/JobOps.h
         # Note edits, undo and redo: added later.
         # Time grid: added later.
     )
@@ -176,6 +184,12 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             ${CMAKE_CURRENT_SOURCE_DIR}/Tests
         )
         target_link_libraries(OpenTuneControlProcessorTests PRIVATE OpenTuneStandalone)
+        if(APPLE)
+            # The test message pump drives the main CFRunLoop directly.
+            target_link_libraries(OpenTuneControlProcessorTests PRIVATE "-framework CoreFoundation")
+        endif()
+        # Jobs and the write envelope.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlJobTests.cpp)
         if(MSVC)
             target_compile_options(OpenTuneControlProcessorTests PRIVATE /utf-8 /EHsc /bigobj)
         endif()
@@ -214,6 +228,13 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "OffMainThread|--control-api"
         )
         file(TO_NATIVE_PATH "${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces" _opentune_control_trace_dir)
+        # Jobs and the write envelope (Tests/Control/ControlJobTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "Jobs|--control-api"
+            "JobShutdown|--control-api"
+            "WriteEnvelope|--control-api"
+            "JobVectors|--control-api"
+        )
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
             string(REPLACE "|" ";" _opentune_control_scenario "${_opentune_control_scenario}")
             list(GET _opentune_control_scenario 0 _opentune_control_name)

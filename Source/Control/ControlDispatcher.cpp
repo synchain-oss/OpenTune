@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "ControlDispatcher.h"
 
+#include "ContentHandles.h"
+#include "ControlJobs.h"
 #include "ControlLogTail.h"
 #include "ControlMessageThread.h"
 
@@ -57,6 +59,8 @@ std::vector<std::string> ControlDispatcher::capabilities() const
 
 void ControlDispatcher::setInstanceId(std::string instanceId)
 {
+    if (setup_.jobs != nullptr)
+        setup_.jobs->setInstanceShort(controlInstanceShort(instanceId));
     std::lock_guard<std::mutex> lock(factsMutex_);
     auto facts = std::make_shared<ControlInstanceFacts>(*facts_);
     facts->instanceId = std::move(instanceId);
@@ -119,11 +123,29 @@ void ControlDispatcher::handleRequest(ControlRequest request, ControlCompletion 
         completion.respondError("INVALID_ARGUMENT", "invalid_params", why, false);
         return;
     }
+    if (!method->mainThread && method->runWithoutMessageThread) {
+        // job.get and job.cancel: the jobs registry only, never the message thread (PROTOCOL.md section 13.3
+        // rule 2). The reply may come later from the registry's thread; it captures only the completion.
+        if (setup_.jobs == nullptr) {
+            completion.respondError("INTERNAL", {}, "the method is not available", false);
+            return;
+        }
+        method->runWithoutMessageThread(*setup_.jobs, parsed.get(), [completion](Result<JsonValue> result) {
+            if (result.ok()) {
+                completion.respondResult(result.value());
+                return;
+            }
+            const auto reply = controlMapError(result.error());
+            completion.respondError(reply.kind, reply.reason, reply.detail, reply.executed.value_or(false));
+        });
+        return;
+    }
 
     auto outcome = std::make_shared<Outcome>();
     if (!method->mainThread) {
-        // x-otcp.mainThread false: runs here, on the connection thread, and never waits for the message
-        // thread, so a busy main thread never delays it and it never answers TIMEOUT.
+        // x-otcp.mainThread false without the jobs registry (app.getLog): runs here, on the connection
+        // thread, and never waits for the message thread, so a busy main thread never delays it and it
+        // never answers TIMEOUT.
         executeOffMainThread(*method, parsed.get(), *outcome);
         respond(*outcome, completion);
         return;
@@ -170,13 +192,16 @@ void ControlDispatcher::execute(const ControlMethod& method, const void* parsed,
     ++executed_;
     const auto facts = currentFacts();
     try {
-        ControlOpContext context(*setup_.processor, setup_.uiBridge ? setup_.uiBridge() : nullptr, *facts, probe_);
+        ControlOpContext context(*setup_.processor, setup_.uiBridge ? setup_.uiBridge() : nullptr, *facts, probe_,
+                                 setup_.jobs.get(), setup_.uiBridge);
         auto result = method.run(context, parsed);
         if (result.ok()) {
             outcome.result = std::move(result).value();
         } else {
             outcome.error = controlMapError(result.error());
-            outcome.executed = false; // operations fail in their checks, before any change
+            // As the operation stated it: controlOpError fails before any change, controlOpErrorAfterChange
+            // after one. Another error of a write may have changed state.
+            outcome.executed = outcome.error.executed.value_or(method.write);
         }
     } catch (const ControlThreadViolation&) {
         outcome.error = {"INTERNAL", "", "OpenTune state was reached from a thread other than the main thread"};
@@ -190,6 +215,10 @@ void ControlDispatcher::execute(const ControlMethod& method, const void* parsed,
 
 void ControlDispatcher::executeOffMainThread(const ControlMethod& method, const void* parsed, Outcome& outcome)
 {
+    if (!method.runOffMainThread) {
+        outcome.error = {"INTERNAL", "", "the method is not available"};
+        return;
+    }
     std::shared_ptr<const ControlInstanceFacts> facts;
     {
         // ControlService sets the secrets right after ControlServer::start() returned, so a request can

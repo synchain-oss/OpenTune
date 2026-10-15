@@ -62,6 +62,16 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/ProjectReadOps.h
         Source/Control/Ops/ContentReadOps.cpp
         Source/Control/Ops/ContentReadOps.h
+        # The rest of the reads: content details, preferences and the log, the wire forms they share
+        # with the other reads, and the redacting log tail (standard library only).
+        Source/Control/Ops/OpsJson.cpp
+        Source/Control/Ops/OpsJson.h
+        Source/Control/Ops/ContentDetailsOps.cpp
+        Source/Control/Ops/ContentDetailsOps.h
+        Source/Control/Ops/AppReadOps.cpp
+        Source/Control/Ops/AppReadOps.h
+        Source/Control/ControlLogTail.cpp
+        Source/Control/ControlLogTail.h
         # Jobs, import, export and the editor bridge: the jobs registry (tick on the message thread, long
         # poll on a thread of its own, retention), the write envelope and the busy checks that every write
         # shares, job.get and job.cancel. Import, export and the editor's side of the bridge: added later.
@@ -122,6 +132,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # Unit tests of the channel: standard library and the channel sources only.
         # Handles and tokens are standard library only as well.
         set(OPENTUNE_CONTROL_TEST_SOURCES ${OPENTUNE_CONTROL_CHANNEL_SOURCES} Source/Control/ContentHandles.cpp)
+        # The log tail and its redaction are standard library only as well.
+        list(APPEND OPENTUNE_CONTROL_TEST_SOURCES Source/Control/ControlLogTail.cpp)
         list(FILTER OPENTUNE_CONTROL_TEST_SOURCES INCLUDE REGEX "\\.cpp$")
         add_executable(OpenTuneControlUnitTests
             Tests/Control/ControlUnitTests.cpp
@@ -210,7 +222,10 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ThreadProbe|--control-api"
             "DispatchShutdown|--control-api"
             "DispatchTimeout|--control-api"
+            "Details|--control-api"
+            "Completeness|--control-api"
             "Vectors|--control-api"
+            "OffMainThread|--control-api"
         )
         file(TO_NATIVE_PATH "${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces" _opentune_control_trace_dir)
         # Jobs and the write envelope (Tests/Control/ControlJobTests.cpp).

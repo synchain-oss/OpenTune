@@ -157,6 +157,9 @@ public:
     int port() const { return port_.load(); }
     /** The instance id (not secret), empty before start(). */
     std::string instanceId() const;
+    /** The session token and the server proof (secrets), after start(); empty before. Only for redacting
+        them from text that leaves the process (app.getLog); never log, return or store them elsewhere. */
+    std::vector<std::string> secrets() const;
     /** Path of this process's discovery file. */
     std::string discoveryFilePath() const { return discovery_.filePath(); }
     /** Number of authenticated sessions. */

@@ -709,6 +709,12 @@ std::string ControlServer::instanceId() const
     return shared_->instanceId;
 }
 
+std::vector<std::string> ControlServer::secrets() const
+{
+    std::lock_guard<std::mutex> lock(shared_->mutex);
+    return {shared_->token, shared_->serverProof};
+}
+
 int ControlServer::sessionCount() const
 {
     std::lock_guard<std::mutex> lock(shared_->mutex);

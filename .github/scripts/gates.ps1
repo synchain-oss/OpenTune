@@ -294,24 +294,31 @@ function Add-IsolationRow($Control, $Other, [bool]$RanCtest) {
     Add-Row $step $v.Status $v.Note
 }
 
+# The cmake arguments recorded in <build>\lane.json (without -S / -B), minus any argument matching one of the
+# -like patterns in $Drop. Shared by the lane build and the control-on build.
+function Get-LaneCmakeArgs([string[]]$Drop = @()) {
+    $result = @()
+    $laneJson = Join-Path $BuildDir 'lane.json'
+    if (-not (Test-Path -LiteralPath $laneJson)) { return $result }
+    $cfg = Get-Content -LiteralPath $laneJson -Raw | ConvertFrom-Json
+    if (-not $cfg.PSObject.Properties['cmakeArgs']) { return $result }
+    $src = @($cfg.cmakeArgs)
+    for ($i = 0; $i -lt $src.Count; $i++) {
+        if ($src[$i] -in @('-S', '-B')) { $i++; continue }
+        $arg = [string]$src[$i]
+        if (@($Drop | Where-Object { $arg -like $_ }).Count) { continue }
+        $result += $arg
+    }
+    return $result
+}
+
 # Step 2: configure, build and ctest, each under the build slot. Adds the configure/build/ctest rows
 # and sets $script:ctestDataDiff to the change of the real data directory during ctest.
 $script:ctestDataDiff = $null
 $script:ctestControlDiff = $null
 function Invoke-BuildSteps {
     New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
-    $cmakeArgs = @()
-    $laneJson = Join-Path $BuildDir 'lane.json'
-    if (Test-Path -LiteralPath $laneJson) {
-        $cfg = Get-Content -LiteralPath $laneJson -Raw | ConvertFrom-Json
-        if ($cfg.PSObject.Properties['cmakeArgs']) {
-            $src = @($cfg.cmakeArgs)
-            for ($i = 0; $i -lt $src.Count; $i++) {
-                if ($src[$i] -in @('-S', '-B')) { $i++; continue }
-                $cmakeArgs += [string]$src[$i]
-            }
-        }
-    }
+    $cmakeArgs = @(Get-LaneCmakeArgs)
     if (-not ($cmakeArgs -contains '-G')) { $cmakeArgs += @('-G', 'Ninja Multi-Config', "-DCMAKE_MAKE_PROGRAM=$((Find-Ninja) -replace '\\', '/')") }
     if (-not ($cmakeArgs | Where-Object { $_ -like '-DCMAKE_CONFIGURATION_TYPES=*' })) { $cmakeArgs += "-DCMAKE_CONFIGURATION_TYPES=$Config;Release" }
     if (-not ($cmakeArgs -contains '-DOPENTUNE_BUILD_TESTS=ON')) { $cmakeArgs += '-DOPENTUNE_BUILD_TESTS=ON' }
@@ -393,23 +400,12 @@ function Invoke-BuildSteps {
 # Layer L2 and above: the lane build directory is control-API-off by default, so a change that only touches
 # test code could run no Control test at all. Configure, build and run the Control tests once more in
 # <build>\control-on with the control API switched on; zero Control tests counts as FAIL. One row.
+$script:controlOnDiff = $null
 $ControlOnStep = 'control-on（OPENTUNE_ENABLE_CONTROL_API=ON：configure / build / ctest -R Control）'
 function Invoke-ControlOnSteps {
     $dir = Join-Path $BuildDir 'control-on'
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
-    $cmakeArgs = @()
-    $laneJson = Join-Path $BuildDir 'lane.json'
-    if (Test-Path -LiteralPath $laneJson) {
-        $cfg = Get-Content -LiteralPath $laneJson -Raw | ConvertFrom-Json
-        if ($cfg.PSObject.Properties['cmakeArgs']) {
-            $src = @($cfg.cmakeArgs)
-            for ($i = 0; $i -lt $src.Count; $i++) {
-                if ($src[$i] -in @('-S', '-B')) { $i++; continue }
-                if ([string]$src[$i] -like '-DOPENTUNE_ENABLE_CONTROL_API=*' -or [string]$src[$i] -like '-DOPENTUNE_BUILD_TESTS=*') { continue }
-                $cmakeArgs += [string]$src[$i]
-            }
-        }
-    }
+    $cmakeArgs = @(Get-LaneCmakeArgs @('-DOPENTUNE_ENABLE_CONTROL_API=*', '-DOPENTUNE_BUILD_TESTS=*'))
     if (-not ($cmakeArgs -contains '-G')) { $cmakeArgs += @('-G', 'Ninja Multi-Config', "-DCMAKE_MAKE_PROGRAM=$((Find-Ninja) -replace '\\', '/')") }
     if (-not ($cmakeArgs | Where-Object { $_ -like '-DCMAKE_CONFIGURATION_TYPES=*' })) { $cmakeArgs += "-DCMAKE_CONFIGURATION_TYPES=$Config;Release" }
     $cmakeArgs += @('-DOPENTUNE_ENABLE_CONTROL_API=ON', '-DOPENTUNE_BUILD_TESTS=ON')
@@ -433,8 +429,10 @@ function Invoke-ControlOnSteps {
     }
     $summaryPath = Join-Path $logDir 'ctest-summary-control-on.json'
     Remove-Item -LiteralPath $summaryPath -ErrorAction SilentlyContinue
+    $dataBefore = Get-DirSnapshot $realDataDir
     $ctest = Invoke-InSlot 'control-on-ctest' @('pwsh', '-NoProfile', '-File', (Join-Path $scripts 'run-ctest.ps1'), '-BuildDir', $dir, '-Config', $Config,
         '-Include', 'Control', '-Exclude', ($ExcludedTests -join ','), '-DataRoot', (Join-Path $dir 'ot-test-data'), '-SummaryPath', $summaryPath)
+    $script:controlOnDiff = Compare-DirSnapshot $dataBefore (Get-DirSnapshot $realDataDir)
     $summary = $null
     if (Test-Path -LiteralPath $summaryPath) { $summary = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json }
     if (-not $summary) {
@@ -501,6 +499,18 @@ try {
             Add-Row $ControlOnStep 'FAIL' "$($_.Exception.Message)（$($_.InvocationInfo.PositionMessage -replace '\r?\n', ' ')）"
         }
     }
+
+    # 2c. test data isolation of the control-on ctest pass: any create / change / delete under the real
+    # %APPDATA%\OpenTune during that pass is a FAIL (the control tests set their own OPENTUNE_DATA_DIR).
+    $isoControlOn = '测试数据隔离（control-on 一轮）'
+    if ($Layer -eq 'L0' -or $SkipBuild) { Add-Row $isoControlOn 'SKIP' $(if ($SkipBuild) { '-SkipBuild（ctest 未运行）' } else { 'L0 层不涉及原生代码' }) }
+    elseif ($null -eq $script:controlOnDiff) { Add-Row $isoControlOn 'SKIP' 'control-on 的 ctest 未运行' }
+    elseif ($script:controlOnDiff.Count -gt 0) {
+        $d = $script:controlOnDiff
+        $ex = @(@($d.Created) + @($d.Changed) | Select-Object -First 3 | ForEach-Object { if ($_ -eq '.') { 'OpenTune' } else { "OpenTune\$_" } })
+        Add-Row $isoControlOn 'FAIL' "control-on 一轮 ctest 写入了真实的 %APPDATA%\OpenTune：新建 $(@($d.Created).Count) 项、修改 $(@($d.Changed).Count) 项、删除 $(@($d.Removed).Count) 项$(if ($ex.Count) { "（如 $($ex -join '、')）" })"
+    }
+    else { Add-Row $isoControlOn 'PASS' 'control-on 一轮 ctest 前后真实目录无任何新建、修改或删除' }
 
     # 3. test data isolation
     if ($SkipBuild) { Add-Row '测试数据隔离（真实 %APPDATA%\OpenTune）' 'SKIP' '-SkipBuild（ctest 未运行）' }

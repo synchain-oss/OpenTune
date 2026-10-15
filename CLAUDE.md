@@ -145,7 +145,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - 一键运行 `pwsh .github/scripts/gates.ps1 -Layer <层>`（在 lane 内；只改文档或脚本时加 `-SkipBuild`）。它输出带 SHA 的 PASS/FAIL/SKIP 汇总表，原样贴进 PR。依次执行：
   1. LFS 设置检查：`lfs.fetchexclude=*`，模型文件仍是未 smudge 的指针。
   2. configure / build / ctest / 真机启动，全部经 `.github/scripts/with-build-slot.ps1`：全机默认 2 个构建槽（环境变量 `OPENTUNE_BUILD_SLOTS` 或 `gates.ps1 -BuildSlots` 可调，范围 1–8），命名互斥锁，每个槽拿到后检查空闲内存，每个槽显式 `--parallel 8`。
-  3. `ctest -R Control`，再加上游已有测试，用 `-E ARALifecycleContractTests` 排除一项。该测试依赖 ARA_DRAFT 的 `persistentID`，在锁定的 ARA SDK 2.3.0 下编不过，属于上游问题。`-Layer` 为 L2 及以上时，gates 还会在 `<构建目录>\control-on` 用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` 再 configure / build / `ctest -R Control` 一遍（单独一行，Control 测试数为 0 即 FAIL），因为 lane 默认构建目录的控制接口是关闭的；L0 与 `-SkipBuild` 时该行 SKIP。
+  3. `ctest -R Control`，再加上游已有测试，用 `-E ARALifecycleContractTests` 排除一项。该测试依赖 ARA_DRAFT 的 `persistentID`，在锁定的 ARA SDK 2.3.0 下编不过，属于上游问题。`-Layer` 为 L2 及以上时，gates 还会在 `<构建目录>\control-on` 用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` 再 configure / build / `ctest -R Control` 一遍（单独一行，Control 测试数为 0 即 FAIL），因为 lane 默认构建目录的控制接口是关闭的；这一轮 ctest 前后还会对真实 `%APPDATA%OpenTune` 各做一次快照，有新建、修改或删除即 FAIL（「测试数据隔离（control-on 一轮）」一行）；L0 与 `-SkipBuild` 时这两行 SKIP。
   4. 所有测试都使用临时 `OPENTUNE_DATA_DIR`，因为上游 ctest 会写真实的 `%APPDATA%\OpenTune`。
   5. 真 Standalone 测试环境就绪后：改到 Dispatcher / Jobs / Ops / Edit / bridge 或 `spec.lock` 的 PR，还要跑真 Standalone 的契约与场景测试。这一步持 E2E 互斥锁，并先快照、再恢复 `OpenTune.settings` 与 AppPreferences。
   6. 署名与身份检查（`.github/scripts/fork-checks.mjs`，与 fork-gate 同一份实现）。

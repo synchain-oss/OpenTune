@@ -41,7 +41,11 @@ public:
     ControlThreadViolation() : std::runtime_error("OpenTune state accessed off the message thread") {}
 };
 
-/** What session.info and the handles need to know about the running instance. */
+/**
+ * What session.info, the handles and app.getLog need to know about the running instance. ControlDispatcher
+ * keeps it as an immutable snapshot: a change makes a new copy, so a method can read the copy it got from
+ * any thread without a lock.
+ */
 struct ControlInstanceFacts
 {
     /** The instance id of the listener (32 lowercase hexadecimal digits). */
@@ -50,6 +54,12 @@ struct ControlInstanceFacts
     ControlBuildIdentity build;
     /** The capabilities the instance reports, in the order session.hello lists them. */
     std::vector<std::string> capabilities;
+    /** The session token and the server proof: texts that leave the process (app.getLog) are redacted
+        with them. Never reported, logged or stored elsewhere. */
+    std::vector<std::string> redactionSecrets;
+    /** The spellings of the user's home directory (controlHomeDirectorySpellings()), which app.getLog
+        replaces with "~"; taken once on the message thread when the dispatcher is created. */
+    std::vector<std::string> homeDirectorySpellings;
 };
 
 /**
@@ -160,17 +170,27 @@ ControlErrorReply controlMapError(const Error& error);
  * ASCII, no request content) and the request is answered with INVALID_ARGUMENT(invalid_params).
  *
  * run runs on the message thread with what parse kept, and returns the result object or an Error.
+ *
+ * A method whose schema says x-otcp.mainThread false has one of two functions instead of run, and both
+ * run on the connection thread, never wait for the message thread and so never answer TIMEOUT:
+ * - runOffMainThread (app.getLog) gets only the instance facts (an immutable snapshot) and what parse
+ *   kept, never the processor or the editor bridge, so it cannot read or change project content;
+ * - runWithoutMessageThread (job.get, job.cancel) gets the jobs registry and may answer later.
  */
 struct ControlMethod
 {
     std::string name;
-    /** Runs on the message thread (x-otcp.mainThread of the schema). */
+    /** Runs on the message thread (x-otcp.mainThread of the schema): run is set when true,
+        runOffMainThread or runWithoutMessageThread when false. */
     bool mainThread = true;
     /** Changes state (x-otcp.write is not "no"): decides `executed` of an error that does not state it
         (an exception, or an OpenTune error that is not a controlOpError). */
     bool write = false;
     std::function<bool(const JsonValue& params, std::shared_ptr<const void>& parsed, std::string& why)> parse;
     std::function<Result<JsonValue>(ControlOpContext& context, const void* parsed)> run;
+    /** Any thread; must not block for long, read files only within a fixed bound, and reach no OpenTune
+        state other than what is thread-safe by its own contract (for example AppLogger). */
+    std::function<Result<JsonValue>(const ControlInstanceFacts& facts, const void* parsed)> runOffMainThread;
     /** Answers the request exactly once, possibly later and from another thread. */
     using Reply = std::function<void(Result<JsonValue>)>;
     /** Instead of run, for a method with mainThread false (job.get, job.cancel): runs on the connection
@@ -198,6 +218,23 @@ ControlMethod controlReadMethod(std::string name, bool (*parse)(const JsonValue&
     };
     method.run = [run](ControlOpContext& context, const void* parsed) {
         return run(context, *static_cast<const Params*>(parsed));
+    };
+    return method;
+}
+
+/**
+ * A read method whose schema says x-otcp.mainThread false: parse fills a Params value and run gets it,
+ * with the instance facts, on the same connection thread. Only for methods that read no project state.
+ */
+template <typename Params>
+ControlMethod controlOffMainThreadReadMethod(std::string name, bool (*parse)(const JsonValue&, Params&, std::string&),
+                                             Result<JsonValue> (*run)(const ControlInstanceFacts&, const Params&))
+{
+    ControlMethod method = controlReadMethod<Params>(std::move(name), parse, nullptr);
+    method.mainThread = false;
+    method.run = nullptr;
+    method.runOffMainThread = [run](const ControlInstanceFacts& facts, const void* parsed) {
+        return run(facts, *static_cast<const Params*>(parsed));
     };
     return method;
 }

@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // Unit tests of the control API channel: run-time options, path rules, CSPRNG, JSON, request ids,
-// fixed responses, discovery and ready files, and the listener with its rules before and after
-// authentication. The session vectors of the specification copy (Tests/Control/spec/otcp/v1/vectors/
-// session) are read and run against a real server with a stand-in request handler.
+// fixed responses, discovery and ready files, the listener with its rules before and after
+// authentication, and the content handles, revision tokens and cursors. The session vectors of the specification copy
+// (Tests/Control/spec/otcp/v1/vectors/ session) are read and run against a real server with a stand-in request handler.
 //
 // Every file goes to a fresh directory under OPENTUNE_DATA_DIR (set per test by the gates) or under
 // the build directory, never to the user's real data directories.
 
 #include "ControlTestSupport.h"
 
+#include "Control/ContentHandles.h"
 #include "Control/ControlPathPolicy.h"
 
 #include <cmath>
@@ -1169,6 +1170,98 @@ void testStartFailures()
 }
 
 // --------------------------------------------------------------------------------------------------
+// Content handles, revision tokens and cursors
+// --------------------------------------------------------------------------------------------------
+
+/** The patterns of common.schema.json: contentId, placementId and revisionToken. */
+bool matchesHandlePattern(const std::string& text, char prefix)
+{
+    if (text.size() < 14 || text[0] != prefix || text[1] != ':' || text[10] != ':')
+        return false;
+    for (std::size_t i = 2; i < 10; ++i)
+        if (!((text[i] >= '0' && text[i] <= '9') || (text[i] >= 'a' && text[i] <= 'f')))
+            return false;
+    const auto rest = text.substr(11);
+    const auto colon = rest.find(':');
+    auto decimal = [](const std::string& part) {
+        return !part.empty() && part.find_first_not_of("0123456789") == std::string::npos
+               && (part.size() == 1 || part[0] != '0');
+    };
+    return colon != std::string::npos && decimal(rest.substr(0, colon)) && decimal(rest.substr(colon + 1));
+}
+
+bool matchesRevisionTokenPattern(const std::string& text)
+{
+    return !text.empty() && text.size() <= 128
+           && text.find_first_not_of("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._:-")
+                  == std::string::npos;
+}
+
+void testHandles()
+{
+    // Format and parse round trip; the forms follow the schema patterns.
+    const std::string contentId = controlFormatHandle(ControlHandleKind::Content, "0123abcd", 2, 17);
+    CONTROL_CHECK(contentId == "c:0123abcd:2:17" && matchesHandlePattern(contentId, 'c'));
+    const std::string placementId = controlFormatHandle(ControlHandleKind::Placement, "0123abcd", 0, 3);
+    CONTROL_CHECK(placementId == "p:0123abcd:0:3" && matchesHandlePattern(placementId, 'p'));
+    const auto parsedContent = controlParseHandle(ControlHandleKind::Content, contentId);
+    if (CONTROL_CHECK(parsedContent.has_value())) {
+        CONTROL_CHECK(parsedContent->instanceShort == "0123abcd" && parsedContent->epoch == 2
+                      && parsedContent->object == 17);
+        CONTROL_CHECK(!parsedContent->epochOverflow && !parsedContent->objectOverflow);
+    }
+    CONTROL_CHECK(controlInstanceShort("0123abcd456789ef0123456789abcdef") == "0123abcd");
+
+    // A handle of one kind never passes the form check of the other (PROTOCOL.md section 9 rule 1).
+    CONTROL_CHECK(!controlParseHandle(ControlHandleKind::Content, placementId));
+    CONTROL_CHECK(!controlParseHandle(ControlHandleKind::Placement, contentId));
+    for (const char* invalid :
+         {"", "c:", "c:0123abcd:1", "c:0123abcd:1:", "c:0123abcd::1", "c:0123ABCD:1:1", "c:0123abc:1:1",
+          "c:0123abcde:1:1", "c:0123abcd:01:1", "c:0123abcd:1:01", "c:0123abcd:1:1:1", "c:0123abcd:-1:1",
+          "c:0123abcd:1:1 ", "x:0123abcd:1:1", "j:0123abcd:1", "u:0123abcd:1"})
+        CONTROL_CHECK(!controlParseHandle(ControlHandleKind::Content, invalid));
+
+    // Numbers beyond 64 bits keep the valid form and are flagged, so resolution reports them as stale
+    // (epoch) or unknown (object) instead of rejecting the form.
+    const auto huge = controlParseHandle(ControlHandleKind::Content, "c:0123abcd:99999999999999999999:1");
+    CONTROL_CHECK(huge && huge->epochOverflow && !huge->objectOverflow);
+    const auto hugeObject = controlParseHandle(ControlHandleKind::Content, "c:0123abcd:0:18446744073709551616");
+    CONTROL_CHECK(hugeObject && hugeObject->objectOverflow && !hugeObject->epochOverflow);
+    const auto maxObject = controlParseHandle(ControlHandleKind::Content, "c:0123abcd:0:18446744073709551615");
+    CONTROL_CHECK(maxObject && !maxObject->objectOverflow && maxObject->object == 18446744073709551615ull);
+
+    // Tokens: equal fields give equal tokens, the order and the boundaries of fields count, -0.0 is 0.0.
+    const auto token = [](double value, const char* text) {
+        return ControlTokenHasher('r').add(std::uint64_t{7}).add(value).add(std::string_view(text)).token();
+    };
+    CONTROL_CHECK(token(1.5, "a") == token(1.5, "a"));
+    CONTROL_CHECK(token(0.0, "a") == token(-0.0, "a"));
+    CONTROL_CHECK(token(1.5, "a") != token(1.5, "b") && token(1.5, "a") != token(2.5, "a"));
+    CONTROL_CHECK(ControlTokenHasher('x').add(std::string_view("ab")).add(std::string_view("c")).token()
+                  != ControlTokenHasher('x').add(std::string_view("a")).add(std::string_view("bc")).token());
+    CONTROL_CHECK(ControlTokenHasher('a').token() != ControlTokenHasher('b').token());
+    const auto sample = token(1.5, "a");
+    CONTROL_CHECK(sample.size() == 17 && sample[0] == 'r' && matchesRevisionTokenPattern(sample));
+
+    // Cursors: round trip, kind of the issuing method, bounded form.
+    const std::string paramsHash = ControlTokenHasher('q').add(std::string_view("params")).token();
+    const std::string tokensHash = ControlTokenHasher('t').add(std::string_view("tokens")).token();
+    const std::string cursor = controlFormatCursor({'n', 200, paramsHash, tokensHash});
+    CONTROL_CHECK(cursor.size() <= 512);
+    const auto parsedCursor = controlParseCursor('n', cursor);
+    if (CONTROL_CHECK(parsedCursor.has_value()))
+        CONTROL_CHECK(parsedCursor->offset == 200 && parsedCursor->paramsHash == paramsHash
+                      && parsedCursor->tokensHash == tokensHash);
+    CONTROL_CHECK(!controlParseCursor('p', cursor));
+    for (const std::string& invalid :
+         {std::string("n1"), std::string("n1."), "n2.0." + paramsHash + "." + tokensHash,
+          "n1.01." + paramsHash + "." + tokensHash, "n1.0." + paramsHash, "n1.0." + paramsHash + ".t123",
+          "n1.0." + paramsHash + "." + tokensHash + "." + tokensHash,
+          "n1.99999999999999999999." + paramsHash + "." + tokensHash})
+        CONTROL_CHECK(!controlParseCursor('n', invalid));
+}
+
+// --------------------------------------------------------------------------------------------------
 // Session vectors of the specification copy
 // --------------------------------------------------------------------------------------------------
 
@@ -1187,12 +1280,12 @@ public:
         if (!fixture_.start("vector"))
             return "the server did not start";
         for (std::size_t i = 0; i < fixture_.discovery.size(); ++i)
-            bindings_["discovery." + fixture_.discovery.keyAt(i)] = fixture_.discovery.at(i);
+            matcher_.bindings["discovery." + fixture_.discovery.keyAt(i)] = fixture_.discovery.at(i);
         std::string wrong;
         do {
             wrong = SecureRandom::hex(fixture_.token.size() / 2).value_or("");
         } while (wrong == fixture_.token);
-        bindings_["runner.wrongToken"] = JsonValue::string(wrong);
+        matcher_.bindings["runner.wrongToken"] = JsonValue::string(wrong);
 
         auto& main = connections_["main"];
         if (!main.connect(fixture_.port))
@@ -1224,12 +1317,12 @@ private:
     {
         auto& main = connections_["main"];
         std::string failure;
-        const auto request = substitute(*vector_.find("request"), failure);
+        const auto request = matcher_.substitute(*vector_.find("request"), failure);
         if (!failure.empty())
             return failure;
         if (!main.sendLine(toJsonString(request)))
             return "cannot send the request";
-        failure = expectLine(main, *vector_.find("response"));
+        failure = matcher_.expectLine(main, *vector_.find("response"));
         if (!failure.empty())
             return failure;
         std::size_t bytes = 0;
@@ -1246,7 +1339,7 @@ private:
             return connections_[name->text()].connect(fixture_.port) ? std::string() : "cannot connect";
         if (const JsonValue* value = step.find("send")) {
             std::string failure;
-            const auto resolved = substitute(*value, failure);
+            const auto resolved = matcher_.substitute(*value, failure);
             if (!failure.empty())
                 return failure;
             return connection.sendLine(toJsonString(resolved)) ? std::string() : "send failed";
@@ -1267,7 +1360,7 @@ private:
             return connection.sendRaw(bytes) ? std::string() : "send failed";
         }
         if (const JsonValue* expected = step.find("expect"))
-            return expectLine(connection, *expected);
+            return matcher_.expectLine(connection, *expected);
         if (const JsonValue* closed = step.find("expectClosed")) {
             const JsonValue* within = closed->find("withinMs");
             const int bound = within != nullptr ? static_cast<int>(within->asDouble()) : kReadTimeoutMs;
@@ -1287,186 +1380,20 @@ private:
         return "unknown step";
     }
 
-    std::string expectLine(TestClient& connection, const JsonValue& expected)
-    {
-        const auto line = connection.readLine();
-        if (!line)
-            return "no response line";
-        const auto actual = parseJson(*line);
-        if (!actual.ok)
-            return "the response is not JSON";
-        std::string failure;
-        if (!match(expected, actual.value, "$", failure))
-            return failure;
-        // Matching rule 4: a number id is written as a plain integer literal.
-        const JsonValue* expectedId = expected.find("id");
-        if (expectedId != nullptr && expectedId->isNumber()) {
-            const std::string& literal = actual.value.find("id")->text();
-            const bool plain = !literal.empty() && literal.find_first_not_of("0123456789") == std::string::npos
-                               && (literal.size() == 1 || literal[0] != '0');
-            if (!plain)
-                return "the id is not written as a plain integer: " + literal;
-        }
-        return {};
-    }
-
-    static bool isMatcher(const JsonValue& value)
-    {
-        if (!value.isObject() || value.size() == 0)
-            return false;
-        for (std::size_t i = 0; i < value.size(); ++i)
-            if (value.keyAt(i).empty() || value.keyAt(i)[0] != '$')
-                return false;
-        return true;
-    }
-
-    JsonValue substitute(const JsonValue& value, std::string& failure)
-    {
-        if (isMatcher(value)) {
-            const JsonValue* reference = value.find("$ref");
-            const auto bound = reference != nullptr ? bindings_.find(reference->text()) : bindings_.end();
-            if (bound == bindings_.end())
-                failure = "unbound or unsupported matcher in a value to send";
-            return bound != bindings_.end() ? bound->second : JsonValue();
-        }
-        if (value.isArray()) {
-            auto out = JsonValue::array();
-            for (std::size_t i = 0; i < value.size(); ++i)
-                out.append(substitute(value.at(i), failure));
-            return out;
-        }
-        if (value.isObject()) {
-            auto out = JsonValue::object();
-            for (std::size_t i = 0; i < value.size(); ++i)
-                out.appendMember(value.keyAt(i), substitute(value.at(i), failure));
-            return out;
-        }
-        return value;
-    }
-
-    static bool equal(const JsonValue& a, const JsonValue& b)
-    {
-        if (a.type() != b.type())
-            return false;
-        switch (a.type()) {
-            case JsonValue::Type::Null:
-                return true;
-            case JsonValue::Type::Boolean:
-                return a.asBoolean() == b.asBoolean();
-            case JsonValue::Type::Number:
-                return a.asDouble() == b.asDouble();
-            case JsonValue::Type::String:
-                return a.text() == b.text();
-            case JsonValue::Type::Array:
-                if (a.size() != b.size())
-                    return false;
-                for (std::size_t i = 0; i < a.size(); ++i)
-                    if (!equal(a.at(i), b.at(i)))
-                        return false;
-                return true;
-            case JsonValue::Type::Object:
-                if (a.size() != b.size())
-                    return false;
-                for (std::size_t i = 0; i < a.size(); ++i) {
-                    const JsonValue* other = b.find(a.keyAt(i));
-                    if (other == nullptr || !equal(a.at(i), *other))
-                        return false;
-                }
-                return true;
-        }
-        return false;
-    }
-
-    bool matchMatcher(const JsonValue& matcher, const JsonValue& actual, const std::string& where, std::string& failure)
-    {
-        if (const JsonValue* reference = matcher.find("$ref")) {
-            const auto bound = bindings_.find(reference->text());
-            if (bound == bindings_.end() || !equal(bound->second, actual)) {
-                failure = where + ": does not equal " + reference->text();
-                return false;
-            }
-            return true;
-        }
-        if (const JsonValue* any = matcher.find("$any"); any != nullptr && any->isString()) {
-            const std::string& type = any->text();
-            const bool ok = (type == "string" && actual.isString()) || (type == "number" && actual.isNumber())
-                            || (type == "integer" && actual.isNumber()
-                                && actual.asDouble() == static_cast<double>(static_cast<long long>(actual.asDouble())))
-                            || (type == "boolean" && actual.isBoolean()) || (type == "object" && actual.isObject())
-                            || (type == "array" && actual.isArray()) || (type == "null" && actual.isNull());
-            if (!ok) {
-                failure = where + ": not of type " + type;
-                return false;
-            }
-        }
-        if (const JsonValue* approx = matcher.find("$approx")) {
-            const JsonValue* tolerance = matcher.find("$tol");
-            const double tol = tolerance != nullptr ? tolerance->asDouble() : 1e-6;
-            if (!actual.isNumber() || std::abs(actual.asDouble() - approx->asDouble()) > tol) {
-                failure = where + ": not within the tolerance";
-                return false;
-            }
-        }
-        if (const JsonValue* capture = matcher.find("$capture")) {
-            if (bindings_.count(capture->text()) != 0) {
-                failure = where + ": the vector binds a name twice";
-                return false;
-            }
-            bindings_[capture->text()] = actual;
-        }
-        return true;
-    }
-
-    bool match(const JsonValue& expected, const JsonValue& actual, const std::string& where, std::string& failure)
-    {
-        if (isMatcher(expected))
-            return matchMatcher(expected, actual, where, failure);
-        if (expected.isObject()) {
-            if (!actual.isObject()) {
-                failure = where + ": not an object";
-                return false;
-            }
-            for (std::size_t i = 0; i < expected.size(); ++i) {
-                const JsonValue* member = actual.find(expected.keyAt(i));
-                if (member == nullptr) {
-                    failure = where + "." + expected.keyAt(i) + ": missing";
-                    return false;
-                }
-                if (!match(expected.at(i), *member, where + "." + expected.keyAt(i), failure))
-                    return false;
-            }
-            return true;
-        }
-        if (expected.isArray()) {
-            if (!actual.isArray() || actual.size() != expected.size()) {
-                failure = where + ": array of another length";
-                return false;
-            }
-            for (std::size_t i = 0; i < expected.size(); ++i)
-                if (!match(expected.at(i), actual.at(i), where + "[" + std::to_string(i) + "]", failure))
-                    return false;
-            return true;
-        }
-        if (!equal(expected, actual)) {
-            failure = where + ": expected " + toJsonString(expected) + ", got " + toJsonString(actual);
-            return false;
-        }
-        return true;
-    }
-
     const JsonValue& vector_;
     ServerFixture fixture_;
-    std::map<std::string, JsonValue> bindings_;
+    VectorMatcher matcher_;
     std::map<std::string, TestClient> connections_;
     Clock::time_point lastStepEnd_;
 };
 
-/** Why a vector cannot run against this server, or empty when it can. */
+/** Why a vector cannot run against this server, or empty when it can. The server here has a stand-in
+    handler; ControlProcessorTests.Vectors runs the vectors of the methods against the real dispatcher. */
 std::string skipReason(const std::string& id, const JsonValue& vector)
 {
     const std::set<std::string> reported = {"session.v1"};
     if (reported.count(vector.find("capability")->text()) == 0)
-        return "needs capability " + vector.find("capability")->text() + ", not reported before the dispatcher exists";
+        return "needs capability " + vector.find("capability")->text() + ", which the stand-in handler does not report";
     if (const JsonValue* extra = vector.find("extraCapabilities"))
         for (std::size_t i = 0; i < extra->size(); ++i)
             if (reported.count(extra->at(i).text()) == 0)
@@ -1476,7 +1403,7 @@ std::string skipReason(const std::string& id, const JsonValue& vector)
             if (given->keyAt(i) != "withoutCapabilities")
                 return "precondition given." + given->keyAt(i) + " needs the dispatcher";
     if (id == "session/info-ok")
-        return "checks the session.info result, which the dispatcher provides (this test answers with a stand-in)";
+        return "checks the session.info result of the dispatcher (ControlProcessorTests.Vectors runs it)";
     return {};
 }
 
@@ -1537,6 +1464,7 @@ int main(int argc, char** argv)
         {"stop answers arrived requests", testStopAnswersArrivedRequests},
         {"connection exception", testConnectionExceptionClosesChannel},
         {"start failures", testStartFailures},
+        {"handles", testHandles},
         {"session vectors", testSessionVectors},
     };
     if (!ControlSocket::acquireNetworking()) {

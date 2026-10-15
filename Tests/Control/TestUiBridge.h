@@ -6,7 +6,9 @@
 
 #include "Control/ControlUiBridge.h"
 
+#include <cstdint>
 #include <optional>
+#include <vector>
 
 namespace OpenTune {
 namespace ControlTest {
@@ -28,11 +30,15 @@ public:
     void onUndoRedoApplied() override { ++undoRedoNotifications; }
     void onProjectReloaded() override { ++projectReloads; }
 
+    std::optional<ViewState> viewState() const override { return view; }
+    std::optional<std::vector<std::uint64_t>> selectedPlacementIds() const override { return selection; }
     std::optional<int> visibleTrackCount() const override { return visibleTracks; }
 
     /** Injected state. */
     ProjectInfo project;
     BusyState busy;
+    ViewState view;
+    std::vector<std::uint64_t> selection;
     int visibleTracks = 1;
 
     /** Counters of the calls received. */

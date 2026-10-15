@@ -365,7 +365,7 @@ void checkSessionInfo(ApiSession& api)
     CONTROL_CHECK(memberOf(memberOf(info, "runtime"), "pid").asDouble()
                   == static_cast<double>(controlCurrentProcessId()));
     // Only the capabilities this build implements are reported.
-    CONTROL_CHECK(toJsonString(memberOf(info, "capabilities")) == R"(["session.v1","read.v1"])");
+    CONTROL_CHECK(toJsonString(memberOf(info, "capabilities")) == R"(["session.v1","read.v1","jobs.v1"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");
@@ -768,12 +768,12 @@ void checkErrors(ApiSession& api, const ClipHandles& handles)
     CONTROL_CHECK(api.fails("content.segmentNotes", json("{\"contentId\":" + content + ",\"noteSplitCents\":201}"),
                             "INVALID_ARGUMENT", "invalid_params"));
     CONTROL_CHECK(api.fails("project.get", json(R"({"verbose":true})"), "INVALID_ARGUMENT", "invalid_params"));
-    // Methods of a reported capability that a later part implements, and a method the protocol does not
-    // define.
+    // Methods of a reported capability that a later part implements, a method of a capability this build
+    // does not report yet, and a method the protocol does not define.
     CONTROL_CHECK(
         api.fails("content.getDetails", json("{\"contentId\":" + content + "}"), "UNSUPPORTED", "capability_missing"));
     CONTROL_CHECK(api.fails("transport.get", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
-    CONTROL_CHECK(api.fails("job.get", json(R"({"jobId":"j:00000000:1"})"), "UNSUPPORTED", "capability_missing"));
+    CONTROL_CHECK(api.fails("export.start", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
     CONTROL_CHECK(api.fails("track.rename", JsonValue::object(), "UNSUPPORTED", "unknown_method"));
 }
 

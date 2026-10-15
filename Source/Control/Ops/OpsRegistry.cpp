@@ -2,6 +2,7 @@
 #include "OpsRegistry.h"
 
 #include "ContentReadOps.h"
+#include "JobOps.h"
 #include "ProjectReadOps.h"
 #include "SessionOps.h"
 
@@ -15,7 +16,20 @@ namespace OpenTune {
 
 namespace {
 
+/** Context of an error that changed nothing, and of one after a change (executed true). Same length. */
 constexpr std::string_view kErrorContextPrefix = "otcp:";
+constexpr std::string_view kErrorAfterChangePrefix = "otcp!";
+
+Error makeOpError(std::string_view prefix, std::string_view kind, std::string_view reason, std::string detail)
+{
+    const ErrorCode code = kind == "INVALID_ARGUMENT" || kind == "NOT_FOUND" || kind == "REVISION_CONFLICT"
+                               ? ErrorCode::InvalidParameter
+                           : kind == "NOT_READY" ? ErrorCode::NotInitialized
+                                                 : ErrorCode::UnknownError;
+    std::string context(prefix);
+    context.append(kind).append(":").append(reason);
+    return Error(code, std::move(detail), std::move(context));
+}
 
 } // namespace
 
@@ -27,7 +41,7 @@ void registerControlMethods(ControlMethodTable& table)
     registerProjectReadOps(table); // project.get; later also transport.get, prefs.get, app.getLog
     registerContentReadOps(table); // content.getNotes, content.getPitchCurve, content.segmentNotes;
                                    // later also content.getDetails
-    // registerJobOps(table);          job.get, job.cancel
+    registerJobOps(table);         // job.get, job.cancel
     // registerImportOps(table);       import.start
     // registerExportOps(table);       export.start
     // registerUiOps(table);           ui.getState, ui.dismiss, ui.setSelection
@@ -44,13 +58,44 @@ void registerControlMethods(ControlMethodTable& table)
 }
 
 ControlOpContext::ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiBridge* bridge,
-                                   const ControlInstanceFacts& facts, ControlThreadProbe& probe)
+                                   const ControlInstanceFacts& facts, ControlThreadProbe& probe, ControlJobs* jobs,
+                                   std::function<ControlUiBridge*()> bridgeAccessor)
     : processor_(processor)
     , bridge_(bridge)
     , facts_(facts)
     , probe_(probe)
+    , jobs_(jobs)
+    , bridgeAccessor_(std::move(bridgeAccessor))
     , instanceShort_(controlInstanceShort(facts.instanceId))
 {}
+
+ControlOpContext::ControlOpContext(const ControlOpEnvironment& environment)
+    : ControlOpContext(*environment.processor, environment.bridge ? environment.bridge() : nullptr, environment.facts,
+                       *environment.probe, environment.jobs, environment.bridge)
+{}
+
+ControlJobs* ControlOpContext::jobs()
+{
+    requireMessageThread();
+    return jobs_;
+}
+
+ControlOpEnvironment ControlOpContext::environment()
+{
+    requireMessageThread();
+    ControlOpEnvironment environment;
+    environment.processor = &processor_;
+    environment.bridge = bridgeAccessor_;
+    if (!environment.bridge) {
+        // Without an accessor the bridge of this request stays the bridge of every later step.
+        auto* bridge = bridge_;
+        environment.bridge = [bridge] { return bridge; };
+    }
+    environment.facts = facts_;
+    environment.probe = &probe_;
+    environment.jobs = jobs_;
+    return environment;
+}
 
 void ControlOpContext::requireMessageThread()
 {
@@ -78,24 +123,26 @@ ControlUiBridge* ControlOpContext::bridge()
 
 Error controlOpError(std::string_view kind, std::string_view reason, std::string detail)
 {
-    const ErrorCode code = kind == "INVALID_ARGUMENT" || kind == "NOT_FOUND" || kind == "REVISION_CONFLICT"
-                               ? ErrorCode::InvalidParameter
-                           : kind == "NOT_READY" ? ErrorCode::NotInitialized
-                                                 : ErrorCode::UnknownError;
-    std::string context(kErrorContextPrefix);
-    context.append(kind).append(":").append(reason);
-    return Error(code, std::move(detail), std::move(context));
+    return makeOpError(kErrorContextPrefix, kind, reason, std::move(detail));
+}
+
+Error controlOpErrorAfterChange(std::string_view kind, std::string_view reason, std::string detail)
+{
+    return makeOpError(kErrorAfterChangePrefix, kind, reason, std::move(detail));
 }
 
 ControlErrorReply controlMapError(const Error& error)
 {
     ControlErrorReply reply;
-    if (error.context.compare(0, kErrorContextPrefix.size(), kErrorContextPrefix) == 0) {
+    const bool unchanged = error.context.compare(0, kErrorContextPrefix.size(), kErrorContextPrefix) == 0;
+    const bool afterChange = error.context.compare(0, kErrorAfterChangePrefix.size(), kErrorAfterChangePrefix) == 0;
+    if (unchanged || afterChange) {
         const std::string rest = error.context.substr(kErrorContextPrefix.size());
         const auto colon = rest.find(':');
         reply.kind = rest.substr(0, colon);
         reply.reason = colon == std::string::npos ? std::string() : rest.substr(colon + 1);
         reply.detail = error.message;
+        reply.executed = afterChange;
         return reply;
     }
     switch (error.code) {

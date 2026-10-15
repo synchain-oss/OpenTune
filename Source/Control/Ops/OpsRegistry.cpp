@@ -1,0 +1,155 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+#include "OpsRegistry.h"
+
+#include "ContentReadOps.h"
+#include "ProjectReadOps.h"
+#include "SessionOps.h"
+
+#include "Control/ContentHandles.h"
+
+#include <juce_events/juce_events.h>
+
+#include <algorithm>
+
+namespace OpenTune {
+
+namespace {
+
+constexpr std::string_view kErrorContextPrefix = "otcp:";
+
+} // namespace
+
+void registerControlMethods(ControlMethodTable& table)
+{
+    // One line per group, in the order of the layers. A method that is not registered is answered with
+    // UNSUPPORTED(capability_missing). Groups that later parts add have a placeholder line.
+    registerSessionOps(table);     // session.info (ControlServer answers session.hello itself)
+    registerProjectReadOps(table); // project.get; later also transport.get, prefs.get, app.getLog
+    registerContentReadOps(table); // content.getNotes, content.getPitchCurve, content.segmentNotes;
+                                   // later also content.getDetails
+    // registerJobOps(table);          job.get, job.cancel
+    // registerImportOps(table);       import.start
+    // registerExportOps(table);       export.start
+    // registerUiOps(table);           ui.getState, ui.dismiss, ui.setSelection
+    // registerContentTuneOps(table);  content.setKey, content.autoTune
+    // registerContentEditOps(table);  content.editNotes, content.setPitchShift
+    // registerUndoOps(table);         edit.getHistory, edit.undo, edit.redo
+    // registerTimingOps(table);       content.shiftTiming, content.editTimeGrid
+    // registerTransportOps(table);    transport.control, transport.setTempo, transport.setLoop
+    // registerArrangementOps(table);  arrangement.edit, arrangement.copy, content.analyzeReference
+    // registerTrackOps(table);        track.set, track.add, track.duplicate, track.delete
+    // registerProjectOps(table);      project.save, project.saveAs, project.open, project.clearRecent
+    // registerPrefsOps(table);        prefs.set
+    // registerAudioDeviceOps(table);  audio.get, audio.set
+}
+
+ControlOpContext::ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiBridge* bridge,
+                                   const ControlInstanceFacts& facts, ControlThreadProbe& probe)
+    : processor_(processor)
+    , bridge_(bridge)
+    , facts_(facts)
+    , probe_(probe)
+    , instanceShort_(controlInstanceShort(facts.instanceId))
+{}
+
+void ControlOpContext::requireMessageThread()
+{
+    // Always on, also in release builds: content is read and changed only on the message thread.
+    if (juce::MessageManager::existsAndIsCurrentThread()) {
+        ++probe_.messageThreadAccesses;
+        return;
+    }
+    ++probe_.otherThreadAccesses;
+    jassertfalse;
+    throw ControlThreadViolation();
+}
+
+OpenTuneAudioProcessor& ControlOpContext::processor()
+{
+    requireMessageThread();
+    return processor_;
+}
+
+ControlUiBridge* ControlOpContext::bridge()
+{
+    requireMessageThread();
+    return bridge_;
+}
+
+Error controlOpError(std::string_view kind, std::string_view reason, std::string detail)
+{
+    const ErrorCode code = kind == "INVALID_ARGUMENT" || kind == "NOT_FOUND" || kind == "REVISION_CONFLICT"
+                               ? ErrorCode::InvalidParameter
+                           : kind == "NOT_READY" ? ErrorCode::NotInitialized
+                                                 : ErrorCode::UnknownError;
+    std::string context(kErrorContextPrefix);
+    context.append(kind).append(":").append(reason);
+    return Error(code, std::move(detail), std::move(context));
+}
+
+ControlErrorReply controlMapError(const Error& error)
+{
+    ControlErrorReply reply;
+    if (error.context.compare(0, kErrorContextPrefix.size(), kErrorContextPrefix) == 0) {
+        const std::string rest = error.context.substr(kErrorContextPrefix.size());
+        const auto colon = rest.find(':');
+        reply.kind = rest.substr(0, colon);
+        reply.reason = colon == std::string::npos ? std::string() : rest.substr(colon + 1);
+        reply.detail = error.message;
+        return reply;
+    }
+    switch (error.code) {
+        case ErrorCode::InvalidParameter:
+            reply.kind = "INVALID_ARGUMENT";
+            reply.reason = "invalid_params";
+            break;
+        case ErrorCode::NotInitialized:
+            reply.kind = "NOT_READY";
+            break;
+        case ErrorCode::ModelNotFound:
+            reply.kind = "MODEL_UNAVAILABLE";
+            reply.reason = "model_missing";
+            break;
+        case ErrorCode::ModelLoadFailed:
+        case ErrorCode::SessionCreationFailed:
+            reply.kind = "MODEL_UNAVAILABLE";
+            reply.reason = "backend_unavailable";
+            break;
+        case ErrorCode::OperationCancelled:
+            reply.kind = "CANCELLED";
+            break;
+        default:
+            reply.kind = "INTERNAL";
+            break;
+    }
+    // The fixed text of the code: an OpenTune message may contain paths or names from the project.
+    reply.detail = errorCodeMessage(error.code);
+    return reply;
+}
+
+void ControlMethodTable::add(ControlMethod method)
+{
+    jassert(controlMethodCapability(method.name) != nullptr && find(method.name) == nullptr);
+    methods_.push_back(std::move(method));
+}
+
+const ControlMethod* ControlMethodTable::find(std::string_view name) const
+{
+    for (const auto& method : methods_)
+        if (method.name == name)
+            return &method;
+    return nullptr;
+}
+
+std::vector<std::string> ControlMethodTable::capabilities() const
+{
+    std::vector<std::string> out{"session.v1"};
+    for (const auto& method : methods_) {
+        const char* capability = controlMethodCapability(method.name);
+        if (capability != nullptr && std::find(out.begin(), out.end(), capability) == out.end())
+            out.emplace_back(capability);
+    }
+    return out;
+}
+
+} // namespace OpenTune

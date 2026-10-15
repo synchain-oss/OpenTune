@@ -1,0 +1,11 @@
+# ThreadSanitizer suppressions for the Control Sanitizers workflow (fork only).
+#
+# Upstream behaviour, not changed by this fork: OpenTune::ProcessRenderRuntime
+# (Source/Runtime/ProcessRenderRuntime.cpp) starts its control worker thread
+# (controlWorker_) in the constructor and again in retainOwner(), and does not
+# join it before process exit. TSan reports that as a thread leak at exit.
+#
+# Only thread leaks whose creation stack goes through those two functions are
+# suppressed. Data races, deadlocks and every other thread leak stay fatal.
+thread:*ProcessRenderRuntime::ProcessRenderRuntime*
+thread:*ProcessRenderRuntime::retainOwner*

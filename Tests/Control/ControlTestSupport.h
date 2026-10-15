@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <cstdio>
 #include <filesystem>
@@ -23,6 +24,7 @@
 #include <functional>
 #include <iostream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -491,6 +493,194 @@ inline std::string responseIdText(const std::optional<std::string>& line)
         return {};
     return id->isString() ? "\"" + id->text() + "\"" : toJsonString(*id);
 }
+
+/**
+ * The bindings and matchers of the specification's vectors (Tests/Control/spec/otcp/v1/vectors/README.md):
+ * replaces $ref matchers in values to send, matches expected values ($any, $approx with $tol, $capture,
+ * $ref, JSON equality with numbers by value) and checks that a number id is written as a plain integer
+ * literal (matching rule 4). Shared by the vector runners of the channel tests and of the processor tests.
+ */
+class VectorMatcher
+{
+public:
+    /** Bound names: discovery.*, runner.*, the names a precondition establishes and captures. */
+    std::map<std::string, JsonValue> bindings;
+
+    /** An object whose member names all start with '$'. */
+    static bool isMatcher(const JsonValue& value)
+    {
+        if (!value.isObject() || value.size() == 0)
+            return false;
+        for (std::size_t i = 0; i < value.size(); ++i)
+            if (value.keyAt(i).empty() || value.keyAt(i)[0] != '$')
+                return false;
+        return true;
+    }
+
+    /** The value with every {"$ref": name} replaced by the bound value; sets failure for other matchers
+        and for unbound names. */
+    JsonValue substitute(const JsonValue& value, std::string& failure) const
+    {
+        if (isMatcher(value)) {
+            const JsonValue* reference = value.find("$ref");
+            const auto bound = reference != nullptr ? bindings.find(reference->text()) : bindings.end();
+            if (bound == bindings.end())
+                failure = "unbound or unsupported matcher in a value to send";
+            return bound != bindings.end() ? bound->second : JsonValue();
+        }
+        if (value.isArray()) {
+            auto out = JsonValue::array();
+            for (std::size_t i = 0; i < value.size(); ++i)
+                out.append(substitute(value.at(i), failure));
+            return out;
+        }
+        if (value.isObject()) {
+            auto out = JsonValue::object();
+            for (std::size_t i = 0; i < value.size(); ++i)
+                out.appendMember(value.keyAt(i), substitute(value.at(i), failure));
+            return out;
+        }
+        return value;
+    }
+
+    /** JSON equality; numbers compare by value, object members in any order. */
+    static bool equal(const JsonValue& a, const JsonValue& b)
+    {
+        if (a.type() != b.type())
+            return false;
+        switch (a.type()) {
+            case JsonValue::Type::Null:
+                return true;
+            case JsonValue::Type::Boolean:
+                return a.asBoolean() == b.asBoolean();
+            case JsonValue::Type::Number:
+                return a.asDouble() == b.asDouble();
+            case JsonValue::Type::String:
+                return a.text() == b.text();
+            case JsonValue::Type::Array:
+                if (a.size() != b.size())
+                    return false;
+                for (std::size_t i = 0; i < a.size(); ++i)
+                    if (!equal(a.at(i), b.at(i)))
+                        return false;
+                return true;
+            case JsonValue::Type::Object:
+                if (a.size() != b.size())
+                    return false;
+                for (std::size_t i = 0; i < a.size(); ++i) {
+                    const JsonValue* other = b.find(a.keyAt(i));
+                    if (other == nullptr || !equal(a.at(i), *other))
+                        return false;
+                }
+                return true;
+        }
+        return false;
+    }
+
+    /** Matching rules 1 and 2: expected members must be present and match; extra actual members are
+        allowed; arrays match element by element. where names the position for failure. */
+    bool match(const JsonValue& expected, const JsonValue& actual, const std::string& where, std::string& failure)
+    {
+        if (isMatcher(expected))
+            return matchMatcher(expected, actual, where, failure);
+        if (expected.isObject()) {
+            if (!actual.isObject()) {
+                failure = where + ": not an object";
+                return false;
+            }
+            for (std::size_t i = 0; i < expected.size(); ++i) {
+                const JsonValue* member = actual.find(expected.keyAt(i));
+                if (member == nullptr) {
+                    failure = where + "." + expected.keyAt(i) + ": missing";
+                    return false;
+                }
+                if (!match(expected.at(i), *member, where + "." + expected.keyAt(i), failure))
+                    return false;
+            }
+            return true;
+        }
+        if (expected.isArray()) {
+            if (!actual.isArray() || actual.size() != expected.size()) {
+                failure = where + ": array of another length";
+                return false;
+            }
+            for (std::size_t i = 0; i < expected.size(); ++i)
+                if (!match(expected.at(i), actual.at(i), where + "[" + std::to_string(i) + "]", failure))
+                    return false;
+            return true;
+        }
+        if (!equal(expected, actual)) {
+            failure = where + ": expected " + toJsonString(expected) + ", got " + toJsonString(actual);
+            return false;
+        }
+        return true;
+    }
+
+    /** Reads the next line of the connection and matches it; empty on success, otherwise why not. */
+    std::string expectLine(TestClient& connection, const JsonValue& expected)
+    {
+        const auto line = connection.readLine();
+        if (!line)
+            return "no response line";
+        const auto actual = parseJson(*line);
+        if (!actual.ok)
+            return "the response is not JSON";
+        std::string failure;
+        if (!match(expected, actual.value, "$", failure))
+            return failure;
+        // Matching rule 4: a number id is written as a plain integer literal.
+        const JsonValue* expectedId = expected.find("id");
+        if (expectedId != nullptr && expectedId->isNumber()) {
+            const std::string& literal = actual.value.find("id")->text();
+            const bool plain = !literal.empty() && literal.find_first_not_of("0123456789") == std::string::npos
+                               && (literal.size() == 1 || literal[0] != '0');
+            if (!plain)
+                return "the id is not written as a plain integer: " + literal;
+        }
+        return {};
+    }
+
+private:
+    bool matchMatcher(const JsonValue& matcher, const JsonValue& actual, const std::string& where, std::string& failure)
+    {
+        if (const JsonValue* reference = matcher.find("$ref")) {
+            const auto bound = bindings.find(reference->text());
+            if (bound == bindings.end() || !equal(bound->second, actual)) {
+                failure = where + ": does not equal " + reference->text();
+                return false;
+            }
+            return true;
+        }
+        if (const JsonValue* any = matcher.find("$any"); any != nullptr && any->isString()) {
+            const std::string& type = any->text();
+            const bool ok = (type == "string" && actual.isString()) || (type == "number" && actual.isNumber())
+                            || (type == "integer" && actual.isNumber()
+                                && actual.asDouble() == static_cast<double>(static_cast<long long>(actual.asDouble())))
+                            || (type == "boolean" && actual.isBoolean()) || (type == "object" && actual.isObject())
+                            || (type == "array" && actual.isArray()) || (type == "null" && actual.isNull());
+            if (!ok) {
+                failure = where + ": not of type " + type;
+                return false;
+            }
+        }
+        if (const JsonValue* approx = matcher.find("$approx")) {
+            const JsonValue* tolerance = matcher.find("$tol");
+            const double tol = tolerance != nullptr ? tolerance->asDouble() : 1e-6;
+            if (!actual.isNumber() || std::abs(actual.asDouble() - approx->asDouble()) > tol) {
+                failure = where + ": not within the tolerance";
+                return false;
+            }
+        }
+        if (const JsonValue* capture = matcher.find("$capture")) {
+            if (bindings.count(capture->text()) != 0) {
+                failure = where + ": the vector binds a name twice";
+                return false;
+            }
+            bindings[capture->text()] = actual;
+        }
+        return true;
+    }
+};
 
 } // namespace ControlTest
 } // namespace OpenTune

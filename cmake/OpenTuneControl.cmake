@@ -44,7 +44,24 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/ControlUiBridge.h
         Source/Control/ControlService.cpp
         Source/Control/ControlService.h
-        # Dispatcher and the read methods: added later.
+        # Dispatcher and the read methods: handles, revision tokens and cursors (standard library only),
+        # the request handler with its method table and error mapping, the helpers the operations share
+        # (parameter checks, handle resolution, the world revision vector, asOf) and the session,
+        # project and content reads.
+        Source/Control/ContentHandles.cpp
+        Source/Control/ContentHandles.h
+        Source/Control/ControlDispatcher.cpp
+        Source/Control/ControlDispatcher.h
+        Source/Control/Ops/OpsRegistry.cpp
+        Source/Control/Ops/OpsRegistry.h
+        Source/Control/Ops/OpsSupport.cpp
+        Source/Control/Ops/OpsSupport.h
+        Source/Control/Ops/SessionOps.cpp
+        Source/Control/Ops/SessionOps.h
+        Source/Control/Ops/ProjectReadOps.cpp
+        Source/Control/Ops/ProjectReadOps.h
+        Source/Control/Ops/ContentReadOps.cpp
+        Source/Control/Ops/ContentReadOps.h
         # Jobs, import, export and the editor bridge: added later.
         # Note edits, undo and redo: added later.
         # Time grid: added later.
@@ -95,7 +112,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
 
     if(OPENTUNE_BUILD_TESTS)
         # Unit tests of the channel: standard library and the channel sources only.
-        set(OPENTUNE_CONTROL_TEST_SOURCES ${OPENTUNE_CONTROL_CHANNEL_SOURCES})
+        # Handles and tokens are standard library only as well.
+        set(OPENTUNE_CONTROL_TEST_SOURCES ${OPENTUNE_CONTROL_CHANNEL_SOURCES} Source/Control/ContentHandles.cpp)
         list(FILTER OPENTUNE_CONTROL_TEST_SOURCES INCLUDE REGEX "\\.cpp$")
         add_executable(OpenTuneControlUnitTests
             Tests/Control/ControlUnitTests.cpp
@@ -128,12 +146,15 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # language standard and the MSVC runtime come from the directory scope, as for the SharedCode.
         add_executable(OpenTuneControlProcessorTests
             Tests/Control/ControlProcessorTests.cpp
+            Tests/Control/ControlDispatcherTests.cpp
+            Tests/Control/ControlProcessorSupport.h
             Tests/Control/ControlHeadlessSupport.h
             Tests/Control/TestUiBridge.h
             Tests/Control/ControlTestSupport.h
         )
         target_compile_definitions(OpenTuneControlProcessorTests PRIVATE
             $<FILTER:$<TARGET_PROPERTY:OpenTuneStandalone,COMPILE_DEFINITIONS>,EXCLUDE,^JUCE_SHARED_CODE>
+            OPENTUNE_CONTROL_SPEC_DIR="${CMAKE_CURRENT_SOURCE_DIR}/Tests/Control/spec/otcp/v1"
             OPENTUNE_CONTROL_TEST_DATA_DIR="${CMAKE_CURRENT_BINARY_DIR}/ot-test-data/ControlProcessorTests"
         )
         target_include_directories(OpenTuneControlProcessorTests PRIVATE
@@ -171,6 +192,11 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "DestroyBeforeStart|--control-api"
             "RepeatedStop|--control-api"
             "Shutdown|--control-api"
+            "Reads|--control-api"
+            "ThreadProbe|--control-api"
+            "DispatchShutdown|--control-api"
+            "DispatchTimeout|--control-api"
+            "Vectors|--control-api"
         )
         file(TO_NATIVE_PATH "${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces" _opentune_control_trace_dir)
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
@@ -194,5 +220,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
                 TIMEOUT 60
                 ENVIRONMENT "OPENTUNE_DATA_DIR=${_opentune_control_data};OPENTUNE_LIFECYCLE_TRACE_DIR=${_opentune_control_trace_dir}")
         endforeach()
+        # Every vector starts a processor of its own.
+        set_tests_properties(ControlProcessorTests.Vectors PROPERTIES TIMEOUT 300)
     endif()
 endif()

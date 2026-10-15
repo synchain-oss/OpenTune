@@ -832,7 +832,9 @@ void ControlServer::shutDown()
         if (connection->finished) {
             connection->thread.join();
         } else {
-            // Cannot happen while every wait is bounded; the thread owns shared state, so detaching is safe.
+            // Cannot happen while every wait is bounded. The thread owns its share of the shared state
+            // (handler included); it may still call the log sink, whose captures must stay valid for
+            // that (see ControlServerConfig::log).
             connection->thread.detach();
             allJoined = false;
         }

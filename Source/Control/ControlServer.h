@@ -80,7 +80,10 @@ public:
 
     /** Called by ControlServer::stop() after the stop flag is set (new requests already get
         SHUTTING_DOWN) and before any session closes, so that pending waits can end with SHUTTING_DOWN:
-        responses sent from here still reach their clients. Sessions close after it returns. */
+        responses sent from here still reach their clients. Sessions close after it returns.
+        handleRequest() may still run concurrently with, or just after, this call for a request that
+        passed the stop check before the flag was set; the handler must answer such requests itself
+        (for example with SHUTTING_DOWN) instead of starting a wait that nothing will end. */
     virtual void serverStopping() {}
 };
 
@@ -100,7 +103,10 @@ struct ControlServerConfig
     /** Request handler; nullptr selects the built-in one that implements only session.hello. */
     std::shared_ptr<ControlRequestHandler> handler;
     /** Diagnostic sink. Never receives the token, the server proof or request content. Called from
-        the start/stop thread and from network threads. */
+        the start/stop thread and from network threads, concurrently. A connection thread that stop()
+        had to detach can still call it after stop() returned and after the server is destroyed, so
+        what it captures must stay valid, or the sink must turn into a no-op before its captures go
+        away (ControlService passes a sink that captures only a gate it closes in stop()). */
     std::function<void(const std::string&)> log;
 };
 

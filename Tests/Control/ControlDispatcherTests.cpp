@@ -401,7 +401,7 @@ void checkSessionInfo(ApiSession& api)
     CONTROL_CHECK(memberOf(memberOf(info, "runtime"), "pid").asDouble()
                   == static_cast<double>(controlCurrentProcessId()));
     // Only the capabilities this build implements are reported.
-    CONTROL_CHECK(toJsonString(memberOf(info, "capabilities")) == R"(["session.v1","read.v1","jobs.v1"])");
+    CONTROL_CHECK(toJsonString(memberOf(info, "capabilities")) == R"(["session.v1","read.v1","jobs.v1","import.v1"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");
@@ -1273,7 +1273,7 @@ const std::set<std::string> kImplementedMethods = {"session.info",
                                                    "prefs.get",
                                                    "app.getLog"};
 /** The capabilities whose vectors this runner runs; ControlJobTests.cpp (JobVectors) runs those of
-    jobs.v1. */
+    jobs.v1 and import.v1. */
 const std::set<std::string> kReportedCapabilities = {"session.v1", "read.v1"};
 
 /**
@@ -1823,7 +1823,7 @@ void scenarioCompleteness()
         return;
     const auto& methods = memberOf(parsed.value, "methods");
     const auto reported = dispatcher->capabilities();
-    for (const char* capability : {"session.v1", "read.v1", "jobs.v1"})
+    for (const char* capability : {"session.v1", "read.v1", "jobs.v1", "import.v1"})
         CONTROL_CHECK(std::find(reported.begin(), reported.end(), capability) != reported.end());
 
     // The listener answers session.hello itself, so the dispatcher's method table has no entry for it.
@@ -1852,8 +1852,8 @@ void scenarioCompleteness()
         const char* capability = controlMethodCapability(method);
         CONTROL_CHECK(capability == nullptr || std::string(capability) != "read.v1");
     }
-    // session.info, the eight reads, job.get and job.cancel.
-    CONTROL_CHECK(checked >= 11);
+    // session.info, the eight reads, job.get, job.cancel and import.start.
+    CONTROL_CHECK(checked >= 12);
     if (!kUnimplementedReportedMethods.empty())
         note("exempt methods remain; the list must be empty before dev is merged");
     note(std::to_string(checked) + " methods of the reported capabilities are registered");

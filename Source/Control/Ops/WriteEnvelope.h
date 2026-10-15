@@ -73,12 +73,17 @@ JsonValue controlRevisionDiff(const ControlWorldVersions& before, const ControlW
  * vector again where the state requires it and return the envelope with every member (section 14.1) in one
  * of the four states of section 14.2.
  *
- * - committed(): applied. noOp when nothing was recorded and revisionDiff is empty; the undo descriptor is
- *   then {undoable: false, reason: no_op, revert: null}. A change that is neither undoable nor revertible
- *   gets the warning IRREVERSIBLE (section 15.2 rule 2), unless its reason is not_persisted_state (view
- *   state, rule 6).
+ * - committed(): applied. noOp when nothing was recorded (changes, created, removed, idMap or side effects)
+ *   and revisionDiff is empty; the undo descriptor is then the one the method set, or {undoable: false,
+ *   reason: no_op, revert: null} when it set none (section 14.2: a step of edit.undo that changes nothing
+ *   keeps its own descriptor, section 15.3 rule 5). A change that is neither undoable nor revertible gets
+ *   the warning IRREVERSIBLE (section 15.2 rule 2), unless its reason is not_persisted_state (view state,
+ *   rule 6) or no_op (the method itself changed nothing).
  * - predicted(): dryRun; revisionDiff empty, tokens current, dirty unchanged, undo null.
  * - handedToJob(): the work was handed to a job; the job's result carries the envelope of what it commits.
+ *   changes, created, removed, idMap and sideEffects are empty in this state (section 14.2 rule 3), so the
+ *   method must not change any state before it hands its work over: nothing would explain a non-empty
+ *   revisionDiff (section 14.4). Debug builds assert that it is empty.
  *
  * The result says what the server observed: tokens are read back after the commit (section 10 rule 5),
  * dirty after is the editor's flag after the call, ui is the snapshot after the call.
@@ -149,6 +154,8 @@ private:
     std::vector<std::uint64_t> touchedPlacements_;
     bool limitDiff_ = false;
     JsonValue undo_;
+    /** setUndoable() or setNotUndoable() was called. */
+    bool undoSet_ = false;
     bool undoable_ = false;
     std::string undoReason_;
     bool revertNull_ = true;

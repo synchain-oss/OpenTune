@@ -74,7 +74,8 @@ private:
 
 /** The work of a job. The registry calls it on the message thread, once per tick, until it ends the
     job, and destroys it on the message thread afterwards or when the registry stops. Each call must
-    return quickly; long work belongs on a thread of the work's own, which its destructor joins. */
+    return quickly and should not run a nested message loop; long work belongs on a thread of the
+    work's own, which its destructor joins. */
 using ControlJobWork = std::function<void(ControlJobStep& step)>;
 
 /**
@@ -86,7 +87,8 @@ using ControlJobWork = std::function<void(ControlJobStep& step)>;
  * - Retention: a terminal job is kept for limits.jobRetentionMs after it finished, unless more than
  *   limits.jobRetentionCount jobs exist; then the terminal jobs that finished first are evicted first.
  *   Jobs that are not terminal are never evicted; when all retained jobs are active, start() refuses with
- *   BUSY(job_limit).
+ *   BUSY(job_limit). Retention is measured with a monotonic clock, so that a change of the system time
+ *   never evicts a job early; the timestamps of the job object are wall-clock time.
  * - job.get with waitMs holds its response on a thread of the registry, never on the message thread and
  *   never on the connection thread: the response comes when the job becomes terminal, or when waitMs
  *   passes, or with SHUTTING_DOWN when the registry stops. The waiting holds no lock or lease of the
@@ -98,6 +100,13 @@ using ControlJobWork = std::function<void(ControlJobStep& step)>;
  * Threading: start(), findByKey() and stop() on the message thread; get(), waitAsync(), cancel() and
  * the accessors from any thread. The work runs on the message thread only. Destroy the registry after
  * stop() (any thread then), or on the message thread.
+ *
+ * Re-entrancy: when a step runs a nested message loop, the tick's timer may fire inside it; that nested
+ * tick does nothing. stop() called from such a loop stops the timer but leaves its destruction to the
+ * registry's destructor, because the timer's callback has not returned yet; the works of the jobs that
+ * the interrupted tick was running are destroyed when it returns, and none of them is called again. The
+ * registry itself must not be destroyed inside such a loop: the interrupted tick returns into it (debug
+ * builds assert this).
  */
 class ControlJobs
 {
@@ -123,11 +132,12 @@ public:
         std::string jobId;
         std::string refusal;
     };
-    /** Milliseconds since the Unix epoch. */
+    /** Milliseconds: since the Unix epoch for the wall clock, from any fixed point for the monotonic one. */
     using Clock = std::function<std::int64_t()>;
 
     explicit ControlJobs(const ControlLimits& limits);
-    /** Calls stop() when it was not called; see the class threading rules. */
+    /** Calls stop() when it was not called; see the class threading rules. Never inside the nested
+        message loop of a step (see Re-entrancy). */
     ~ControlJobs();
 
     ControlJobs(const ControlJobs&) = delete;
@@ -167,7 +177,8 @@ public:
 
     /**
      * Stops the registry: waiting job.get requests are answered with Stopped at once, the tick stops,
-     * the waiter thread is joined, and the work of every job is destroyed on this thread; no work runs
+     * the waiter thread is joined, and the work of every job is destroyed on this thread (called from a
+     * nested message loop inside a step: the works of the interrupted tick when it returns); no work runs
      * afterwards. start() refuses from now on. Message thread; idempotent.
      */
     void stop();
@@ -180,8 +191,9 @@ public:
     /** Number of job.get requests waiting. Any thread; for tests. */
     std::size_t waitingCount() const;
 
-    /** Test seam: the clock of the timestamps and of retention. Message thread, before the first job. */
-    void setClockForTesting(Clock clock);
+    /** Test seam: the wall clock of the timestamps and the monotonic clock of retention; without
+        steadyClock, clock drives both. Message thread, before the first job. */
+    void setClockForTesting(Clock clock, Clock steadyClock = {});
 
 private:
     friend class ControlJobStep;
@@ -189,10 +201,15 @@ private:
     struct Waiter;
     class Ticker;
 
+    /** Wall-clock time of the timestamps. */
     std::int64_t now() const;
+    /** Monotonic time of retention. */
+    std::int64_t steadyNow() const;
     /** Advances every active job once; returns whether one is still active. Message thread. */
     bool tick();
-    void evictLocked(std::int64_t nowMs);
+    /** A terminal job retained beyond its time, which every reader treats as gone (section 12.4). */
+    bool expiredLocked(const Job& job, std::int64_t steadyNowMs) const;
+    void evictLocked(std::int64_t steadyNowMs);
     Job* findLocked(const std::string& jobId) const;
     JsonValue jobJsonLocked(const Job& job) const;
     void finishLocked(Job& job, const char* state, std::optional<ControlJobError> error, JsonValue result);
@@ -201,6 +218,7 @@ private:
 
     ControlLimits limits_;
     Clock clock_;
+    Clock steadyClock_;
     mutable std::mutex mutex_;
     std::condition_variable changed_;
     std::string instanceShort_ = "00000000";
@@ -211,6 +229,9 @@ private:
     bool stopped_ = false;
     /** Message thread only. */
     std::unique_ptr<Ticker> ticker_;
+    /** Number of tick() calls running on the message thread (more than one only in a nested message
+        loop). Message thread only. */
+    int tickDepth_ = 0;
 };
 
 } // namespace OpenTune

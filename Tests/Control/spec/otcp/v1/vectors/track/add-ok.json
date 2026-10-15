@@ -1,0 +1,61 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "track/add-ok",
+  "type": "request",
+  "description": "track.add shows the next hidden track slot, as the + button does. The number of visible tracks is view state and is not saved with the project (warning NOT_PERSISTED): no IRREVERSIBLE warning, and the project is not marked as changed.",
+  "capability": "tracks.v1",
+  "since": "1.0",
+  "method": "track.add",
+  "session": "authenticated",
+  "given": { "dirty": false, "visibleTrackCount": 2 },
+  "request": { "jsonrpc": "2.0", "id": 1, "method": "track.add", "params": {} },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "track",
+          "ref": { "trackId": 2 },
+          "label": { "$any": true },
+          "fields": {
+            "visible": { "before": false, "after": true, "unit": null }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": {
+          "before": { "$any": "string" },
+          "after": { "$any": "string" }
+        },
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "not_persisted_state",
+        "revert": null
+      },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [
+        { "code": "NOT_PERSISTED", "subject": { "trackId": 2 }, "data": null }
+      ],
+      "job": null,
+      "visibleTrackCount": { "before": 2, "after": 3 }
+    }
+  },
+  "connectionAfter": "open"
+}

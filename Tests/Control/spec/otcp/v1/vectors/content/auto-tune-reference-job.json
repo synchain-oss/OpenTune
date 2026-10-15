@@ -1,0 +1,126 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/auto-tune-reference-job",
+  "type": "scenario",
+  "description": "AUTO in reference mode on a clip whose binding has no alignment data yet: the referenceAnalysis job computes the data and then aligns the content in one undo step. Its result is the write envelope of content.autoTune with keyUsed and paramsUsed null.",
+  "capability": "edit.v1",
+  "extraCapabilities": ["reference.v1", "jobs.v1"],
+  "since": "1.0",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "notes": [
+          { "startContentSec": 0.5, "endContentSec": 1.5, "targetMidi": 64 },
+          { "startContentSec": 2, "endContentSec": 3, "targetMidi": 69 }
+        ],
+        "referenceClip": "ref"
+      },
+      {
+        "bind": "ref",
+        "trackId": 1,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "content.autoTune",
+        "params": {
+          "contentId": { "$ref": "clip.contentId" },
+          "mode": "reference",
+          "expectedRevision": { "$ref": "clip.revision" },
+          "placementId": { "$ref": "clip.placementId" }
+        }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+          "job": {
+            "jobId": { "$capture": "autoRefJob", "$any": "string" },
+            "kind": "referenceAnalysis",
+            "state": { "$any": "string" }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "autoRefJob" }, "waitMs": 30000 }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "autoRefJob" },
+            "kind": "referenceAnalysis",
+            "state": "succeeded",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": {
+              "applied": true,
+              "noOp": false,
+              "dryRun": false,
+              "changes": { "$any": "array" },
+              "created": { "$any": "array" },
+              "removed": { "$any": "array" },
+              "idMap": [],
+              "revisionDiff": {
+                "arrangement": null,
+                "trackState": null,
+                "contents": [
+                  {
+                    "contentId": { "$ref": "clip.contentId" },
+                    "changed": { "$any": "object" }
+                  }
+                ]
+              },
+              "tokens": { "$any": "object" },
+              "undo": {
+                "undoable": true,
+                "undoId": { "$any": "string" },
+                "description": { "$any": "string" },
+                "innerActions": { "$any": "array" },
+                "steps": 1
+              },
+              "dirty": { "before": false, "after": true },
+              "ui": { "$any": true },
+              "sideEffects": {},
+              "warnings": { "$any": "array" },
+              "job": null,
+              "mode": "reference",
+              "keyUsed": null,
+              "paramsUsed": null,
+              "noteCount": { "before": 2, "after": { "$any": "integer" } },
+              "omittedCount": { "changes": 0, "created": 0, "removed": 0 }
+            },
+            "error": null
+          }
+        }
+      }
+    }
+  ]
+}

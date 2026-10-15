@@ -86,7 +86,7 @@
     {
       "code": "REPLACES_ALL_NOTES",
       "since": "1.0",
-      "description": "The operation replaced every note of the content."
+      "description": "The operation replaced every note of the content. data is {removedCount, createdCount}: how many notes it removed and how many it created."
     },
     {
       "code": "UNDO_NO_EFFECT",
@@ -132,6 +132,21 @@
       "code": "NOT_SAVED_IN_PROJECT",
       "since": "1.0",
       "description": "The project was saved, but some session state is not part of the project file. data.items lists it (for example the visible track count, the undo history and preferences)."
+    },
+    {
+      "code": "SCHEME_GENERATED_NOTES",
+      "since": "1.0",
+      "description": "Switching the editing scheme made OpenTune generate notes for the clip open in the piano roll. This has no undo entry; sideEffects.notesGenerated reports it."
+    },
+    {
+      "code": "SHARED_CONTENT",
+      "since": "1.0",
+      "description": "The new clips show the same contents as the clips they were copied from, so an edit of one shows in the other."
+    },
+    {
+      "code": "UNDO_HISTORY_POSSIBLY_STALE",
+      "since": "1.0",
+      "description": "Deleting a track made entries of the undo or redo history possibly stale: they were recorded before the deletion and may address tracks that have moved since. This code describes the whole history after a track deletion; UNDO_ENTRY_POSSIBLY_STALE describes one applied entry. data.undo and data.redo count the possibly stale entries."
     }
   ]
 }

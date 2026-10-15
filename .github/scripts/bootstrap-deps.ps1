@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # Fork-only build tooling (lives under .github/, never goes upstream).
+# The 'Global\' mutex name is used on purpose on Unix as well (.NET maps it to a machine-wide named lock there).
 #Requires -Version 7.2
 <#
 .SYNOPSIS
@@ -168,7 +169,15 @@ function Install-GitDep($Dep, [string]$Dest) {
     $cloneArgs += @($Dep.url, $partial)
     Write-Step "$($Dep.name): git clone $($Dep.url) @ $($Dep.ref)"
     try {
-        Invoke-Git $cloneArgs
+        # Bounded retry for transient network failures; leftovers of a failed attempt are removed first.
+        for ($attempt = 1; ; $attempt++) {
+            try { Invoke-Git $cloneArgs; break } catch {
+                Remove-Partial $partial
+                if ($attempt -ge 3) { throw }
+                Write-Step "$($Dep.name): git clone attempt $attempt failed, retrying"
+                Start-Sleep -Seconds (5 * $attempt)
+            }
+        }
     } catch {
         if (-not $Dep.recursive) { throw }
         # Some servers refuse shallow fetches of non-tip submodule commits; retry with full submodules.

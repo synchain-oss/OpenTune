@@ -156,7 +156,11 @@ export function extractFunction(text, symbol) {
       }
       const c = text[i];
       if (c === '(') depth++;
-      else if (c === ')') depth--;
+      else if (c === ')') {
+        depth--;
+        // An unmatched ')' means the name was a call argument, not a definition.
+        if (depth < 0) break;
+      }
       else if (depth === 0 && c === ';') break;
       else if (depth === 0 && c === '{') {
         bodyOpen = i;

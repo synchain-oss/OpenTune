@@ -135,7 +135,11 @@ jobs:
             $ninja = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
           }
           if (-not (Test-Path -LiteralPath $ninja)) { throw "ninja.exe not found" }
-          # /fsanitize=address 加在 CMAKE_{C,CXX}_FLAGS 上（编译与链接共用）；/INCREMENTAL:NO 是 ASan 的链接要求。
+          # /fsanitize=address 通过环境变量 CFLAGS/CXXFLAGS 追加：CMake 把它们与 MSVC 默认的 /DWIN32 /D_WINDOWS /EHsc 合并，
+          # 而 -DCMAKE_CXX_FLAGS=... 会整体替换这些默认值。/INCREMENTAL:NO 是 ASan 的链接要求，放在 RelWithDebInfo 的链接参数里
+          # （该配置默认带 /INCREMENTAL，放在 CMAKE_EXE_LINKER_FLAGS 会与之冲突）。下一步从 CMakeCache.txt 断言最终结果。
+          $env:CFLAGS = '/fsanitize=address'
+          $env:CXXFLAGS = '/fsanitize=address'
           # CMP0141=NEW + Embedded（/Z7）让 sccache 可以缓存目标文件，见 build-windows。
           $configure = @(
             'cmake', '-S', $env:GITHUB_WORKSPACE, '-B', $env:OT_BUILD, '-G', 'Ninja Multi-Config',
@@ -143,10 +147,8 @@ jobs:
             "-DCMAKE_CONFIGURATION_TYPES=$env:OT_CONFIG",
             '-DOPENTUNE_BUILD_TESTS=ON',
             '-DOPENTUNE_ENABLE_CONTROL_API=ON',
-            '-DCMAKE_C_FLAGS=/fsanitize=address',
-            '-DCMAKE_CXX_FLAGS=/fsanitize=address',
-            '-DCMAKE_EXE_LINKER_FLAGS=/INCREMENTAL:NO',
-            '-DCMAKE_SHARED_LINKER_FLAGS=/INCREMENTAL:NO',
+            '-DCMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO=/debug /INCREMENTAL:NO',
+            '-DCMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO=/debug /INCREMENTAL:NO',
             "-DCMAKE_C_COMPILER_LAUNCHER=$env:SCCACHE",
             "-DCMAKE_CXX_COMPILER_LAUNCHER=$env:SCCACHE",
             '-DCMAKE_POLICY_DEFAULT_CMP0141=NEW',
@@ -154,6 +156,27 @@ jobs:
           )
           pwsh -NoProfile -File .github/scripts/with-build-slot.ps1 -VsDevShell -MinFreeMB 2048 -WaitMinutes 10 -- @configure
           if ($LASTEXITCODE -ne 0) { throw "configure failed ($LASTEXITCODE)" }
+
+      # 只读检查：编译参数没有丢掉 MSVC 默认的 /EHsc，ASan 开关在，链接参数是 /INCREMENTAL:NO 而不是 /INCREMENTAL。
+      - name: Assert the final compiler and linker flags
+        run: |
+          $cache = Get-Content -LiteralPath (Join-Path $env:OT_BUILD 'CMakeCache.txt')
+          function Get-CacheValue([string]$name) {
+            $line = $cache | Where-Object { $_ -match "^$([regex]::Escape($name)):[A-Z]+=" } | Select-Object -First 1
+            if (-not $line) { throw "$name not found in CMakeCache.txt" }
+            return ($line -replace '^[^=]*=', '')
+          }
+          $cxx = (Get-CacheValue 'CMAKE_CXX_FLAGS') + ' ' + (Get-CacheValue 'CMAKE_CXX_FLAGS_RELWITHDEBINFO')
+          Write-Host "CXX flags: $cxx"
+          foreach ($need in '/EHsc', '/fsanitize=address') {
+            if ($cxx -notmatch [regex]::Escape($need)) { throw "CMAKE_CXX_FLAGS lacks $need" }
+          }
+          foreach ($n in 'CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO', 'CMAKE_SHARED_LINKER_FLAGS_RELWITHDEBINFO') {
+            $v = Get-CacheValue $n
+            Write-Host "$n = $v"
+            if ($v -notmatch '/INCREMENTAL:NO') { throw "$n lacks /INCREMENTAL:NO" }
+            if ($v -match '/INCREMENTAL(?!:NO)') { throw "$n contains a bare /INCREMENTAL" }
+          }
 
       - name: Build the Control tests
         id: build

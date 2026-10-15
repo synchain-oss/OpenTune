@@ -40,6 +40,10 @@ describe('tryRebase', () => {
     assert.equal(r.conflictedCommits.length, 0);
     assert.equal(r.overlapFiles.length, 0);
     assert.equal(r.applied, r.commits);
+    assert.equal(r.dropped, 0);
+    assert.equal(r.skipped, 0);
+    assert.equal(r.unprocessed, 0);
+    assert.match(formatSummary(r), /实际应用 \d+ 个提交/);
   });
 
   test('conflicting edits of the same lines are counted: files, blocks, commits', () => {

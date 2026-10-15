@@ -8,6 +8,8 @@ name: Control Sanitizers
 # macos-14（arm64），Ninja，RelWithDebInfo。只编名字里含 Control 的已注册测试的可执行文件
 # （现在是 OpenTuneControlUnitTests；目标由 .github/scripts/list-test-targets.ps1 读自 CTestTestfile.cmake），
 # 并用 run-ctest.ps1 -Include Control 运行。依赖与 build-macos 相同（bootstrap-deps.ps1 -Platform macos）。
+# 注意：测试按名字（含 Control）纳入；以后若有链接 JUCE 的测试被纳入，TSan 下可能出现 JUCE 内部的误报，
+# 届时需要白名单或设置 TSAN_OPTIONS=suppressions=<文件>。
 # 触发：手动；PR → feature/** 改到本 workflow 自身时（引入它的 PR 上首跑）。
 on:
   pull_request:

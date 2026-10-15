@@ -32,9 +32,14 @@ concurrency:
 
 jobs:
   dry-run:
-    name: try-rebase onto upstream standalone
+    # 定时任务只在默认分支 dev 上运行，所以用 matrix 同时统计 dev 与主支线两个分支的增量。
+    name: try-rebase ${{ matrix.branch }} onto upstream standalone
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        branch: [dev, feature/control-api]
     env:
       GIT_LFS_SKIP_SMUDGE: '1'
       UPSTREAM_URL: https://github.com/YuFeng926/OpenTune.git
@@ -42,6 +47,7 @@ jobs:
       # lfs: false —— 绝不下载模型权重（CLAUDE.md §11）。fetch-depth: 0：增量的定义需要完整历史。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.event_name == 'pull_request' && github.sha || matrix.branch }}
           fetch-depth: 0
           lfs: false
           persist-credentials: false
@@ -61,4 +67,8 @@ jobs:
           set -euo pipefail
           git log -1 --format='upstream standalone: %H %cs' refs/remotes/upstream/standalone
           node .github/scripts/try-rebase.mjs --upstream refs/remotes/upstream/standalone --summary "$RUNNER_TEMP/sync-dryrun.md"
-          cat "$RUNNER_TEMP/sync-dryrun.md" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## 分支：${{ matrix.branch }}${{ github.event_name == 'pull_request' && '（PR 触发：实际检出的是本 PR 的合并提交，两行结果相同）' || '' }}"
+            echo
+            cat "$RUNNER_TEMP/sync-dryrun.md"
+          } >> "$GITHUB_STEP_SUMMARY"

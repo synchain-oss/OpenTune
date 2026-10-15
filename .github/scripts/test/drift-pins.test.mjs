@@ -71,6 +71,14 @@ describe('extractFunction', () => {
     const text = 'void g()\n{\n    Foo::commit(3);\n}\n';
     assert.equal(extractFunction(text, 'Foo::commit'), null);
   });
+
+  test('a call site that comes before the definition is not mistaken for it', () => {
+    const call = 'void g()\n{\n    h(Foo::commit(3)) ;\n    k();\n}\n';
+    assert.equal(extractFunction(call, 'Foo::commit'), null);
+    const f = extractFunction(`${call}void Foo::commit(int n)\n{\n    run(n);\n}\n`, 'Foo::commit');
+    assert.equal(f.startLine, 6);
+    assert.equal(f.endLine, 9);
+  });
 });
 
 describe('fn-v1 normalisation', () => {

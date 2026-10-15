@@ -74,6 +74,9 @@ export function tryRebase(opts = {}) {
     commits: delta.commits.length,
     deltaFiles: delta.files.length,
     applied: 0,
+    skipped: 0,
+    dropped: 0,
+    unprocessed: 0,
     conflictedCommits: [],
     conflictFiles: [],
     conflictBlocks: 0,
@@ -126,6 +129,7 @@ export function tryRebase(opts = {}) {
       if (!files.length) {
         // Nothing to resolve (for example a commit that became empty): skip it and go on.
         r = g(clone, ['rebase', '--skip'], { allowFail: true });
+        report.skipped++;
         if (r.status !== 0 && !fs.existsSync(path.join(clone, '.git', 'rebase-merge'))) break;
         continue;
       }
@@ -154,6 +158,11 @@ export function tryRebase(opts = {}) {
     }
     if (r.status === 0) {
       report.applied = Number(g(clone, ['rev-list', '--count', `${upstreamSha}..HEAD`]).trim());
+      // Commits that vanished: dropped by --empty=drop (became empty on the new base), not counting the skipped ones.
+      report.dropped = Math.max(0, report.commits - report.applied - report.skipped);
+    } else {
+      report.complete = false;
+      report.unprocessed = Math.max(0, report.commits - report.conflictedCommits.length - report.skipped);
     }
   } finally {
     if (!opts.keep) removeDir(work);
@@ -175,7 +184,7 @@ export function formatSummary(r) {
   L.push(`- 我们的增量：${r.commits} 个提交，${r.deltaFiles} 个文件（HEAD ${short(r.head)}，上游基点 ${short(r.base)}）`);
   L.push(`- 目标上游：${short(r.upstream)}（${r.upstreamFrom}）`);
   L.push(`- 上游与增量都改过的文件：${r.overlapFiles.length} 个`);
-  L.push(`- 变基结果：${r.complete ? '完成' : '未完成'}；干净应用 ${r.commits - r.conflictedCommits.length} 个提交，遇到冲突 ${r.conflictedCommits.length} 个提交`);
+  L.push(`- 变基结果：${r.complete ? '完成' : '未完成'}；实际应用 ${r.applied} 个提交（干净 ${Math.max(0, r.applied - r.conflictedCommits.length)} 个，遇到冲突 ${r.conflictedCommits.length} 个）；因变空被丢弃 ${r.dropped} 个，被 rebase --skip 跳过 ${r.skipped} 个，未处理到 ${r.unprocessed} 个`);
   L.push(`- 冲突文件 ${r.conflictFiles.length} 个，冲突块 ${r.conflictBlocks} 个${r.binaryConflicts ? `，另有 ${r.binaryConflicts} 个二进制冲突` : ''}`);
   for (const n of r.notes) L.push(`- 注意：${n}`);
   if (r.conflictedCommits.length) {

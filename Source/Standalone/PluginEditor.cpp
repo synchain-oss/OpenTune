@@ -40,6 +40,9 @@
 #include "Content/StandaloneClipContent.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/PlacementActions.h"
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+#include "ControlEditorBridge.h"  // OpenTune Control API hook: editor bridge, see Source/Control/README.md#hooks
+#endif
 #include <cmath>
 #include <atomic>
 #include <cstdlib>
@@ -854,10 +857,18 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         applyF0Model();
 
     beginExternalEditSession();
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: register the editor bridge once the editor is complete, see Source/Control/README.md#hooks
+    controlEditorBridge_ = std::make_unique<ControlEditorBridge>(*this);
+#endif
 }
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: unregister the editor bridge before anything is torn down, see Source/Control/README.md#hooks
+    controlEditorBridge_.reset();
+#endif
     preferencesDialog_.reset();
     onboardingOverlay_.reset();
     // 退出保存外层窗口实际 width/height（§5.1）：此刻默认 StandaloneFilterWindow 仍存活，

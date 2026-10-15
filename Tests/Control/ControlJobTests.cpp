@@ -1,18 +1,31 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Scenarios of the jobs (job.get, job.cancel, retention, shutdown) and of the write envelope with the busy
-// checks, against the real processor without a window or an audio device. Registered with the other
-// processor scenarios in ControlProcessorTests.cpp.
+// Scenarios of the jobs (job.get, job.cancel, retention, shutdown), the write envelope with the busy
+// checks, and import.start, against the real processor without a window or an audio device. Imported
+// clips get a pitch analysis made of synthetic F0 through the import job's analysis seam, committed the
+// way OpenTune commits a finished analysis, so no model is needed. Registered with the other processor
+// scenarios in ControlProcessorTests.cpp.
 
 #include "ControlProcessorSupport.h"
 #include "TestUiBridge.h"
 
+#include "Content/EditableContentSnapshot.h"
+#include "Content/StandaloneClipContent.h"
+#include "Content/StandaloneContentRepository.h"
 #include "Control/ControlDispatcher.h"
 #include "Control/ControlJobs.h"
+#include "Control/Ops/ImportOps.h"
 #include "Control/Ops/OpsRegistry.h"
 #include "Control/Ops/WriteEnvelope.h"
+#include "Utils/AppLogger.h"
+#include "Utils/AppPreferences.h"
+#include "Utils/PitchCurve.h"
+#include "Utils/ProjectSession.h"
+
+#include <juce_audio_formats/juce_audio_formats.h>
 
 #include <algorithm>
+#include <cmath>
 #include <set>
 #include <vector>
 
@@ -21,6 +34,16 @@ namespace ControlTest {
 
 namespace {
 
+/** Sample rate of the test audio (OpenTune stores audio at 44.1 kHz). */
+constexpr double kAudioSampleRate = 44100.0;
+/** Geometry of the synthetic pitch analysis, the one the F0 extractor produces: 16 kHz, hop 160. */
+constexpr double kF0SampleRate = 16000.0;
+constexpr int kF0HopSize = 160;
+/** The two pitches of the test tone (A3, then B3 from the middle) and its unvoiced tail. */
+constexpr float kFirstHz = 220.0f;
+constexpr float kSecondHz = 246.94f;
+constexpr double kUnvoicedTailSec = 0.3;
+constexpr double kSecTolerance = 0.01;
 /** The longest hold of job.get, used where a job must end first. */
 constexpr int kJobWaitMs = 30000;
 /** A short hold of job.get, and the slack of its response time. */
@@ -30,6 +53,173 @@ constexpr int kWaitSlackMs = 1000;
 constexpr int kJobExchangeMs = 60000;
 /** How often the thread of a work checks whether it should end. */
 constexpr int kWorkerPollMs = 5;
+
+// ---- Files ------------------------------------------------------------------------------------------
+
+juce::File juceFileOf(const std::filesystem::path& path)
+{
+    return juce::File(juce::String::fromUTF8(path.u8string().c_str()));
+}
+
+std::filesystem::path mediaDirectory(const std::string& name)
+{
+    const auto directory = isolatedDataDirectory() / "media" / name;
+    std::error_code ignored;
+    std::filesystem::create_directories(directory, ignored);
+    return directory;
+}
+
+/** A WAV file of a voiced tone (A3, then B3) of the given length; returns its absolute path (UTF-8). */
+std::string writeTone(const std::filesystem::path& directory, const std::string& name, double durationSec,
+                      int channels = 1, double sampleRate = kAudioSampleRate)
+{
+    const auto samples = static_cast<int>(std::llround(durationSec * sampleRate));
+    juce::AudioBuffer<float> audio(channels, samples);
+    for (int i = 0; i < samples; ++i) {
+        const double hz = i < samples / 2 ? kFirstHz : kSecondHz;
+        const auto value =
+            0.25f * static_cast<float>(std::sin(2.0 * juce::MathConstants<double>::pi * hz * i / sampleRate));
+        for (int channel = 0; channel < channels; ++channel)
+            audio.setSample(channel, i, value);
+    }
+    const auto path = directory / (name + ".wav");
+    const auto file = juceFileOf(path);
+    file.deleteFile();
+    std::unique_ptr<juce::OutputStream> stream(file.createOutputStream().release());
+    juce::WavAudioFormat wav;
+    const auto options =
+        juce::AudioFormatWriterOptions{}.withSampleRate(sampleRate).withNumChannels(channels).withBitsPerSample(16);
+    auto writer = stream != nullptr ? wav.createWriterFor(stream, options) : nullptr;
+    CONTROL_CHECK(writer != nullptr && writer->writeFromAudioSampleBuffer(audio, 0, samples));
+    return path.u8string();
+}
+
+/** A file named .wav whose content is no audio. */
+std::string writeGarbage(const std::filesystem::path& directory, const std::string& name)
+{
+    const auto path = directory / name;
+    CONTROL_CHECK(juceFileOf(path).replaceWithText("this is not audio"));
+    return path.u8string();
+}
+
+std::string absentPath(const std::filesystem::path& directory, const std::string& name)
+{
+    const auto path = directory / name;
+    std::error_code ignored;
+    std::filesystem::remove(path, ignored);
+    return path.u8string();
+}
+
+std::string logText()
+{
+    const auto file = AppLogger::getCurrentLogFile();
+    return file == juce::File{} ? std::string() : file.loadFileAsString().toStdString();
+}
+
+std::size_t occurrences(const std::string& text, const std::string& part)
+{
+    std::size_t count = 0;
+    for (auto at = text.find(part); at != std::string::npos; at = text.find(part, at + part.size()))
+        ++count;
+    return count;
+}
+
+// ---- The synthetic analysis ------------------------------------------------------------------------
+
+/** F0 of a test tone: A3, then B3 from the middle, an unvoiced tail. */
+std::shared_ptr<PitchCurve> syntheticCurve(double durationSec)
+{
+    const auto frames = static_cast<std::size_t>(std::llround(durationSec * kF0SampleRate / kF0HopSize));
+    const auto tail = static_cast<std::size_t>(std::llround(kUnvoicedTailSec * kF0SampleRate / kF0HopSize));
+    std::vector<float> f0(frames, kFirstHz);
+    for (auto frame = frames / 2; frame < frames; ++frame)
+        f0[frame] = kSecondHz;
+    for (auto frame = frames > tail ? frames - tail : 0; frame < frames; ++frame)
+        f0[frame] = 0.0f;
+    auto curve = std::make_shared<PitchCurve>();
+    curve->setHopSize(kF0HopSize);
+    curve->setSampleRate(kF0SampleRate);
+    curve->setOriginalF0(f0);
+    return curve;
+}
+
+/**
+ * The steps of the F0 completion in OpenTuneAudioProcessor::requestContentRefresh with a synthetic
+ * curve: the curve goes to the content owner (StandaloneClipContent::applyOriginalF0, which the
+ * processor's private writeOriginalF0ToOwner calls for a Standalone clip), then the requested note
+ * generation with its callback, then the state Ready.
+ */
+void commitSyntheticAnalysis(OpenTuneAudioProcessor& processor,
+                             const OpenTuneAudioProcessor::ContentRefreshRequest& request)
+{
+    const auto snapshot = processor.getContentSnapshot(request.contentKey);
+    auto* owner = processor.getStandaloneContentRepository()->findClip(request.contentKey);
+    if (snapshot == nullptr || snapshot->audioBuffer == nullptr || owner == nullptr)
+        return;
+    owner->applyOriginalF0(syntheticCurve(snapshot->audioBuffer->getNumSamples() / kAudioSampleRate));
+    if (request.generateNotesWholeContentOnReady
+        && processor.generateNotesOnlyByContentKey(request.contentKey, request.noteGenerationParams)
+        && request.onNotesGenerated)
+        request.onNotesGenerated();
+    processor.setContentOriginalF0State(request.contentKey, OriginalF0State::Ready);
+}
+
+/**
+ * Installs the synthetic analysis as the import job's analysis request for the life of this object: it
+ * sets the state Extracting at once, as requestContentRefresh does, and commits the analysis from a later
+ * message (or never, with completes false). Posted messages do nothing once the object is gone.
+ */
+class SyntheticAnalysis
+{
+public:
+    explicit SyntheticAnalysis(bool completes = true)
+    {
+        auto alive = alive_;
+        controlSetImportAnalysisForTesting(
+            [alive, completes](OpenTuneAudioProcessor& processor,
+                               const OpenTuneAudioProcessor::ContentRefreshRequest& request) {
+                if (!processor.setContentOriginalF0State(request.contentKey, OriginalF0State::Extracting))
+                    return false;
+                if (completes) {
+                    auto* target = &processor;
+                    juce::MessageManager::callAsync([alive, target, request] {
+                        if (alive->load())
+                            commitSyntheticAnalysis(*target, request);
+                    });
+                }
+                return true;
+            });
+    }
+
+    ~SyntheticAnalysis()
+    {
+        *alive_ = false;
+        controlSetImportAnalysisForTesting({});
+    }
+
+    SyntheticAnalysis(const SyntheticAnalysis&) = delete;
+    SyntheticAnalysis& operator=(const SyntheticAnalysis&) = delete;
+
+private:
+    std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true);
+};
+
+/** Registers a bridge with the service for the life of this object. */
+class ScopedBridge
+{
+public:
+    ScopedBridge(ControlService& service, ControlUiBridge& bridge) : service_(service)
+    {
+        service_.setUiBridge(&bridge);
+    }
+    ~ScopedBridge() { service_.setUiBridge(nullptr); }
+
+    ScopedBridge(const ScopedBridge&) = delete;
+    ScopedBridge& operator=(const ScopedBridge&) = delete;
+
+private:
+    ControlService& service_;
+};
 
 // ---- Requests and results --------------------------------------------------------------------------
 
@@ -54,6 +244,20 @@ JsonValue waitJob(ApiSession& api, const std::string& jobId)
     return memberOf(result, "job");
 }
 
+/** Starts an import and returns its job once terminal; the start must hand the work to a job. */
+JsonValue importAndWait(ApiSession& api, const std::string& params)
+{
+    const auto start = api.result("import.start", json(params));
+    const auto& job = memberOf(start, "job");
+    if (!CONTROL_CHECK(job.isObject() && memberOf(job, "kind").text() == "import"))
+        return JsonValue();
+    CONTROL_CHECK(!memberOf(start, "applied").asBoolean() && memberOf(start, "undo").isNull()
+                  && memberOf(start, "changes").size() == 0 && memberOf(start, "created").size() == 0);
+    const auto& diff = memberOf(start, "revisionDiff");
+    CONTROL_CHECK(memberOf(diff, "arrangement").isNull() && memberOf(diff, "contents").size() == 0);
+    return waitJob(api, memberOf(job, "jobId").text());
+}
+
 std::vector<std::string> warningCodes(const JsonValue& result)
 {
     std::vector<std::string> codes;
@@ -61,6 +265,11 @@ std::vector<std::string> warningCodes(const JsonValue& result)
     for (std::size_t i = 0; i < warnings.size(); ++i)
         codes.push_back(memberOf(warnings.at(i), "code").text());
     return codes;
+}
+
+bool near(const JsonValue& value, double expected, double tolerance = kSecTolerance)
+{
+    return value.isNumber() && std::abs(value.asDouble() - expected) <= tolerance;
 }
 
 const JsonValue& errorKindOf(const JsonValue& errorObject)
@@ -299,6 +508,77 @@ void scenarioJobs()
         CONTROL_CHECK(lookup == ControlJobs::Lookup::Stopped);
     }
 
+    // Retention follows the monotonic clock: a jump of the system time does not evict a terminal job early
+    // (section 12.4, "at least jobRetentionMs"); the timestamps follow the wall clock.
+    {
+        const ControlLimits limits;
+        ControlJobs registry(limits);
+        registry.setInstanceShort("0123abcd");
+        std::int64_t wallMs = 1000000;
+        std::int64_t steadyMs = 5000;
+        registry.setClockForTesting([&wallMs] { return wallMs; }, [&steadyMs] { return steadyMs; });
+        auto done = std::make_shared<FixtureJob>();
+        done->release = true;
+        const auto id = registry.start("import", true, fixtureWork(done)).jobId;
+        CONTROL_CHECK(pumpMessagesUntil([&registry] { return registry.activeCount() == 0; }, kReadTimeoutMs));
+        JsonValue job;
+        CONTROL_CHECK(registry.get(id, job) == ControlJobs::Lookup::Found
+                      && memberOf(job, "finishedAtMs").asDouble() == 1000000.0);
+        wallMs += 2 * static_cast<std::int64_t>(limits.jobRetentionMs);
+        CONTROL_CHECK(registry.get(id, job) == ControlJobs::Lookup::Found);
+        steadyMs += limits.jobRetentionMs - 1;
+        CONTROL_CHECK(registry.get(id, job) == ControlJobs::Lookup::Found);
+        steadyMs += 1;
+        CONTROL_CHECK(registry.get(id, job) == ControlJobs::Lookup::NotFound);
+        registry.stop();
+    }
+
+    // stop() from a nested message loop inside a step: the timer that fires inside the loop calls no work,
+    // the stop does not destroy the timer under its own callback, the interrupted work goes once its step
+    // returned, and no work runs afterwards.
+    {
+        const ControlLimits limits;
+        ControlJobs registry(limits);
+        struct Record
+        {
+            std::atomic<int> steps{0};
+            std::atomic<int> stepsInsideLoop{0};
+            std::atomic<bool> stoppedInsideStep{false};
+            std::atomic<bool> destroyed{false};
+        };
+        auto record = std::make_shared<Record>();
+        /** Owned by the work only: destroyed with it. */
+        struct Marker
+        {
+            explicit Marker(std::shared_ptr<Record> recordIn) : record(std::move(recordIn)) {}
+            ~Marker() { record->destroyed = true; }
+            Marker(const Marker&) = delete;
+            Marker& operator=(const Marker&) = delete;
+            std::shared_ptr<Record> record;
+        };
+        auto marker = std::make_shared<Marker>(record);
+        auto* target = &registry;
+        ControlJobWork work = [record, marker, target](ControlJobStep&) {
+            if (++record->steps > 1)
+                return;
+            // A nested message loop longer than several ticks, then the stop from inside it.
+            pumpMessagesFor(kQuietPumpMs);
+            record->stepsInsideLoop = record->steps.load();
+            juce::MessageManager::callAsync([target] { target->stop(); });
+            pumpMessagesUntil([target] { return target->isStopped(); }, kReadTimeoutMs);
+            record->stoppedInsideStep = target->isStopped();
+        };
+        marker.reset();
+        const auto id = registry.start("import", true, std::move(work)).jobId;
+        CONTROL_CHECK(!id.empty());
+        CONTROL_CHECK(pumpMessagesUntil([&record] { return record->stoppedInsideStep.load(); }, kReadTimeoutMs));
+        pumpMessagesFor(kQuietPumpMs);
+        CONTROL_CHECK(record->stepsInsideLoop.load() == 1 && record->steps.load() == 1);
+        CONTROL_CHECK(registry.isStopped() && record->destroyed.load());
+        CONTROL_CHECK(registry.start("import", true, fixtureWork(std::make_shared<FixtureJob>())).refusal
+                      == "stopping");
+    }
+
     // `executed` of errors (section 17.4): an operation states it; other errors of a write may have
     // changed state.
     CONTROL_CHECK(controlMapError(controlOpError("BUSY", "pointer_down", "busy")).executed
@@ -346,7 +626,9 @@ void scenarioJobShutdown()
     if (CONTROL_CHECK(response.has_value())) {
         note("response: " + *response);
         CONTROL_CHECK(isError(response, "SHUTTING_DOWN", ""));
-        const JsonValue* data = errorData(json(*response));
+        // Keep the parsed response: errorData() points into it.
+        const JsonValue parsed = json(*response);
+        const JsonValue* data = errorData(parsed);
         CONTROL_CHECK(data != nullptr && !memberOf(*data, "executed").asBoolean());
     }
     // The work was destroyed during the stop, its thread joined; no work runs afterwards.
@@ -387,14 +669,44 @@ void scenarioWriteEnvelope()
     // Committed without changes: noOp, undo no_op, no IRREVERSIBLE.
     {
         ControlWriteEnvelope envelope(context);
-        envelope.setNotUndoable("ui_parity");
         const auto result = envelope.committed(context);
         CONTROL_CHECK(hasEveryMember(result));
         CONTROL_CHECK(memberOf(result, "applied").asBoolean() && memberOf(result, "noOp").asBoolean()
                       && !memberOf(result, "dryRun").asBoolean() && memberOf(result, "job").isNull());
-        CONTROL_CHECK(memberOf(memberOf(result, "undo"), "reason").text() == "no_op" && warningCodes(result).empty());
+        CONTROL_CHECK(toJsonString(memberOf(result, "undo")) == R"({"undoable":false,"reason":"no_op","revert":null})"
+                      && warningCodes(result).empty());
         CONTROL_CHECK(memberOf(memberOf(result, "revisionDiff"), "trackState").isNull());
         CONTROL_CHECK(memberOf(result, "ui").isObject() && memberOf(result, "nullReasons").isNull());
+    }
+    // A no-op keeps the descriptor its method set (section 15.3 rule 5: an undo step that changed
+    // nothing); a no-op is never IRREVERSIBLE.
+    {
+        ControlWriteEnvelope undoStep(context);
+        undoStep.setUndoable("u:" + facts.instanceId.substr(0, 8) + ":7", "Move notes", {"NoteAction"});
+        const auto result = undoStep.committed(context);
+        CONTROL_CHECK(memberOf(result, "noOp").asBoolean() && memberOf(memberOf(result, "undo"), "undoable").asBoolean()
+                      && memberOf(memberOf(result, "undo"), "undoId").text()
+                             == "u:" + facts.instanceId.substr(0, 8) + ":7");
+        ControlWriteEnvelope notUndoable(context);
+        notUndoable.setNotUndoable("ui_parity");
+        const auto kept = notUndoable.committed(context);
+        CONTROL_CHECK(memberOf(kept, "noOp").asBoolean()
+                      && memberOf(memberOf(kept, "undo"), "reason").text() == "ui_parity"
+                      && warningCodes(kept).empty());
+    }
+    // A write that only had a side effect is no no-op.
+    {
+        ControlWriteEnvelope envelope(context);
+        auto effect = JsonValue::object();
+        effect.appendMember("from", JsonValue::string("arrangement"));
+        effect.appendMember("to", JsonValue::string("pianoRoll"));
+        envelope.addSideEffect("workspaceSwitched", std::move(effect));
+        envelope.setNotUndoable("not_persisted_state");
+        const auto result = envelope.committed(context);
+        CONTROL_CHECK(memberOf(result, "applied").asBoolean() && !memberOf(result, "noOp").asBoolean());
+        CONTROL_CHECK(memberOf(memberOf(result, "sideEffects"), "workspaceSwitched").isObject()
+                      && memberOf(memberOf(result, "undo"), "reason").text() == "not_persisted_state"
+                      && warningCodes(result).empty());
     }
     // Committed with a change that a recipe reverts: revisionDiff shows it, dirty after the mark.
     {
@@ -447,12 +759,22 @@ void scenarioWriteEnvelope()
         const auto predicted = envelope.predicted(context);
         CONTROL_CHECK(!memberOf(predicted, "applied").asBoolean() && memberOf(predicted, "dryRun").asBoolean()
                       && memberOf(predicted, "undo").isNull() && memberOf(predicted, "changes").size() == 1);
+        // What a method records for its job's result does not show in the hand-over (section 14.2 rule 3).
         ControlWriteEnvelope handed(context);
+        handed.addChange("track", json(R"({"trackId":0})"), JsonValue(),
+                         json(R"({"muted":{"before":false,"after":true,"unit":null}})"));
+        handed.addSideEffect("tracksRevealed", json(R"({"trackIds":[1],"revert":null})"));
         const auto result =
             handed.handedToJob(context, json(R"({"jobId":"j:01234567:1","kind":"import","state":"queued"})"));
         CONTROL_CHECK(!memberOf(result, "applied").asBoolean() && !memberOf(result, "dryRun").asBoolean()
+                      && !memberOf(result, "noOp").asBoolean()
                       && memberOf(memberOf(result, "job"), "kind").text() == "import"
                       && memberOf(result, "undo").isNull());
+        CONTROL_CHECK(memberOf(result, "changes").size() == 0 && memberOf(result, "created").size() == 0
+                      && memberOf(result, "removed").size() == 0 && memberOf(result, "idMap").size() == 0);
+        CONTROL_CHECK(toJsonString(memberOf(result, "revisionDiff"))
+                      == R"({"arrangement":null,"trackState":null,"contents":[]})");
+        CONTROL_CHECK(toJsonString(memberOf(result, "sideEffects")) == "{}");
     }
     // Without an editor the UI snapshot is null with its reason.
     {
@@ -494,12 +816,325 @@ void scenarioWriteEnvelope()
     }
     CONTROL_CHECK(probe.otherThreadAccesses.load() == 0);
 }
+// ---- import.start ---------------------------------------------------------------------------------
+
+void scenarioImport()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    TestUiBridge bridge;
+    bridge.visibleTracks = 1;
+    ScopedBridge registered(service, bridge);
+    SyntheticAnalysis analysis;
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    auto& preferences = processor->getAppPreferences();
+    const auto copiesBefore = controlImportCommitCopiesForTesting();
+    const auto media = mediaDirectory("import");
+    const auto take1 = writeTone(media, "take1", 2.0);
+    const auto take2 = writeTone(media, "take2", 1.5, 2, 48000.0); // stereo, resampled
+    const auto take3 = writeTone(media, "take3", 1.0);
+    const auto garbled = writeGarbage(media, "garbled.wav");
+
+    // 1. openTune scheme: one file onto track 0 at 1 s; it is focused, no notes are generated.
+    preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::CorrectedF0Primary);
+    {
+        const auto job = importAndWait(api, R"({"items":[{"path":)" + quoted(take1)
+                                                + R"(}],"layout":"single","trackId":0,"startTimelineSec":1})");
+        CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+        const auto& result = memberOf(job, "result");
+        const auto& item = memberOf(result, "items").at(0);
+        CONTROL_CHECK(memberOf(result, "applied").asBoolean() && !memberOf(result, "noOp").asBoolean()
+                      && memberOf(result, "job").isNull());
+        CONTROL_CHECK(memberOf(item, "imported").asBoolean() && memberOf(item, "trackId").asDouble() == 0
+                      && near(memberOf(item, "startTimelineSec"), 1.0) && near(memberOf(item, "durationSec"), 2.0));
+        CONTROL_CHECK(memberOf(item, "channelCount").asDouble() == 1 && !memberOf(item, "resampled").asBoolean()
+                      && near(memberOf(item, "originalSampleRateHz"), kAudioSampleRate));
+        CONTROL_CHECK(memberOf(item, "f0State").text() == "ready" && !memberOf(item, "notesGenerated").asBoolean()
+                      && memberOf(item, "notesGeneratedBy").isNull() && memberOf(item, "error").isNull());
+        CONTROL_CHECK(toJsonString(memberOf(result, "counts")) == R"({"requested":1,"imported":1,"failed":0})");
+        CONTROL_CHECK(toJsonString(memberOf(result, "undo"))
+                      == R"({"undoable":false,"reason":"ui_parity","revert":null})");
+        CONTROL_CHECK(warningCodes(result) == std::vector<std::string>{"IRREVERSIBLE"});
+        CONTROL_CHECK(memberOf(result, "created").size() == 2);
+        const auto& diff = memberOf(result, "revisionDiff");
+        CONTROL_CHECK(memberOf(diff, "arrangement").isObject() && memberOf(diff, "contents").size() == 1);
+        const auto& changed = memberOf(memberOf(diff, "contents").at(0), "changed");
+        CONTROL_CHECK(memberOf(memberOf(changed, "content"), "before").isNull());
+        CONTROL_CHECK(toJsonString(memberOf(result, "dirty")) == R"({"before":false,"after":true})");
+        const auto& tokens = memberOf(result, "tokens");
+        CONTROL_CHECK(memberOf(memberOf(tokens, "contents").at(0), "contentId").text()
+                      == memberOf(item, "contentId").text());
+        CONTROL_CHECK(memberOf(memberOf(tokens, "placements").at(0), "placementId").text()
+                      == memberOf(item, "placementId").text());
+        CONTROL_CHECK(memberOf(result, "sideEffects").size() == 0);
+        CONTROL_CHECK(bridge.focused.size() == 1 && bridge.focused.back().first == 0 && bridge.structureChanges == 1);
+        // project.get shows the clip with its source file.
+        const auto project = api.result("project.get");
+        const auto& placements = memberOf(project, "placements");
+        CONTROL_CHECK(placements.size() == 1 && memberOf(placements.at(0), "sourcePath").text() == take1);
+    }
+
+    // 2. openDyne scheme, sequential onto the first track without clips (track 1, hidden: revealed); the
+    //    focus makes OpenTune generate the notes of the last clip.
+    preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::NotesPrimary);
+    {
+        const auto job = importAndWait(api, R"({"items":[{"path":)" + quoted(take1) + R"(},{"path":)" + quoted(take2)
+                                                + R"(}],"layout":"sequential","newTrack":true})");
+        CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+        const auto& result = memberOf(job, "result");
+        const auto& first = memberOf(result, "items").at(0);
+        const auto& second = memberOf(result, "items").at(1);
+        CONTROL_CHECK(memberOf(first, "trackId").asDouble() == 1 && memberOf(second, "trackId").asDouble() == 1);
+        CONTROL_CHECK(near(memberOf(first, "startTimelineSec"), 0.0)
+                      && near(memberOf(second, "startTimelineSec"), memberOf(first, "startTimelineSec").asDouble()
+                                                                        + memberOf(first, "durationSec").asDouble()));
+        CONTROL_CHECK(memberOf(second, "channelCount").asDouble() == 2 && memberOf(second, "resampled").asBoolean()
+                      && near(memberOf(second, "originalSampleRateHz"), 48000.0)
+                      && near(memberOf(second, "durationSec"), 1.5));
+        CONTROL_CHECK(!memberOf(first, "notesGenerated").asBoolean() && memberOf(second, "notesGenerated").asBoolean()
+                      && memberOf(second, "notesGeneratedBy").text() == "focus");
+        CONTROL_CHECK(
+            (warningCodes(result)
+             == std::vector<std::string>{"TRACK_AUTO_REVEALED", "SELECTION_GENERATED_NOTES", "IRREVERSIBLE"}));
+        const auto& sideEffects = memberOf(result, "sideEffects");
+        CONTROL_CHECK(toJsonString(memberOf(memberOf(sideEffects, "notesGenerated"), "contentIds"))
+                      == "[" + quoted(memberOf(second, "contentId").text()) + "]");
+        CONTROL_CHECK(memberOf(memberOf(sideEffects, "notesGenerated"), "revert").isNull());
+        CONTROL_CHECK(toJsonString(memberOf(memberOf(sideEffects, "tracksRevealed"), "trackIds")) == "[1]");
+        CONTROL_CHECK(bridge.visibleTracks == 2 && bridge.revealCalls == 1);
+        CONTROL_CHECK(bridge.focused.size() == 2 && bridge.focused.back().first == 1);
+        const auto notes = api.result("content.getNotes",
+                                      json(R"({"contentId":)" + quoted(memberOf(second, "contentId").text()) + "}"));
+        CONTROL_CHECK(memberOf(notes, "notes").size() >= 1);
+        CONTROL_CHECK(memberOf(memberOf(result, "revisionDiff"), "contents").size() == 2);
+    }
+
+    // 3. Notes on request in separate tracks without focus; a file that cannot be decoded fails alone.
+    {
+        const auto focusedBefore = bridge.focused.size();
+        const auto job =
+            importAndWait(api, R"({"items":[{"path":)" + quoted(take3) + R"(},{"path":)" + quoted(garbled)
+                                   + R"(}],"layout":"separateTracks","trackId":3,"generateNotes":true,"focus":false})");
+        CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+        const auto& result = memberOf(job, "result");
+        const auto& first = memberOf(result, "items").at(0);
+        const auto& second = memberOf(result, "items").at(1);
+        CONTROL_CHECK(memberOf(first, "trackId").asDouble() == 3 && memberOf(first, "notesGenerated").asBoolean()
+                      && memberOf(first, "notesGeneratedBy").text() == "request");
+        CONTROL_CHECK(!memberOf(second, "imported").asBoolean() && memberOf(second, "trackId").isNull()
+                      && memberOf(second, "f0State").isNull() && !memberOf(second, "notesGenerated").asBoolean());
+        CONTROL_CHECK(errorKindOf(memberOf(second, "error")).text() == "UNSUPPORTED"
+                      && errorReasonOf(memberOf(second, "error")).text() == "unsupported_format");
+        CONTROL_CHECK(toJsonString(memberOf(result, "counts")) == R"({"requested":2,"imported":1,"failed":1})");
+        CONTROL_CHECK((warningCodes(result)
+                       == std::vector<std::string>{"TRACK_AUTO_REVEALED", "TRACK_AUTO_REVEALED", "IRREVERSIBLE"}));
+        CONTROL_CHECK(memberOf(memberOf(result, "sideEffects"), "notesGenerated").isNull());
+        CONTROL_CHECK(bridge.focused.size() == focusedBefore);
+        // OpenTune's commit selects the clip and makes its track active even without focus; the snapshot
+        // shows it (the active track was 1 after the previous import).
+        CONTROL_CHECK(memberOf(memberOf(result, "ui"), "activeTrackId").asDouble() == 3);
+    }
+
+    // 4. Checks before the job: nothing starts and executed is false.
+    const auto retained = service.jobs()->retainedCount();
+    const auto take1Item = R"({"items":[{"path":)" + quoted(take1) + "}]";
+    CONTROL_CHECK(api.fails("import.start", json(R"({"items":[{"path":"take1.wav"}],"layout":"single"})"),
+                            "INVALID_ARGUMENT", "path_not_absolute"));
+    CONTROL_CHECK(api.fails("import.start",
+                            json(R"({"items":[{"path":)" + quoted(take1 + ".txt") + R"(}],"layout":"single"})"),
+                            "INVALID_ARGUMENT", "path_bad_extension"));
+    const int tracks = processor->getStandaloneArrangement()->getNumTracks();
+    CONTROL_CHECK(api.fails("import.start",
+                            json(take1Item + R"(,"layout":"single","trackId":)" + std::to_string(tracks) + "}"),
+                            "NOT_FOUND", "unknown_handle"));
+    CONTROL_CHECK(api.fails("import.start",
+                            json(R"({"items":[{"path":)" + quoted(take1) + R"(},{"path":)" + quoted(take2)
+                                 + R"(}],"layout":"separateTracks","trackId":)" + std::to_string(tracks - 1) + "}"),
+                            "INVALID_ARGUMENT", "track_capacity"));
+    CONTROL_CHECK(api.fails(
+        "import.start",
+        json(R"({"items":[{"path":)" + quoted(take1) + R"(},{"path":)" + quoted(take2) + R"(}],"layout":"single"})"),
+        "INVALID_ARGUMENT", "invalid_params"));
+    CONTROL_CHECK(api.fails("import.start", json(take1Item + R"(,"layout":"single","trackId":0,"newTrack":false})"),
+                            "INVALID_ARGUMENT", "invalid_params"));
+    CONTROL_CHECK(api.fails("import.start", json(take1Item + R"(,"layout":"single","idempotencyKey":"a b"})"),
+                            "INVALID_ARGUMENT", "invalid_params"));
+    CONTROL_CHECK(
+        api.fails("import.start", json(take1Item + R"(,"layout":"diagonal"})"), "INVALID_ARGUMENT", "invalid_params"));
+    // The UI has priority: every busy condition refuses the write; reads and job.get are never refused.
+    const std::pair<bool ControlUiBridge::BusyState::*, const char*> conditions[] = {
+        {&ControlUiBridge::BusyState::pointerDown, "pointer_down"},
+        {&ControlUiBridge::BusyState::modalOpen, "modal_open"},
+        {&ControlUiBridge::BusyState::importRunning, "import_in_progress"},
+        {&ControlUiBridge::BusyState::exportRunning, "export_in_progress"},
+        {&ControlUiBridge::BusyState::operationRunning, "project_operation"},
+    };
+    for (const auto& [member, reason] : conditions) {
+        bridge.busy = {};
+        bridge.busy.*member = true;
+        CONTROL_CHECK(
+            api.fails("import.start", json(take1Item + R"(,"layout":"single","trackId":4})"), "BUSY", reason));
+        CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 4);
+    }
+    CONTROL_CHECK(api.result("job.get", json(R"({"jobId":"j:)"
+                                             + memberOf(api.discovery(), "instanceId").text().substr(0, 8) + R"(:1"})"))
+                      .isObject());
+    bridge.busy = {};
+    CONTROL_CHECK(service.jobs()->retainedCount() == retained);
+
+    // 5. Idempotency (section 12.5): the same key and params return the same job, other params fail.
+    {
+        const auto params =
+            take1Item + R"(,"layout":"single","trackId":5,"focus":false,"idempotencyKey":"take1-on-5"})";
+        const auto first = api.result("import.start", json(params));
+        const auto jobId = memberOf(memberOf(first, "job"), "jobId").text();
+        const auto again = api.result("import.start", json(params));
+        CONTROL_CHECK(!jobId.empty() && memberOf(memberOf(again, "job"), "jobId").text() == jobId);
+        CONTROL_CHECK(api.fails(
+            "import.start",
+            json(take1Item + R"(,"layout":"single","trackId":6,"focus":false,"idempotencyKey":"take1-on-5"})"),
+            "INVALID_ARGUMENT", "idempotency_key_reused"));
+        CONTROL_CHECK(memberOf(waitJob(api, jobId), "state").text() == "succeeded");
+        const auto afterEnd = api.result("import.start", json(params));
+        CONTROL_CHECK(memberOf(memberOf(afterEnd, "job"), "jobId").text() == jobId
+                      && memberOf(memberOf(afterEnd, "job"), "state").text() == "succeeded");
+        CONTROL_CHECK(processor->getStandaloneArrangement()->getNumPlacements(5) == 1);
+    }
+    // No project was opened, so no clip id could be in use: every commit was a single one without a copy
+    // of the audio, as the UI's.
+    CONTROL_CHECK(controlImportCommitCopiesForTesting() == copiesBefore);
+    const auto dispatcher = service.dispatcher();
+    CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+}
+
+void scenarioImportAfterOpen()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    ApiSession api;
+    if (!service.isRunning() || !api.open(service))
+        return;
+    SyntheticAnalysis analysis;
+    const auto media = mediaDirectory("reopen");
+    const auto take1 = writeTone(media, "take1", 1.0);
+    const auto take2 = writeTone(media, "take2", 1.0);
+    const auto take3 = writeTone(media, "take3", 1.0);
+    for (const auto& [path, track] : {std::pair<std::string, int>{take1, 0}, std::pair<std::string, int>{take2, 1}})
+        CONTROL_CHECK(
+            memberOf(importAndWait(api, R"({"items":[{"path":)" + quoted(path) + R"(}],"layout":"single","trackId":)"
+                                            + std::to_string(track) + "}"),
+                     "state")
+                .text()
+            == "succeeded");
+
+    // Save and open the project with the editor's two-phase flows: opening clears the contents and
+    // restarts clip ids at 1, while the project's clips keep theirs.
+    {
+        ProjectSession session(*processor, processor->getAppPreferences());
+        const auto directory = isolatedDataDirectory() / "project";
+        std::error_code ignored;
+        std::filesystem::create_directories(directory, ignored);
+        const auto file = juceFileOf(directory / "reopen.otproj");
+        auto task = session.prepareSave(file);
+        CONTROL_CHECK(ProjectSession::executeSaveToFile(task).ok());
+        auto prepared = session.prepareOpen(file);
+        if (!CONTROL_CHECK(prepared.ok()))
+            return;
+        CONTROL_CHECK(session.commitPreparedOpen(std::move(prepared).value()).ok());
+    }
+    CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 2);
+
+    // The import commits although the first clip ids are in use; the repeated commits are logged, and the
+    // attempts that may be repeated commit a copy of the audio.
+    const auto repeatedBefore = occurrences(logText(), "was repeated");
+    const auto copiesBefore = controlImportCommitCopiesForTesting();
+    const auto job =
+        importAndWait(api, R"({"items":[{"path":)" + quoted(take3) + R"(}],"layout":"single","trackId":2})");
+    CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+    const auto& item = memberOf(memberOf(job, "result"), "items").at(0);
+    CONTROL_CHECK(memberOf(item, "imported").asBoolean() && memberOf(item, "f0State").text() == "ready");
+    CONTROL_CHECK(occurrences(logText(), "was repeated") == repeatedBefore + 1);
+    CONTROL_CHECK(controlImportCommitCopiesForTesting() > copiesBefore);
+    const auto project = api.result("project.get");
+    CONTROL_CHECK(memberOf(project, "placements").size() == 3 && memberOf(project, "contents").size() == 3);
+
+    // Every clip id is now behind the one that import received: the next import commits once, without a
+    // copy, and nothing is repeated.
+    const auto take4 = writeTone(media, "take4", 1.0);
+    const auto copiesAfter = controlImportCommitCopiesForTesting();
+    const auto next =
+        importAndWait(api, R"({"items":[{"path":)" + quoted(take4) + R"(}],"layout":"single","trackId":3})");
+    CONTROL_CHECK(memberOf(next, "state").text() == "succeeded");
+    CONTROL_CHECK(memberOf(memberOf(memberOf(next, "result"), "items").at(0), "imported").asBoolean());
+    CONTROL_CHECK(controlImportCommitCopiesForTesting() == copiesAfter);
+    CONTROL_CHECK(occurrences(logText(), "was repeated") == repeatedBefore + 1);
+    CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 4);
+}
+
+void scenarioImportCancel()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    TestUiBridge bridge;
+    bridge.visibleTracks = 4;
+    ScopedBridge registered(service, bridge);
+    SyntheticAnalysis analysis;
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    const auto media = mediaDirectory("cancel");
+    std::string items;
+    for (int i = 1; i <= 3; ++i)
+        items += std::string(i > 1 ? "," : "") + R"({"path":)"
+                 + quoted(writeTone(media, "take" + std::to_string(i), 1.0)) + "}";
+    const auto start = api.result(
+        "import.start", json(R"({"items":[)" + items + R"(],"layout":"sequential","trackId":0,"startTimelineSec":0})"));
+    const auto jobId = memberOf(memberOf(start, "job"), "jobId").text();
+    // The first commit; then the user holds the mouse button, so the next commit waits.
+    CONTROL_CHECK(pumpMessagesUntil([&bridge] { return bridge.structureChanges >= 1; }, kReadTimeoutMs));
+    bridge.busy.pointerDown = true;
+    pumpMessagesFor(kQuietPumpMs);
+    CONTROL_CHECK(bridge.structureChanges == 1);
+    // A cancellation commits nothing, so it does not wait for the UI: the job ends while the button is
+    // still held, and it focuses no clip under the user's hands.
+    const auto cancel = api.result("job.cancel", json(R"({"jobId":)" + quoted(jobId) + "}"));
+    CONTROL_CHECK(memberOf(cancel, "cancelRequested").asBoolean());
+    const auto job = waitJob(api, jobId);
+    CONTROL_CHECK(bridge.busy.pointerDown && bridge.structureChanges == 1 && bridge.focused.empty());
+    bridge.busy.pointerDown = false;
+    CONTROL_CHECK(memberOf(job, "state").text() == "cancelled");
+    const auto& error = memberOf(job, "error");
+    CONTROL_CHECK(errorKindOf(error).text() == "CANCELLED" && errorReasonOf(error).text() == "cancelled_by_request"
+                  && memberOf(memberOf(error, "data"), "executed").asBoolean());
+    const auto& result = memberOf(job, "result");
+    const auto& resultItems = memberOf(result, "items");
+    CONTROL_CHECK(resultItems.size() == 3 && memberOf(resultItems.at(0), "imported").asBoolean());
+    CONTROL_CHECK(!memberOf(resultItems.at(1), "imported").asBoolean()
+                  && memberOf(resultItems.at(1), "error").isNull());
+    CONTROL_CHECK(!memberOf(resultItems.at(2), "imported").asBoolean()
+                  && memberOf(resultItems.at(2), "error").isNull());
+    CONTROL_CHECK(toJsonString(memberOf(result, "counts")) == R"({"requested":3,"imported":1,"failed":0})");
+    // The committed clip stays; the way back is reported: no undo entry, and without arrangement.v1 no
+    // request can delete it, so revert is null and the result says IRREVERSIBLE.
+    CONTROL_CHECK(memberOf(result, "applied").asBoolean() && memberOf(result, "created").size() == 2);
+    CONTROL_CHECK(toJsonString(memberOf(result, "undo")) == R"({"undoable":false,"reason":"ui_parity","revert":null})");
+    CONTROL_CHECK(warningCodes(result) == std::vector<std::string>{"IRREVERSIBLE"});
+    CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 1);
+    CONTROL_CHECK(bridge.dirtyMarks >= 1);
+}
+
 // ---- The specification's vectors -------------------------------------------------------------------
 
 namespace {
 
-const std::set<std::string> kVectorMethods = {"job.get", "job.cancel"};
-const std::set<std::string> kVectorCapabilities = {"session.v1", "read.v1", "jobs.v1"};
+const std::set<std::string> kVectorMethods = {"job.get", "job.cancel", "import.start", "project.get", "session.info"};
+const std::set<std::string> kVectorCapabilities = {"session.v1", "read.v1", "jobs.v1", "import.v1"};
 
 std::string jobVectorSkipReason(const JsonValue& vector)
 {
@@ -509,20 +1144,85 @@ std::string jobVectorSkipReason(const JsonValue& vector)
     for (std::size_t i = 0; i < extra.size(); ++i)
         if (kVectorCapabilities.count(extra.at(i).text()) == 0)
             return "needs capability " + extra.at(i).text() + ", which a later part implements";
-    if (memberOf(vector, "session").text() != "authenticated" || memberOf(vector, "type").text() != "request")
-        return "only authenticated request vectors are run here";
-    const auto method = memberOf(memberOf(vector, "request"), "method").text();
-    if (kVectorMethods.count(method) == 0)
-        return "uses " + method + ", which this runner does not cover";
+    if (memberOf(vector, "session").text() != "authenticated")
+        return "unauthenticated vectors test the listener (ControlUnitTests)";
+    std::vector<std::string> methods;
+    if (const JsonValue* request = vector.find("request"))
+        methods.push_back(memberOf(*request, "method").text());
+    if (const JsonValue* steps = vector.find("steps"))
+        for (std::size_t i = 0; i < steps->size(); ++i) {
+            const auto& step = steps->at(i);
+            if ((step.find("send") == nullptr && step.find("expect") == nullptr) || step.find("connection") != nullptr)
+                return "uses steps other than send and expect on the main connection";
+            if (const JsonValue* send = step.find("send"))
+                methods.push_back(memberOf(*send, "method").text());
+        }
+    for (const auto& method : methods)
+        if (kVectorMethods.count(method) == 0)
+            return "uses " + method + ", which this runner does not cover";
     const auto& given = memberOf(vector, "given");
-    for (std::size_t i = 0; i < given.size(); ++i)
-        if (given.keyAt(i) != "jobs")
-            return "precondition given." + given.keyAt(i) + " is not established by this runner";
-    const auto& jobs = memberOf(given, "jobs");
-    for (std::size_t j = 0; j < jobs.size(); ++j)
-        if (memberOf(jobs.at(j), "state").text() == "queued")
-            return "a queued job is not established by this runner";
+    for (std::size_t i = 0; i < given.size(); ++i) {
+        const auto& name = given.keyAt(i);
+        if (name == "dirty" || name == "editingScheme" || name == "clipOnEveryTrack" || name == "withoutCapabilities")
+            continue;
+        if (name == "files") {
+            for (std::size_t f = 0; f < given.at(i).size(); ++f) {
+                const auto kind = memberOf(given.at(i).at(f), "kind").text();
+                if (kind != "audio" && kind != "absent" && kind != "undecodable")
+                    return "file kind " + kind + " is not established by this runner";
+            }
+            continue;
+        }
+        if (name == "jobs") {
+            for (std::size_t j = 0; j < given.at(i).size(); ++j)
+                if (memberOf(given.at(i).at(j), "state").text() == "queued")
+                    return "a queued job is not established by this runner";
+            continue;
+        }
+        if (name == "clips") {
+            for (std::size_t c = 0; c < given.at(i).size(); ++c) {
+                const auto& clip = given.at(i).at(c);
+                if (memberOf(clip, "analysis").text() != "ready" || clip.size() > 5)
+                    return "clips other than plain analysed ones are not established by this runner";
+            }
+            continue;
+        }
+        return "precondition given." + name + " is not established by this runner";
+    }
+    const auto& without = memberOf(given, "withoutCapabilities");
+    for (std::size_t i = 0; i < without.size(); ++i)
+        if (kVectorCapabilities.count(without.at(i).text()) != 0)
+            return "removing the reported capability " + without.at(i).text() + " is not supported by this runner";
     return {};
+}
+
+/** Adds a clip of a voiced tone with a finished analysis (no notes) at the start of the track. */
+bool addAnalysedClip(OpenTuneAudioProcessor& processor, const std::filesystem::path& directory, const std::string& name,
+                     int trackId, double startSec, double durationSec)
+{
+    const auto path = writeTone(directory, name, durationSec);
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    std::unique_ptr<juce::AudioFormatReader> reader(
+        formats.createReaderFor(juce::File(juce::String::fromUTF8(path.c_str()))));
+    if (reader == nullptr)
+        return false;
+    juce::AudioBuffer<float> audio(static_cast<int>(reader->numChannels), static_cast<int>(reader->lengthInSamples));
+    reader->read(&audio, 0, audio.getNumSamples(), 0, true, true);
+    OpenTuneAudioProcessor::PreparedImport prepared;
+    if (!processor.prepareImport(std::move(audio), reader->sampleRate, juce::String(name),
+                                 juce::String::fromUTF8(path.c_str()), prepared))
+        return false;
+    OpenTuneAudioProcessor::ImportPlacement placement;
+    placement.trackId = trackId;
+    placement.timelineStartSeconds = startSec;
+    const auto committed = processor.commitPreparedImportAsPlacement(std::move(prepared), placement);
+    if (!committed.isValid())
+        return false;
+    OpenTuneAudioProcessor::ContentRefreshRequest request;
+    request.contentKey = committed.contentKey;
+    commitSyntheticAnalysis(processor, request);
+    return true;
 }
 
 /** Establishes given.jobs: each job in its state, its id bound to its name. */
@@ -545,8 +1245,8 @@ bool establishJobs(ControlJobs& jobs, const JsonValue& given, VectorMatcher& mat
         } else if (state == "cancelled") {
             work = [](ControlJobStep& step) { step.cancel(); };
         }
-        const bool cancellable = memberOf(spec, "cancellable").asBoolean() || state != "running";
-        const auto started = jobs.start(memberOf(spec, "kind").text(), cancellable, work);
+        const auto started = jobs.start(memberOf(spec, "kind").text(),
+                                        memberOf(spec, "cancellable").asBoolean() || state != "running", work);
         if (started.jobId.empty())
             return false;
         matcher.bindings[memberOf(spec, "bind").text()] = JsonValue::string(started.jobId);
@@ -564,39 +1264,98 @@ bool establishJobs(ControlJobs& jobs, const JsonValue& given, VectorMatcher& mat
     return true;
 }
 
-/** Runs one request vector of job.get or job.cancel against a fresh processor. Empty on success. */
-std::string runJobVector(const JsonValue& vector)
+/** Runs one vector of job.get, job.cancel or import.start against a fresh processor with a test bridge
+    and the synthetic analysis. Empty on success. */
+std::string runJobVector(const JsonValue& vector, const std::string& slug)
 {
     auto processor = startedProcessor();
     auto& service = processor->getControlService();
     if (!service.isRunning())
         return "the control API did not start";
+    const auto& given = memberOf(vector, "given");
+    TestUiBridge bridge;
+    bridge.project.dirty = memberOf(given, "dirty").isBoolean() && memberOf(given, "dirty").asBoolean();
+    ScopedBridge registered(service, bridge);
+    SyntheticAnalysis analysis;
+    processor->getAppPreferences().setAudioEditingScheme(memberOf(given, "editingScheme").text() == "openDyne"
+                                                             ? AudioEditingScheme::Scheme::NotesPrimary
+                                                             : AudioEditingScheme::Scheme::CorrectedF0Primary);
+    const auto directory = mediaDirectory("vectors-" + slug);
     VectorMatcher matcher;
+
+    const auto& files = memberOf(given, "files");
+    for (std::size_t i = 0; i < files.size(); ++i) {
+        const auto& file = files.at(i);
+        const auto bind = memberOf(file, "bind").text();
+        const auto kind = memberOf(file, "kind").text();
+        std::string path;
+        if (kind == "audio")
+            path = writeTone(directory, bind, memberOf(file, "durationSec").asDouble());
+        else if (kind == "undecodable")
+            path = writeGarbage(directory, bind + ".wav");
+        else
+            path = absentPath(directory, bind + ".wav");
+        matcher.bindings[bind] = JsonValue::string(path);
+    }
+    auto* arrangement = processor->getStandaloneArrangement();
+    const auto& clips = memberOf(given, "clips");
+    for (std::size_t i = 0; i < clips.size(); ++i) {
+        const auto& clip = clips.at(i);
+        if (!addAnalysedClip(*processor, directory, "clip" + std::to_string(i),
+                             static_cast<int>(memberOf(clip, "trackId").asDouble()),
+                             memberOf(clip, "startTimelineSec").asDouble(), memberOf(clip, "durationSec").asDouble()))
+            return "the clip " + memberOf(clip, "bind").text() + " could not be added";
+    }
+    if (memberOf(given, "clipOnEveryTrack").asBoolean())
+        for (int trackId = 0; trackId < arrangement->getNumTracks(); ++trackId)
+            if (arrangement->getNumPlacements(trackId) == 0
+                && !addAnalysedClip(*processor, directory, "fill" + std::to_string(trackId), trackId, 0.0, 2.0))
+                return "a clip on every track could not be added";
     std::vector<std::shared_ptr<FixtureJob>> fixtures;
-    if (!establishJobs(*service.jobs(), memberOf(memberOf(vector, "given"), "jobs"), matcher, fixtures))
+    if (!establishJobs(*service.jobs(), memberOf(given, "jobs"), matcher, fixtures))
         return "given.jobs could not be established";
+
     ApiSession api;
     if (!api.open(service))
         return "session.hello failed";
     const auto& discovery = api.discovery();
     for (std::size_t i = 0; i < discovery.size(); ++i)
         matcher.bindings["discovery." + discovery.keyAt(i)] = discovery.at(i);
+    const int lastTrack = arrangement->getNumTracks() - 1;
+    matcher.bindings["runner.lastTrackId"] = JsonValue::integer(lastTrack);
+    matcher.bindings["runner.unknownTrackId"] = JsonValue::integer(lastTrack + 1);
 
     std::string failure;
     runWhilePumping(
         [&] {
             auto& connection = api.client();
-            const auto request = matcher.substitute(memberOf(vector, "request"), failure);
-            if (!failure.empty())
-                return;
-            if (!connection.sendLine(toJsonString(request))) {
-                failure = "cannot send the request";
+            if (memberOf(vector, "type").text() == "request") {
+                const auto request = matcher.substitute(memberOf(vector, "request"), failure);
+                if (!failure.empty())
+                    return;
+                if (!connection.sendLine(toJsonString(request))) {
+                    failure = "cannot send the request";
+                    return;
+                }
+                failure = matcher.expectLine(connection, memberOf(vector, "response"));
+                if (failure.empty() && memberOf(vector, "connectionAfter").text() == "open"
+                    && !connection.staysQuiet(kOpenCheckMs))
+                    failure = "the connection closed or sent more";
                 return;
             }
-            failure = matcher.expectLine(connection, memberOf(vector, "response"));
-            if (failure.empty() && memberOf(vector, "connectionAfter").text() == "open"
-                && !connection.staysQuiet(kOpenCheckMs))
-                failure = "the connection closed or sent more";
+            const auto& steps = memberOf(vector, "steps");
+            for (std::size_t i = 0; i < steps.size() && failure.empty(); ++i) {
+                const auto& step = steps.at(i);
+                if (const JsonValue* send = step.find("send")) {
+                    const auto value = matcher.substitute(*send, failure);
+                    if (failure.empty() && !connection.sendLine(toJsonString(value)))
+                        failure = "send failed";
+                } else {
+                    failure = matcher.expectLine(connection, memberOf(step, "expect"));
+                }
+                if (!failure.empty())
+                    failure = "step " + std::to_string(i + 1) + ": " + failure;
+            }
         },
         kJobExchangeMs);
     for (const auto& fixture : fixtures)
@@ -610,9 +1369,10 @@ void scenarioJobVectors()
 {
     const auto root = std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR) / "vectors";
     std::vector<std::filesystem::path> files;
-    for (const auto& entry : std::filesystem::directory_iterator(root / "job"))
-        if (entry.path().extension() == ".json")
-            files.push_back(entry.path());
+    for (const char* area : {"job", "import"})
+        for (const auto& entry : std::filesystem::directory_iterator(root / area))
+            if (entry.path().extension() == ".json")
+                files.push_back(entry.path());
     std::sort(files.begin(), files.end());
     int passed = 0;
     int skipped = 0;
@@ -628,14 +1388,16 @@ void scenarioJobVectors()
             continue;
         }
         const auto started = Clock::now();
-        const auto failure = runJobVector(vector);
+        auto slug = id;
+        std::replace(slug.begin(), slug.end(), '/', '-');
+        const auto failure = runJobVector(vector, slug);
         if (CONTROL_CHECK(failure.empty()))
             ++passed;
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
-    // Every vector of job/ runs headless.
-    CONTROL_CHECK(skipped == 0 && passed >= 7);
+    // Every vector of job/ and import/ runs headless.
+    CONTROL_CHECK(skipped == 0 && passed >= 18);
     note(std::to_string(passed) + " vectors passed, " + std::to_string(skipped) + " skipped");
 }
 

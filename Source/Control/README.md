@@ -28,12 +28,14 @@ without this directory.
 | `ControlUiBridge.h` | Interface to what only the editor owns; every function defaults to "not supported". |
 | `ControlDataDirectory.*` | `OPENTUNE_DATA_DIR` for the preference and log hooks. |
 | `ContentHandles.*` | `contentId` / `placementId` handles, revision tokens (64-bit FNV-1a) and pagination cursors; standard library only. |
-| `ControlDispatcher.*` | The request handler of the listener: parameter checks, execution on the message thread, timeout, stop, error mapping. |
+| `ControlDispatcher.*` | The request handler of the listener: parameter checks, execution on the message thread (or on the connection thread for `mainThread: false` methods), timeout, stop, error mapping. |
 | `Ops/OpsRegistry.*` | The method table (one registration line per group), the operation context with its thread check, the error mapping. |
 | `Ops/OpsSupport.*` | What the operations share: parameter reader, handle resolution, the world revision vector and `asOf`, number and text output. |
 | `ControlJobs.*` | The jobs of the instance: registry, the tick that advances running jobs on the message thread, the long poll of `job.get`, cancellation, retention. |
 | `Ops/WriteEnvelope.*` | What every write shares: the busy checks, the dirty flag, revert recipes, the UI snapshot, `revisionDiff` and the write envelope builder. |
-| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*` | The methods, one file per group (see "Method table"). |
+| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*` | The methods, one file per group (see "Method table"). |
+| `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme, the processing object of `session.info` and `prefs.get`). |
+| `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
 | `../Standalone/ControlEditorBridge.*` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor; compiled into the application wrapper only. |
 
 The channel files (options to server) use only the standard library and the operating system; the
@@ -56,9 +58,18 @@ later part use JUCE and the processor. `cmake/OpenTuneControl.cmake` lists all f
 - Methods run only through `ControlDispatcher`: every access of an operation to the processor or the
   editor bridge goes through `ControlOpContext`, which refuses any other thread than the message thread,
   in every build type.
-- `job.get` and `job.cancel` never wait for the message thread: they run on the connection thread with
-  the jobs registry only. A `job.get` that waits holds its response on the registry's waiter thread, so
-  the connection keeps serving the session's other requests (for example a `job.cancel`).
+- The exception to "methods run on the message thread" are the methods whose schema says
+  `x-otcp.mainThread: false`: `app.getLog`, `job.get` and `job.cancel`. They run on their connection
+  thread and never wait for the message thread, so they never answer `TIMEOUT`, and they get no
+  `ControlOpContext`.
+- `app.getLog` gets only the immutable facts snapshot (`ControlInstanceFacts`: instance id, limits,
+  redaction secrets, home directory spellings) and its params. It must not read or change project
+  content, the processor or the bridge, may call only OpenTune functions that are thread-safe by their own
+  contract (`AppLogger::getCurrentLogFile()` copies the path under the logger's lock), and reads files only
+  within a fixed bound.
+- `job.get` and `job.cancel` run with the jobs registry only. A `job.get` that waits holds its response
+  on the registry's waiter thread, so the connection keeps serving the session's other requests (for
+  example a `job.cancel`).
 - The work of a job runs only on the message thread, one short step per tick. Long work (decoding a
   file) runs on a thread that the work owns and joins in its destructor; `ControlJobs::stop()` destroys
   every work on the message thread, so no such thread outlives the processor.
@@ -112,6 +123,8 @@ option, so a build with the option OFF compiles exactly the upstream code.
 | `Source/Utils/AppPreferences.cpp` (include, `resolveSettingsDirectory`) | `OPENTUNE_DATA_DIR` replaces the per-user OpenTune folder | Preferences of tests stay in the test's directory. | Tests read and write the user's real preferences. |
 | `Source/Utils/AppLogger.cpp` (include, `initialize`) | `OPENTUNE_DATA_DIR` replaces the per-user OpenTune folder | Logs of tests stay in the test's directory. | Tests write into the user's real log folder. |
 | `Source/Content/StandaloneContentRepository.h` (end of the class) | Member `contentEpoch_` and public `getContentEpoch()` | The content epoch of the handles (PROTOCOL.md section 9). | Handles cannot tell the contents of a project opened later from earlier ones. |
+| `Source/PluginProcessor.h` (the control block at the end of the class, after `getControlService()`; 6 lines: one marker comment, `getReferenceFeatureProducer()`, `getContentF0FailureReason()`, `recordF0FailureReason()`, members `contentF0FailureReasons_` and `contentF0FailureEpoch_`) | Read-only reference feature producer; the last F0 failure reason per content | The reference feature producer this instance would use (`resolveReferenceFeatureProducer()`), and the reason the pitch analysis of a content failed, for `content.getDetails`. The reasons belong to one content epoch: the first record after a project was opened forgets the old ones, and the getter reports nothing for an older epoch, because clip ids restart at 1. | `content.getDetails` cannot tell why an analysis failed (it reports `f0_failed`) nor whether reference alignment data is current. |
+| `Source/PluginProcessor.cpp` (43 lines: one `#if` block of 25 lines with the two definitions, just before `resolveReferenceFeatureProducer()`; six calls in `requestContentRefresh`, each 3 lines with its own `#if`/`#endif`) | `recordF0FailureReason(key, reason)` where the analysis starts (clear: the Standalone clip case of the state switch), fails (the extractor's failure: `f0_empty` for its unvoiced result, else `f0_failed`; the commit of the curve; the dispatcher-failure callback; a rejected submit: `f0_failed`) and succeeds (clear, before the state becomes Ready) | Remembers the last failure reason per content on the message thread (all six places are message-thread callbacks or the caller itself). | As above. |
 | `Source/Content/StandaloneContentRepository.cpp` (`clear()`) | `contentEpoch_` is incremented | `clear()` discards every content when a project is opened (`ProjectSession::commitPreparedOpen`) and clip ids restart at 1, so handles from before become `NOT_FOUND(stale_handle)` instead of naming new contents. | Old handles would silently name the contents of the newly opened project. |
 | `Source/Standalone/PluginEditor.h` (end of the class) | `friend class ControlEditorBridge;` and member `controlEditorBridge_` | The bridge reads the editor's state and calls its functions while the editor keeps its members private. | The control API cannot reach the editor: results report `no_editor`, busy checks cannot see the UI. |
 | `Source/Standalone/PluginEditor.cpp` (includes) | `#include "ControlEditorBridge.h"` | Complete type for the constructor and destructor. | Does not compile with the option ON. |
@@ -137,7 +150,11 @@ hello). For each request the dispatcher then:
    `limits.dispatchTimeoutMs` (10 s). A request that has not started by then is abandoned under the
    mutex that its start takes and is answered with `TIMEOUT(dispatch_timeout)`, `executed` false; it
    never runs later (section 13.1 rule 2). A request that `stop()` overtakes before it started gets
-   `SHUTTING_DOWN`. The waiting connection thread holds no lock or lease of the processor.
+   `SHUTTING_DOWN`. The waiting connection thread holds no lock or lease of the processor. A read with
+   `mainThread` false in its schema (`ControlMethod::runOffMainThread`, `app.getLog`) instead runs right
+   here on the connection thread with the facts snapshot (section 13.3 rule 2): no dispatch timeout, no
+   `TIMEOUT`. The redaction secrets are set right after the listener started; such a method waits for
+   them (bounded by the dispatch timeout) so that it never answers without them.
 5. maps the method's `Result<JsonValue>` to the response. Operations return OpenTune's `Error`
    (`Utils/Error.h`); `controlOpError()` puts the protocol kind and reason into `Error::context`, and
    `controlMapError()`, called by the dispatcher, is the only place where errors become protocol errors.
@@ -148,8 +165,8 @@ A request occupies its connection thread while it waits, so the requests of one 
 message thread in the order they arrived (section 3.3 rule 6), and sessions do not wait for each other.
 Reads finish within one message-thread step.
 
-Methods whose schema says `mainThread: false` (`job.get`, `job.cancel`) skip step 4: they run on the
-connection thread with the jobs registry (`ControlMethod::runWithoutMessageThread`), never return
+The jobs methods, whose schema says `mainThread: false` too (`job.get`, `job.cancel`), skip step 4:
+they run on the connection thread with the jobs registry (`ControlMethod::runWithoutMessageThread`), never return
 `TIMEOUT` and never `BUSY` because of the UI; `job.get` answers later from the registry's waiter thread.
 
 `executed` of an error (section 17.4): an operation returns `controlOpError()` only from its checks,
@@ -343,8 +360,14 @@ are described in "Request handling"; write results return them read back after t
    is printable ASCII and never contains secrets or text from files or projects. Note in a comment which
    upstream function the operation calls and why.
 3. Register it with `controlReadMethod<Params>(name, parse, run)`, `controlWriteMethod<Params>` for a
-   write (see "Write results") or `controlJobMethod<Params>` for a method that never waits for the
-   message thread, in the group's `register<Group>Ops()`. A new group gets its line in
+   write (see "Write results") or `controlJobMethod<Params>` for a method that works with the jobs
+   registry and never waits for the message thread, in the group's `register<Group>Ops()`. A read whose
+   schema says `mainThread: false` and that needs no jobs registry is registered with
+   `controlOffMainThreadReadMethod<Params>(name, parse, run)`, whose run gets `const ControlInstanceFacts&`
+   instead of a context and runs on the connection thread: it must not read or write content, the
+   processor or the bridge (it has no way to reach them), may call only OpenTune functions documented as
+   thread-safe, and must return within a fixed bound. `ControlProcessorTests.OffMainThread` checks that
+   every registered method's `mainThread` matches its schema. A new group gets its line in
    `registerControlMethods()` (`Ops/OpsRegistry.cpp`), where the groups of later parts already have a
    placeholder line. The capability of a registered method is reported by `session.hello` and
    `session.info`.
@@ -369,8 +392,17 @@ contents get a pitch analysis made of synthetic F0, committed the way OpenTune c
 analysis, so no model is needed. `Reads` covers the methods with and without an editor bridge, pagination
 and cursors, every analysis state, the errors and a reopened project; `ThreadProbe` the message-thread
 check; `DispatchShutdown` and `DispatchTimeout` a request that waits for the message thread when the
-service stops or its dispatch timeout passes; `Vectors` runs the specification's vectors of the
-implemented methods against the real dispatcher (the others are listed as skipped, with the reason).
+service stops or its dispatch timeout passes; `Details` covers `content.getDetails` (time grid, reference
+binding, AUTO modes, analysis failures), `transport.get`, `prefs.get` and `app.getLog` including the
+redaction of a log with the session token, the server proof and the home directory planted in it;
+`Completeness` checks that every method of every reported capability is registered (an exemption list
+exists and must be empty before dev is merged; `read.v1` may never be on it); `Vectors` runs the
+specification's vectors of the implemented methods against the real dispatcher and requires every vector of
+an explicit list (`kMustRunVectors`) to run and pass, instead of counting; the others are listed as
+skipped, with the reason. `OffMainThread` checks that each registered method runs on or off the message
+thread as its schema's `mainThread` says, and that `app.getLog` answers while the message thread is held
+(no `TIMEOUT`, nothing queued for the message thread). `ControlUnitTests` also tests the log redaction and
+the log tail on files.
 
 `Tests/Control/ControlJobTests.cpp` holds the scenarios of the jobs, the write envelope and the import.
 Imported clips get their synthetic analysis through the import's test seam
@@ -392,8 +424,8 @@ method table: `session.v1` always, and the capability of every registered method
 `jobs.v1` and `import.v1`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
-method of a capability it reports: while `content.getDetails`, `transport.get`, `prefs.get` and
-`app.getLog` are still missing, `read.v1` is reported with those four answering `capability_missing`.
+method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
+`ControlProcessorTests.Completeness` fails when a reported capability has a method that is not registered.
 
 ## Method table
 
@@ -405,6 +437,10 @@ method of a capability it reports: while `content.getDetails`, `transport.get`, 
 | `content.getNotes` | `read.v1` | `Ops/ContentReadOps.cpp` | `ControlProcessorTests.Reads`, `.Vectors` | `methods/content.getNotes.schema.json` |
 | `content.getPitchCurve` | `read.v1` | `Ops/ContentReadOps.cpp` | `ControlProcessorTests.Reads`, `.Vectors` | `methods/content.getPitchCurve.schema.json` |
 | `content.segmentNotes` | `read.v1` | `Ops/ContentReadOps.cpp` | `ControlProcessorTests.Reads`, `.Vectors` | `methods/content.segmentNotes.schema.json` |
+| `content.getDetails` | `read.v1` | `Ops/ContentDetailsOps.cpp` | `ControlProcessorTests.Details`, `.Vectors` | `methods/content.getDetails.schema.json` |
+| `transport.get` | `read.v1` | `Ops/ProjectReadOps.cpp` | `ControlProcessorTests.Details`, `.Vectors` | `methods/transport.get.schema.json` |
+| `prefs.get` | `read.v1` | `Ops/AppReadOps.cpp` | `ControlProcessorTests.Details`, `.Vectors` | `methods/prefs.get.schema.json` |
+| `app.getLog` | `read.v1` | `Ops/AppReadOps.cpp` (tail and redaction in `ControlLogTail.cpp`; off the message thread) | `ControlProcessorTests.Details`, `.OffMainThread`, `ControlUnitTests` | `methods/app.getLog.schema.json` |
 | `job.get` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.JobShutdown`, `.JobVectors` | `methods/job.get.schema.json` |
 | `job.cancel` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.ImportCancel`, `.JobVectors` | `methods/job.cancel.schema.json` |
 | `import.start` | `import.v1` | `Ops/ImportOps.cpp` | `ControlProcessorTests.Import`, `.ImportAfterOpen`, `.ImportCancel`, `.JobVectors` | `methods/import.start.schema.json` |

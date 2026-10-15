@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "OpsRegistry.h"
 
+#include "AppReadOps.h"
+#include "ContentDetailsOps.h"
 #include "ContentReadOps.h"
 #include "ImportOps.h"
 #include "JobOps.h"
@@ -38,12 +40,13 @@ void registerControlMethods(ControlMethodTable& table)
 {
     // One line per group, in the order of the layers. A method that is not registered is answered with
     // UNSUPPORTED(capability_missing). Groups that later parts add have a placeholder line.
-    registerSessionOps(table);     // session.info (ControlServer answers session.hello itself)
-    registerProjectReadOps(table); // project.get; later also transport.get, prefs.get, app.getLog
-    registerContentReadOps(table); // content.getNotes, content.getPitchCurve, content.segmentNotes;
-                                   // later also content.getDetails
-    registerJobOps(table);         // job.get, job.cancel
-    registerImportOps(table);      // import.start
+    registerSessionOps(table);        // session.info (ControlServer answers session.hello itself)
+    registerProjectReadOps(table);    // project.get, transport.get
+    registerContentReadOps(table);    // content.getNotes, content.getPitchCurve, content.segmentNotes
+    registerContentDetailsOps(table); // content.getDetails
+    registerAppReadOps(table);        // prefs.get, app.getLog
+    registerJobOps(table);            // job.get, job.cancel
+    registerImportOps(table);         // import.start
     // registerExportOps(table);       export.start
     // registerUiOps(table);           ui.getState, ui.dismiss, ui.setSelection
     // registerContentTuneOps(table);  content.setKey, content.autoTune
@@ -178,6 +181,9 @@ ControlErrorReply controlMapError(const Error& error)
 void ControlMethodTable::add(ControlMethod method)
 {
     jassert(controlMethodCapability(method.name) != nullptr && find(method.name) == nullptr);
+    // A method runs either on the message thread (run) or off it (runOffMainThread); writes never run off it.
+    jassert(method.mainThread ? (method.run && !method.runOffMainThread)
+                              : (method.runOffMainThread && !method.run && !method.write));
     methods_.push_back(std::move(method));
 }
 

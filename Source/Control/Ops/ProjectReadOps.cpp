@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "ProjectReadOps.h"
 
+#include "OpsJson.h"
 #include "OpsSupport.h"
 
 #include "Control/ControlUiBridge.h"
@@ -18,45 +19,9 @@ constexpr float kSilentRmsDb = -99.9f;
 /** Longest path and clip name returned (common.schema.json#/$defs/path, placement.name). */
 constexpr std::size_t kMaxTextCodePoints = 4096;
 
-const char* scaleName(Scale scale)
-{
-    switch (scale) {
-        case Scale::Major:
-            return "major";
-        case Scale::Minor:
-            return "minor";
-        case Scale::Chromatic:
-            return "chromatic";
-        case Scale::HarmonicMinor:
-            return "harmonicMinor";
-        case Scale::Dorian:
-            return "dorian";
-        case Scale::Mixolydian:
-            return "mixolydian";
-        case Scale::PentatonicMajor:
-            return "pentatonicMajor";
-        case Scale::PentatonicMinor:
-            return "pentatonicMinor";
-    }
-    return "major";
-}
-
 JsonValue optionalNumber(const std::optional<double>& value, int decimals)
 {
     return value ? controlJsonNumber(*value, decimals) : JsonValue();
-}
-
-/** The key of a content (common.schema.json#/$defs/key); null until the analysis determined one. */
-JsonValue keyJson(const DetectedKey& key)
-{
-    if (key.origin == Origin::Unset)
-        return JsonValue();
-    auto json = JsonValue::object();
-    json.appendMember("root", JsonValue::integer(static_cast<int>(key.root)));
-    json.appendMember("scale", JsonValue::string(scaleName(key.scale)));
-    json.appendMember("origin", JsonValue::string(key.origin == Origin::Manual ? "manual" : "automatic"));
-    json.appendMember("confidence", key.origin == Origin::Manual ? JsonValue() : controlJsonNumber(key.confidence, 4));
-    return json;
 }
 
 JsonValue trackJson(const StandaloneArrangement& arrangement, int trackId, bool visible, bool anySolo,
@@ -142,15 +107,12 @@ JsonValue contentSummaryJson(const std::string& contentId, const EditableContent
     auto nullReasons = JsonValue::object();
     json.appendMember("contentId", JsonValue::string(contentId));
     json.appendMember("f0State", JsonValue::string(controlF0StateName(snapshot.originalF0State)));
-    auto key = keyJson(snapshot.detectedKey);
+    auto key = controlKeyJson(snapshot.detectedKey);
     if (key.isNull())
         nullReasons.appendMember("key", JsonValue::string("not_analyzed"));
     json.appendMember("key", std::move(key));
     json.appendMember("noteCount", JsonValue::integer(static_cast<std::int64_t>(snapshot.notes.size())));
-    auto pitchShift = JsonValue::object();
-    pitchShift.appendMember("semitones", JsonValue::integer(snapshot.pitchShiftSettings.semitone));
-    pitchShift.appendMember("cents", JsonValue::integer(snapshot.pitchShiftSettings.cents));
-    json.appendMember("pitchShift", std::move(pitchShift));
+    json.appendMember("pitchShift", controlPitchShiftJson(snapshot.pitchShiftSettings));
     json.appendMember("timeGridIdentity",
                       JsonValue::boolean(snapshot.timeGrid == nullptr || snapshot.timeGrid->isIdentity()));
     if (nullReasons.size() != 0)
@@ -279,11 +241,22 @@ Result<JsonValue> runProjectGet(ControlOpContext& context, const ControlNoParams
     return result;
 }
 
+Result<JsonValue> runTransportGet(ControlOpContext& context, const ControlNoParams&)
+{
+    // The transport describes no content: asOf lists none, and nothing in the result is derived.
+    auto result = JsonValue::object();
+    result.appendMember("asOf", controlAsOf(controlArrangementRevision(context), {}));
+    result.appendMember("derived", JsonValue::array());
+    result.appendMember("transport", controlTransportJson(context));
+    return result;
+}
+
 } // namespace
 
 void registerProjectReadOps(ControlMethodTable& table)
 {
     table.add(controlReadMethod<ControlNoParams>("project.get", controlParseNoParams, runProjectGet));
+    table.add(controlReadMethod<ControlNoParams>("transport.get", controlParseNoParams, runTransportGet));
 }
 
 } // namespace OpenTune

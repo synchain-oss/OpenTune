@@ -14,10 +14,14 @@
 #include "Control/ControlDispatcher.h"
 #include "Control/ControlMessageThread.h"
 #include "Control/Ops/OpsRegistry.h"
+#include "Utils/AppLogger.h"
+#include "Utils/AppPreferences.h"
 #include "Utils/DetectedKey.h"
 #include "Utils/PitchCurve.h"
+#include "Utils/PitchShiftSettings.h"
 #include "Utils/PitchUtils.h"
 #include "Utils/ProjectSession.h"
+#include "Utils/TimeGrid.h"
 #include "Utils/TuningConfig.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -76,6 +80,9 @@ struct ClipSpec
     Analysis analysis = Analysis::Ready;
     std::vector<NoteSpec> notes;
     std::optional<DetectedKey> key;
+    std::optional<PitchShiftSettings> pitchShift;
+    /** Content times of the handles between the end points of the time grid (output equals content). */
+    std::vector<double> gridHandlesContentSec;
 };
 
 struct Clip
@@ -83,6 +90,8 @@ struct Clip
     ContentKey key;
     std::uint64_t placementId = 0;
     std::string sourcePath;
+    /** The handleIds of the time grid's inner handles, in order. */
+    std::vector<std::string> handleIds;
 };
 
 float hzOf(double midi)
@@ -212,6 +221,33 @@ Clip addClip(OpenTuneAudioProcessor& processor, const ClipSpec& spec)
                 CONTROL_CHECK(processor.replaceContentNotesForFullMutation(clip.key, notesOf(spec)));
             if (spec.key)
                 CONTROL_CHECK(processor.setContentDetectedKey(clip.key, *spec.key));
+            if (spec.pitchShift) {
+                // The edit state of a pitch shift: the settings with the notes (no correction segments).
+                PitchShiftEditState state;
+                state.settings = *spec.pitchShift;
+                state.notes = notesOf(spec);
+                CONTROL_CHECK(processor.applyContentPitchShiftState(clip.key, state));
+            }
+            if (!spec.gridHandlesContentSec.empty()) {
+                // ClipStart, the inner handles, ClipEnd; ids count from 1, output times equal content times.
+                std::vector<TimeHandle> handles;
+                std::uint64_t nextId = 1;
+                const auto add = [&handles, &nextId](double sec, HandleKind kind) {
+                    TimeHandle handle;
+                    handle.id = nextId++;
+                    handle.source_seconds = sec;
+                    handle.output_seconds = sec;
+                    handle.kind = kind;
+                    handles.push_back(handle);
+                };
+                add(0.0, HandleKind::ClipStart);
+                for (const double sec : spec.gridHandlesContentSec) {
+                    add(sec, HandleKind::UserAdded);
+                    clip.handleIds.push_back(std::to_string(handles.back().id));
+                }
+                add(spec.durationSec, HandleKind::ClipEnd);
+                owner->applyTimeGrid(TimeGridSnapshot::makeFromHandles(std::move(handles)));
+            }
             CONTROL_CHECK(processor.setContentOriginalF0State(clip.key, OriginalF0State::Ready));
             break;
         }
@@ -768,11 +804,8 @@ void checkErrors(ApiSession& api, const ClipHandles& handles)
     CONTROL_CHECK(api.fails("content.segmentNotes", json("{\"contentId\":" + content + ",\"noteSplitCents\":201}"),
                             "INVALID_ARGUMENT", "invalid_params"));
     CONTROL_CHECK(api.fails("project.get", json(R"({"verbose":true})"), "INVALID_ARGUMENT", "invalid_params"));
-    // Methods of a reported capability that a later part implements, a method of a capability this build
-    // does not report yet, and a method the protocol does not define.
-    CONTROL_CHECK(
-        api.fails("content.getDetails", json("{\"contentId\":" + content + "}"), "UNSUPPORTED", "capability_missing"));
-    CONTROL_CHECK(api.fails("transport.get", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
+    // A method of a capability this build does not report (a later part implements it), and a method the
+    // protocol does not define.
     CONTROL_CHECK(api.fails("export.start", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
     CONTROL_CHECK(api.fails("track.rename", JsonValue::object(), "UNSUPPORTED", "unknown_method"));
 }
@@ -798,12 +831,480 @@ void checkReopen(ApiSession& api, OpenTuneAudioProcessor& processor, const ClipH
     CONTROL_CHECK(memberOf(notes, "contentId").text() == after->contentId);
 }
 
+// ---- content.getDetails, transport.get, prefs.get and app.getLog -----------------------------------
+
+std::set<std::string> memberNames(const JsonValue& object)
+{
+    std::set<std::string> names;
+    for (std::size_t i = 0; i < object.size(); ++i)
+        names.insert(object.keyAt(i));
+    return names;
+}
+
+/** The clips of the details scenario. */
+struct DetailsClips
+{
+    Clip sung;
+    Clip ref;
+    Clip failedEmpty;
+    Clip failedPlain;
+    Clip pending;
+};
+
+ClipSpec refSpec()
+{
+    ClipSpec spec;
+    spec.name = "ref";
+    spec.trackId = 1;
+    spec.startTimelineSec = 2.0;
+    return spec;
+}
+
+/** Gives the content of a clip reference alignment data of the given producer. */
+void applyReferenceFeatures(OpenTuneAudioProcessor& processor, const Clip& clip, ReferenceFeatureProducer producer)
+{
+    ReferenceFeatureSet features;
+    features.status = ReferenceFeatureStatus::Ready;
+    features.producer = producer;
+    auto* owner = processor.getStandaloneContentRepository()->findClip(clip.key);
+    if (CONTROL_CHECK(owner != nullptr))
+        owner->applyReferenceFeatures(features);
+}
+
+void checkDetailsOfSung(ApiSession& api, OpenTuneAudioProcessor& processor, const DetailsClips& clips,
+                        const ClipHandles& handles, const ClipHandles& refHandles)
+{
+    const auto byContent = json("{\"contentId\":" + quoted(handles.contentId) + "}");
+    const auto details = api.result("content.getDetails", byContent);
+    CONTROL_CHECK(memberOf(details, "contentId").text() == handles.contentId);
+    CONTROL_CHECK(memberOf(details, "viaPlacementId").text() == handles.placementId);
+    CONTROL_CHECK(toJsonString(memberOf(details, "placementIds")) == "[" + quoted(handles.placementId) + "]");
+    CONTROL_CHECK(near(memberOf(details, "durationSec"), 6.0, kSecTolerance));
+    CONTROL_CHECK(toJsonString(memberOf(details, "key"))
+                  == R"({"root":9,"scale":"minor","origin":"manual","confidence":null})");
+    CONTROL_CHECK(toJsonString(memberOf(details, "pitchShift")) == R"({"semitones":-2,"cents":0})");
+    // The tokens are those of project.get, for this content alone.
+    CONTROL_CHECK(toJsonString(memberOf(memberOf(details, "asOf"), "contents"))
+                  == "[" + toJsonString(handles.tokens) + "]");
+    CONTROL_CHECK(containsString(memberOf(details, "derived"), "durationSec"));
+
+    const auto& analysis = memberOf(details, "analysis");
+    CONTROL_CHECK(toJsonString(memberOf(analysis, "f0State")) == "\"ready\"" && memberOf(analysis, "failure").isNull());
+    CONTROL_CHECK(near(memberOf(analysis, "hopSec"), kFrameSec, 1e-9));
+    CONTROL_CHECK(!containsString(memberOf(details, "derived"), "analysis.hopSec"));
+
+    // The render: the token of what the render is made from, and a published token that equals it exactly
+    // when the render is current.
+    const auto& render = memberOf(details, "render");
+    CONTROL_CHECK(memberOf(render, "current").isBoolean() && memberOf(render, "desiredRevision").isString());
+    CONTROL_CHECK((memberOf(render, "publishedRevision").text() == memberOf(render, "desiredRevision").text())
+                  == memberOf(render, "current").asBoolean());
+
+    const auto& grid = memberOf(details, "timeGrid");
+    CONTROL_CHECK(memberOf(grid, "seeded").asBoolean() && memberOf(grid, "identity").asBoolean());
+    CONTROL_CHECK(near(memberOf(grid, "minHandleSpacingSec"), 0.03, 1e-9));
+    const auto& gridHandles = memberOf(grid, "handles");
+    if (CONTROL_CHECK(gridHandles.size() == 2 && clips.sung.handleIds.size() == 2)) {
+        CONTROL_CHECK(memberOf(gridHandles.at(0), "handleId").text() == clips.sung.handleIds[0]);
+        CONTROL_CHECK(near(memberOf(gridHandles.at(0), "contentSec"), 1.0, kSecTolerance)
+                      && near(memberOf(gridHandles.at(0), "outputSec"), 1.0, kSecTolerance));
+        CONTROL_CHECK(memberOf(gridHandles.at(1), "handleId").text() == clips.sung.handleIds[1]);
+        CONTROL_CHECK(near(memberOf(gridHandles.at(1), "contentSec"), 2.5, kSecTolerance));
+    }
+
+    const auto& reference = memberOf(details, "reference");
+    CONTROL_CHECK(memberOf(reference, "referencePlacementId").text() == refHandles.placementId);
+    CONTROL_CHECK(!memberOf(reference, "alignmentReady").asBoolean());
+
+    // The scheme is openTune and the experimental features are off, so the button regenerates.
+    const auto& modes = memberOf(details, "autoModes");
+    CONTROL_CHECK(memberOf(modes, "editingScheme").text() == "openTune"
+                  && memberOf(modes, "uiButtonRuns").text() == "regenerate");
+    CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == R"(["regenerate","snapNotes","notesOnly"])");
+
+    // By placement: the same content, through that placement; every member besides the placement the same.
+    const auto byPlacement =
+        api.result("content.getDetails", json("{\"placementId\":" + quoted(handles.placementId) + "}"));
+    CONTROL_CHECK(toJsonString(byPlacement) == toJsonString(details));
+    // The reference clip is a content of its own, with no binding of its own and no time grid.
+    const auto refDetails =
+        api.result("content.getDetails", json("{\"contentId\":" + quoted(refHandles.contentId) + "}"));
+    CONTROL_CHECK(memberOf(memberOf(refDetails, "reference"), "referencePlacementId").isNull());
+    CONTROL_CHECK(!memberOf(memberOf(refDetails, "timeGrid"), "seeded").asBoolean()
+                  && memberOf(memberOf(refDetails, "timeGrid"), "handles").size() == 0
+                  && memberOf(memberOf(refDetails, "timeGrid"), "identity").asBoolean());
+    CONTROL_CHECK(memberOf(refDetails, "key").isNull() && nullReason(refDetails, "key").text() == "not_analyzed");
+
+    // The render input changes with an edit and with nothing else.
+    const auto desiredBefore = memberOf(render, "desiredRevision").text();
+    CONTROL_CHECK(memberOf(memberOf(api.result("content.getDetails", byContent), "render"), "desiredRevision").text()
+                  == desiredBefore);
+    auto changed = notesOf(sungSpec());
+    changed[0].retuneSpeed = 0.5f;
+    CONTROL_CHECK(processor.replaceContentNotesForFullMutation(clips.sung.key, changed));
+    CONTROL_CHECK(memberOf(memberOf(api.result("content.getDetails", byContent), "render"), "desiredRevision").text()
+                  != desiredBefore);
+}
+
+/** content.getDetails run on the message thread with the facts of an instance that reports reference.v1,
+    as an instance with the reference methods would answer (this build does not report it). */
+JsonValue detailsAsInstanceWithReference(OpenTuneAudioProcessor& processor, const std::string& instanceId,
+                                         const std::string& contentId)
+{
+    ControlMethodTable table;
+    registerControlMethods(table);
+    const ControlMethod* method = table.find("content.getDetails");
+    if (!CONTROL_CHECK(method != nullptr))
+        return JsonValue();
+    std::shared_ptr<const void> parsed;
+    std::string why;
+    if (!CONTROL_CHECK(method->parse(json("{\"contentId\":" + quoted(contentId) + "}"), parsed, why)))
+        return JsonValue();
+    ControlInstanceFacts facts;
+    facts.instanceId = instanceId;
+    facts.capabilities = {"session.v1", "read.v1", "reference.v1"};
+    ControlThreadProbe probe;
+    ControlOpContext context(processor, nullptr, facts, probe);
+    auto result = method->run(context, parsed.get());
+    if (!CONTROL_CHECK(result.ok()))
+        return JsonValue();
+    return std::move(result).value();
+}
+
+/** The reference binding and the AUTO button: alignment data of the producer in use, the scheme and the
+    experimental features. */
+void checkAutoModes(ApiSession& api, OpenTuneAudioProcessor& processor, const DetailsClips& clips,
+                    const ClipHandles& handles)
+{
+    const auto byContent = json("{\"contentId\":" + quoted(handles.contentId) + "}");
+    const auto producer = processor.getReferenceFeatureProducer();
+    const auto other = producer == ReferenceFeatureProducer::Game ? ReferenceFeatureProducer::StandardAuto
+                                                                  : ReferenceFeatureProducer::Game;
+    // Alignment data of both clips for the producer in use; data of the other producer does not count.
+    applyReferenceFeatures(processor, clips.sung, producer);
+    CONTROL_CHECK(
+        !memberOf(memberOf(api.result("content.getDetails", byContent), "reference"), "alignmentReady").asBoolean());
+    applyReferenceFeatures(processor, clips.ref, other);
+    CONTROL_CHECK(
+        !memberOf(memberOf(api.result("content.getDetails", byContent), "reference"), "alignmentReady").asBoolean());
+    applyReferenceFeatures(processor, clips.ref, producer);
+    CONTROL_CHECK(
+        memberOf(memberOf(api.result("content.getDetails", byContent), "reference"), "alignmentReady").asBoolean());
+    applyReferenceFeatures(processor, clips.sung, other);
+    CONTROL_CHECK(
+        !memberOf(memberOf(api.result("content.getDetails", byContent), "reference"), "alignmentReady").asBoolean());
+
+    // This instance does not report reference.v1, so content.autoTune cannot run reference alignment: the
+    // button's mode is named regenerate, with the binding and the experimental features as they are.
+    auto& preferences = processor.getAppPreferences();
+    preferences.setExperimentalFeaturesEnabled(true);
+    auto modes = memberOf(api.result("content.getDetails", byContent), "autoModes");
+    CONTROL_CHECK(memberOf(modes, "uiButtonRuns").text() == "regenerate");
+    CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == R"(["regenerate","snapNotes","notesOnly"])");
+
+    // An instance that reports reference.v1 (the details run directly, with the facts of such an instance).
+    const auto instanceId = memberOf(api.discovery(), "instanceId").text();
+    const auto modesOf = [&] {
+        return memberOf(detailsAsInstanceWithReference(processor, instanceId, handles.contentId), "autoModes");
+    };
+    // A binding that is still there makes the AUTO button run reference alignment once the experimental
+    // features are on (evaluateAutoRefUiState), in the openTune scheme.
+    modes = modesOf();
+    CONTROL_CHECK(memberOf(modes, "uiButtonRuns").text() == "reference");
+    CONTROL_CHECK(toJsonString(memberOf(modes, "available"))
+                  == R"(["regenerate","snapNotes","notesOnly","reference"])");
+    preferences.setExperimentalFeaturesEnabled(false);
+    modes = modesOf();
+    CONTROL_CHECK(memberOf(modes, "uiButtonRuns").text() == "regenerate");
+    CONTROL_CHECK(memberOf(modes, "available").size() == 4);
+    // The openDyne scheme snaps notes, whatever the binding says.
+    preferences.setExperimentalFeaturesEnabled(true);
+    preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::NotesPrimary);
+    modes = modesOf();
+    CONTROL_CHECK(memberOf(modes, "editingScheme").text() == "openDyne"
+                  && memberOf(modes, "uiButtonRuns").text() == "snapNotes");
+    // Without the binding the button regenerates, and reference alignment is not offered.
+    preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::CorrectedF0Primary);
+    CONTROL_CHECK(processor.getStandaloneArrangement()->setPlacementReferencePlacement(0, clips.sung.placementId, 0));
+    modes = modesOf();
+    CONTROL_CHECK(memberOf(modes, "uiButtonRuns").text() == "regenerate");
+    CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == R"(["regenerate","snapNotes","notesOnly"])");
+    CONTROL_CHECK(
+        memberOf(memberOf(api.result("content.getDetails", byContent), "reference"), "referencePlacementId").isNull());
+    preferences.setExperimentalFeaturesEnabled(false);
+    CONTROL_CHECK(processor.getStandaloneArrangement()->setPlacementReferencePlacement(0, clips.sung.placementId,
+                                                                                       clips.ref.placementId));
+}
+
+/** Analysis states: the failure reason the processor recorded, and what a content without analysis offers. */
+void checkDetailsOfUnanalysed(ApiSession& api, OpenTuneAudioProcessor& processor, const DetailsClips& clips,
+                              const JsonValue& project)
+{
+    const auto detailsOf = [&](int trackId) {
+        const auto handles = handlesOf(project, trackId, 0.0);
+        if (!CONTROL_CHECK(handles.has_value()))
+            return JsonValue();
+        return api.result("content.getDetails", json("{\"contentId\":" + quoted(handles->contentId) + "}"));
+    };
+    // A failure that was recorded says why; one that was not (loaded from a project) is f0_failed.
+    const auto empty = detailsOf(2);
+    CONTROL_CHECK(memberOf(memberOf(empty, "analysis"), "f0State").text() == "failed");
+    CONTROL_CHECK(memberOf(memberOf(empty, "analysis"), "failure").text() == "f0_empty");
+    const auto plain = detailsOf(3);
+    CONTROL_CHECK(memberOf(memberOf(plain, "analysis"), "f0State").text() == "failed");
+    CONTROL_CHECK(memberOf(memberOf(plain, "analysis"), "failure").text() == "f0_failed");
+    for (const auto& details : {empty, plain}) {
+        CONTROL_CHECK(memberOf(details, "key").isNull() && nullReason(details, "key").text() == "not_analyzed");
+        CONTROL_CHECK(memberOf(memberOf(details, "autoModes"), "available").size() == 0);
+        CONTROL_CHECK(memberOf(memberOf(details, "reference"), "referencePlacementId").isNull());
+        // Without a pitch curve the hop is the analysis' own, and the result says it computed it.
+        CONTROL_CHECK(near(memberOf(memberOf(details, "analysis"), "hopSec"), kFrameSec, 1e-9));
+        CONTROL_CHECK(containsString(memberOf(details, "derived"), "analysis.hopSec"));
+    }
+    const auto pending = detailsOf(4);
+    CONTROL_CHECK(memberOf(memberOf(pending, "analysis"), "f0State").text() == "notRequested");
+    CONTROL_CHECK(memberOf(memberOf(pending, "analysis"), "failure").isNull());
+    CONTROL_CHECK(memberOf(memberOf(pending, "autoModes"), "available").size() == 0);
+
+    // The processor keeps the reason per content, clears it when an analysis starts or succeeds, and a
+    // recorded reason is reported only while the analysis is failed.
+    CONTROL_CHECK(processor.getContentF0FailureReason(clips.failedEmpty.key) == std::optional<std::string>("f0_empty"));
+    CONTROL_CHECK(!processor.getContentF0FailureReason(clips.failedPlain.key).has_value());
+    processor.recordF0FailureReason(clips.failedEmpty.key, nullptr);
+    CONTROL_CHECK(!processor.getContentF0FailureReason(clips.failedEmpty.key).has_value());
+    CONTROL_CHECK(memberOf(memberOf(detailsOf(2), "analysis"), "failure").text() == "f0_failed");
+    processor.recordF0FailureReason(clips.failedEmpty.key, "f0_empty");
+    CONTROL_CHECK(processor.setContentOriginalF0State(clips.failedEmpty.key, OriginalF0State::Extracting));
+    CONTROL_CHECK(memberOf(memberOf(detailsOf(2), "analysis"), "failure").isNull());
+    CONTROL_CHECK(memberOf(memberOf(detailsOf(2), "analysis"), "f0State").text() == "extracting");
+    processor.recordF0FailureReason(clips.failedEmpty.key, "f0_empty");
+}
+
+void checkDetailsErrors(ApiSession& api, const ClipHandles& handles)
+{
+    const auto instanceShort = memberOf(api.discovery(), "instanceId").text().substr(0, 8);
+    const auto epoch = epochOf(handles.contentId);
+    const auto content = quoted(handles.contentId);
+    const auto placement = quoted(handles.placementId);
+    CONTROL_CHECK(api.fails("content.getDetails",
+                            json("{\"contentId\":" + quoted("c:" + instanceShort + ":" + epoch + ":4294967295") + "}"),
+                            "NOT_FOUND", "unknown_handle"));
+    CONTROL_CHECK(
+        api.fails("content.getDetails",
+                  json("{\"placementId\":" + quoted("p:" + instanceShort + ":" + epoch + ":4294967295") + "}"),
+                  "NOT_FOUND", "unknown_handle"));
+    CONTROL_CHECK(
+        api.fails("content.getDetails",
+                  json("{\"contentId\":" + quoted("c:" + otherInstanceShort(instanceShort) + ":" + epoch + ":1") + "}"),
+                  "NOT_FOUND", "stale_handle"));
+    CONTROL_CHECK(api.fails(
+        "content.getDetails",
+        json("{\"placementId\":" + quoted("p:" + otherInstanceShort(instanceShort) + ":" + epoch + ":1") + "}"),
+        "NOT_FOUND", "stale_handle"));
+    for (const std::string& params :
+         {std::string("{}"), "{\"contentId\":" + content + ",\"placementId\":" + placement + "}",
+          "{\"contentId\":" + placement + "}", "{\"placementId\":" + content + "}",
+          "{\"contentId\":" + content + ",\"verbose\":true}"})
+        CONTROL_CHECK(api.fails("content.getDetails", json(params), "INVALID_ARGUMENT", "invalid_params"));
+}
+
+void checkTransport(ApiSession& api, ControlService& service, const JsonValue& project)
+{
+    const auto result = api.result("transport.get");
+    // Not a read of a content: asOf lists no content, and nothing is derived.
+    CONTROL_CHECK(memberOf(memberOf(result, "asOf"), "contents").size() == 0);
+    CONTROL_CHECK(memberOf(memberOf(result, "asOf"), "arrangementRevision").text()
+                  == memberOf(memberOf(project, "asOf"), "arrangementRevision").text());
+    CONTROL_CHECK(memberOf(result, "derived").isArray() && memberOf(result, "derived").size() == 0);
+    CONTROL_CHECK(toJsonString(memberOf(result, "transport")) == toJsonString(memberOf(project, "transport")));
+    const auto names = memberNames(memberOf(result, "transport"));
+    CONTROL_CHECK((names
+                   == std::set<std::string>{"playing", "positionTimelineSec", "playStartTimelineSec", "loopEnabled",
+                                            "bpm", "timeSignature", "audioDeviceRunning", "lastControl"}));
+    CONTROL_CHECK(!memberOf(memberOf(result, "transport"), "audioDeviceRunning").asBoolean());
+    CONTROL_CHECK(api.fails("transport.get", json(R"({"verbose":true})"), "INVALID_ARGUMENT", "invalid_params"));
+
+    // With a bridge that cannot see the audio device the transport still reports the device as not running.
+    TestUiBridge bridge;
+    service.setUiBridge(&bridge);
+    const auto withBridge = api.result("transport.get");
+    service.setUiBridge(nullptr);
+    CONTROL_CHECK(!memberOf(memberOf(withBridge, "transport"), "audioDeviceRunning").asBoolean());
+}
+
+void checkPrefs(ApiSession& api, OpenTuneAudioProcessor& processor)
+{
+    auto& preferences = processor.getAppPreferences();
+    const auto media = isolatedDataDirectory() / "prefs";
+    std::error_code ignored;
+    std::filesystem::create_directories(media, ignored);
+    const auto existing = juceFile(media / "recent-a.otproj");
+    CONTROL_CHECK(existing.replaceWithText("project"));
+    const auto missing = juceFile(media / "recent-missing.otproj");
+    missing.deleteFile();
+    preferences.clearRecentProjects();
+    preferences.pushRecentProject(existing.getFullPathName());
+    preferences.pushRecentProject(missing.getFullPathName());
+    preferences.setExperimentalFeaturesEnabled(true);
+    preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::NotesPrimary);
+
+    const auto result = api.result("prefs.get");
+    // Preferences are not project state.
+    CONTROL_CHECK(result.find("asOf") == nullptr && result.find("derived") == nullptr);
+    CONTROL_CHECK(
+        (memberNames(result) == std::set<std::string>{"processing", "onboardingShown", "language", "recentProjects"}));
+    const auto& processing = memberOf(result, "processing");
+    CONTROL_CHECK(
+        (memberNames(processing)
+             == std::set<std::string>{"tuningHz", "editingScheme", "hybridMode", "vocoderWeight", "f0Model",
+                                      "renderingPriority", "experimentalFeatures", "referenceAlignMode", "nullReasons"}
+         || memberNames(processing)
+                == std::set<std::string>{"tuningHz", "editingScheme", "hybridMode", "vocoderWeight", "f0Model",
+                                         "renderingPriority", "experimentalFeatures", "referenceAlignMode"}));
+    CONTROL_CHECK(near(memberOf(processing, "tuningHz"), TuningConfig::currentTuningHz(), 1e-3));
+    CONTROL_CHECK(memberOf(processing, "editingScheme").text() == "openDyne");
+    CONTROL_CHECK(memberOf(processing, "f0Model").text() == "fcpe");
+    CONTROL_CHECK(memberOf(processing, "hybridMode").isBoolean());
+    CONTROL_CHECK(memberOf(processing, "experimentalFeatures").asBoolean());
+    const auto priority = memberOf(processing, "renderingPriority").text();
+    CONTROL_CHECK(priority == "gpuFirst" || priority == "cpuFirst");
+    const auto alignMode = memberOf(processing, "referenceAlignMode").text();
+    CONTROL_CHECK(alignMode == "standardAuto" || alignMode == "game");
+    CONTROL_CHECK(memberOf(processing, "vocoderWeight").isString()
+                  || nullReason(processing, "vocoderWeight").text() == "unavailable");
+    const auto language = memberOf(result, "language").text();
+    CONTROL_CHECK(language == "en" || language == "zh" || language == "ja" || language == "ru" || language == "es");
+    CONTROL_CHECK(memberOf(result, "onboardingShown").isBoolean());
+
+    // Most recent first, with whether each file is still there.
+    const auto& recent = memberOf(result, "recentProjects");
+    if (CONTROL_CHECK(recent.size() == 2)) {
+        CONTROL_CHECK(memberOf(recent.at(0), "path").text() == missing.getFullPathName().toStdString()
+                      && !memberOf(recent.at(0), "exists").asBoolean());
+        CONTROL_CHECK(memberOf(recent.at(1), "path").text() == existing.getFullPathName().toStdString()
+                      && memberOf(recent.at(1), "exists").asBoolean());
+    }
+    CONTROL_CHECK(api.fails("prefs.get", json(R"({"verbose":true})"), "INVALID_ARGUMENT", "invalid_params"));
+
+    preferences.clearRecentProjects();
+    preferences.setExperimentalFeaturesEnabled(false);
+    preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::CorrectedF0Primary);
+    CONTROL_CHECK(memberOf(api.result("prefs.get"), "recentProjects").size() == 0);
+}
+
+bool anyLineContains(const JsonValue& lines, const std::string& needle)
+{
+    for (std::size_t i = 0; i < lines.size(); ++i)
+        if (lines.at(i).isString() && lines.at(i).text().find(needle) != std::string::npos)
+            return true;
+    return false;
+}
+
+void checkAppLog(ApiSession& api)
+{
+    const auto token = memberOf(api.discovery(), "token").text();
+    const auto proof = memberOf(api.discovery(), "serverProof").text();
+    const auto home = juce::File::getSpecialLocation(juce::File::userHomeDirectory).getFullPathName().toStdString();
+    CONTROL_CHECK(token.size() >= 32 && proof.size() >= 32 && home.size() > 3);
+    auto forward = home;
+    std::replace(forward.begin(), forward.end(), '\\', '/');
+
+    // Secrets and the home directory planted into the log, as an application bug could write them.
+    const std::string marker = "details-scenario-marker";
+    AppLogger::log(juce::String::fromUTF8((marker + " token=" + token + " proof=" + proof).c_str()));
+    AppLogger::log(juce::String::fromUTF8((marker + " file=" + home + "\\Documents\\song.otproj").c_str()));
+    AppLogger::log(juce::String::fromUTF8((marker + " file=" + forward + "/Documents/song.otproj").c_str()));
+    std::string upperToken = token;
+    for (auto& c : upperToken)
+        c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+    AppLogger::log(juce::String::fromUTF8((marker + " upper=" + upperToken).c_str()));
+    AppLogger::log(juce::String::fromUTF8((marker + " long=" + std::string(6000, 'x')).c_str()));
+    AppLogger::log(juce::String::fromUTF8((marker + " end").c_str()));
+
+    JsonValue result;
+    CONTROL_CHECK(pumpMessagesUntil(
+        [&] {
+            result = api.result("app.getLog", json(R"({"maxLines":1000})"));
+            return anyLineContains(memberOf(result, "lines"), marker + " end");
+        },
+        5000));
+    const auto& lines = memberOf(result, "lines");
+    CONTROL_CHECK(lines.isArray() && lines.size() >= 6 && lines.size() <= 1000);
+    // Neither secret, nor the home directory in any spelling, appears anywhere in the result.
+    const auto text = toJsonString(result);
+    CONTROL_CHECK(text.find(token) == std::string::npos && text.find(proof) == std::string::npos
+                  && text.find(upperToken) == std::string::npos);
+    CONTROL_CHECK(!anyLineContains(lines, home) && !anyLineContains(lines, forward));
+    CONTROL_CHECK(anyLineContains(lines, marker + " upper=<redacted>"));
+    CONTROL_CHECK(anyLineContains(lines, marker + " token=<redacted> proof=<redacted>"));
+    CONTROL_CHECK(anyLineContains(lines, marker + " file=~\\Documents\\song.otproj"));
+    CONTROL_CHECK(anyLineContains(lines, marker + " file=~/Documents/song.otproj"));
+    // A line is cut to 4096 characters.
+    bool foundLong = false;
+    for (std::size_t i = 0; i < lines.size(); ++i)
+        if (lines.at(i).text().find(marker + " long=") != std::string::npos) {
+            foundLong = true;
+            CONTROL_CHECK(utf8CodePointCount(lines.at(i).text()) == 4096);
+        }
+    CONTROL_CHECK(foundLong);
+
+    // maxLines limits the tail to the newest lines, oldest first, and says that earlier lines exist.
+    const auto last = api.result("app.getLog", json(R"({"maxLines":2})"));
+    CONTROL_CHECK(memberOf(last, "lines").size() == 2 && memberOf(last, "truncated").asBoolean());
+    // The log is not project state.
+    CONTROL_CHECK(last.find("asOf") == nullptr && last.find("derived") == nullptr);
+    CONTROL_CHECK(memberOf(api.result("app.getLog"), "lines").size() <= 200);
+
+    for (const char* params :
+         {R"({"maxLines":0})", R"({"maxLines":1001})", R"({"maxLines":1.5})", R"({"maxLines":"3"})", R"({"limit":3})"})
+        CONTROL_CHECK(api.fails("app.getLog", json(params), "INVALID_ARGUMENT", "invalid_params"));
+}
+
 // ---- The specification's vectors ------------------------------------------------------------------
 
 /** The methods this build implements; the runner runs the vectors that use only these. */
-const std::set<std::string> kImplementedMethods = {"session.info", "project.get", "content.getNotes",
-                                                   "content.getPitchCurve", "content.segmentNotes"};
+const std::set<std::string> kImplementedMethods = {"session.info",
+                                                   "project.get",
+                                                   "content.getNotes",
+                                                   "content.getPitchCurve",
+                                                   "content.segmentNotes",
+                                                   "content.getDetails",
+                                                   "transport.get",
+                                                   "prefs.get",
+                                                   "app.getLog"};
+/** The capabilities whose vectors this runner runs; ControlJobTests.cpp (JobVectors) runs those of
+    jobs.v1. */
 const std::set<std::string> kReportedCapabilities = {"session.v1", "read.v1"};
+
+/**
+ * Methods of a capability the instance reports that are not registered in OpsRegistry yet. An instance
+ * must implement every method of every capability it reports (PROTOCOL.md section 3.3 rule 5 case 10), so
+ * this list is a debt: it must be empty before dev is merged, and read.v1 may never be on it. A method is
+ * removed from the list when it is registered (scenarioCompleteness fails on a stale entry).
+ */
+const std::set<std::string> kUnimplementedReportedMethods = {};
+
+/** The vectors of the specification that run against the processor and must pass, by id. */
+const char* const kMustRunVectors[] = {
+    "app/get-log-ok",
+    "content/get-details-ok",
+    "content/get-details-stale-handle",
+    "content/get-notes-handle-kind",
+    "content/get-notes-ok",
+    "content/get-notes-stale-handle",
+    "content/get-notes-timeline",
+    "content/get-pitch-curve-not-found",
+    "content/get-pitch-curve-ok",
+    "content/segment-notes-ok",
+    "content/segment-notes-stale-handle",
+    "prefs/get-ok",
+    "project/get-ok",
+    "session/batch-rejected",
+    "session/info-ok",
+    "session/info-unknown-param",
+    "session/unknown-method",
+    "transport/get-ok",
+};
 
 /** The methods a vector sends. */
 std::vector<std::string> methodsOf(const JsonValue& vector)
@@ -850,6 +1351,8 @@ std::string vectorSkipReason(const JsonValue& vector)
         const auto& name = given.keyAt(i);
         if (name == "dirty" && !given.at(i).asBoolean())
             continue; // without an editor the project has no unsaved changes
+        if (name == "editingScheme")
+            continue; // set in the preferences by runVector
         if (name != "clips")
             return "precondition given." + name + " is not established by this runner";
         for (std::size_t c = 0; c < given.at(i).size(); ++c) {
@@ -857,9 +1360,6 @@ std::string vectorSkipReason(const JsonValue& vector)
             if (memberOf(clip, "analysis").text() != "ready")
                 return "a clip with analysis " + memberOf(clip, "analysis").text()
                        + " is not established by this runner";
-            for (const char* member : {"pitchShift", "timeGrid", "referenceClip"})
-                if (clip.find(member) != nullptr)
-                    return std::string("clip member ") + member + " is not established by this runner";
         }
     }
     return {};
@@ -894,7 +1394,15 @@ std::string runVector(const JsonValue& vector)
         return "the control API did not start";
     VectorMatcher matcher;
 
+    // The preferences persist in the data directory between vectors: set the scheme every time.
+    const auto scheme = memberOf(memberOf(vector, "given"), "editingScheme").text();
+    processor->getAppPreferences().setAudioEditingScheme(scheme == "openDyne"
+                                                             ? AudioEditingScheme::Scheme::NotesPrimary
+                                                             : AudioEditingScheme::Scheme::CorrectedF0Primary);
+
     std::vector<std::pair<std::string, ClipSpec>> specs;
+    std::vector<std::pair<std::string, std::string>> references; // clip -> clip it has a reference binding to
+    std::vector<std::vector<std::string>> handleBinds;           // per clip: the names of its grid handles
     const auto& clips = memberOf(memberOf(vector, "given"), "clips");
     for (std::size_t i = 0; i < clips.size(); ++i) {
         const auto& given = clips.at(i);
@@ -915,11 +1423,46 @@ std::string runVector(const JsonValue& vector)
             detected.origin = Origin::Manual;
             spec.key = detected;
         }
+        if (const JsonValue* shift = given.find("pitchShift")) {
+            PitchShiftSettings settings;
+            settings.semitone = static_cast<int>(memberOf(*shift, "semitones").asDouble());
+            settings.cents = static_cast<int>(memberOf(*shift, "cents").asDouble());
+            spec.pitchShift = settings;
+        }
+        handleBinds.emplace_back();
+        const auto& grid = memberOf(given, "timeGrid");
+        for (std::size_t h = 0; h < grid.size(); ++h) {
+            spec.gridHandlesContentSec.push_back(memberOf(grid.at(h), "contentSec").asDouble());
+            handleBinds.back().push_back(memberOf(grid.at(h), "bind").text());
+        }
+        if (const JsonValue* reference = given.find("referenceClip"))
+            references.emplace_back(spec.name, reference->text());
         specs.emplace_back(spec.name, spec);
     }
     std::vector<std::pair<std::string, Clip>> created;
     for (const auto& [bind, spec] : specs)
         created.emplace_back(bind, addClip(*processor, spec));
+    // Reference bindings: StandaloneArrangement::setPlacementReferencePlacement, as the editor's menu sets one.
+    for (const auto& [target, reference] : references) {
+        const auto find = [&created](const std::string& name) -> const Clip* {
+            for (const auto& [bind, clip] : created)
+                if (bind == name)
+                    return &clip;
+            return nullptr;
+        };
+        const Clip* targetClip = find(target);
+        const Clip* referenceClip = find(reference);
+        int targetTrack = 0;
+        for (const auto& [bind, spec] : specs)
+            if (bind == target)
+                targetTrack = spec.trackId;
+        if (CONTROL_CHECK(targetClip != nullptr && referenceClip != nullptr))
+            CONTROL_CHECK(processor->getStandaloneArrangement()->setPlacementReferencePlacement(
+                targetTrack, targetClip->placementId, referenceClip->placementId));
+    }
+    for (std::size_t i = 0; i < created.size(); ++i)
+        for (std::size_t h = 0; h < handleBinds[i].size() && h < created[i].second.handleIds.size(); ++h)
+            matcher.bindings[handleBinds[i][h]] = JsonValue::string(created[i].second.handleIds[h]);
 
     ApiSession api;
     if (!api.open(service))
@@ -1006,7 +1549,8 @@ void scenarioReads()
         return;
     for (const auto& method : kImplementedMethods)
         CONTROL_CHECK(dispatcher->implements(method));
-    CONTROL_CHECK(!dispatcher->implements("content.getDetails") && !dispatcher->implements("session.hello"));
+    // The listener answers session.hello itself; the dispatcher never sees it.
+    CONTROL_CHECK(!dispatcher->implements("session.hello"));
     const auto sung = addClip(*processor, sungSpec());
     addClip(*processor, unanalysedSpec("pending", 1, 0.0, Analysis::NotRequested));
     addClip(*processor, unanalysedSpec("running", 1, 3.0, Analysis::Running));
@@ -1167,17 +1711,71 @@ void scenarioDispatchTimeout()
     CONTROL_CHECK(dispatcher->executedCount() == 1);
 }
 
+void scenarioDetails()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    const auto dispatcher = service.dispatcher();
+    if (!CONTROL_CHECK(dispatcher != nullptr))
+        return;
+
+    DetailsClips clips;
+    auto sung = sungSpec();
+    sung.pitchShift = PitchShiftSettings{-2, 0};
+    sung.gridHandlesContentSec = {1.0, 2.5};
+    clips.sung = addClip(*processor, sung);
+    clips.ref = addClip(*processor, refSpec());
+    clips.failedEmpty = addClip(*processor, unanalysedSpec("failedEmpty", 2, 0.0, Analysis::Failed));
+    clips.failedPlain = addClip(*processor, unanalysedSpec("failedPlain", 3, 0.0, Analysis::Failed));
+    clips.pending = addClip(*processor, unanalysedSpec("pending", 4, 0.0, Analysis::NotRequested));
+    // What the analysis callbacks record when they fail it (OpenTuneAudioProcessor::recordF0FailureReason).
+    processor->recordF0FailureReason(clips.failedEmpty.key, "f0_empty");
+    CONTROL_CHECK(processor->getStandaloneArrangement()->setPlacementReferencePlacement(0, clips.sung.placementId,
+                                                                                        clips.ref.placementId));
+
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    const auto project = api.result("project.get");
+    const auto sungHandles = handlesOf(project, 0, 2.0);
+    const auto refHandles = handlesOf(project, 1, 2.0);
+    if (!CONTROL_CHECK(sungHandles.has_value() && refHandles.has_value()))
+        return;
+
+    checkDetailsOfSung(api, *processor, clips, *sungHandles, *refHandles);
+    checkAutoModes(api, *processor, clips, *sungHandles);
+    checkDetailsOfUnanalysed(api, *processor, clips, project);
+    checkDetailsErrors(api, *sungHandles);
+    checkTransport(api, service, project);
+    checkPrefs(api, *processor);
+    checkAppLog(api);
+    CONTROL_CHECK(dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+
+    // Opening a project starts a new content epoch and clip ids restart at 1: a reason recorded for the
+    // old project is never reported for a content of the new one with the same key.
+    const auto failedKey = clips.failedEmpty.key;
+    CONTROL_CHECK(processor->getContentF0FailureReason(failedKey) == std::optional<std::string>("f0_empty"));
+    if (saveAndReopen(*processor)) {
+        CONTROL_CHECK(processor->getContentF0FailureReason(failedKey) != std::optional<std::string>("f0_empty"));
+        processor->recordF0FailureReason(failedKey, "f0_empty");
+        CONTROL_CHECK(processor->getContentF0FailureReason(failedKey) == std::optional<std::string>("f0_empty"));
+    }
+}
+
 void scenarioVectors()
 {
     const auto root = std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR) / "vectors";
     std::vector<std::filesystem::path> files;
-    for (const char* area : {"session", "project", "content"})
+    for (const char* area : {"session", "project", "content", "transport", "prefs", "app"})
         for (const auto& entry : std::filesystem::directory_iterator(root / area))
             if (entry.path().extension() == ".json")
                 files.push_back(entry.path());
     std::sort(files.begin(), files.end());
     int passed = 0;
     int skipped = 0;
+    std::set<std::string> passedIds;
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -1191,14 +1789,162 @@ void scenarioVectors()
         }
         const auto started = Clock::now();
         const auto failure = runVector(vector);
-        if (CONTROL_CHECK(failure.empty()))
+        if (CONTROL_CHECK(failure.empty())) {
             ++passed;
+            passedIds.insert(id);
+        }
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
-    // The vectors of every implemented method run (session.info, project.get and the three content reads).
-    CONTROL_CHECK(passed >= 11);
+    // Every vector of the list runs and passes: a vector that is skipped or gone fails here, instead of
+    // a count that hides it. A newly runnable vector of the specification is added to the list on purpose.
+    for (const char* id : kMustRunVectors)
+        CONTROL_CHECK(passedIds.count(id) == 1);
+    for (const auto& id : passedIds)
+        if (std::find_if(std::begin(kMustRunVectors), std::end(kMustRunVectors),
+                         [&id](const char* listed) { return id == listed; })
+            == std::end(kMustRunVectors))
+            note("passes but is not in kMustRunVectors: " + id);
     note(std::to_string(passed) + " vectors passed, " + std::to_string(skipped) + " skipped");
+}
+
+void scenarioCompleteness()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    const auto dispatcher = service.dispatcher();
+    if (!CONTROL_CHECK(dispatcher != nullptr))
+        return;
+    const auto parsed =
+        parseJson(readFile(std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR) / "methods" / "index.json"));
+    if (!CONTROL_CHECK(parsed.ok))
+        return;
+    const auto& methods = memberOf(parsed.value, "methods");
+    const auto reported = dispatcher->capabilities();
+    for (const char* capability : {"session.v1", "read.v1", "jobs.v1"})
+        CONTROL_CHECK(std::find(reported.begin(), reported.end(), capability) != reported.end());
+
+    // The listener answers session.hello itself, so the dispatcher's method table has no entry for it.
+    int checked = 0;
+    for (std::size_t i = 0; i < methods.size(); ++i) {
+        const auto& entry = methods.at(i);
+        const auto method = memberOf(entry, "method").text();
+        const auto capability = memberOf(entry, "capability").text();
+        if (std::find(reported.begin(), reported.end(), capability) == reported.end() || method == "session.hello")
+            continue;
+        ++checked;
+        const bool exempt = kUnimplementedReportedMethods.count(method) != 0;
+        if (!CONTROL_CHECK(dispatcher->implements(method) || exempt))
+            note("capability " + capability + " is reported, but " + method + " is not registered in OpsRegistry");
+        // An exemption of a method that exists is stale: the list shrinks, it does not rot.
+        CONTROL_CHECK(!(exempt && dispatcher->implements(method)));
+    }
+    // The exemption must be for a method of a reported capability, or it exempts nothing.
+    for (const auto& method : kUnimplementedReportedMethods) {
+        const char* capability = controlMethodCapability(method);
+        CONTROL_CHECK(capability != nullptr
+                      && std::find(reported.begin(), reported.end(), capability) != reported.end());
+    }
+    // read.v1 is complete: nothing of it may be exempt.
+    for (const auto& method : kUnimplementedReportedMethods) {
+        const char* capability = controlMethodCapability(method);
+        CONTROL_CHECK(capability == nullptr || std::string(capability) != "read.v1");
+    }
+    // session.info, the eight reads, job.get and job.cancel.
+    CONTROL_CHECK(checked >= 11);
+    if (!kUnimplementedReportedMethods.empty())
+        note("exempt methods remain; the list must be empty before dev is merged");
+    note(std::to_string(checked) + " methods of the reported capabilities are registered");
+}
+
+void scenarioOffMainThread()
+{
+    // The method table follows the schemas: a method runs off the message thread exactly when its schema
+    // says x-otcp.mainThread false (PROTOCOL.md section 13.3 rule 2), and then has no run on it.
+    ControlMethodTable table;
+    registerControlMethods(table);
+    const auto methodsDir = std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR) / "methods";
+    const auto index = parseJson(readFile(methodsDir / "index.json"));
+    if (!CONTROL_CHECK(index.ok))
+        return;
+    const auto& methods = memberOf(index.value, "methods");
+    int registered = 0;
+    std::vector<std::string> offMainThread;
+    for (std::size_t i = 0; i < methods.size(); ++i) {
+        const auto name = memberOf(methods.at(i), "method").text();
+        const ControlMethod* method = table.find(name);
+        if (method == nullptr)
+            continue;
+        ++registered;
+        const auto schema = parseJson(readFile(methodsDir / (name + ".schema.json")));
+        if (!CONTROL_CHECK(schema.ok))
+            continue;
+        const auto& mainThread = memberOf(memberOf(schema.value, "x-otcp"), "mainThread");
+        if (!CONTROL_CHECK(mainThread.isBoolean() && mainThread.asBoolean() == method->mainThread))
+            note(name + ": mainThread of the method table differs from its schema");
+        // Off the message thread: exactly one of the two functions, the facts one (app.getLog) or the jobs
+        // one (job.get, job.cancel).
+        const bool withFacts = static_cast<bool>(method->runOffMainThread);
+        const bool withJobs = static_cast<bool>(method->runWithoutMessageThread);
+        CONTROL_CHECK(method->mainThread ? (method->run && !withFacts && !withJobs)
+                                         : (withFacts != withJobs && !method->run && !method->write));
+        if (!method->mainThread)
+            offMainThread.push_back(name);
+    }
+    CONTROL_CHECK(registered >= 11);
+    for (const char* name : {"app.getLog", "job.get", "job.cancel"})
+        CONTROL_CHECK(std::find(offMainThread.begin(), offMainThread.end(), name) != offMainThread.end());
+
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    const auto dispatcher = service.dispatcher();
+    const auto messageThread = service.messageThread();
+    ApiSession api;
+    if (!CONTROL_CHECK(dispatcher != nullptr) || !api.open(service))
+        return;
+    const std::string marker = "off-main-thread-scenario-marker";
+    AppLogger::log(marker);
+
+    // This thread, the message thread, pumps no messages while the request runs, as when a modal loop or a
+    // long synchronous operation holds it. app.getLog still answers at once, never with TIMEOUT.
+    const int dispatchTimeoutMs = ControlLimits{}.dispatchTimeoutMs;
+    const int executedBefore = dispatcher->executedCount();
+    std::optional<std::string> response;
+    std::atomic<bool> answered{false};
+    std::thread client([&] {
+        if (api.client().sendLine(R"({"jsonrpc":"2.0","id":9,"method":"app.getLog","params":{"maxLines":50}})"))
+            response = api.client().readLine(dispatchTimeoutMs + kReadTimeoutMs);
+        answered = true;
+    });
+    const auto started = Clock::now();
+    CONTROL_CHECK(
+        waitUntil([&answered] { return answered.load(); }, dispatchTimeoutMs + kReadTimeoutMs + kCloseSeenMs));
+    client.join();
+    const auto elapsed = millisecondsSince(started);
+    note("answered after " + std::to_string(elapsed) + " ms while the message thread was held");
+    CONTROL_CHECK(elapsed < dispatchTimeoutMs);
+    if (CONTROL_CHECK(response.has_value())) {
+        const auto parsed = parseJson(*response);
+        const JsonValue* result = parsed.ok ? parsed.value.find("result") : nullptr;
+        if (CONTROL_CHECK(result != nullptr))
+            CONTROL_CHECK(anyLineContains(memberOf(*result, "lines"), marker));
+        else
+            note("response: " + *response);
+    }
+    // Nothing went to the message thread, and no operation context was made.
+    CONTROL_CHECK(messageThread->waitingCalls() == 0);
+    CONTROL_CHECK(dispatcher->executedCount() == executedBefore && dispatcher->offMainThreadCount() == 1);
+    pumpMessagesFor(kQuietPumpMs);
+    CONTROL_CHECK(dispatcher->executedCount() == executedBefore);
+    CONTROL_CHECK(dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+
+    // With the message thread free again, the same request through the pumping helper.
+    CONTROL_CHECK(memberOf(api.result("app.getLog", json(R"({"maxLines":1})")), "lines").size() == 1);
+    CONTROL_CHECK(dispatcher->offMainThreadCount() == 2 && dispatcher->executedCount() == executedBefore);
 }
 
 } // namespace ControlTest

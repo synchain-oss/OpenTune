@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "ControlService.h"
 
+#include "ControlDispatcher.h"
 #include "ControlServer.h"
 
 #include "PluginProcessor.h"
@@ -150,6 +151,16 @@ bool ControlService::startListening()
     config.readyFile = options_.readyFile;
     config.launchNonce = options_.launchNonce;
     config.build = buildIdentity();
+    // The dispatcher answers every request after session.hello. It reaches the processor and the bridge
+    // only on the message thread, while the liveness token is alive, so `this` is safe in the accessor.
+    ControlDispatcher::Setup setup;
+    setup.processor = &processor_;
+    setup.messageThread = messageThread_;
+    setup.limits = config.limits;
+    setup.build = config.build;
+    setup.uiBridge = [this] { return uiBridge_; };
+    auto dispatcher = std::make_shared<ControlDispatcher>(std::move(setup));
+    config.handler = dispatcher;
     auto gate = logGate_;
     config.log = [gate](const std::string& line) { gate->write(line); };
     auto server = std::make_unique<ControlServer>(std::move(config));
@@ -157,6 +168,9 @@ bool ControlService::startListening()
         log("control API: not started: " + error);
         return false;
     }
+    // Requests run on this thread, after this function returned, so they always see the instance id.
+    dispatcher->setInstanceId(server->instanceId());
+    dispatcher_ = std::move(dispatcher);
     discoveryFile_ = server->discoveryFilePath();
     port_ = server->port();
     if (options_.readyFile) {

@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/track.add.schema.json",
+  "title": "track.add",
+  "description": "Shows count more track slots after the visible ones (default 1), as the + button of OpenTune's track panel does. If fewer hidden slots remain, the call fails with INVALID_ARGUMENT(track_limit) and shows none. changes lists every track that became visible (member visible), and visibleTrackCount gives the number of visible tracks before and after. A shown track keeps the clips it holds, as a later track can after a project was opened. The number of visible tracks is view state (PROTOCOL.md section 15.2 rule 6) and is not saved with the project (warning NOT_PERSISTED): the undo reason is not_persisted_state, revert is null, and the project is not marked as changed, as with the + button.",
+  "x-otcp": {
+    "method": "track.add",
+    "layer": "L6",
+    "capability": "tracks.v1",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": null,
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 64,
+          "default": 1
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "required": ["visibleTrackCount"],
+      "properties": {
+        "visibleTrackCount": {
+          "type": "object",
+          "required": ["before", "after"],
+          "additionalProperties": false,
+          "properties": {
+            "before": { "type": "integer", "minimum": 0 },
+            "after": { "type": "integer", "minimum": 0 }
+          }
+        }
+      },
+      "unevaluatedProperties": false
+    }
+  }
+}

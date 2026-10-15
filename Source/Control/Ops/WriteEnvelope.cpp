@@ -286,6 +286,7 @@ void ControlWriteEnvelope::setUndoable(std::string undoId, std::string descripti
         actions.append(JsonValue::string(std::move(action)));
     undo_.appendMember("innerActions", std::move(actions));
     undo_.appendMember("steps", JsonValue::integer(1));
+    undoSet_ = true;
     undoable_ = true;
     undoReason_.clear();
     revertNull_ = false;
@@ -293,6 +294,7 @@ void ControlWriteEnvelope::setUndoable(std::string undoId, std::string descripti
 
 void ControlWriteEnvelope::setNotUndoable(std::string reason, JsonValue revert)
 {
+    undoSet_ = true;
     undoable_ = false;
     undoReason_ = reason;
     revertNull_ = revert.isNull();
@@ -331,27 +333,32 @@ JsonValue ControlWriteEnvelope::build(ControlOpContext& context, State state, Js
 {
     // The state after the call, read back from the instance (section 10 rule 5).
     const auto after = controlCaptureWorldVersions(context);
-    const bool recorded = changes_.size() != 0 || created_.size() != 0 || removed_.size() != 0 || idMap_.size() != 0;
+    // A side effect is a change as well: a write that only had side effects is no no-op.
+    const bool recorded = changes_.size() != 0 || created_.size() != 0 || removed_.size() != 0 || idMap_.size() != 0
+                          || sideEffects_.size() != 0;
     JsonValue diff = state == State::Predicted
                          ? emptyDiff()
                          : controlRevisionDiff(before_, after, limitDiff_ ? &touchedContents_ : nullptr);
+    // Section 14.2 rule 3: a method hands its work to a job before it changes anything.
+    jassert(state != State::HandedToJob || isEmptyDiff(diff));
     const bool noOp = state == State::Committed && !recorded && isEmptyDiff(diff);
 
     JsonValue undo;
     if (state == State::Committed) {
-        if (noOp) {
+        if (noOp && !undoSet_) {
             undo = JsonValue::object();
             undo.appendMember("undoable", JsonValue::boolean(false));
             undo.appendMember("reason", JsonValue::string("no_op"));
             undo.appendMember("revert", JsonValue());
         } else {
+            // With changes, or a no-op whose method set its own descriptor (section 15.3 rule 5).
             jassert(undo_.isObject());
             if (!undo_.isObject())
                 setNotUndoable("no_upstream_undo");
             undo = undo_;
             // Neither undoable nor revertible: the client states it first (section 15.2 rule 2, section 18
-            // rule 4); view state is exempt (section 15.2 rule 6).
-            if (!undoable_ && revertNull_ && undoReason_ != "not_persisted_state"
+            // rule 4); view state is exempt (section 15.2 rule 6), and so is a call that changed nothing.
+            if (!noOp && !undoable_ && revertNull_ && undoReason_ != "not_persisted_state" && undoReason_ != "no_op"
                 && !hasWarning(warnings_, "IRREVERSIBLE"))
                 addWarning("IRREVERSIBLE");
         }

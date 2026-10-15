@@ -42,6 +42,9 @@
 #include "Content/StandaloneClipContent.h"
 #include "Utils/KeyShortcutConfig.h"
 #include "Utils/PlacementActions.h"
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+#include "ControlEditorBridge.h"  // OpenTune Control API hook: editor bridge, see Source/Control/README.md#hooks
+#endif
 #include <cmath>
 #include <atomic>
 #include <cstdlib>
@@ -973,10 +976,18 @@ OpenTuneAudioProcessorEditor::OpenTuneAudioProcessorEditor(OpenTuneAudioProcesso
         applyF0Model();
 
     beginExternalEditSession();
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: register the editor bridge once the editor is complete, see Source/Control/README.md#hooks
+    controlEditorBridge_ = std::make_unique<ControlEditorBridge>(*this);
+#endif
 }
 
 OpenTuneAudioProcessorEditor::~OpenTuneAudioProcessorEditor()
 {
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: unregister the editor bridge before anything is torn down, see Source/Control/README.md#hooks
+    controlEditorBridge_.reset();
+#endif
     onboardingVisibilityWatcher_.reset();
     onboardingModalWatcher_.reset();
     preferencesDialog_.reset();

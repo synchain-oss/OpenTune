@@ -24,7 +24,10 @@ param(
     # Regular expression on the test name. Empty = every test.
     [string]$Include = '',
     # Test names to leave out (comma separated or an array).
-    [string[]]$Exclude = @()
+    [string[]]$Exclude = @(),
+    # Regular expression on the test name (PowerShell -match): matching tests are left out as well.
+    # Empty = no pattern exclusion.
+    [string]$ExcludePattern = ''
 )
 
 Set-StrictMode -Version 3.0
@@ -60,6 +63,7 @@ Get-TestTargets $BuildDir $tests
 $targets = [System.Collections.Generic.List[string]]::new()
 foreach ($name in @($tests.Keys)) {
     if ($Exclude -contains [string]$name) { continue }
+    if ($ExcludePattern -and ([string]$name -match $ExcludePattern)) { continue }
     if ($Include -and ([string]$name -notmatch $Include)) { continue }
     $exe = [string]$tests[$name]
     if ($exe -and -not $targets.Contains($exe)) { $targets.Add($exe) }

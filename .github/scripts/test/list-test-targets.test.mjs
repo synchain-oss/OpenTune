@@ -50,6 +50,23 @@ describe('list-test-targets', { skip: !HAVE_PWSH && 'pwsh is not installed' }, (
     assert.deepEqual(lines(run('-Include', 'Control', '-Exclude', 'ControlProcessorTests')), ['OpenTuneControlUnitTests']);
   });
 
+  test('-ExcludePattern removes by name regex and leaves the other names alone', () => {
+    const d = makeTempDir('list-targets-pattern');
+    try {
+      // Names as ctest registers them: a dotted gtest-style name next to a plain one.
+      fs.writeFileSync(path.join(d, 'CTestTestfile.cmake'), [
+        'add_test(ControlUnitTests "/b/OpenTuneControlUnitTests")',
+        'add_test(ControlProcessorTests.StartAndHello "/b/OpenTuneControlProcessorTests")',
+        '',
+      ].join('\n'));
+      const r = spawnSync('pwsh', ['-NoProfile', '-File', SCRIPT, '-BuildDir', d, '-Include', 'Control', '-ExcludePattern', '^ControlProcessorTests\\.'], { encoding: 'utf8' });
+      assert.equal(r.status, 0, r.stderr);
+      assert.deepEqual(lines(r), ['OpenTuneControlUnitTests']);
+    } finally {
+      removeDir(d);
+    }
+  });
+
   test('a pattern without matches exits 1 and shows what was parsed', () => {
     const r = run('-Include', 'Nothing');
     assert.equal(r.status, 1);

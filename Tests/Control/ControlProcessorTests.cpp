@@ -220,8 +220,8 @@ void scenarioStartAndHello()
         CONTROL_CHECK(memberOf(*hello, "serverProof").text() == serverProof);
         CONTROL_CHECK(memberOf(*hello, "pid").asDouble() == static_cast<double>(controlCurrentProcessId()));
         CONTROL_CHECK(memberOf(*hello, "appVersion").text() == ControlService::buildIdentity().appVersion);
-        // session.v1 and the capability of the read methods the dispatcher implements.
-        CONTROL_CHECK(toJsonString(memberOf(*hello, "capabilities")) == R"(["session.v1","read.v1"])");
+        // session.v1 and the capabilities of the methods the dispatcher implements.
+        CONTROL_CHECK(toJsonString(memberOf(*hello, "capabilities")) == R"(["session.v1","read.v1","jobs.v1"])");
     }
     // The runtime was initialised before the listener started: the logger writes under the data dir.
     checkLogInsideDataDirectory();
@@ -525,6 +525,10 @@ const Scenario kScenarios[] = {
     // Waits longer than dispatchTimeoutMs, beyond the watchdog's bound.
     {"DispatchTimeout", scenarioDispatchTimeout, false},
     {"Vectors", scenarioVectors, false},
+    {"Jobs", scenarioJobs, false},
+    {"JobShutdown", scenarioJobShutdown, true},
+    {"WriteEnvelope", scenarioWriteEnvelope, false},
+    {"JobVectors", scenarioJobVectors, false},
 };
 
 int runScenario(const Scenario& scenario)

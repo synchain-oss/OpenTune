@@ -2,6 +2,7 @@
 #include "ControlService.h"
 
 #include "ControlDispatcher.h"
+#include "ControlJobs.h"
 #include "ControlServer.h"
 
 #include "PluginProcessor.h"
@@ -159,18 +160,23 @@ bool ControlService::startListening()
     setup.limits = config.limits;
     setup.build = config.build;
     setup.uiBridge = [this] { return uiBridge_; };
+    // The jobs live as long as the dispatcher can reach them; stop() stops them before the listener.
+    auto jobs = std::make_shared<ControlJobs>(config.limits);
+    setup.jobs = jobs;
     auto dispatcher = std::make_shared<ControlDispatcher>(std::move(setup));
     config.handler = dispatcher;
     auto gate = logGate_;
     config.log = [gate](const std::string& line) { gate->write(line); };
     auto server = std::make_unique<ControlServer>(std::move(config));
     if (!server->start(error)) {
+        jobs->stop();
         log("control API: not started: " + error);
         return false;
     }
     // Requests run on this thread, after this function returned, so they always see the instance id.
     dispatcher->setInstanceId(server->instanceId());
     dispatcher_ = std::move(dispatcher);
+    jobs_ = std::move(jobs);
     discoveryFile_ = server->discoveryFilePath();
     port_ = server->port();
     if (options_.readyFile) {
@@ -195,21 +201,25 @@ void ControlService::stop() noexcept
         stopping_ = true;
         // 2. Wake every thread waiting for the message thread; queued functions become no-ops.
         messageThread_->stop();
-        // 3. The listener: its own stop flag and SHUTTING_DOWN for new requests, then the sessions and
+        // 3. The jobs: waiting job.get requests are answered with SHUTTING_DOWN, no job work runs again,
+        //    and the work of every job is destroyed on this thread, joining whatever thread it owns.
+        if (jobs_ != nullptr)
+            jobs_->stop();
+        // 4. The listener: its own stop flag and SHUTTING_DOWN for new requests, then the sessions and
         //    the listener close, the threads are joined with a bounded wait and the discovery file is
         //    deleted (ControlServer::stop()).
         if (server_ != nullptr) {
             server_->stop();
             server_.reset();
         }
-        // 4. The ready file.
+        // 5. The ready file.
         withdrawReadyFile();
     } catch (...) {
         log("control API: unexpected error while stopping");
     }
     running_ = false;
     port_ = 0;
-    // 5. No connection thread reaches AppLogger through this service after this point.
+    // 6. No connection thread reaches AppLogger through this service after this point.
     logGate_->close();
 }
 

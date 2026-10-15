@@ -556,6 +556,12 @@ int runScenario(const Scenario& scenario)
             return 1;
         }
         scenario.run();
+        // Before the message manager goes away: a dialog left open would be deleted at its shutdown,
+        // where an upstream dialog uses its freed content (see closeLeftoverModalWindows).
+        const int closedWindows = closeLeftoverModalWindows();
+        CONTROL_CHECK(closedWindows >= 0);
+        if (closedWindows > 0)
+            note("closed " + std::to_string(closedWindows) + " modal window(s) left open");
         ControlSocket::releaseNetworking();
     }
     // Never the user's real discovery file; preferences and logs were checked inside the data dir.

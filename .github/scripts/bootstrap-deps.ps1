@@ -230,7 +230,7 @@ function Get-Archive($Dep, [string]$DownloadDir, [ref]$LockChanged) {
     foreach ($url in (Get-DownloadUrls $Dep)) {
         if (Test-Path -LiteralPath $part) { Remove-Item -LiteralPath $part -Force }
         Write-Step "$($Dep.name): downloading $url"
-        & $script:curlExe --fail --location --retry 3 --retry-delay 2 --silent --show-error --output $part $url
+        & $script:curlExe --fail --location --connect-timeout 20 --retry 4 --retry-delay 3 --retry-all-errors --silent --show-error --output $part $url
         if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $part)) {
             # A mirror copy that does not match the pin is discarded and the next URL is tried.
             if ($pin -and $script:mirrorBase -and $url.StartsWith($script:mirrorBase) -and (Get-Sha256 $part) -ne $pin) {

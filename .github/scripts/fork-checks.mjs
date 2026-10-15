@@ -572,7 +572,7 @@ export async function runChecks(opts = {}) {
       const rangeNote = `${range.baseRef}${range.note}…HEAD 共 ${range.files.length} 个文件`;
       const multi = { baseBranch: branchOfRef(range.baseRef), headBranch, external: Boolean(opts.external) };
       if (want('layer')) add(layerCheck(opts, range.files, rangeNote, isMultiLayerPr(multi) ? multi : null));
-      if (want('spec-copy')) add(specCheck(opts, multi, range.files, rangeNote));
+      if (want('spec-copy')) add(specCheck(opts, multi, range.files, rangeNote, { top, head: opts.index ? null : delta.head ?? tryResolveCommit(top, opts.head ?? 'HEAD') }));
     }
   }
 
@@ -758,15 +758,69 @@ export function mayChangeSpec({ headBranch, baseBranch, external }) {
   return false;
 }
 
-function specCheck(opts, { headBranch, baseBranch }, files, rangeNote) {
+/**
+ * Recompute what .github/spec.lock records about the spec copy and return the mismatches (empty = the
+ * lock is consistent with the copy at `rev`). Read-only: sha256 per file from the blobs, the tree id from
+ * `git rev-parse <rev>:<copy>` (the same id `git write-tree --prefix=<copy>/` would give), the file count
+ * from `git ls-tree`. The sha256 follows lock.sha256Method: the sha256 of the `sha256sum` listing
+ * ("<hex>  <relative path>" per line, each line ended by LF, paths sorted bytewise; the binary-mode
+ * separator " *" is accepted too).
+ */
+export function verifySpecLock(top, rev) {
+  const lockBlob = readBlobs(top, [`${rev}:.github/spec.lock`]).get(`${rev}:.github/spec.lock`);
+  if (!lockBlob) return ['.github/spec.lock 不存在'];
+  let lock;
+  try {
+    lock = JSON.parse(lockBlob.toString('utf8'));
+  } catch (e) {
+    return [`.github/spec.lock 不是合法的 JSON：${e.message}`];
+  }
+  const copy = typeof lock.copy === 'string' ? lock.copy.replace(/\/+$/, '') : '';
+  if (!copy || copy.startsWith('/') || copy.split('/').includes('..')) return [`.github/spec.lock 的 copy 字段无效：${JSON.stringify(lock.copy)}`];
+  const paths = listTreeFiles(top, rev, copy);
+  const problems = [];
+  if (!paths.length) return [`规范副本目录 ${copy} 在 HEAD 中没有文件`];
+  const entries = paths.map((full) => ({ full, rel: full.slice(copy.length + 1) }));
+  const blobs = readBlobs(top, entries.map((e) => `${rev}:${e.full}`));
+  const lines = [];
+  for (const e of entries) {
+    const blob = blobs.get(`${rev}:${e.full}`);
+    if (!blob) {
+      problems.push(`${e.full} 不是普通文件`);
+      continue;
+    }
+    lines.push({ rel: Buffer.from(e.rel, 'utf8'), hex: sha256Hex(blob), name: e.rel });
+  }
+  lines.sort((a, b) => Buffer.compare(a.rel, b.rel));
+  // `sha256sum` writes "<hex>  <path>" in text mode and "<hex> *<path>" in binary mode (the default of
+  // GNU coreutils on Windows). The recorded lock was produced in binary mode, so both listings are accepted.
+  const listing = (sep) => sha256Hex(Buffer.from(lines.map((l) => `${l.hex}${sep}${l.name}\n`).join(''), 'utf8'));
+  const candidates = [listing('  '), listing(' *')];
+  const sha256 = candidates.includes(lock.sha256) ? lock.sha256 : candidates[0];
+  const tree = git(['rev-parse', '--verify', '--quiet', `${rev}:${copy}`], { cwd: top, allowFail: true });
+  const gitTree = tree.status === 0 ? String(tree.stdout).trim() : '(none)';
+  if (lock.sha256 !== sha256) problems.push(`sha256：lock 记录 ${lock.sha256}，按 sha256Method 复算得 ${sha256}`);
+  if (lock.gitTree !== gitTree) problems.push(`gitTree：lock 记录 ${lock.gitTree}，副本目录的 tree 是 ${gitTree}`);
+  if (lock.files !== paths.length) problems.push(`files：lock 记录 ${lock.files}，副本目录有 ${paths.length} 个文件`);
+  return problems;
+}
+
+function specCheck(opts, { headBranch, baseBranch }, files, rangeNote, repo = null) {
   const id = 'spec-copy';
   const touched = files.filter((f) => matchesAny(f.path, SPEC_PATTERNS)).map((f) => f.path);
   if (!touched.length) return result(id, titleOf(id), 'PASS', `${rangeNote}，未改动规范副本与 .github/spec.lock`);
   const external = Boolean(opts.external);
   const pr = `${external ? '外部 PR ' : ''}${headBranch ?? '未知分支'} → ${baseBranch || '未知 base'}`;
-  return mayChangeSpec({ headBranch, baseBranch, external })
-    ? result(id, titleOf(id), 'PASS', `${pr} 可以更新规范副本（${touched.length} 个文件）`)
-    : result(id, titleOf(id), 'FAIL', `只有 spec-sync/* 可以改规范副本与 .github/spec.lock；feature/**、sync/* 只在合入 dev、upstream-pr/* 只在合入 review-base/* 时可以带入已合入的规范变更（当前 ${pr}）`, touched);
+  if (mayChangeSpec({ headBranch, baseBranch, external })) {
+    // The branch may change the spec; the lock still has to describe the copy it ships with.
+    if (repo?.head) {
+      const lockProblems = verifySpecLock(repo.top, repo.head);
+      if (lockProblems.length) return result(id, titleOf(id), 'FAIL', `${pr} 改动了规范副本或 .github/spec.lock，但 lock 与副本不一致`, lockProblems);
+      return result(id, titleOf(id), 'PASS', `${pr} 可以更新规范副本（${touched.length} 个文件）；.github/spec.lock 已按 sha256Method、git tree 与文件数复算，三项一致`);
+    }
+    return result(id, titleOf(id), 'PASS', `${pr} 可以更新规范副本（${touched.length} 个文件）；暂存检查不复算 lock`);
+  }
+  return result(id, titleOf(id), 'FAIL', `只有 spec-sync/* 可以改规范副本与 .github/spec.lock；feature/**、sync/* 只在合入 dev、upstream-pr/* 只在合入 review-base/* 时可以带入已合入的规范变更（当前 ${pr}）`, touched);
 }
 
 /** null when `uses:` is acceptable, otherwise the reason. */

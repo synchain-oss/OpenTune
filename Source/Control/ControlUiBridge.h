@@ -53,15 +53,20 @@ public:
 
     // ---- Busy state ---------------------------------------------------------------------------
 
-    /** Why the UI must not be changed under the user's hands right now (UI priority). */
+    /** Why the UI must not be changed under the user's hands right now (UI priority, PROTOCOL.md section
+        13.2): each member is one reason of BUSY. */
     struct BusyState
     {
-        /** A mouse or pen gesture is in progress in the editor. */
+        /** A mouse or pen gesture is in progress in the editor (pointer_down). */
         bool pointerDown = false;
-        /** A modal dialog is open. */
+        /** A modal dialog is open (modal_open). */
         bool modalOpen = false;
-        /** The editor runs an import, export or project operation of its own. */
+        /** The editor runs a project save or open of its own (project_operation). */
         bool operationRunning = false;
+        /** An import started in the editor is running or queued (import_in_progress). */
+        bool importRunning = false;
+        /** An export started in the editor is running (export_in_progress). */
+        bool exportRunning = false;
     };
 
     /** The busy state; nullopt when not supported (the control API then cannot tell). */

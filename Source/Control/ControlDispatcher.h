@@ -13,6 +13,7 @@
 
 namespace OpenTune {
 
+class ControlJobs;
 class ControlMessageThread;
 class ControlUiBridge;
 class OpenTuneAudioProcessor;
@@ -31,7 +32,13 @@ class OpenTuneAudioProcessor;
  *    TIMEOUT(dispatch_timeout), executed false, and never runs later (the liveness token and the
  *    abandon mark of call()). A request that stop() overtakes before it started gets SHUTTING_DOWN;
  * 5. maps the method's Result to the response: the result object, or the error that controlMapError
- *    gives (the only place where OpenTune errors become protocol errors).
+ *    gives (the only place where OpenTune errors become protocol errors). `executed` is what the
+ *    operation stated (controlOpError or controlOpErrorAfterChange); for any other failure of a write
+ *    it is true, because the write may have changed state.
+ *
+ * Methods whose schema says mainThread false (job.get, job.cancel) skip step 4: they run on the
+ * connection thread with the jobs registry only, and job.get with waitMs answers later from the
+ * registry's own thread, so the connection keeps serving the session's other requests meanwhile.
  *
  * Every access to OpenTune state goes through ControlOpContext, which refuses any thread other than the
  * message thread, always (not only in debug builds); the refusals are counted in threadProbe().
@@ -61,6 +68,9 @@ public:
         ControlBuildIdentity build;
         /** The editor's bridge, or nullptr; called on the message thread for each request. */
         std::function<ControlUiBridge*()> uiBridge;
+        /** The jobs of the instance (job.get, job.cancel and the methods that start jobs); stopped by
+            ControlService::stop() before the listener. */
+        std::shared_ptr<ControlJobs> jobs;
     };
 
     explicit ControlDispatcher(Setup setup);
@@ -72,8 +82,8 @@ public:
         message thread and has not started yet. */
     void serverStopping() override;
 
-    /** The instance id the listener generated; set after ControlServer::start(), before the message
-        loop runs any request. Message thread. */
+    /** The instance id the listener generated, also for the job ids; set after ControlServer::start(),
+        before the message loop runs any request. Message thread. */
     void setInstanceId(std::string instanceId);
 
     /** True once serverStopping() was called. Thread-safe. */

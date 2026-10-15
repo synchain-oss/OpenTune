@@ -211,6 +211,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "Details|--control-api"
             "Completeness|--control-api"
             "Vectors|--control-api"
+            "OffMainThread|--control-api"
         )
         file(TO_NATIVE_PATH "${CMAKE_CURRENT_BINARY_DIR}/lifecycle-traces" _opentune_control_trace_dir)
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)

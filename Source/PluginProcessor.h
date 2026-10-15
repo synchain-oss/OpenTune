@@ -683,9 +683,6 @@ public:
         experimentalReferenceAlignMode_ = mode;
     }
 
-    // OpenTune Control API hook: remembers why the F0 analysis of a content failed (a null reason clears it); does nothing without the control API, see Source/Control/README.md#hooks
-    void recordF0FailureReason(ContentKey key, const char* reason);
-
 private:
     void enqueueStage2WhenCanonicalSettled(
         ContentKey key,
@@ -931,13 +928,15 @@ public:
         return ready;
     }
     ControlService& getControlService() noexcept { return *controlService_; }
-    // OpenTune Control API hook: read-only reference feature producer and last F0 failure reason (message thread), see Source/Control/README.md#hooks
+    // OpenTune Control API hook: read-only reference feature producer; last F0 failure reason per content of the current content epoch, recorded by requestContentRefresh (a null reason clears it; message thread), see Source/Control/README.md#hooks
     ReferenceFeatureProducer getReferenceFeatureProducer() const { return resolveReferenceFeatureProducer(); }
     std::optional<std::string> getContentF0FailureReason(ContentKey key) const;
+    void recordF0FailureReason(ContentKey key, const char* reason);
 
 private:
     std::unique_ptr<ControlService> controlService_;
     std::map<ContentKey, std::string> contentF0FailureReasons_;
+    uint64_t contentF0FailureEpoch_ = 0;
 #endif
 
 public:

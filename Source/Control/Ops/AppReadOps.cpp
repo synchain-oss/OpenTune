@@ -8,47 +8,15 @@
 #include "PluginProcessor.h"
 #include "Utils/AppLogger.h"
 #include "Utils/AppPreferences.h"
-#include "Utils/TuningConfig.h"
 
 namespace OpenTune {
 
 namespace {
 
-/** Longest value of a preference string and of a path (prefs.get.schema.json, common.schema.json path). */
-constexpr std::size_t kMaxPreferenceTextCodePoints = 64;
+/** Longest path (common.schema.json path). */
 constexpr std::size_t kMaxPathCodePoints = 4096;
 constexpr std::int64_t kLogDefaultLines = 200;
 constexpr std::int64_t kLogMaxLines = 1000;
-
-JsonValue processingJson(const SharedPreferencesState& preferences)
-{
-    auto json = JsonValue::object();
-    auto nullReasons = JsonValue::object();
-    // TuningConfig::currentTuningHz(): the A4 frequency every *Midi value of this API refers to.
-    json.appendMember("tuningHz", controlJsonNumber(TuningConfig::currentTuningHz(), 3));
-    json.appendMember("editingScheme", JsonValue::string(controlEditingSchemeName(preferences.audioEditingScheme)));
-    // The "hybrid" (light pitch correction) switch of the processing preferences.
-    json.appendMember("hybridMode", JsonValue::boolean(preferences.lightPitchCorrectionEnabled));
-    const auto& weight = preferences.vocoderModelWeight;
-    if (!weight.empty() && utf8CodePointCount(weight) <= kMaxPreferenceTextCodePoints && isValidUtf8(weight)) {
-        json.appendMember("vocoderWeight", JsonValue::string(weight));
-    } else {
-        json.appendMember("vocoderWeight", JsonValue());
-        nullReasons.appendMember("vocoderWeight", JsonValue::string("unavailable"));
-    }
-    json.appendMember("f0Model", JsonValue::string("fcpe")); // F0ModelType has FCPE only
-    json.appendMember(
-        "renderingPriority",
-        JsonValue::string(preferences.renderingPriority == RenderingPriority::CpuFirst ? "cpuFirst" : "gpuFirst"));
-    json.appendMember("experimentalFeatures", JsonValue::boolean(preferences.experimentalFeaturesEnabled));
-    json.appendMember("referenceAlignMode", JsonValue::string(preferences.experimentalReferenceAlignMode
-                                                                      == ExperimentalReferenceAlignMode::Game
-                                                                  ? "game"
-                                                                  : "standardAuto"));
-    if (nullReasons.size() != 0)
-        json.appendMember("nullReasons", std::move(nullReasons));
-    return json;
-}
 
 Result<JsonValue> runPrefsGet(ControlOpContext& context, const ControlNoParams&)
 {
@@ -56,8 +24,10 @@ Result<JsonValue> runPrefsGet(ControlOpContext& context, const ControlNoParams&)
     // AppPreferences::getState(): a copy taken under the preferences' own mutex.
     const auto shared = preferences.getState().shared;
 
-    // AppPreferences::getRecentProjects(): the most recently used project files, newest first. Whether a
-    // file still exists is a stat of each path.
+    // AppPreferences::getRecentProjects(): the most recently used project files, newest first (at most 10).
+    // Whether a file still exists is a synchronous stat of each path on the message thread, as the
+    // upstream recent-projects menu does (ProjectSession::getRecentProjects(), which drops the missing
+    // ones when the editor fills the menu); a path on an unreachable network share can block both alike.
     auto recent = JsonValue::array();
     for (const auto& path : preferences.getRecentProjects()) {
         if (path.isEmpty())
@@ -69,7 +39,7 @@ Result<JsonValue> runPrefsGet(ControlOpContext& context, const ControlNoParams&)
     }
 
     auto result = JsonValue::object();
-    result.appendMember("processing", processingJson(shared));
+    result.appendMember("processing", controlProcessingJson(shared, nullptr));
     result.appendMember("onboardingShown", JsonValue::boolean(shared.onboardingShown));
     result.appendMember("language", JsonValue::string(controlLanguageTag(shared.language)));
     result.appendMember("recentProjects", std::move(recent));
@@ -93,18 +63,19 @@ bool parseLogParams(const JsonValue& params, LogParams& out, std::string& why)
     return true;
 }
 
-Result<JsonValue> runGetLog(ControlOpContext& context, const LogParams& params)
+/** Runs on the connection thread (x-otcp.mainThread false): it reads the log file and the facts snapshot
+    only, never project state. */
+Result<JsonValue> runGetLog(const ControlInstanceFacts& facts, const LogParams& params)
 {
-    // AppLogger::getCurrentLogFile(): the file the process-wide logger writes to; empty until the logger
-    // was initialised.
+    // AppLogger::getCurrentLogFile(): the file the process-wide logger writes to, copied under the
+    // logger's own lock, so any thread may ask (the logger lives as long as the process and is written
+    // from worker threads too); empty until the logger was initialised.
     const auto file = AppLogger::getCurrentLogFile();
     ControlLogTail tail;
-    if (file != juce::File()) {
-        const auto home = juce::File::getSpecialLocation(juce::File::userHomeDirectory).getFullPathName().toStdString();
+    if (file != juce::File())
         tail = controlReadLogTail(std::filesystem::u8path(file.getFullPathName().toStdString()),
-                                  static_cast<std::size_t>(params.maxLines), context.facts().redactionSecrets,
-                                  controlHomeDirectorySpellings(home));
-    }
+                                  static_cast<std::size_t>(params.maxLines), facts.redactionSecrets,
+                                  facts.homeDirectorySpellings);
     auto result = JsonValue::object();
     if (!tail.readable) {
         result.appendMember("lines", JsonValue());
@@ -127,7 +98,7 @@ Result<JsonValue> runGetLog(ControlOpContext& context, const LogParams& params)
 void registerAppReadOps(ControlMethodTable& table)
 {
     table.add(controlReadMethod<ControlNoParams>("prefs.get", controlParseNoParams, runPrefsGet));
-    table.add(controlReadMethod<LogParams>("app.getLog", parseLogParams, runGetLog));
+    table.add(controlOffMainThreadReadMethod<LogParams>("app.getLog", parseLogParams, runGetLog));
 }
 
 } // namespace OpenTune

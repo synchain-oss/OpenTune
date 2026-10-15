@@ -133,6 +133,9 @@ ControlErrorReply controlMapError(const Error& error)
 void ControlMethodTable::add(ControlMethod method)
 {
     jassert(controlMethodCapability(method.name) != nullptr && find(method.name) == nullptr);
+    // A method runs either on the message thread (run) or off it (runOffMainThread); writes never run off it.
+    jassert(method.mainThread ? (method.run && !method.runOffMainThread)
+                              : (method.runOffMainThread && !method.run && !method.write));
     methods_.push_back(std::move(method));
 }
 

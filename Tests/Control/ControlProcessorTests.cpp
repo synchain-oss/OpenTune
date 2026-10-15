@@ -527,6 +527,7 @@ const Scenario kScenarios[] = {
     {"Details", scenarioDetails, false},
     {"Completeness", scenarioCompleteness, false},
     {"Vectors", scenarioVectors, false},
+    {"OffMainThread", scenarioOffMainThread, false},
 };
 
 int runScenario(const Scenario& scenario)

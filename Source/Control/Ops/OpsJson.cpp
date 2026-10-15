@@ -3,6 +3,8 @@
 
 #include "OpsSupport.h"
 
+#include "Utils/TuningConfig.h"
+
 namespace OpenTune {
 
 const char* controlScaleName(Scale scale)
@@ -70,6 +72,43 @@ const char* controlLanguageTag(Language language)
 const char* controlEditingSchemeName(AudioEditingScheme::Scheme scheme)
 {
     return scheme == AudioEditingScheme::Scheme::NotesPrimary ? "openDyne" : "openTune";
+}
+
+JsonValue controlProcessingJson(const SharedPreferencesState& preferences, const ControlProcessingRuntime* runtime)
+{
+    /** Longest preference text (maxLength of the schemas, in code points). */
+    constexpr std::size_t kMaxPreferenceTextCodePoints = 64;
+    auto json = JsonValue::object();
+    auto nullReasons = JsonValue::object();
+    // TuningConfig::currentTuningHz(): the A4 frequency every *Midi value of this API refers to.
+    json.appendMember("tuningHz", controlJsonNumber(TuningConfig::currentTuningHz(), 3));
+    json.appendMember("editingScheme", JsonValue::string(controlEditingSchemeName(preferences.audioEditingScheme)));
+    // The "hybrid" (light pitch correction) switch of the processing preferences.
+    json.appendMember("hybridMode", JsonValue::boolean(preferences.lightPitchCorrectionEnabled));
+    const auto& weight = preferences.vocoderModelWeight;
+    if (!weight.empty() && isValidUtf8(weight) && utf8CodePointCount(weight) <= kMaxPreferenceTextCodePoints) {
+        json.appendMember("vocoderWeight", JsonValue::string(weight));
+    } else {
+        json.appendMember("vocoderWeight", JsonValue());
+        nullReasons.appendMember("vocoderWeight", JsonValue::string("unavailable"));
+    }
+    json.appendMember("f0Model", JsonValue::string("fcpe")); // F0ModelType has FCPE only
+    json.appendMember(
+        "renderingPriority",
+        JsonValue::string(preferences.renderingPriority == RenderingPriority::CpuFirst ? "cpuFirst" : "gpuFirst"));
+    if (runtime != nullptr) {
+        json.appendMember("backend", JsonValue::string(runtime->backend));
+        json.appendMember("vocoderReady", JsonValue::boolean(runtime->vocoderReady));
+        json.appendMember("vocoderReconfiguring", JsonValue::boolean(runtime->vocoderReconfiguring));
+    }
+    json.appendMember("experimentalFeatures", JsonValue::boolean(preferences.experimentalFeaturesEnabled));
+    json.appendMember("referenceAlignMode", JsonValue::string(preferences.experimentalReferenceAlignMode
+                                                                      == ExperimentalReferenceAlignMode::Game
+                                                                  ? "game"
+                                                                  : "standardAuto"));
+    if (nullReasons.size() != 0)
+        json.appendMember("nullReasons", std::move(nullReasons));
+    return json;
 }
 
 } // namespace OpenTune

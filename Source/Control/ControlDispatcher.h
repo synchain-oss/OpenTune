@@ -5,10 +5,12 @@
 #include "Ops/OpsRegistry.h"
 
 #include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace OpenTune {
@@ -29,17 +31,21 @@ class OpenTuneAudioProcessor;
  * 4. runs the method on the message thread through ControlMessageThread::call(), with the dispatch
  *    timeout of the limits. A request that has not started within it is abandoned and answered with
  *    TIMEOUT(dispatch_timeout), executed false, and never runs later (the liveness token and the
- *    abandon mark of call()). A request that stop() overtakes before it started gets SHUTTING_DOWN;
+ *    abandon mark of call()). A request that stop() overtakes before it started gets SHUTTING_DOWN.
+ *    A method whose schema says x-otcp.mainThread false (ControlMethod::runOffMainThread, app.getLog)
+ *    runs on the connection thread instead, with the immutable facts snapshot only: it never waits for
+ *    the message thread, so it never answers TIMEOUT (PROTOCOL.md section 13.3 rule 2);
  * 5. maps the method's Result to the response: the result object, or the error that controlMapError
  *    gives (the only place where OpenTune errors become protocol errors).
  *
  * Every access to OpenTune state goes through ControlOpContext, which refuses any thread other than the
- * message thread, always (not only in debug builds); the refusals are counted in threadProbe().
+ * message thread, always (not only in debug builds); the refusals are counted in threadProbe(). Methods
+ * that run off the message thread get no ControlOpContext at all.
  *
  * A request occupies its connection thread while it waits for the message thread: at most the dispatch
  * timeout before it starts, then until it returns (reads return within one main-thread step). The
- * requests of one session therefore start on the message thread in the order they arrived (PROTOCOL.md
- * section 3.3 rule 6), and different sessions do not wait for each other.
+ * requests of one session therefore start in the order they arrived (PROTOCOL.md section 3.3 rule 6),
+ * and different sessions do not wait for each other.
  *
  * Threading: handleRequest() on connection threads, concurrently; serverStopping() and setInstanceId() on
  * the thread that starts and stops the listener (the message thread in OpenTune); the accessors from any
@@ -77,7 +83,9 @@ public:
     void setInstanceId(std::string instanceId);
 
     /** The session token and the server proof, for redacting app.getLog; set once after
-        ControlServer::start(), like the instance id. Message thread. */
+        ControlServer::start(), like the instance id. Message thread. Methods that run off the message
+        thread wait for it (bounded by the dispatch timeout): a request can reach the handler between
+        ControlServer::start() and this call. */
     void setRedactionSecrets(std::vector<std::string> secrets);
 
     /** True once serverStopping() was called. Thread-safe. */
@@ -88,20 +96,32 @@ public:
     const ControlThreadProbe& threadProbe() const noexcept { return probe_; }
     /** Number of methods that started on the message thread. Thread-safe. */
     int executedCount() const noexcept { return executed_.load(); }
+    /** Number of methods that ran on a connection thread (x-otcp.mainThread false). Thread-safe. */
+    int offMainThreadCount() const noexcept { return offMainThread_.load(); }
+    /** The method of this name, or nullptr when this build does not implement it. Thread-safe. */
+    const ControlMethod* method(std::string_view name) const { return methods_.find(name); }
 
 private:
     struct Outcome;
 
     void execute(const ControlMethod& method, const void* parsed, Outcome& outcome);
+    void executeOffMainThread(const ControlMethod& method, const void* parsed, Outcome& outcome);
+    static void respond(const Outcome& outcome, const ControlCompletion& completion);
+    std::shared_ptr<const ControlInstanceFacts> currentFacts() const;
 
     Setup setup_;
     ControlMethodTable methods_;
     std::vector<std::string> capabilities_;
     mutable std::mutex factsMutex_;
-    ControlInstanceFacts facts_;
+    /** Set by setRedactionSecrets() and serverStopping(); methods off the message thread wait on it. */
+    std::condition_variable factsChanged_;
+    /** Replaced, never changed in place: a reader keeps the copy it got. Guarded by factsMutex_. */
+    std::shared_ptr<const ControlInstanceFacts> facts_;
+    bool redactionSecretsSet_ = false;
     ControlThreadProbe probe_;
     std::atomic<bool> stopping_{false};
     std::atomic<int> executed_{0};
+    std::atomic<int> offMainThread_{0};
 };
 
 } // namespace OpenTune

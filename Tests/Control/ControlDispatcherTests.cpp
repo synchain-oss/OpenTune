@@ -1750,6 +1750,16 @@ void scenarioDetails()
     checkPrefs(api, *processor);
     checkAppLog(api);
     CONTROL_CHECK(dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+
+    // Opening a project starts a new content epoch and clip ids restart at 1: a reason recorded for the
+    // old project is never reported for a content of the new one with the same key.
+    const auto failedKey = clips.failedEmpty.key;
+    CONTROL_CHECK(processor->getContentF0FailureReason(failedKey) == std::optional<std::string>("f0_empty"));
+    if (saveAndReopen(*processor)) {
+        CONTROL_CHECK(processor->getContentF0FailureReason(failedKey) != std::optional<std::string>("f0_empty"));
+        processor->recordF0FailureReason(failedKey, "f0_empty");
+        CONTROL_CHECK(processor->getContentF0FailureReason(failedKey) == std::optional<std::string>("f0_empty"));
+    }
 }
 
 void scenarioVectors()
@@ -1843,6 +1853,89 @@ void scenarioCompleteness()
     if (!kUnimplementedReportedMethods.empty())
         note("exempt methods remain; the list must be empty before dev is merged");
     note(std::to_string(checked) + " methods of the reported capabilities are registered");
+}
+
+void scenarioOffMainThread()
+{
+    // The method table follows the schemas: a method runs off the message thread exactly when its schema
+    // says x-otcp.mainThread false (PROTOCOL.md section 13.3 rule 2), and then has no run on it.
+    ControlMethodTable table;
+    registerControlMethods(table);
+    const auto methodsDir = std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR) / "methods";
+    const auto index = parseJson(readFile(methodsDir / "index.json"));
+    if (!CONTROL_CHECK(index.ok))
+        return;
+    const auto& methods = memberOf(index.value, "methods");
+    int registered = 0;
+    std::vector<std::string> offMainThread;
+    for (std::size_t i = 0; i < methods.size(); ++i) {
+        const auto name = memberOf(methods.at(i), "method").text();
+        const ControlMethod* method = table.find(name);
+        if (method == nullptr)
+            continue;
+        ++registered;
+        const auto schema = parseJson(readFile(methodsDir / (name + ".schema.json")));
+        if (!CONTROL_CHECK(schema.ok))
+            continue;
+        const auto& mainThread = memberOf(memberOf(schema.value, "x-otcp"), "mainThread");
+        if (!CONTROL_CHECK(mainThread.isBoolean() && mainThread.asBoolean() == method->mainThread))
+            note(name + ": mainThread of the method table differs from its schema");
+        CONTROL_CHECK(method->mainThread ? (method->run && !method->runOffMainThread)
+                                         : (method->runOffMainThread && !method->run && !method->write));
+        if (!method->mainThread)
+            offMainThread.push_back(name);
+    }
+    CONTROL_CHECK(registered >= 9);
+    CONTROL_CHECK(std::find(offMainThread.begin(), offMainThread.end(), "app.getLog") != offMainThread.end());
+
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    const auto dispatcher = service.dispatcher();
+    const auto messageThread = service.messageThread();
+    ApiSession api;
+    if (!CONTROL_CHECK(dispatcher != nullptr) || !api.open(service))
+        return;
+    const std::string marker = "off-main-thread-scenario-marker";
+    AppLogger::log(marker);
+
+    // This thread, the message thread, pumps no messages while the request runs, as when a modal loop or a
+    // long synchronous operation holds it. app.getLog still answers at once, never with TIMEOUT.
+    const int dispatchTimeoutMs = ControlLimits{}.dispatchTimeoutMs;
+    const int executedBefore = dispatcher->executedCount();
+    std::optional<std::string> response;
+    std::atomic<bool> answered{false};
+    std::thread client([&] {
+        if (api.client().sendLine(R"({"jsonrpc":"2.0","id":9,"method":"app.getLog","params":{"maxLines":50}})"))
+            response = api.client().readLine(dispatchTimeoutMs + kReadTimeoutMs);
+        answered = true;
+    });
+    const auto started = Clock::now();
+    CONTROL_CHECK(
+        waitUntil([&answered] { return answered.load(); }, dispatchTimeoutMs + kReadTimeoutMs + kCloseSeenMs));
+    client.join();
+    const auto elapsed = millisecondsSince(started);
+    note("answered after " + std::to_string(elapsed) + " ms while the message thread was held");
+    CONTROL_CHECK(elapsed < dispatchTimeoutMs);
+    if (CONTROL_CHECK(response.has_value())) {
+        const auto parsed = parseJson(*response);
+        const JsonValue* result = parsed.ok ? parsed.value.find("result") : nullptr;
+        if (CONTROL_CHECK(result != nullptr))
+            CONTROL_CHECK(anyLineContains(memberOf(*result, "lines"), marker));
+        else
+            note("response: " + *response);
+    }
+    // Nothing went to the message thread, and no operation context was made.
+    CONTROL_CHECK(messageThread->waitingCalls() == 0);
+    CONTROL_CHECK(dispatcher->executedCount() == executedBefore && dispatcher->offMainThreadCount() == 1);
+    pumpMessagesFor(kQuietPumpMs);
+    CONTROL_CHECK(dispatcher->executedCount() == executedBefore);
+    CONTROL_CHECK(dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+
+    // With the message thread free again, the same request through the pumping helper.
+    CONTROL_CHECK(memberOf(api.result("app.getLog", json(R"({"maxLines":1})")), "lines").size() == 1);
+    CONTROL_CHECK(dispatcher->offMainThreadCount() == 2 && dispatcher->executedCount() == executedBefore);
 }
 
 } // namespace ControlTest

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Control/ControlJson.h"
+#include "Utils/AppPreferences.h"
 #include "Utils/AudioEditingScheme.h"
 #include "Utils/DetectedKey.h"
 #include "Utils/LocalizationManager.h"
@@ -10,8 +11,8 @@
 namespace OpenTune {
 
 /**
- * Wire forms of small OpenTune values that more than one read method reports. Pure functions; no
- * OpenTune state is read, so they may run on any thread.
+ * Wire forms of small OpenTune values that more than one read method reports. They read no project
+ * state (controlProcessingJson only the process-wide tuning atomic), so they may run on any thread.
  */
 
 /** The wire name of a scale (common.schema.json#/$defs/scaleName). */
@@ -28,5 +29,23 @@ const char* controlLanguageTag(Language language);
 
 /** The wire name of an editing scheme: openDyne for the notes-primary scheme, openTune otherwise. */
 const char* controlEditingSchemeName(AudioEditingScheme::Scheme scheme);
+
+/** The members of the processing object that only session.info reports: the state of the inference
+    runtime, which the caller reads. */
+struct ControlProcessingRuntime
+{
+    /** Wire name of the inference backend in use (cpu, directml, coreml). */
+    const char* backend = "cpu";
+    bool vocoderReady = false;
+    bool vocoderReconfiguring = false;
+};
+
+/**
+ * The processing object of session.info (with runtime) and prefs.get (runtime null): the processing
+ * preferences of a copy of the preferences' state, and the A4 frequency of
+ * TuningConfig::currentTuningHz() (an atomic, any thread). vocoderWeight is null with the reason
+ * "unavailable" when the preference is empty, not UTF-8 or longer than 64 characters.
+ */
+JsonValue controlProcessingJson(const SharedPreferencesState& preferences, const ControlProcessingRuntime* runtime);
 
 } // namespace OpenTune

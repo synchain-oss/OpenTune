@@ -28,11 +28,11 @@ without this directory.
 | `ControlUiBridge.h` | Interface to what only the editor owns; every function defaults to "not supported". |
 | `ControlDataDirectory.*` | `OPENTUNE_DATA_DIR` for the preference and log hooks. |
 | `ContentHandles.*` | `contentId` / `placementId` handles, revision tokens (64-bit FNV-1a) and pagination cursors; standard library only. |
-| `ControlDispatcher.*` | The request handler of the listener: parameter checks, execution on the message thread, timeout, stop, error mapping. |
+| `ControlDispatcher.*` | The request handler of the listener: parameter checks, execution on the message thread (or on the connection thread for `mainThread: false` methods), timeout, stop, error mapping. |
 | `Ops/OpsRegistry.*` | The method table (one registration line per group), the operation context with its thread check, the error mapping. |
 | `Ops/OpsSupport.*` | What the operations share: parameter reader, handle resolution, the world revision vector and `asOf`, number and text output. |
 | `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*` | The methods, one file per group (see "Method table"). |
-| `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme). |
+| `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme, the processing object of `session.info` and `prefs.get`). |
 | `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
 
 The channel files (options to server) use only the standard library and the operating system; the
@@ -55,6 +55,14 @@ later part use JUCE and the processor. `cmake/OpenTuneControl.cmake` lists all f
 - Methods run only through `ControlDispatcher`: every access of an operation to the processor or the
   editor bridge goes through `ControlOpContext`, which refuses any other thread than the message thread,
   in every build type.
+- The one exception to "methods run on the message thread" is a method whose schema says
+  `x-otcp.mainThread: false` (today `app.getLog`; later `job.get` and `job.cancel`). It runs on its
+  connection thread and never waits for the message thread, so it never answers `TIMEOUT`. It gets no
+  `ControlOpContext`, only the immutable facts snapshot (`ControlInstanceFacts`: instance id, limits,
+  redaction secrets, home directory spellings) and its params. It must not read or change project
+  content, the processor or the bridge, may call only OpenTune functions that are thread-safe by their own
+  contract (`AppLogger::getCurrentLogFile()` copies the path under the logger's lock), and reads files only
+  within a fixed bound.
 - The listener runs one accepting thread and one thread per connection; every network wait is a poll of
   at most 250 ms that also checks the stop flag.
 - Logging goes through `AppLogger` only and never contains the token, the server proof or request
@@ -103,8 +111,8 @@ option, so a build with the option OFF compiles exactly the upstream code.
 | `Source/Utils/AppPreferences.cpp` (include, `resolveSettingsDirectory`) | `OPENTUNE_DATA_DIR` replaces the per-user OpenTune folder | Preferences of tests stay in the test's directory. | Tests read and write the user's real preferences. |
 | `Source/Utils/AppLogger.cpp` (include, `initialize`) | `OPENTUNE_DATA_DIR` replaces the per-user OpenTune folder | Logs of tests stay in the test's directory. | Tests write into the user's real log folder. |
 | `Source/Content/StandaloneContentRepository.h` (end of the class) | Member `contentEpoch_` and public `getContentEpoch()` | The content epoch of the handles (PROTOCOL.md section 9). | Handles cannot tell the contents of a project opened later from earlier ones. |
-| `Source/PluginProcessor.h` (public, before the private section; control block at the end of the class) | `recordF0FailureReason()`; `getReferenceFeatureProducer()`, `getContentF0FailureReason()`, member `contentF0FailureReasons_` | The reason the pitch analysis of a content failed, and the reference feature producer this instance would use, for `content.getDetails`. `recordF0FailureReason()` is declared for every build and does nothing without the control API. | `content.getDetails` cannot tell why an analysis failed (it reports `f0_failed`) nor whether reference alignment data is current. |
-| `Source/PluginProcessor.cpp` (definitions near `resolveReferenceFeatureProducer()`; six calls in `requestContentRefresh`) | `recordF0FailureReason(key, reason)` where the analysis starts (clear), fails (`f0_empty` for the extractor's unvoiced result, else `f0_failed`) and succeeds (clear) | Remembers the last failure reason per content on the message thread. | As above. |
+| `Source/PluginProcessor.h` (the control block at the end of the class, after `getControlService()`; 6 lines: one marker comment, `getReferenceFeatureProducer()`, `getContentF0FailureReason()`, `recordF0FailureReason()`, members `contentF0FailureReasons_` and `contentF0FailureEpoch_`) | Read-only reference feature producer; the last F0 failure reason per content | The reference feature producer this instance would use (`resolveReferenceFeatureProducer()`), and the reason the pitch analysis of a content failed, for `content.getDetails`. The reasons belong to one content epoch: the first record after a project was opened forgets the old ones, and the getter reports nothing for an older epoch, because clip ids restart at 1. | `content.getDetails` cannot tell why an analysis failed (it reports `f0_failed`) nor whether reference alignment data is current. |
+| `Source/PluginProcessor.cpp` (43 lines: one `#if` block of 25 lines with the two definitions, just before `resolveReferenceFeatureProducer()`; six calls in `requestContentRefresh`, each 3 lines with its own `#if`/`#endif`) | `recordF0FailureReason(key, reason)` where the analysis starts (clear: the Standalone clip case of the state switch), fails (the extractor's failure: `f0_empty` for its unvoiced result, else `f0_failed`; the commit of the curve; the dispatcher-failure callback; a rejected submit: `f0_failed`) and succeeds (clear, before the state becomes Ready) | Remembers the last failure reason per content on the message thread (all six places are message-thread callbacks or the caller itself). | As above. |
 | `Source/Content/StandaloneContentRepository.cpp` (`clear()`) | `contentEpoch_` is incremented | `clear()` discards every content when a project is opened (`ProjectSession::commitPreparedOpen`) and clip ids restart at 1, so handles from before become `NOT_FOUND(stale_handle)` instead of naming new contents. | Old handles would silently name the contents of the newly opened project. |
 
 ## Request handling
@@ -126,7 +134,11 @@ hello). For each request the dispatcher then:
    `limits.dispatchTimeoutMs` (10 s). A request that has not started by then is abandoned under the
    mutex that its start takes and is answered with `TIMEOUT(dispatch_timeout)`, `executed` false; it
    never runs later (section 13.1 rule 2). A request that `stop()` overtakes before it started gets
-   `SHUTTING_DOWN`. The waiting connection thread holds no lock or lease of the processor.
+   `SHUTTING_DOWN`. The waiting connection thread holds no lock or lease of the processor. A method with
+   `mainThread` false in its schema (`ControlMethod::runOffMainThread`) instead runs right here on the
+   connection thread with the facts snapshot (section 13.3 rule 2): no dispatch timeout, no `TIMEOUT`. The
+   redaction secrets are set right after the listener started; such a method waits for them (bounded by
+   the dispatch timeout) so that it never answers without them.
 5. maps the method's `Result<JsonValue>` to the response. Operations return OpenTune's `Error`
    (`Utils/Error.h`); `controlOpError()` puts the protocol kind and reason into `Error::context`, and
    `controlMapError()`, called by the dispatcher, is the only place where errors become protocol errors.
@@ -176,7 +188,12 @@ To be completed with the editing methods.
    is printable ASCII and never contains secrets or text from files or projects. Note in a comment which
    upstream function the operation calls and why.
 3. Register it with `controlReadMethod<Params>(name, parse, run)` (or a `ControlMethod` for writes) in
-   the group's `register<Group>Ops()`. A new group gets its line in `registerControlMethods()`
+   the group's `register<Group>Ops()`. Only when the schema says `mainThread: false`, register it with
+   `controlOffMainThreadReadMethod<Params>(name, parse, run)`, whose run gets `const ControlInstanceFacts&`
+   instead of a context and runs on the connection thread: it must not read or write content, the
+   processor or the bridge (it has no way to reach them), may call only OpenTune functions documented as
+   thread-safe, and must return within a fixed bound. `ControlProcessorTests.OffMainThread` checks that
+   every registered method's `mainThread` matches its schema. A new group gets its line in `registerControlMethods()`
    (`Ops/OpsRegistry.cpp`), where the groups of later parts already have a placeholder line. The
    capability of a registered method is reported by `session.hello` and `session.info`.
 4. Add the files to `cmake/OpenTuneControl.cmake` in the part's block.
@@ -207,7 +224,10 @@ redaction of a log with the session token, the server proof and the home directo
 exists and must be empty before dev is merged; `read.v1` may never be on it); `Vectors` runs the
 specification's vectors of the implemented methods against the real dispatcher and requires every vector of
 an explicit list (`kMustRunVectors`) to run and pass, instead of counting; the others are listed as
-skipped, with the reason. `ControlUnitTests` also tests the log redaction and the log tail on files.
+skipped, with the reason. `OffMainThread` checks that each registered method runs on or off the message
+thread as its schema's `mainThread` says, and that `app.getLog` answers while the message thread is held
+(no `TIMEOUT`, nothing queued for the message thread). `ControlUnitTests` also tests the log redaction and
+the log tail on files.
 
 ## Capabilities and protocol versions
 
@@ -232,4 +252,4 @@ method of a capability it reports: `read.v1` is complete (all eight reads are re
 | `content.getDetails` | `read.v1` | `Ops/ContentDetailsOps.cpp` | `ControlProcessorTests.Details`, `.Vectors` | `methods/content.getDetails.schema.json` |
 | `transport.get` | `read.v1` | `Ops/ProjectReadOps.cpp` | `ControlProcessorTests.Details`, `.Vectors` | `methods/transport.get.schema.json` |
 | `prefs.get` | `read.v1` | `Ops/AppReadOps.cpp` | `ControlProcessorTests.Details`, `.Vectors` | `methods/prefs.get.schema.json` |
-| `app.getLog` | `read.v1` | `Ops/AppReadOps.cpp` (tail and redaction in `ControlLogTail.cpp`) | `ControlProcessorTests.Details`, `ControlUnitTests` | `methods/app.getLog.schema.json` |
+| `app.getLog` | `read.v1` | `Ops/AppReadOps.cpp` (tail and redaction in `ControlLogTail.cpp`; off the message thread) | `ControlProcessorTests.Details`, `.OffMainThread`, `ControlUnitTests` | `methods/app.getLog.schema.json` |

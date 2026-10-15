@@ -9,7 +9,6 @@
 #include "Runtime/ProcessRenderRuntime.h"
 #include "Utils/AccelerationDetector.h"
 #include "Utils/AppPreferences.h"
-#include "Utils/TuningConfig.h"
 
 #include <algorithm>
 
@@ -111,41 +110,17 @@ JsonValue audioDeviceJson(ControlOpContext& context)
     return json;
 }
 
-JsonValue processingJson(const SharedPreferencesState& preferences)
+/** The state of the inference runtime that session.info reports with the processing preferences. */
+ControlProcessingRuntime processingRuntime()
 {
-    auto json = JsonValue::object();
-    auto nullReasons = JsonValue::object();
-    // TuningConfig::currentTuningHz(): the A4 frequency every *Midi value of this API refers to.
-    json.appendMember("tuningHz", controlJsonNumber(TuningConfig::currentTuningHz(), 3));
-    json.appendMember("editingScheme", JsonValue::string(controlEditingSchemeName(preferences.audioEditingScheme)));
-    // The "hybrid" (light pitch correction) switch of the processing preferences.
-    json.appendMember("hybridMode", JsonValue::boolean(preferences.lightPitchCorrectionEnabled));
-    const auto& weight = preferences.vocoderModelWeight;
-    if (!weight.empty() && weight.size() <= 64 && isValidUtf8(weight)) {
-        json.appendMember("vocoderWeight", JsonValue::string(weight));
-    } else {
-        json.appendMember("vocoderWeight", JsonValue());
-        nullReasons.appendMember("vocoderWeight", JsonValue::string("unavailable"));
-    }
-    json.appendMember("f0Model", JsonValue::string("fcpe")); // F0ModelType has FCPE only
-    json.appendMember(
-        "renderingPriority",
-        JsonValue::string(preferences.renderingPriority == RenderingPriority::CpuFirst ? "cpuFirst" : "gpuFirst"));
+    ControlProcessingRuntime runtime;
     // AccelerationDetector::getSelection(): the inference backend in use (CPU until one was detected).
-    json.appendMember("backend",
-                      JsonValue::string(backendName(AccelerationDetector::getInstance().getSelection().backend)));
+    runtime.backend = backendName(AccelerationDetector::getInstance().getSelection().backend);
     // ProcessRenderRuntime: the process-wide vocoder, polled without a hook.
-    auto& runtime = ProcessRenderRuntime::getInstance();
-    json.appendMember("vocoderReady", JsonValue::boolean(runtime.isVocoderReady()));
-    json.appendMember("vocoderReconfiguring", JsonValue::boolean(runtime.isVocoderReconfiguring()));
-    json.appendMember("experimentalFeatures", JsonValue::boolean(preferences.experimentalFeaturesEnabled));
-    json.appendMember("referenceAlignMode", JsonValue::string(preferences.experimentalReferenceAlignMode
-                                                                      == ExperimentalReferenceAlignMode::Game
-                                                                  ? "game"
-                                                                  : "standardAuto"));
-    if (nullReasons.size() != 0)
-        json.appendMember("nullReasons", std::move(nullReasons));
-    return json;
+    auto& render = ProcessRenderRuntime::getInstance();
+    runtime.vocoderReady = render.isVocoderReady();
+    runtime.vocoderReconfiguring = render.isVocoderReconfiguring();
+    return runtime;
 }
 
 JsonValue exportJson()
@@ -190,7 +165,8 @@ Result<JsonValue> runSessionInfo(ControlOpContext& context, const ControlNoParam
     result.appendMember("runtime", std::move(runtime));
 
     result.appendMember("audioDevice", audioDeviceJson(context));
-    result.appendMember("processing", processingJson(preferences));
+    const auto inference = processingRuntime();
+    result.appendMember("processing", controlProcessingJson(preferences, &inference));
     result.appendMember("language", JsonValue::string(controlLanguageTag(preferences.language)));
 
     auto capabilities = JsonValue::array();

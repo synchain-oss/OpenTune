@@ -39,13 +39,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 | 公开 `ensureRuntimeInitialized()` | `Source/PluginProcessor.h/.cpp` | 含在上一行的合计内 |
 | `OPENTUNE_DATA_DIR` 重定向 | `Source/Utils/AppPreferences.cpp`（+ `AppLogger.cpp`） | `AppPreferences.cpp` 与 `AppLogger.cpp` 各约 8 |
 | `contentEpoch` + getter | `Source/Content/StandaloneContentRepository.h/.cpp` | 约 11（含 `#if`/`#endif` 与访问说明符） |
-| `friend class ControlEditorBridge;` + 成员；构造后创建，析构时先注销 | `Source/Standalone/PluginEditor.h/.cpp` | ~6 |
+| `friend class ControlEditorBridge;` + 成员；构造后创建，析构时先注销 | `Source/Standalone/PluginEditor.h/.cpp` | `.h` 约 6、`.cpp` 约 11 |
 | 导出锁（UI 与 API 共用）、master 导出错误信息、按 placementId 导出 clip | `Source/PluginProcessor.*`、`Source/Standalone/PluginEditor.cpp` | 15–25 |
 | 抽出 `afterUndoRedo()`（纯重构）+ bridge 调用 | `Source/Standalone/PluginEditor.cpp` | 5–8 |
 | `peekUndo` / `peekRedo` / `size` / `cursor` | `Source/Utils/UndoManager.h/.cpp` | ~8 |
 | 公开 `dismiss()`，包装私有 `finish()`（只关闭已显示的首次引导） | `Source/Editor/OnboardingOverlayComponent.*` | ~3 |
 | （可选）公开包装私有选择提交 | `Source/Standalone/UI/ArrangementViewComponent.*` | ~8 |
-| 参考特征生产者 getter；记录每个内容最近一次 F0 失败原因 | `Source/PluginProcessor.*` | ~4 / ~8 |
+| 参考特征生产者 getter；记录每个内容最近一次 F0 失败原因 | `Source/PluginProcessor.*` | `.h` 约 6、`.cpp` 约 43（全部在选项宏内） |
 | `option()` + `include(cmake/OpenTuneControl.cmake)` | `CMakeLists.txt` | 2–5 |
 
 - **表外的上游文件一律不改。** 确需新钩子时先停下，在 PR 或返回结果的问题列表里提出。由 manager 更新本表与 `Source/Control/README.md` 的钩子清单后再做。

@@ -1,0 +1,142 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: Control Sanitizers
+
+# 纯控制层（不含 JUCE 编辑器与界面）在 macOS 上的 ThreadSanitizer 与 AddressSanitizer+UBSan 两个变体：
+# macos-14（arm64），Ninja，RelWithDebInfo。只编名字里含 Control 的已注册测试的可执行文件
+# （现在是 OpenTuneControlUnitTests；目标由 .github/scripts/list-test-targets.ps1 读自 CTestTestfile.cmake），
+# 并用 run-ctest.ps1 -Include Control 运行。依赖与 build-macos 相同（bootstrap-deps.ps1 -Platform macos）。
+# 注意：测试按名字（含 Control）纳入；以后若有链接 JUCE 的测试被纳入，TSan 下可能出现 JUCE 内部的误报，
+# 届时需要白名单或设置 TSAN_OPTIONS=suppressions=<文件>。
+# 触发：手动；PR → feature/** 改到控制层源码、测试、cmake/OpenTuneControl.cmake 或本 workflow 自身时。
+on:
+  pull_request:
+    branches: ['feature/**']
+    paths:
+      - 'Source/Control/**'
+      - 'Tests/Control/**'
+      - 'cmake/OpenTuneControl.cmake'
+      - '.github/workflows/control-sanitizers.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: control-sanitizers-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sanitize:
+    name: ${{ matrix.variant }} (macos-14)
+    runs-on: macos-14
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: tsan
+            flags: '-fsanitize=thread -fno-omit-frame-pointer'
+            options_name: TSAN_OPTIONS
+            options: 'halt_on_error=1:second_deadlock_stack=1'
+          - variant: asan-ubsan
+            flags: '-fsanitize=address,undefined -fno-sanitize-recover=undefined -fno-omit-frame-pointer'
+            options_name: ASAN_OPTIONS
+            options: 'halt_on_error=1:detect_stack_use_after_return=1:strict_string_checks=1'
+    env:
+      GIT_LFS_SKIP_SMUDGE: '1'
+      OT_CONFIG: RelWithDebInfo
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+      - name: Set work paths
+        run: |
+          {
+            echo "OT_DEPS=$RUNNER_TEMP/ot-deps"
+            echo "OT_BUILD=$RUNNER_TEMP/ot-build-${{ matrix.variant }}"
+            echo "OT_TEST_DATA=$RUNNER_TEMP/ot-test-data"
+          } >> "$GITHUB_ENV"
+
+      - name: Restore dependency cache
+        id: deps-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.OT_DEPS }}
+          key: ot-deps-macos-${{ hashFiles('.github/scripts/deps.lock.json', '.github/scripts/bootstrap-deps.ps1') }}
+      - name: Bootstrap dependencies (sha256 verified) and link them into the tree
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File .github/scripts/bootstrap-deps.ps1 -DepsRoot $env:OT_DEPS `
+            -DownloadsDir "$env:RUNNER_TEMP/ot-deps-downloads" -LinkInto $env:GITHUB_WORKSPACE -Platform macos
+          if ($LASTEXITCODE -ne 0) { throw "bootstrap-deps failed ($LASTEXITCODE)" }
+      - name: Save dependency cache
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.OT_DEPS }}
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+
+      - name: Vocoder placeholder (0 bytes)
+        run: |
+          voc='pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx'
+          if [ -e "$voc" ]; then echo "unexpected file at the vocoder path: $voc"; exit 1; fi
+          mkdir -p "$(dirname "$voc")"
+          : > "$voc"
+
+      # 编译与链接共用同一组 sanitizer 标志（CMAKE_{C,CXX}_FLAGS 与链接标志）。
+      - name: Configure (${{ matrix.variant }})
+        env:
+          SAN_FLAGS: ${{ matrix.flags }}
+        run: |
+          cmake -S "$GITHUB_WORKSPACE" -B "$OT_BUILD" -G Ninja \
+            -DCMAKE_BUILD_TYPE="$OT_CONFIG" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DOPENTUNE_BUILD_TESTS=ON \
+            -DOPENTUNE_ENABLE_CONTROL_API=ON \
+            -DCMAKE_C_FLAGS="$SAN_FLAGS" \
+            -DCMAKE_CXX_FLAGS="$SAN_FLAGS" \
+            -DCMAKE_EXE_LINKER_FLAGS="$SAN_FLAGS" \
+            -DCMAKE_SHARED_LINKER_FLAGS="$SAN_FLAGS"
+
+      # 仅 macOS 暂时排除 ControlProcessorTests（目标 OpenTuneControlProcessorTests）：它依赖只在 Windows 上定义的 JUCE 消息泵
+      # 函数 juce::detail::dispatchNextMessageOnSystemQueue，在 macOS 上链接失败。补上 POSIX 的消息泵之后再打开。
+      # ControlUnitTests 继续运行；Windows 的 asan 不受影响。
+      - name: Build the Control tests
+        shell: pwsh
+        run: |
+          $targets = @(pwsh -NoProfile -File .github/scripts/list-test-targets.ps1 -BuildDir $env:OT_BUILD -Include Control -ExcludePattern '^ControlProcessorTests\.')
+          if ($LASTEXITCODE -ne 0 -or $targets.Count -eq 0) { throw 'no Control test targets' }
+          $jobs = [Environment]::ProcessorCount
+          Write-Host "targets ($($targets.Count)): $($targets -join ', '); --parallel $jobs"
+          cmake --build $env:OT_BUILD --parallel $jobs --target @targets
+          if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
+
+      - name: ctest -R Control (${{ matrix.variant }})
+        shell: pwsh
+        env:
+          SAN_OPTIONS_NAME: ${{ matrix.options_name }}
+          SAN_OPTIONS: ${{ matrix.options }}
+          VARIANT: ${{ matrix.variant }}
+        run: |
+          [Environment]::SetEnvironmentVariable($env:SAN_OPTIONS_NAME, $env:SAN_OPTIONS)
+          $summary = "$env:RUNNER_TEMP/ot-ctest-summary.json"
+          pwsh -NoProfile -File .github/scripts/run-ctest.ps1 -BuildDir $env:OT_BUILD -Config $env:OT_CONFIG `
+            -Include Control -ExcludePattern '^ControlProcessorTests\.' -DataRoot $env:OT_TEST_DATA -SummaryPath $summary
+          $code = $LASTEXITCODE
+          if (Test-Path -LiteralPath $summary) {
+            $s = Get-Content -LiteralPath $summary -Raw | ConvertFrom-Json
+            $lines = @("### $($env:VARIANT)：ctest -R Control", '', "$($s.passed)/$($s.total) 通过；$($s.seconds) s", '', '| 测试 | 结果 | 秒 |', '|---|---|---|')
+            foreach ($t in @($s.tests)) { $lines += "| $($t.name) | $(if ($t.passed) { 'PASS' } else { 'FAIL' }) | $($t.seconds) |" }
+            $lines -join "`n" >> $env:GITHUB_STEP_SUMMARY
+            foreach ($name in @($s.failed)) {
+              Write-Host "::group::$name output"
+              Get-Content -LiteralPath (Join-Path $env:OT_TEST_DATA "$name.log") -ErrorAction SilentlyContinue | Write-Host
+              Write-Host '::endgroup::'
+            }
+          }
+          if ($code -ne 0) { throw "ctest failed ($code)" }

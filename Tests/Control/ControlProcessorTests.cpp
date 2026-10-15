@@ -2,7 +2,8 @@
 //
 // Processor-level tests of the control service without a window or an audio device: the real
 // OpenTuneAudioProcessor of the Standalone SharedCode with its control-service hooks, the
-// message-thread liveness token and the OPENTUNE_DATA_DIR redirection.
+// message-thread liveness token and the OPENTUNE_DATA_DIR redirection; the scenarios of the dispatcher
+// and the read methods are in ControlDispatcherTests.cpp.
 //
 // Each scenario runs in a process of its own (one ctest test per scenario, registered in
 // cmake/OpenTuneControl.cmake). The first argument names the scenario; the control API reads the other
@@ -17,7 +18,7 @@
 #define _CRT_SECURE_NO_WARNINGS
 #endif
 
-#include "ControlHeadlessSupport.h"
+#include "ControlProcessorSupport.h"
 #include "TestUiBridge.h"
 
 #include "Control/ControlDataDirectory.h"
@@ -66,18 +67,8 @@ using namespace OpenTune::ControlTest;
 
 namespace {
 
-/** From construction of the processor to a listening control API. */
-constexpr int kStartTimeoutMs = 5000;
-/** Time in which a start that should not happen would have happened. */
-constexpr int kQuietPumpMs = 300;
-/** Bound of the processor destruction while connections and waiters are busy. */
-constexpr int kShutdownBoundMs = 2000;
-/** Time for a client to see the close of its connection, and for a woken thread to return. */
-constexpr int kCloseSeenMs = 1000;
 /** Timeout of the waiting call(): far longer than the test, so that only stop() can end it. */
 constexpr int kLongCallTimeoutMs = 30000;
-/** Time for the waiting thread to enter call(). */
-constexpr int kWaiterSettleMs = 2000;
 /** Functions queued for the message thread before the processor is destroyed. */
 constexpr int kQueuedFunctions = 3;
 /** Bound of a connection attempt to a port that should be closed. A listening loopback port accepts at
@@ -129,13 +120,6 @@ bool isLowerHex(const std::string& text, std::size_t length)
            });
 }
 
-const JsonValue& memberOf(const JsonValue& object, const char* name)
-{
-    static const JsonValue none;
-    const JsonValue* value = object.find(name);
-    return value != nullptr ? *value : none;
-}
-
 bool matchesOptional(const JsonValue& value, const std::optional<std::string>& expected)
 {
     return expected ? (value.isString() && value.text() == *expected) : value.isNull();
@@ -183,47 +167,6 @@ void checkDiscoveryFile(const JsonValue& json, const ControlService& service,
     CONTROL_CHECK(startedAt.isNumber() && startedAt.asDouble() >= processStart.asDouble()
                   && startedAt.asDouble() <= static_cast<double>(controlNowMs()));
     CONTROL_CHECK(memberOf(json, "flavor").text() == "standalone");
-}
-
-std::optional<JsonValue> readDiscoveryFile(const std::filesystem::path& path)
-{
-    const auto text = readFile(path);
-    CONTROL_CHECK(!text.empty() && text.size() <= 8192);
-    auto parsed = parseJson(text);
-    if (!CONTROL_CHECK(parsed.ok))
-        return std::nullopt;
-    return parsed.value;
-}
-
-std::string helloLine(const std::string& token)
-{
-    return R"({"jsonrpc":"2.0","id":1,"method":"session.hello","params":{"token":")" + token
-           + R"(","protocol":"1.0","client":{"name":"control-processor-tests","version":"1.0.0"}}})";
-}
-
-/** Connects and completes session.hello; returns the hello result. */
-std::optional<JsonValue> authenticate(TestClient& client, int port, const std::string& token)
-{
-    if (!client.connect(port) || !client.sendLine(helloLine(token)))
-        return std::nullopt;
-    const auto line = client.readLine();
-    if (!line)
-        return std::nullopt;
-    auto parsed = parseJson(*line);
-    if (!parsed.ok || parsed.value.find("result") == nullptr)
-        return std::nullopt;
-    return *parsed.value.find("result");
-}
-
-/** Constructs a processor with the API enabled and pumps messages until it listens. */
-std::unique_ptr<OpenTuneAudioProcessor> startedProcessor()
-{
-    auto processor = std::make_unique<OpenTuneAudioProcessor>();
-    auto& service = processor->getControlService();
-    const auto started = Clock::now();
-    if (CONTROL_CHECK(pumpMessagesUntil([&service] { return service.isRunning(); }, kStartTimeoutMs)))
-        note("listening " + std::to_string(millisecondsSince(started)) + " ms after construction");
-    return processor;
 }
 
 /** The log file is inside OPENTUNE_DATA_DIR (the logger hook works). */
@@ -277,7 +220,8 @@ void scenarioStartAndHello()
         CONTROL_CHECK(memberOf(*hello, "serverProof").text() == serverProof);
         CONTROL_CHECK(memberOf(*hello, "pid").asDouble() == static_cast<double>(controlCurrentProcessId()));
         CONTROL_CHECK(memberOf(*hello, "appVersion").text() == ControlService::buildIdentity().appVersion);
-        CONTROL_CHECK(toJsonString(memberOf(*hello, "capabilities")) == R"(["session.v1"])");
+        // session.v1 and the capability of the read methods the dispatcher implements.
+        CONTROL_CHECK(toJsonString(memberOf(*hello, "capabilities")) == R"(["session.v1","read.v1"])");
     }
     // The runtime was initialised before the listener started: the logger writes under the data dir.
     checkLogInsideDataDirectory();
@@ -575,6 +519,12 @@ const Scenario kScenarios[] = {
     {"DestroyBeforeStart", scenarioDestroyBeforeStart, true},
     {"RepeatedStop", scenarioRepeatedStop, true},
     {"Shutdown", scenarioShutdown, true},
+    {"Reads", scenarioReads, false},
+    {"ThreadProbe", scenarioThreadProbe, false},
+    {"DispatchShutdown", scenarioDispatchShutdown, true},
+    // Waits longer than dispatchTimeoutMs, beyond the watchdog's bound.
+    {"DispatchTimeout", scenarioDispatchTimeout, false},
+    {"Vectors", scenarioVectors, false},
 };
 
 int runScenario(const Scenario& scenario)

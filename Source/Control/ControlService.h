@@ -13,6 +13,7 @@
 
 namespace OpenTune {
 
+class ControlDispatcher;
 class ControlServer;
 class ControlUiBridge;
 class OpenTuneAudioProcessor;
@@ -20,8 +21,9 @@ class OpenTuneAudioProcessor;
 /**
  * The control API of one OpenTune Standalone processor. A facade that owns the listener
  * (ControlServer, which also writes and deletes the discovery file through ControlDiscovery), the
- * message-thread marshalling (ControlMessageThread) and, as later parts of the API arrive, the
- * dispatcher and the jobs; it keeps the editor's ControlUiBridge pointer.
+ * message-thread marshalling (ControlMessageThread), the dispatcher (ControlDispatcher, the listener's
+ * request handler) and, as later parts of the API arrive, the jobs; it keeps the editor's
+ * ControlUiBridge pointer.
  *
  * Lifecycle (see Source/Control/README.md#lifecycle):
  * - The processor constructor creates the service and calls scheduleStart(). Creating it only reads
@@ -93,6 +95,9 @@ public:
     const std::string& discoveryFilePath() const noexcept { return discoveryFile_; }
     /** The message-thread marshalling. Holders may keep it beyond the service; it is stopped with it. */
     std::shared_ptr<ControlMessageThread> messageThread() const noexcept { return messageThread_; }
+    /** The dispatcher once the API started (it stays after stop()); nullptr when it never started.
+        Holders may keep it beyond the service, for its counters; it never runs a method after stop(). */
+    std::shared_ptr<ControlDispatcher> dispatcher() const noexcept { return dispatcher_; }
 
     /** Registers the editor's bridge, or unregisters it with nullptr. Message thread. */
     void setUiBridge(ControlUiBridge* bridge) noexcept { uiBridge_ = bridge; }
@@ -124,8 +129,8 @@ private:
     std::shared_ptr<ControlMessageThread> messageThread_;
     std::shared_ptr<LogGate> logGate_;
     std::unique_ptr<ControlServer> server_;
-    // The dispatcher (the server's request handler) and the jobs registry are added here by the later
-    // parts of the API; until then the listener answers session.hello itself.
+    std::shared_ptr<ControlDispatcher> dispatcher_;
+    // The jobs registry is added here by a later part of the API.
     ControlUiBridge* uiBridge_ = nullptr;
     std::string discoveryFile_;
     /** Content of the ready file as this instance wrote it; empty when it wrote none. */

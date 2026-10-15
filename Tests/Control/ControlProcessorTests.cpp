@@ -563,6 +563,7 @@ int runScenario(const Scenario& scenario)
 
 int main(int argc, char** argv)
 {
+    publishCommandLineToJuce(argc, argv);
     const Scenario* scenario = nullptr;
     if (argc > 1)
         for (const auto& candidate : kScenarios)

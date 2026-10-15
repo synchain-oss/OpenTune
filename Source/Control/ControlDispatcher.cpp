@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "ControlDispatcher.h"
 
+#include "ContentHandles.h"
+#include "ControlJobs.h"
 #include "ControlMessageThread.h"
 
 #include "Utils/AppLogger.h"
@@ -49,6 +51,8 @@ std::vector<std::string> ControlDispatcher::capabilities() const
 
 void ControlDispatcher::setInstanceId(std::string instanceId)
 {
+    if (setup_.jobs != nullptr)
+        setup_.jobs->setInstanceShort(controlInstanceShort(instanceId));
     std::lock_guard<std::mutex> lock(factsMutex_);
     facts_.instanceId = std::move(instanceId);
 }
@@ -84,6 +88,23 @@ void ControlDispatcher::handleRequest(ControlRequest request, ControlCompletion 
     std::string why;
     if (!method->parse(request.params, parsed, why)) {
         completion.respondError("INVALID_ARGUMENT", "invalid_params", why, false);
+        return;
+    }
+    if (!method->mainThread) {
+        // job.get and job.cancel: the jobs registry only, never the message thread (PROTOCOL.md section 13.3
+        // rule 2). The reply may come later from the registry's thread; it captures only the completion.
+        if (setup_.jobs == nullptr || !method->runWithoutMessageThread) {
+            completion.respondError("INTERNAL", {}, "the method is not available", false);
+            return;
+        }
+        method->runWithoutMessageThread(*setup_.jobs, parsed.get(), [completion](Result<JsonValue> result) {
+            if (result.ok()) {
+                completion.respondResult(result.value());
+                return;
+            }
+            const auto reply = controlMapError(result.error());
+            completion.respondError(reply.kind, reply.reason, reply.detail, reply.executed.value_or(false));
+        });
         return;
     }
 
@@ -138,13 +159,16 @@ void ControlDispatcher::execute(const ControlMethod& method, const void* parsed,
         facts = facts_;
     }
     try {
-        ControlOpContext context(*setup_.processor, setup_.uiBridge ? setup_.uiBridge() : nullptr, facts, probe_);
+        ControlOpContext context(*setup_.processor, setup_.uiBridge ? setup_.uiBridge() : nullptr, facts, probe_,
+                                 setup_.jobs.get(), setup_.uiBridge);
         auto result = method.run(context, parsed);
         if (result.ok()) {
             outcome.result = std::move(result).value();
         } else {
             outcome.error = controlMapError(result.error());
-            outcome.executed = false; // operations fail in their checks, before any change
+            // As the operation stated it: controlOpError fails before any change, controlOpErrorAfterChange
+            // after one. Another error of a write may have changed state.
+            outcome.executed = outcome.error.executed.value_or(method.write);
         }
     } catch (const ControlThreadViolation&) {
         outcome.error = {"INTERNAL", "", "OpenTune state was reached from a thread other than the main thread"};

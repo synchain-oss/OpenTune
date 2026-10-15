@@ -274,7 +274,11 @@ function Get-IsolationVerdict($Control, $Other, [bool]$Hook) {
         return [pscustomobject]@{ Status = 'SKIP'; Note = "OPENTUNE_DATA_DIR 钩子尚未合入：$what" }
     }
     $note = '控制层测试前后真实目录无任何新建、修改或删除'
-    if ($otherCount -gt 0) { $note += "；上游测试新写入 $otherCount 个文件或目录（已知上游行为：这些测试链接 VST3 共享代码，数据目录钩子按规则只在 Standalone 中生效；未删除用户目录中的任何文件）" }
+    if ($otherCount -gt 0) {
+        $oc = @($Other.Created).Count; $om = @($Other.Changed).Count; $orm = @($Other.Removed).Count
+        $note += "；上游测试改动了真实目录：新建 $oc 项、修改 $om 项、删除 $orm 项（已知上游行为：这些测试链接 VST3 共享代码，数据目录钩子按规则只在 Standalone 中生效）"
+        if ($orm -eq 0) { $note += '；已检查，未删除用户目录中的任何文件' }
+    }
     else { $note += '；其余上游测试也没有写入' }
     return [pscustomobject]@{ Status = 'PASS'; Note = $note }
 }

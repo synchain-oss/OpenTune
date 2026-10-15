@@ -9,7 +9,12 @@
 
 .DESCRIPTION
   Slots are named mutexes: with -Slots 1 the name is exactly 'Global\OpenTune-build-slot';
-  with -Slots N they are '<SlotName>-0' .. '<SlotName>-(N-1)'. The script
+  with -Slots N they are '<SlotName>-0' .. '<SlotName>-(N-1)'. The slot count is, in order: -Slots,
+  the environment variable OPENTUNE_BUILD_SLOTS, then 2 (one build uses --parallel 8, two of them
+  fit the memory budget of the build machine). A value outside 1..8 or not a whole number is
+  rejected (exit 64). A lane that still runs an older copy of this script uses the unsuffixed lock
+  name, which does not exclude the suffixed names, so during a transition up to one more build can
+  run; the -MinFreeMB check is what keeps that safe. The script
     1. waits (up to -WaitMinutes) for any free slot;
     2. treats an AbandonedMutexException (previous holder crashed or was killed) as a successful
        acquire and says so. (Measured on pwsh 7.6.6 / .NET 10.0.12: after the holder is
@@ -31,7 +36,8 @@
 
   Options are parsed by hand (no param block) so that the wrapped command's own dash arguments
   (cmake -S/-B/-G/-D...) are never mistaken for this script's options. Everything after '--' is the
-  command. Options: -Slots N, -SlotName NAME, -MinFreeMB N, -WaitMinutes N, -VsDevShell, -Status.
+  command. Options: -Slots N, -SlotName NAME, -MinFreeMB N, -WaitMinutes N, -VsDevShell, -Status,
+  -ShowConfig (print the resolved slot count and lock names, then exit without taking a lock).
 
 .EXAMPLE
   pwsh -File with-build-slot.ps1 -VsDevShell -MinFreeMB 9000 -- cmake --build C:\lanes\fA-build --config Release --parallel 8
@@ -42,12 +48,14 @@
 Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
-$Slots = 1
+$DefaultSlots = 2
+$Slots = $null
 $SlotName = 'Global\OpenTune-build-slot'
 $MinFreeMB = 6144
 $WaitMinutes = 120
 $VsDevShell = $false
 $Status = $false
+$ShowConfig = $false
 $Command = @()
 
 # Under `pwsh -File`, PowerShell rewrites arguments that look like '-Name:value' (for example
@@ -64,22 +72,36 @@ for ($k = 0; $k -lt $argv.Count; $k++) {
     }
 }
 
+# 1..8 whole number, otherwise exit 64.
+function ConvertTo-SlotCount([string]$Text, [string]$Origin) {
+    $n = 0
+    if (-not [int]::TryParse($Text, [System.Globalization.NumberStyles]::None, [System.Globalization.CultureInfo]::InvariantCulture, [ref]$n) -or $n -lt 1 -or $n -gt 8) {
+        Write-Error "with-build-slot: $Origin must be a whole number 1..8 (got '$Text')" -ErrorAction Continue
+        exit 64
+    }
+    return $n
+}
+
 $i = 0
 while ($i -lt $rawArgs.Count) {
     $a = [string]$rawArgs[$i]
     if ($a -eq '--') { $Command = @($rawArgs | Select-Object -Skip ($i + 1)); break }
     switch -Regex ($a) {
-        '^-Slots$'       { $Slots = [int]$rawArgs[++$i] }
+        '^-Slots$'       { $Slots = ConvertTo-SlotCount ([string]$rawArgs[++$i]) '-Slots' }
         '^-SlotName$'    { $SlotName = [string]$rawArgs[++$i] }
         '^-MinFreeMB$'   { $MinFreeMB = [int]$rawArgs[++$i] }
         '^-WaitMinutes$' { $WaitMinutes = [int]$rawArgs[++$i] }
         '^-VsDevShell$'  { $VsDevShell = $true }
         '^-Status$'      { $Status = $true }
+        '^-ShowConfig$'  { $ShowConfig = $true }
         default          { Write-Error "with-build-slot: unknown option '$a' (put the command after --)" -ErrorAction Continue; exit 64 }
     }
     $i++
 }
-if ($Slots -lt 1 -or $Slots -gt 8) { Write-Error 'with-build-slot: -Slots must be 1..8' -ErrorAction Continue; exit 64 }
+if ($null -eq $Slots) {
+    $fromEnv = [Environment]::GetEnvironmentVariable('OPENTUNE_BUILD_SLOTS')
+    $Slots = if ([string]::IsNullOrWhiteSpace($fromEnv)) { $DefaultSlots } else { ConvertTo-SlotCount $fromEnv.Trim() 'OPENTUNE_BUILD_SLOTS' }
+}
 
 function Write-Slot([string]$Message) { Write-Host "[build-slot $(Get-Date -Format HH:mm:ss)] $Message" }
 
@@ -94,6 +116,12 @@ function Get-SlotNames {
 }
 
 $names = @(Get-SlotNames)
+
+if ($ShowConfig) {
+    Write-Host "slots=$Slots"
+    $names | ForEach-Object { Write-Host "name=$_" }
+    exit 0
+}
 $mutexes = @($names | ForEach-Object { [System.Threading.Mutex]::new($false, $_) })
 
 if ($Status) {

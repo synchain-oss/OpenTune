@@ -3,6 +3,7 @@
 //
 // Every fork-gate check: plant a violation -> FAIL, remove it -> PASS. Runs in throw-away repos.
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
@@ -324,6 +325,33 @@ describe('layer', () => {
   });
 });
 
+const SPEC_DIR = 'Tests/Control/spec/otcp/v1';
+
+/**
+ * A commit on the fork base that carries a spec copy and a .github/spec.lock describing it. `mutate`
+ * edits the lock fields before it is written (plants a wrong value).
+ */
+function specCommit(copyFiles, mutate = () => {}) {
+  const files = {};
+  for (const [name, text] of Object.entries(copyFiles)) files[`${SPEC_DIR}/${name}`] = text;
+  const first = repo.change(files);
+  // sha256sum in binary mode: "<hex> *<path>" per line, paths sorted bytewise
+  const listing = Object.keys(copyFiles)
+    .sort((a, b) => Buffer.compare(Buffer.from(a), Buffer.from(b)))
+    .map((name) => `${createHash('sha256').update(copyFiles[name]).digest('hex')} *${name}\n`)
+    .join('');
+  const lock = {
+    source: 'example/spec-source',
+    ref: 'spec-v0.0.0',
+    copy: SPEC_DIR,
+    gitTree: repo.git(['rev-parse', `${first}:${SPEC_DIR}`]).trim(),
+    sha256: createHash('sha256').update(listing).digest('hex'),
+    files: Object.keys(copyFiles).length,
+  };
+  mutate(lock);
+  return repo.change({ ...files, '.github/spec.lock': `${JSON.stringify(lock, null, 2)}\n` });
+}
+
 describe('spec-copy', () => {
   test('feat/* branch changing the spec copy or spec.lock fails', async () => {
     await expectStatus('spec-copy', repo.change({ 'Tests/Control/spec/otcp/v1/methods.md': 'x\n' }), 'FAIL', { layer: 'L2' });
@@ -332,7 +360,7 @@ describe('spec-copy', () => {
 
   test('spec-sync/* may change it into any base; external PRs may not', async () => {
     repo.ref('refs/remotes/origin/dev', repo.forkBase);
-    const head = repo.change({ 'Tests/Control/spec/otcp/v1/methods.md': 'x\n', '.github/spec.lock': '{}\n' });
+    const head = specCommit({ 'methods.md': 'x\n', 'sub/errors.md': 'e\n' });
     await expectStatus('spec-copy', head, 'PASS', { headBranch: 'spec-sync/v1.0.0' });
     await expectStatus('spec-copy', head, 'PASS', { headBranch: 'spec-sync/v1.0.0', base: 'origin/dev' });
     await expectStatus('spec-copy', head, 'FAIL', { headBranch: 'spec-sync/v1.0.0', external: true });
@@ -340,7 +368,7 @@ describe('spec-copy', () => {
 
   test('integration branches carry spec changes only into dev (upstream-pr/* only into review-base/*)', async () => {
     for (const ref of ['dev', 'feature/other', 'review-base/7']) repo.ref(`refs/remotes/origin/${ref}`, repo.forkBase);
-    const head = repo.change({ 'Tests/Control/spec/otcp/v1/methods.md': 'y\n' });
+    const head = specCommit({ 'methods.md': 'y\n' });
     const into = (headBranch, base, status, extra = {}) => expectStatus('spec-copy', head, status, { headBranch, base: `origin/${base}`, layer: 'L2', ...extra });
     // the main line and a sync candidate into dev carry merged spec changes
     await into('feature/control-api', 'dev', 'PASS');
@@ -361,6 +389,51 @@ describe('spec-copy', () => {
 
   test('changes elsewhere pass', async () => {
     await expectStatus('spec-copy', repo.change({ 'Tests/Control/Unit.cpp': 'x\n' }), 'PASS');
+  });
+
+  describe('spec.lock is recomputed from the copy', () => {
+    const ok = { headBranch: 'spec-sync/v1.0.0' };
+
+    test('a consistent lock passes and says what was recomputed', async () => {
+      const r = await expectStatus('spec-copy', specCommit({ 'a.md': 'a\n', 'b/c.md': 'c\n' }), 'PASS', ok);
+      assert.match(r.detail, /复算/);
+    });
+
+    test('a wrong sha256 fails', async () => {
+      const r = await expectStatus('spec-copy', specCommit({ 'a.md': 'a\n' }, (l) => { l.sha256 = '0'.repeat(64); }), 'FAIL', ok);
+      assert.match(r.problems.join('\n'), /sha256/);
+    });
+
+    test('a wrong gitTree fails', async () => {
+      const r = await expectStatus('spec-copy', specCommit({ 'a.md': 'a\n' }, (l) => { l.gitTree = '1'.repeat(40); }), 'FAIL', ok);
+      assert.match(r.problems.join('\n'), /gitTree/);
+    });
+
+    test('a wrong file count fails', async () => {
+      const r = await expectStatus('spec-copy', specCommit({ 'a.md': 'a\n' }, (l) => { l.files = 2; }), 'FAIL', ok);
+      assert.match(r.problems.join('\n'), /files/);
+    });
+
+    test('a copy changed without updating the lock fails', async () => {
+      const synced = specCommit({ 'a.md': 'a\n' });
+      const head = repo.change({ [`${SPEC_DIR}/a.md`]: 'a, edited\n' }, { parent: synced });
+      const r = await expectStatus('spec-copy', head, 'FAIL', ok);
+      assert.match(r.problems.join('\n'), /sha256|gitTree/);
+    });
+
+    test('a lock without a copy (or an unparseable lock) fails', async () => {
+      await expectStatus('spec-copy', repo.change({ '.github/spec.lock': '{}\n' }), 'FAIL', ok);
+      await expectStatus('spec-copy', repo.change({ '.github/spec.lock': 'not json\n' }), 'FAIL', ok);
+    });
+
+    test('the text-mode listing (two spaces) is accepted as well', async () => {
+      const copyFiles = { 'a.md': 'a\n' };
+      const files = { [`${SPEC_DIR}/a.md`]: 'a\n' };
+      const first = repo.change(files);
+      const text = `${createHash('sha256').update('a\n').digest('hex')}  a.md\n`;
+      const lock = { copy: SPEC_DIR, gitTree: repo.git(['rev-parse', `${first}:${SPEC_DIR}`]).trim(), sha256: createHash('sha256').update(text).digest('hex'), files: Object.keys(copyFiles).length };
+      await expectStatus('spec-copy', repo.change({ ...files, '.github/spec.lock': JSON.stringify(lock) }), 'PASS', ok);
+    });
   });
 });
 

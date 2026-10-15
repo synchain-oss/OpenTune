@@ -10,7 +10,9 @@
 //                            base branch and HEAD .. HEAD) touches native code or the build pipeline
 //                            itself (NATIVE_PATTERNS); otherwise no build, and the aggregate job
 //                            reports a skipped success
-//   anything else            full build (push, workflow_dispatch, or a caller of workflow_call)
+//   anything else            full build (push, workflow_dispatch, or --event workflow_call, which the
+//                            workflow passes when a caller asks for inputs.full: a called workflow
+//                            sees the caller's github.event_name, so it cannot be detected here)
 //
 // CLI: node detect-native.mjs --event <github.event_name> [--base <github.base_ref>] [--head <rev>]
 //      [--github-output <file>]   writes build=, variants= and reason= for $GITHUB_OUTPUT
@@ -30,6 +32,9 @@ export const NATIVE_PATTERNS = [
   '.github/scripts/bootstrap-deps.ps1',
   '.github/scripts/deps.lock.json',
   '.github/scripts/detect-native.mjs',
+  '.github/scripts/fetch-tool.mjs',
+  '.github/scripts/fork-lib.mjs',
+  '.github/scripts/fork-delta.mjs',
   '.github/scripts/run-ctest.ps1',
   '.github/scripts/with-build-slot.ps1',
   '.github/scripts/tools.lock.json',

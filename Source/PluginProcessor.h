@@ -160,6 +160,10 @@ struct PluginPianoRollSessionState
 
 struct PluginProcessorTransportTestAccessor;  // forward decl for test access to transport fields
 
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+class ControlService;  // OpenTune Control API hook: control service type, see Source/Control/README.md#hooks
+#endif
+
 #if !JucePlugin_Build_Standalone
 namespace Capture {
     class CaptureSession;  // forward decl; full type in Source/Plugin/Capture/CaptureSession.h
@@ -1030,6 +1034,22 @@ private:
     // ARA composite scope: per-instance token + one-shot initial Read intent.
     uint64_t araInstanceToken_{0};
     std::atomic<bool> initialAraReadPending_{true};
+#endif
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+public:
+    // OpenTune Control API hook: public runtime initialisation and the control service, see Source/Control/README.md#hooks
+    // Message thread. The sequence of the host entry points: initialise, then replay the deferred state.
+    bool ensureRuntimeInitialized() noexcept
+    {
+        const bool ready = initializeRuntimeState();
+        if (ready)
+            replayDeferredState();
+        return ready;
+    }
+    ControlService& getControlService() noexcept { return *controlService_; }
+
+private:
+    std::unique_ptr<ControlService> controlService_;
 #endif
 
 public:

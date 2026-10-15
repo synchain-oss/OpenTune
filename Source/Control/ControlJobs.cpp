@@ -238,6 +238,9 @@ ControlJobs::ControlJobs(const ControlLimits& limits)
 
 ControlJobs::~ControlJobs()
 {
+    // Never inside a step's nested message loop: the interrupted tick would return into a destroyed
+    // registry (see the class comment).
+    jassert(tickDepth_ == 0);
     // ControlService stops the registry on the message thread first; this only covers a registry that a
     // test creates and destroys on the message thread.
     stop();

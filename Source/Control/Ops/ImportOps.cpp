@@ -49,6 +49,63 @@ ControlImportAnalysis& analysisOverride()
     return analysis;
 }
 
+/** Message thread only. */
+std::uint64_t& commitCopies()
+{
+    static std::uint64_t copies = 0;
+    return copies;
+}
+
+/** The highest clip id that an import commit of the instance received, with the content epoch it was
+    received in. Message thread only. */
+struct ClipIdFloor
+{
+    std::string instanceId;
+    std::uint64_t epoch = 0;
+    std::uint64_t clipId = 0;
+};
+
+ClipIdFloor& clipIdFloor()
+{
+    static ClipIdFloor floor;
+    return floor;
+}
+
+/**
+ * How many attempts to commit a new clip can fail because OpenTune hands out a clip id that a clip
+ * already has. StandaloneContentRepository::createClip() takes new ids from a counter; clear(), which
+ * opening a project calls, restarts the counter at 1 while the opened project's clips keep their ids, so
+ * each id in use that the counter reaches makes one commit fail. Without a clear() (content epoch 0) every
+ * id came from the counter, which is past them all; ids up to the highest one that a commit of this
+ * instance received since the last clear() are behind the counter as well. Message thread.
+ */
+std::size_t possibleClipIdCollisions(ControlOpContext& context)
+{
+    const auto* repository = context.processor().getStandaloneContentRepository();
+    if (repository == nullptr || repository->getContentEpoch() == 0)
+        return 0;
+    const auto& floor = clipIdFloor();
+    const std::uint64_t behind =
+        floor.instanceId == context.facts().instanceId && floor.epoch == repository->getContentEpoch() ? floor.clipId
+                                                                                                       : 0;
+    const auto clips = repository->getAllClips();
+    return static_cast<std::size_t>(
+        std::count_if(clips.begin(), clips.end(), [behind](const ContentKey& key) { return key.objectId > behind; }));
+}
+
+/** Records the clip id that a commit received (see possibleClipIdCollisions()). Message thread. */
+void recordCommittedClipId(ControlOpContext& context, const ContentKey& key)
+{
+    const auto* repository = context.processor().getStandaloneContentRepository();
+    if (repository == nullptr)
+        return;
+    auto& floor = clipIdFloor();
+    const auto epoch = repository->getContentEpoch();
+    if (floor.instanceId != context.facts().instanceId || floor.epoch != epoch)
+        floor = ClipIdFloor{context.facts().instanceId, epoch, 0};
+    floor.clipId = std::max(floor.clipId, key.objectId);
+}
+
 enum class Layout {
     Single,
     Sequential,
@@ -345,12 +402,14 @@ struct ImportItem
  * Source/Standalone/PluginEditor.cpp), then focuses the last clip and requests the pitch analysis of every
  * committed clip, and ends when every analysis has finished.
  *
- * - The commit waits while the editor is busy (UI priority) and stops before it when cancellation was
- *   requested; clips committed before stay, and the result reports them.
+ * - The commit waits while the editor is busy (UI priority). Cancellation stops before the next commit
+ *   without waiting for the UI; clips committed before stay, and the result reports them.
  * - OpenTuneAudioProcessor::commitPreparedImportAsPlacement() is the editor's commit. After a project was
  *   opened, OpenTune gives a new clip an id that a clip of the project may already have, and the commit
- *   fails; each failed attempt uses up that id. The job therefore repeats the commit, at most once more
- *   than there are clips, so the import succeeds where the UI would fail.
+ *   fails; each failed attempt uses up that id. The job therefore repeats the commit, at most once per
+ *   clip whose id can still be handed out, so the import succeeds where the UI would fail. Only then does
+ *   it commit a copy of the prepared audio, which a further attempt needs; otherwise (no project opened, or
+ *   every clip id behind OpenTune's counter) it commits once, as the editor does, without a copy.
  * - OpenTune's import creates no undo entry and the editor does not mark the project as changed after it;
  *   the job marks it (PROTOCOL.md section 15.5).
  * - commitPreparedImportAsPlacement() selects every clip it commits and makes its track the active track,
@@ -358,6 +417,12 @@ struct ImportItem
  *   decides whether the editor shows the last clip (and, in the openDyne scheme, generates its notes).
  * - The clip id collision after a project was opened is only logged: the protocol has no warning code
  *   for it, so the result carries none.
+ *
+ * Where it differs from the editor's import, it follows methods/import.start.schema.json:
+ * - In the openDyne scheme the editor generates notes for every clip it commits; the job generates them
+ *   only for the focused clip (without generateNotes).
+ * - The editor's import into separate tracks places every file at 0 s on its track; the job appends
+ *   each file after the last clip on its track (or places it at startTimelineSec).
  */
 class ImportJob
 {
@@ -427,14 +492,15 @@ private:
             if (file_->error) {
                 item.error = file_->error;
             } else {
-                // UI priority: nothing is committed under the user's hands; the next tick tries again.
-                if (controlCheckBusy(context).has_value())
-                    return;
+                // Cancellation commits nothing, so it does not wait for the UI.
                 if (step.cancelRequested()) {
                     cancelled_ = true;
                     enterAnalysis(context);
                     return;
                 }
+                // UI priority: nothing is committed under the user's hands; the next tick tries again.
+                if (controlCheckBusy(context).has_value())
+                    return;
                 commit(context, item, *file_);
             }
             file_.reset();
@@ -469,24 +535,29 @@ private:
 
         // OpenTuneAudioProcessor::commitPreparedImportAsPlacement(): the editor's commit. A failed attempt
         // releases what it created and uses up one clip id; see the class comment for why it is repeated.
-        const auto* repository = processor.getStandaloneContentRepository();
-        const std::size_t attempts = (repository != nullptr ? repository->getAllClips().size() : 0) + 1;
+        // The commit consumes the prepared audio, so an attempt that may be followed by another one commits
+        // a copy. Attempts are repeated only while the clip id can be the cause of the failure: for a file
+        // that prepareImport() accepted, at a placement that ImportPlacement::isValid() accepts, the commit
+        // has no other reason to fail, and any other failure would repeat on every attempt.
+        const std::size_t attempts = (placement.isValid() ? possibleClipIdCollisions(context) : 0) + 1;
         OpenTuneAudioProcessor::CommittedPlacement committed;
         std::size_t attempt = 0;
         while (attempt < attempts && !committed.isValid()) {
             ++attempt;
-            // The commit consumes what it is given: a copy while another attempt may follow.
             OpenTuneAudioProcessor::PreparedImport prepared;
-            if (attempt < attempts)
+            if (attempt < attempts) {
                 prepared = file.prepared;
-            else
+                ++commitCopies();
+            } else {
                 prepared = std::move(file.prepared);
+            }
             committed = processor.commitPreparedImportAsPlacement(std::move(prepared), placement);
         }
         if (!committed.isValid()) {
             item.error = ControlJobError{"INTERNAL", "", "OpenTune did not accept the clip", false};
             return;
         }
+        recordCommittedClipId(context, committed.contentKey);
         if (attempt > 1)
             AppLogger::logNoThrow("control API: import.start: the commit of a clip was repeated "
                                   + juce::String(static_cast<int>(attempt - 1))
@@ -533,14 +604,16 @@ private:
         }
     }
 
-    /** After the last commit (or cancellation): focus the last clip, request every analysis. */
+    /** After the last commit (or cancellation): focus the last clip, request every analysis. A cancelled
+        job, which does not wait for the UI, focuses no clip while the UI is busy, so that the view does
+        not change under the user's hands. */
     void enterAnalysis(ControlOpContext& context)
     {
         phase_ = Phase::Analysis;
         file_.reset();
         auto& processor = context.processor();
         ImportItem* focus = nullptr;
-        if (params_.focus)
+        if (params_.focus && !(cancelled_ && controlCheckBusy(context).has_value()))
             for (auto it = items_.rbegin(); it != items_.rend() && focus == nullptr; ++it)
                 if (it->imported)
                     focus = &*it;
@@ -553,8 +626,9 @@ private:
             if (bridge != nullptr)
                 bridge->focusPlacement(focus->trackId, focus->placementId);
         }
-        // In the openDyne scheme the editor generates the notes of the clip it shows once its analysis
-        // finished (PROTOCOL.md section 21 rule 2), with the parameters it would use for AUTO.
+        // In the openDyne scheme notes are generated for the focused clip once its analysis finished, as
+        // import.start specifies (PROTOCOL.md section 21 rule 2), with the parameters the editor would use
+        // for AUTO. The editor's own import generates them for every clip it commits; see the class comment.
         const bool openDyne = processor.getAppPreferences().getState().shared.audioEditingScheme
                               == AudioEditingScheme::Scheme::NotesPrimary;
         NoteGeneratorParams editorParams;
@@ -828,6 +902,11 @@ void registerImportOps(ControlMethodTable& table)
 void controlSetImportAnalysisForTesting(ControlImportAnalysis analysis)
 {
     analysisOverride() = std::move(analysis);
+}
+
+std::uint64_t controlImportCommitCopiesForTesting()
+{
+    return commitCopies();
 }
 
 } // namespace OpenTune

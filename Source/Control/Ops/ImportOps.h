@@ -3,6 +3,7 @@
 
 #include "PluginProcessor.h"
 
+#include <cstdint>
 #include <functional>
 
 namespace OpenTune {
@@ -22,5 +23,10 @@ using ControlImportAnalysis = std::function<bool(OpenTuneAudioProcessor& process
     later import job, or restores the default with an empty function. Never used by OpenTune itself.
     Message thread. */
 void controlSetImportAnalysisForTesting(ControlImportAnalysis analysis);
+
+/** Number of times an import job copied the audio of a prepared file so that it could repeat the commit,
+    which it does only while the clip id that OpenTune hands out next may be in use (after a project was
+    opened). For the tests; never used by OpenTune itself. Message thread. */
+std::uint64_t controlImportCommitCopiesForTesting();
 
 } // namespace OpenTune

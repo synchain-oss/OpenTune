@@ -626,7 +626,9 @@ void scenarioJobShutdown()
     if (CONTROL_CHECK(response.has_value())) {
         note("response: " + *response);
         CONTROL_CHECK(isError(response, "SHUTTING_DOWN", ""));
-        const JsonValue* data = errorData(json(*response));
+        // Keep the parsed response: errorData() points into it.
+        const JsonValue parsed = json(*response);
+        const JsonValue* data = errorData(parsed);
         CONTROL_CHECK(data != nullptr && !memberOf(*data, "executed").asBoolean());
     }
     // The work was destroyed during the stop, its thread joined; no work runs afterwards.
@@ -830,6 +832,7 @@ void scenarioImport()
     if (!api.open(service))
         return;
     auto& preferences = processor->getAppPreferences();
+    const auto copiesBefore = controlImportCommitCopiesForTesting();
     const auto media = mediaDirectory("import");
     const auto take1 = writeTone(media, "take1", 2.0);
     const auto take2 = writeTone(media, "take2", 1.5, 2, 48000.0); // stereo, resampled
@@ -1001,6 +1004,9 @@ void scenarioImport()
                       && memberOf(memberOf(afterEnd, "job"), "state").text() == "succeeded");
         CONTROL_CHECK(processor->getStandaloneArrangement()->getNumPlacements(5) == 1);
     }
+    // No project was opened, so no clip id could be in use: every commit was a single one without a copy
+    // of the audio, as the UI's.
+    CONTROL_CHECK(controlImportCommitCopiesForTesting() == copiesBefore);
     const auto dispatcher = service.dispatcher();
     CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
 }
@@ -1042,16 +1048,31 @@ void scenarioImportAfterOpen()
     }
     CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 2);
 
-    // The import commits although the first clip ids are in use; the repeated commits are logged.
+    // The import commits although the first clip ids are in use; the repeated commits are logged, and the
+    // attempts that may be repeated commit a copy of the audio.
     const auto repeatedBefore = occurrences(logText(), "was repeated");
+    const auto copiesBefore = controlImportCommitCopiesForTesting();
     const auto job =
         importAndWait(api, R"({"items":[{"path":)" + quoted(take3) + R"(}],"layout":"single","trackId":2})");
     CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
     const auto& item = memberOf(memberOf(job, "result"), "items").at(0);
     CONTROL_CHECK(memberOf(item, "imported").asBoolean() && memberOf(item, "f0State").text() == "ready");
     CONTROL_CHECK(occurrences(logText(), "was repeated") == repeatedBefore + 1);
+    CONTROL_CHECK(controlImportCommitCopiesForTesting() > copiesBefore);
     const auto project = api.result("project.get");
     CONTROL_CHECK(memberOf(project, "placements").size() == 3 && memberOf(project, "contents").size() == 3);
+
+    // Every clip id is now behind the one that import received: the next import commits once, without a
+    // copy, and nothing is repeated.
+    const auto take4 = writeTone(media, "take4", 1.0);
+    const auto copiesAfter = controlImportCommitCopiesForTesting();
+    const auto next =
+        importAndWait(api, R"({"items":[{"path":)" + quoted(take4) + R"(}],"layout":"single","trackId":3})");
+    CONTROL_CHECK(memberOf(next, "state").text() == "succeeded");
+    CONTROL_CHECK(memberOf(memberOf(memberOf(next, "result"), "items").at(0), "imported").asBoolean());
+    CONTROL_CHECK(controlImportCommitCopiesForTesting() == copiesAfter);
+    CONTROL_CHECK(occurrences(logText(), "was repeated") == repeatedBefore + 1);
+    CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 4);
 }
 
 void scenarioImportCancel()
@@ -1073,20 +1094,20 @@ void scenarioImportCancel()
         items += std::string(i > 1 ? "," : "") + R"({"path":)"
                  + quoted(writeTone(media, "take" + std::to_string(i), 1.0)) + "}";
     const auto start = api.result(
-        "import.start",
-        json(R"({"items":[)" + items + R"(],"layout":"sequential","trackId":0,"startTimelineSec":0,"focus":false})"));
+        "import.start", json(R"({"items":[)" + items + R"(],"layout":"sequential","trackId":0,"startTimelineSec":0})"));
     const auto jobId = memberOf(memberOf(start, "job"), "jobId").text();
-    // The first commit; then the user holds the mouse button, so the next commit waits, and the client
-    // cancels meanwhile.
+    // The first commit; then the user holds the mouse button, so the next commit waits.
     CONTROL_CHECK(pumpMessagesUntil([&bridge] { return bridge.structureChanges >= 1; }, kReadTimeoutMs));
     bridge.busy.pointerDown = true;
-    const auto cancel = api.result("job.cancel", json(R"({"jobId":)" + quoted(jobId) + "}"));
-    CONTROL_CHECK(memberOf(cancel, "cancelRequested").asBoolean());
     pumpMessagesFor(kQuietPumpMs);
     CONTROL_CHECK(bridge.structureChanges == 1);
-    bridge.busy.pointerDown = false;
-
+    // A cancellation commits nothing, so it does not wait for the UI: the job ends while the button is
+    // still held, and it focuses no clip under the user's hands.
+    const auto cancel = api.result("job.cancel", json(R"({"jobId":)" + quoted(jobId) + "}"));
+    CONTROL_CHECK(memberOf(cancel, "cancelRequested").asBoolean());
     const auto job = waitJob(api, jobId);
+    CONTROL_CHECK(bridge.busy.pointerDown && bridge.structureChanges == 1 && bridge.focused.empty());
+    bridge.busy.pointerDown = false;
     CONTROL_CHECK(memberOf(job, "state").text() == "cancelled");
     const auto& error = memberOf(job, "error");
     CONTROL_CHECK(errorKindOf(error).text() == "CANCELLED" && errorReasonOf(error).text() == "cancelled_by_request"

@@ -104,7 +104,9 @@ using ControlJobWork = std::function<void(ControlJobStep& step)>;
  * Re-entrancy: when a step runs a nested message loop, the tick's timer may fire inside it; that nested
  * tick does nothing. stop() called from such a loop stops the timer but leaves its destruction to the
  * registry's destructor, because the timer's callback has not returned yet; the works of the jobs that
- * the interrupted tick was running are destroyed when it returns, and none of them is called again.
+ * the interrupted tick was running are destroyed when it returns, and none of them is called again. The
+ * registry itself must not be destroyed inside such a loop: the interrupted tick returns into it (debug
+ * builds assert this).
  */
 class ControlJobs
 {
@@ -134,7 +136,8 @@ public:
     using Clock = std::function<std::int64_t()>;
 
     explicit ControlJobs(const ControlLimits& limits);
-    /** Calls stop() when it was not called; see the class threading rules. */
+    /** Calls stop() when it was not called; see the class threading rules. Never inside the nested
+        message loop of a step (see Re-entrancy). */
     ~ControlJobs();
 
     ControlJobs(const ControlJobs&) = delete;

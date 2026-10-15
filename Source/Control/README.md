@@ -198,7 +198,9 @@ envelopes of the editing methods compare two captures for `revisionDiff`.
 - A step must return quickly and should not run a nested message loop (a modal dialog,
   `runDispatchLoopUntil`). If one does, the registry stays consistent: the timer that fires inside the
   loop calls no work, and `ControlJobs::stop()` called inside the loop stops the timer without destroying
-  it under its own callback; no work is called after the stop.
+  it under its own callback; no work is called after the stop. The registry itself must not be destroyed
+  inside such a loop (for example the application quitting while a step shows a modal dialog): the
+  interrupted tick would return into a destroyed registry. Debug builds assert it in `~ControlJobs()`.
 - A job created cancellable stays so until it ends, until its work calls `endCancellability()` (the
   point of no return of its kind, section 12.3), or until `job.cancel` requested cancellation. The work
   stops at its next step.
@@ -286,11 +288,22 @@ same processor functions:
   `OpenTuneAudioProcessor::prepareImport()`; a file that fails gets its item error and the others go on;
 - per file, on the message thread: `commitPreparedImportAsPlacement()` at the start the layout gives (the
   end of the last clip on the track, as `computeTrackAppendStartSeconds`, without `startTimelineSec`);
-  the project is marked as changed and hidden tracks that now hold a clip are revealed;
+  the project is marked as changed and hidden tracks that now hold a clip are revealed. The commit waits
+  while the UI is busy; a cancellation does not wait: it stops before the next commit, and while the UI
+  is busy it focuses no clip;
 - after the last commit: the last clip is focused (`focus`), and `requestContentRefresh()` asks for every
   analysis, with note generation for `generateNotes` (OpenTune's default parameters) or, in the openDyne
-  scheme, for the focused clip (the editor's parameters, as the UI); the job ends when every analysis has
+  scheme, for the focused clip (with the editor's parameters); the job ends when every analysis has
   finished.
+
+Where the method's specification differs from the editor's import, the job follows the specification
+(`methods/import.start.schema.json`):
+
+- In the openDyne scheme the editor generates notes for every clip it imports; the job generates them
+  only for the focused clip (the specification: focus "generates notes for it").
+- The editor's import into separate tracks places every file at 0 s on its track; the job appends each
+  file after the last clip on its track (or places it at `startTimelineSec`), as the specification
+  requires for every layout.
 
 The result has no undo entry (reason `ui_parity`, as the UI). Its revert recipe would delete the clips
 with `arrangement.edit`; while the instance does not report `arrangement.v1`, no request can delete them,
@@ -301,9 +314,12 @@ Known OpenTune behaviours, reported as they are:
 
 - After a project was opened, OpenTune gives a new clip an id that a clip of the project may already
   use, and the commit fails; each failed attempt uses up that id, so the import fails once per id in
-  use. The job repeats the commit, at most once more than there are clips, and logs it; the result
-  carries no warning, because the protocol defines no warning code for it. The UI's import fails in this
-  situation.
+  use. The job repeats the commit, at most once per clip whose id OpenTune can still hand out, and logs
+  it; the result carries no warning, because the protocol defines no warning code for it. The UI's
+  import fails in this situation. The commit consumes the prepared audio, so an attempt that may be
+  repeated commits a copy; the job copies only when a project was opened (the content epoch is not 0)
+  and a clip has an id above the highest one the instance's imports received since, and it never repeats
+  a failure that the clip id cannot have caused. Otherwise it commits once without a copy, as the UI.
 - `commitPreparedImportAsPlacement()` selects every clip it commits and makes its track the active
   track, also with `focus: false`. The job does not undo that; the result's `ui` snapshot
   (`activeTrackId`, `selectedPlacementIds`) shows it. `focus` decides only whether the editor shows the
@@ -364,8 +380,9 @@ monotonic clocks, `stop()` from a nested message loop inside a step, and `execut
 destroys the processor while a `job.get` waits for a job whose work owns a thread; `WriteEnvelope` the
 four states, the no-op rules, `IRREVERSIBLE`, the UI snapshot, the busy checks and the environment of a
 job's steps; `Import` both editing schemes, all layouts, focus and note generation,
-revealed tracks, item failures, the checks before the job, busy and idempotency; `ImportAfterOpen` the
-import after a project was opened; `ImportCancel` a cancellation after the first of three commits;
+revealed tracks, item failures, the checks before the job, busy, idempotency and commits without a copy
+of the audio; `ImportAfterOpen` the import after a project was opened and when its commit copies the
+audio; `ImportCancel` a cancellation after the first of three commits while the UI is busy;
 `JobVectors` the specification's vectors of `job/` and `import/`.
 
 ## Capabilities and protocol versions

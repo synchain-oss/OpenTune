@@ -11,8 +11,8 @@
   The steps follow CLAUDE.md section 8, plus the models\ assertion and gitleaks:
   1. LFS settings: lfs.fetchexclude=* and every tracked *.onnx is still an un-smudged LFS pointer.
   2. Unless -SkipBuild: configure (Ninja Multi-Config), build (RelWithDebInfo, --parallel N) and ctest
-     (all registered tests except ARALifecycleContractTests), each through with-build-slot.ps1 (one
-     machine-wide build slot, free-memory check). Every test runs with its own OPENTUNE_DATA_DIR under
+     (all registered tests except ARALifecycleContractTests), each through with-build-slot.ps1 (machine-wide
+     build slots: 2 by default, -BuildSlots or OPENTUNE_BUILD_SLOTS to change; free-memory check). Every test runs with its own OPENTUNE_DATA_DIR under
      <build>\ot-test-data.
   3. Test data isolation: %APPDATA%\OpenTune is snapshotted (files, sizes, write times) before and
      after ctest. Until the OPENTUNE_DATA_DIR hook is in the tree the upstream tests still write there:
@@ -48,6 +48,9 @@ param(
     [string]$Base,
     [ValidateRange(1, 64)][int]$Parallel = 8,
     [int]$MinFreeMB = 6144,
+    # Machine-wide build slots passed to with-build-slot.ps1 -Slots. Unset: the script's own default
+    # (OPENTUNE_BUILD_SLOTS, then 2).
+    [ValidateRange(1, 8)][int]$BuildSlots,
     [string]$ToolsDir = (Join-Path ([System.IO.Path]::GetTempPath()) 'ot-tools'),
     [string]$ReportPath
 )
@@ -165,6 +168,7 @@ function Invoke-InSlot([string]$Label, [string[]]$Command, [switch]$VsDevShell) 
     $log = Join-Path $logDir "$Label.log"
     $a = @('-NoProfile', '-File', $slot, '-MinFreeMB', "$MinFreeMB")
     if ($VsDevShell) { $a += '-VsDevShell' }
+    if ($BuildSlots -ge 1) { $a += @('-Slots', "$BuildSlots") }
     $a += '--'
     $a += $Command
     $sw = [Diagnostics.Stopwatch]::StartNew()

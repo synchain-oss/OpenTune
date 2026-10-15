@@ -14,8 +14,12 @@
     - archive deps (zip / tar.gz / nupkg) are downloaded once into <DownloadsDir>\<name>\,
       checked against the pinned sha256 (and the publisher's own hash when the lock carries one:
       nugetSha512 / publishedSha256), then extracted into <DepsRoot>\<name>\.
+  Entries may carry a "platforms" list (windows / macos); only entries for the host (or -Platform) are
+  fetched. On macOS the directory links are symbolic links instead of junctions.
   Each finished dependency gets a stamp file (.ot-dep.json). A re-run skips anything whose stamp
-  and verify paths are intact, so the script is safe to run repeatedly and from several lanes
+  and verify paths are intact (a cached git dependency must also still be at the pinned commit
+  according to `git rev-parse HEAD`; an archive dependency is checked against the stamp's sha256 and the
+  verify paths only), so the script is safe to run repeatedly and from several lanes
   (a named mutex serialises concurrent runs).
 
   Download order for archive deps: the fork's source mirror first (mirror.baseUrl in the lock, or
@@ -47,6 +51,9 @@
   (JUCE-master, ThirdParty\<dep>) pointing into DepsRoot. Existing junctions are re-pointed; a real
   directory at a junction path is never touched (the script fails instead).
 
+.PARAMETER Platform
+  windows, macos or all. Defaults to the host. Selects which "platforms"-tagged entries are fetched.
+
 .PARAMETER Only
   Restrict to these dependency names.
 
@@ -71,6 +78,7 @@ param(
     [string]$MirrorBaseUrl,
     [string]$LinkInto,
     [string[]]$Only,
+    [ValidateSet('windows', 'macos', 'all')][string]$Platform,
     [Alias('IncludeFallback')][switch]$IncludeOptional,
     [switch]$RecordMissingHashes
 )
@@ -79,6 +87,13 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 $StampName = '.ot-dep.json'
+
+# Which host's dependencies to fetch. Entries without a "platforms" list are shared (JUCE, ARA SDK,
+# SoundTouch); entries with one are fetched only when the host is listed (or -Platform all).
+if (-not $Platform) { $Platform = if ($IsWindows) { 'windows' } elseif ($IsMacOS) { 'macos' } else { throw 'bootstrap-deps: unsupported host; pass -Platform windows|macos|all' } }
+
+$script:curlExe = if ($IsWindows) { 'curl.exe' } else { 'curl' }
+$script:tarExe = if ($IsWindows) { Join-Path $env:SystemRoot 'System32\tar.exe' } else { 'tar' }
 
 function Write-Step([string]$Message) { Write-Host "[bootstrap-deps] $Message" }
 
@@ -138,7 +153,9 @@ function Assert-NoModel($Dep) {
 
 function Install-GitDep($Dep, [string]$Dest) {
     $stamp = Read-Stamp $Dest
-    if ($stamp -and $stamp.commit -eq $Dep.commit -and (Test-VerifyPaths $Dest $Dep)) {
+    # The stamp only records what an earlier run believed; also ask git what the tree is really at.
+    $actualHead = if ($stamp -and (Test-Path -LiteralPath (Join-Path $Dest '.git'))) { ((& git -C $Dest rev-parse HEAD 2>$null) | Out-String).Trim() } else { '' }
+    if ($stamp -and $stamp.commit -eq $Dep.commit -and $actualHead -eq $Dep.commit -and (Test-VerifyPaths $Dest $Dep)) {
         Write-Step "$($Dep.name): ok (cached at $($Dep.commit.Substring(0,12)))"
         return [ordered]@{ name = $Dep.name; kind = 'git'; url = $Dep.url; ref = $Dep.ref; commit = $Dep.commit; submodules = $stamp.submodules; path = $Dest; action = 'cached' }
     }
@@ -191,7 +208,8 @@ function Install-GitDep($Dep, [string]$Dest) {
 # Candidate URLs in order: the fork mirror (when configured), then the upstream URLs from the lock.
 function Get-DownloadUrls($Dep) {
     $urls = @()
-    if ($script:mirrorBase) { $urls += "$($script:mirrorBase)/$([uri]::EscapeDataString([string]$Dep.file))" }
+    # Recording a missing hash must come from the upstream URL only: a mirror would become the root of trust.
+    if ($script:mirrorBase -and [string]$Dep.sha256) { $urls += "$($script:mirrorBase)/$([uri]::EscapeDataString([string]$Dep.file))" }
     $urls += @($Dep.urls)
     return $urls
 }
@@ -212,7 +230,7 @@ function Get-Archive($Dep, [string]$DownloadDir, [ref]$LockChanged) {
     foreach ($url in (Get-DownloadUrls $Dep)) {
         if (Test-Path -LiteralPath $part) { Remove-Item -LiteralPath $part -Force }
         Write-Step "$($Dep.name): downloading $url"
-        & curl.exe --fail --location --retry 3 --retry-delay 2 --silent --show-error --output $part $url
+        & $script:curlExe --fail --location --retry 3 --retry-delay 2 --silent --show-error --output $part $url
         if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $part)) {
             # A mirror copy that does not match the pin is discarded and the next URL is tried.
             if ($pin -and $script:mirrorBase -and $url.StartsWith($script:mirrorBase) -and (Get-Sha256 $part) -ne $pin) {
@@ -277,7 +295,7 @@ function Expand-ArchiveTo($Dep, [string]$Archive, [string]$Target) {
             # 'exclude' skips members Windows cannot create (e.g. SoundTouch's dangling .so symlink).
             $tarArgs = @('-xzf', $Archive, '-C', $Target)
             if ($Dep.PSObject.Properties['exclude']) { foreach ($x in $Dep.exclude) { $tarArgs += @('--exclude', $x) } }
-            & "$env:SystemRoot\System32\tar.exe" @tarArgs
+            & $script:tarExe @tarArgs
             if ($LASTEXITCODE -ne 0) { throw "$($Dep.name): tar failed with exit code $LASTEXITCODE" }
         }
         default { throw "$($Dep.name): unknown archive format '$($Dep.format)'" }
@@ -319,18 +337,20 @@ function Install-ArchiveDep($Dep, [string]$Dest, [string]$DownloadsRoot, [ref]$L
     return [ordered]@{ name = $Dep.name; kind = 'archive'; url = $source; file = $Dep.file; sha256 = $Dep.sha256; size = $size; path = $Dest; action = 'installed' }
 }
 
-# Junction <Tree>\<rel> -> $Target. Re-points an existing junction; refuses to touch a real directory.
+# Junction <Tree>\<rel> -> $Target (a symbolic link on macOS). Re-points an existing link; refuses to
+# touch a real directory.
 function Set-Junction([string]$Tree, [string]$Rel, [string]$Target) {
-    $link = Join-Path $Tree ($Rel -replace '/', '\')
+    $linkType = if ($IsWindows) { 'Junction' } else { 'SymbolicLink' }
+    $link = Join-Path $Tree ($Rel -replace '/', [string][System.IO.Path]::DirectorySeparatorChar)
     $item = Get-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
     if ($item) {
-        if ($item.LinkType -ne 'Junction') { throw "$link exists and is not a junction. Refusing to touch it; move it away by hand." }
+        if ($item.LinkType -ne $linkType) { throw "$link exists and is not a $($linkType.ToLowerInvariant()). Refusing to touch it; move it away by hand." }
         if ([string]@($item.Target)[0] -ieq $Target) { Write-Step "junction ok: $Rel"; return }
         # Directory.Delete(non-recursive) on a junction removes only the link, never the target's contents.
         [System.IO.Directory]::Delete($link)
     }
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $link) | Out-Null
-    New-Item -ItemType Junction -Path $link -Target $Target | Out-Null
+    New-Item -ItemType $linkType -Path $link -Target $Target | Out-Null
     Write-Step "junction: $Rel -> $Target"
 }
 
@@ -367,6 +387,7 @@ try {
     try {
     foreach ($dep in $lock.deps) {
         if ($Only -and ($dep.name -notin $Only)) { continue }
+        if ($Platform -ne 'all' -and $dep.PSObject.Properties['platforms'] -and $Platform -notin @($dep.platforms)) { continue }
         if ($dep.PSObject.Properties['optional'] -and $dep.optional -and -not $IncludeOptional -and -not $Only) {
             Write-Step "$($dep.name): skipped (optional '$($dep.optional)'; pass -IncludeOptional)"
             continue

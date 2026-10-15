@@ -1,0 +1,164 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: Build macOS
+
+# macOS 编译与测试骨架：macos-14（Apple Silicon，arm64），Ninja，RelWithDebInfo，控制接口选项 ON。
+# 依赖由 .github/scripts/bootstrap-deps.ps1 按 deps.lock.json 拉取并逐个校验（JUCE、ARA SDK、SoundTouch 与
+# ONNX Runtime 1.20.0 官方预编译 arm64 包，版本与 sha256 锁在同一份锁文件里；绝不下载模型）。
+# 注意：官方预编译包的最低系统版本比上游 CMake 里的部署目标（12.0）高（上游说明官方包需要 13.3+），链接时
+# 可能出现 "built for newer macOS" 警告；上游自己构建的 universal2 包不在 CI 里复现。
+# 触发：PR → dev（完整编译与 ctest）；手动；PR → feature/** 改到本 workflow、依赖锁定脚本或锁文件时（用来在
+# 引入或修改它的 PR 上首跑，见 gate job）。不是必需检查：阻塞与否由合并前的聚合检查另行决定。
+# runner 能力不足（核数、内存、时长）时如实降级：job summary 写明 runner 配置与每一步耗时，失败就是失败，不假装通过。
+on:
+  pull_request:
+    branches: [dev, 'feature/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-macos-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # PR → dev 与手动运行总是编译；PR → feature/** 只有改到本 workflow 或它依赖的脚本与锁文件时才编译
+  # （on.pull_request 只能有一组 branches/paths，所以在这里按改动文件决定）。
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.decide.outputs.run }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: false
+          persist-credentials: false
+      - name: Decide
+        id: decide
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          run=true
+          if [ "$EVENT_NAME" = "pull_request" ] && [ "$BASE_REF" != "dev" ]; then
+            files=$(git diff --name-only "$(git merge-base "origin/$BASE_REF" HEAD)" HEAD)
+            if printf '%s\n' "$files" | grep -Eq '^(\.github/workflows/build-macos\.yml|\.github/scripts/(bootstrap-deps\.ps1|deps\.lock\.json|list-test-targets\.ps1|run-ctest\.ps1))$'; then
+              echo "PR → $BASE_REF 改到 macOS 流水线或它依赖的脚本，编译" >> "$GITHUB_STEP_SUMMARY"
+            else
+              run=false
+              echo "PR → $BASE_REF 没有改到 macOS 流水线，跳过（PR → dev 才总是编译）" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+
+  compile-test:
+    name: compile-test (macos-14 arm64)
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: macos-14
+    timeout-minutes: 150
+    env:
+      GIT_LFS_SKIP_SMUDGE: '1'
+      OT_CONFIG: RelWithDebInfo
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+      - name: Set work paths and record the runner
+        run: |
+          {
+            echo "OT_DEPS=$RUNNER_TEMP/ot-deps"
+            echo "OT_BUILD=$RUNNER_TEMP/ot-build"
+            echo "OT_TEST_DATA=$RUNNER_TEMP/ot-test-data"
+          } >> "$GITHUB_ENV"
+          {
+            echo "### build-macos：runner"
+            echo
+            echo "- 架构：$(uname -m)；系统：$(sw_vers -productVersion)"
+            echo "- 核数：$(sysctl -n hw.ncpu)；内存：$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 )) GB；磁盘可用：$(df -h "$RUNNER_TEMP" | awk 'NR==2 {print $4}')"
+            echo "- Xcode：$(xcodebuild -version | head -1)；CMake：$(cmake --version | head -1)；Ninja：$(ninja --version 2>/dev/null || echo 未预装)"
+            echo "- PowerShell：$(pwsh --version 2>/dev/null || echo 未预装)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # 依赖缓存只放解压后的依赖目录；key 含锁文件与解压脚本的 sha256。命中缓存时 bootstrap-deps 核对每个依赖的
+      # 戳记与校验路径，git 依赖另用 git rev-parse HEAD 核对固定的 commit。
+      - name: Restore dependency cache
+        id: deps-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.OT_DEPS }}
+          key: ot-deps-macos-${{ hashFiles('.github/scripts/deps.lock.json', '.github/scripts/bootstrap-deps.ps1') }}
+      - name: Bootstrap dependencies (sha256 verified) and link them into the tree
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File .github/scripts/bootstrap-deps.ps1 -DepsRoot $env:OT_DEPS `
+            -DownloadsDir "$env:RUNNER_TEMP/ot-deps-downloads" -LinkInto $env:GITHUB_WORKSPACE -Platform macos
+          if ($LASTEXITCODE -ne 0) { throw "bootstrap-deps failed ($LASTEXITCODE)" }
+      - name: Save dependency cache
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.OT_DEPS }}
+          key: ${{ steps.deps-cache.outputs.cache-primary-key }}
+
+      # 上游 POST_BUILD 无条件复制声码器文件：放一个 0 字节占位，不下载任何模型（路径在上游 gitignore 里）。
+      - name: Vocoder placeholder (0 bytes)
+        run: |
+          voc='pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx'
+          if [ -e "$voc" ]; then echo "unexpected file at the vocoder path: $voc"; exit 1; fi
+          mkdir -p "$(dirname "$voc")"
+          : > "$voc"
+
+      - name: Configure (Ninja, RelWithDebInfo, arm64)
+        run: |
+          cmake -S "$GITHUB_WORKSPACE" -B "$OT_BUILD" -G Ninja \
+            -DCMAKE_BUILD_TYPE="$OT_CONFIG" \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DOPENTUNE_BUILD_TESTS=ON \
+            -DOPENTUNE_ENABLE_CONTROL_API=ON
+
+      # 目标：Standalone 与所有已注册测试的可执行文件，不含 ARALifecycleContractTests（在锁定的 ARA SDK 2.3.0 下
+      # 编不过，上游问题）。测试与目标的对应关系读自生成的 CTestTestfile.cmake。
+      - name: Build (--parallel = runner cores)
+        id: build
+        shell: pwsh
+        run: |
+          $targets = @('OpenTuneStandalone_Standalone') + @(pwsh -NoProfile -File .github/scripts/list-test-targets.ps1 -BuildDir $env:OT_BUILD -Exclude ARALifecycleContractTests)
+          if ($LASTEXITCODE -ne 0) { throw 'no registered tests (OPENTUNE_BUILD_TESTS=ON?)' }
+          $jobs = [Environment]::ProcessorCount
+          Write-Host "targets ($($targets.Count)): $($targets -join ', '); --parallel $jobs"
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          cmake --build $env:OT_BUILD --parallel $jobs --target @targets
+          $code = $LASTEXITCODE
+          "- 编译耗时：$([math]::Round($sw.Elapsed.TotalMinutes, 1)) 分钟（$jobs 个并行任务，$($targets.Count) 个目标）" >> $env:GITHUB_STEP_SUMMARY
+          if ($code -ne 0) { throw "build failed ($code)" }
+
+      # 与 `ctest -E ARALifecycleContractTests --output-on-failure` 等价，但每个测试有独立的 OPENTUNE_DATA_DIR。
+      - name: ctest (-E ARALifecycleContractTests, per-test OPENTUNE_DATA_DIR)
+        shell: pwsh
+        run: |
+          $summary = "$env:RUNNER_TEMP/ot-ctest-summary.json"
+          pwsh -NoProfile -File .github/scripts/run-ctest.ps1 -BuildDir $env:OT_BUILD -Config $env:OT_CONFIG `
+            -DataRoot $env:OT_TEST_DATA -SummaryPath $summary
+          $code = $LASTEXITCODE
+          if (Test-Path -LiteralPath $summary) {
+            $s = Get-Content -LiteralPath $summary -Raw | ConvertFrom-Json
+            $lines = @('### macOS ctest', '', "$($s.passed)/$($s.total) 通过；排除 $(@($s.excluded) -join '、')；$($s.seconds) s", '', '| 测试 | 结果 | 秒 |', '|---|---|---|')
+            foreach ($t in @($s.tests)) { $lines += "| $($t.name) | $(if ($t.passed) { 'PASS' } else { 'FAIL' }) | $($t.seconds) |" }
+            $lines -join "`n" >> $env:GITHUB_STEP_SUMMARY
+            foreach ($name in @($s.failed)) {
+              Write-Host "::group::$name output"
+              Get-Content -LiteralPath (Join-Path $env:OT_TEST_DATA "$name.log") -ErrorAction SilentlyContinue | Write-Host
+              Write-Host '::endgroup::'
+            }
+          }
+          if ($code -ne 0) { throw "ctest failed ($code)" }

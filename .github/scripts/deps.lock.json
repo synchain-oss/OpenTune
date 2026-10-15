@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "comment": "OpenTune fork build dependencies (Windows), read by bootstrap-deps.ps1. Versions follow CMakeLists.txt, not BUILDING.*.md. sha256 pins are verified on every run; nugetSha512 / publishedSha256 are the publisher's own hashes and are cross-checked when present. No model weights are ever listed here. Binary tools (sccache, gitleaks, clang-format) are pinned in tools.lock.json instead.",
+  "comment": "OpenTune fork build dependencies (Windows and macOS; entries with a platforms list are fetched only on those hosts), read by bootstrap-deps.ps1. Versions follow CMakeLists.txt, not BUILDING.*.md. sha256 pins are verified on every run; nugetSha512 / publishedSha256 are the publisher's own hashes and are cross-checked when present. No model weights are ever listed here. Binary tools (sccache, gitleaks, clang-format) are pinned in tools.lock.json instead.",
   "mirror": {
     "baseUrl": "https://github.com/synchain-oss/OpenTune/releases/download/deps-v1",
     "comment": "Archive deps are tried at <baseUrl>/<file> first and fall back to their upstream urls; every copy must match the same sha256 pin. git deps always come from upstream. An empty baseUrl disables the mirror."
@@ -68,7 +68,26 @@
       ]
     },
     {
+      "name": "onnxruntime-osx-arm64-1.20.0",
+      "platforms": ["macos"],
+      "kind": "archive",
+      "format": "tar.gz",
+      "file": "onnxruntime-osx-arm64-1.20.0.tgz",
+      "urls": [
+        "https://github.com/microsoft/onnxruntime/releases/download/v1.20.0/onnxruntime-osx-arm64-1.20.0.tgz"
+      ],
+      "sha256": "2bcfaafa9ff0a3a94f78e3af2f135ffde5bb2d79b08e83a50dbc450b0d20ddae",
+      "size": 7875127,
+      "stripSingleRoot": true,
+      "junction": "ThirdParty/onnxruntime-osx-universal2-1.20.0",
+      "verify": [
+        "include/onnxruntime_cxx_api.h",
+        "lib/libonnxruntime.1.20.0.dylib"
+      ]
+    },
+    {
       "name": "onnxruntime-win-x64-1.24.4",
+      "platforms": ["windows"],
       "kind": "archive",
       "format": "zip",
       "file": "onnxruntime-win-x64-1.24.4.zip",
@@ -87,6 +106,7 @@
     },
     {
       "name": "onnxruntime-dml-1.24.4",
+      "platforms": ["windows"],
       "kind": "archive",
       "format": "nupkg",
       "file": "microsoft.ml.onnxruntime.directml.1.24.4.nupkg",
@@ -105,6 +125,7 @@
     },
     {
       "name": "microsoft.ai.directml.1.15.4",
+      "platforms": ["windows"],
       "kind": "archive",
       "format": "nupkg",
       "file": "microsoft.ai.directml.1.15.4.nupkg",
@@ -124,6 +145,7 @@
     },
     {
       "name": "microsoft.direct3d.d3d12.1.619.5",
+      "platforms": ["windows"],
       "kind": "archive",
       "format": "nupkg",
       "file": "microsoft.direct3d.d3d12.1.619.5.nupkg",

@@ -16,6 +16,9 @@
   ARALifecycleContractTests is excluded by default: it assigns ARA_DRAFT's persistentID, which the
   ARA SDK 2.3.0 pinned by CMake does not have, so it does not compile (an upstream issue).
 
+  -Include '<regex>' keeps only tests whose name matches (the asan workflow runs `-Include Control`:
+  every test with 'Control' in its name, so tests added later are picked up by name).
+
   Writes a JSON summary to -SummaryPath (when given) and exits 1 when any test fails.
 #>
 [CmdletBinding()]
@@ -23,6 +26,8 @@ param(
     [Parameter(Mandatory)][string]$BuildDir,
     [string]$Config = 'RelWithDebInfo',
     [string[]]$Exclude = @('ARALifecycleContractTests'),
+    # Regular expression: only tests whose name matches run (like `ctest -R`). Empty = all tests.
+    [string]$Include = '',
     [Parameter(Mandatory)][string]$DataRoot,
     [string]$SummaryPath
 )
@@ -35,8 +40,8 @@ $Exclude = @($Exclude | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.T
 $listing = (& ctest --test-dir $BuildDir -C $Config --show-only=json-v1) | Out-String | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw "ctest --show-only failed ($LASTEXITCODE)" }
 $all = @($listing.tests | ForEach-Object { [string]$_.name })
-$tests = @($all | Where-Object { $Exclude -notcontains $_ })
-if ($tests.Count -eq 0) { throw "no tests registered in $BuildDir" }
+$tests = @($all | Where-Object { $Exclude -notcontains $_ -and (-not $Include -or $_ -match $Include) })
+if ($tests.Count -eq 0) { throw "no tests registered in $BuildDir$(if ($Include) { " that match '$Include'" })" }
 
 if (Test-Path -LiteralPath $DataRoot) { Remove-Item -LiteralPath $DataRoot -Recurse -Force }
 New-Item -ItemType Directory -Force -Path $DataRoot | Out-Null

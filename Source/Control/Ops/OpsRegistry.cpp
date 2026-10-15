@@ -181,9 +181,14 @@ ControlErrorReply controlMapError(const Error& error)
 void ControlMethodTable::add(ControlMethod method)
 {
     jassert(controlMethodCapability(method.name) != nullptr && find(method.name) == nullptr);
-    // A method runs either on the message thread (run) or off it (runOffMainThread); writes never run off it.
-    jassert(method.mainThread ? (method.run && !method.runOffMainThread)
-                              : (method.runOffMainThread && !method.run && !method.write));
+    // A method runs either on the message thread (run only) or off it with exactly one of runOffMainThread
+    // (the instance facts: app.getLog) and runWithoutMessageThread (the jobs registry: job.get, job.cancel),
+    // without run; writes never run off it.
+    const bool withFacts = static_cast<bool>(method.runOffMainThread);
+    const bool withJobs = static_cast<bool>(method.runWithoutMessageThread);
+    jassert(method.mainThread ? (method.run && !withFacts && !withJobs)
+                              : (withFacts != withJobs && !method.run && !method.write));
+    juce::ignoreUnused(withFacts, withJobs);
     methods_.push_back(std::move(method));
 }
 

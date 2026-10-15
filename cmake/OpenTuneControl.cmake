@@ -172,6 +172,10 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             ${CMAKE_CURRENT_SOURCE_DIR}/Tests
         )
         target_link_libraries(OpenTuneControlProcessorTests PRIVATE OpenTuneStandalone)
+        if(APPLE)
+            # The test message pump drives the main CFRunLoop directly.
+            target_link_libraries(OpenTuneControlProcessorTests PRIVATE "-framework CoreFoundation")
+        endif()
         # Jobs and the write envelope.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlJobTests.cpp)
         if(MSVC)

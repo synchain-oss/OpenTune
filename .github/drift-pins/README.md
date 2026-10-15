@@ -67,6 +67,12 @@ fork 专用（L0），永不进入上游 PR。
 
 规范化方式一旦使用就不再修改；需要不同规则时新增 `fn-v2` 等标识，旧条目在复审时逐条迁移。
 
+## 计算与检查工具
+
+- `node .github/scripts/drift-pins.mjs hash --rev <提交> --path <文件> --symbol <限定名>`：按 `fn-v1` 计算一个函数的哈希与行范围，用来生成条目。
+- `node .github/scripts/drift-pins.mjs check --rev <提交>`：用该提交里的上游文件重新计算本目录所有条目，列出文本已变化、文件或函数找不到的条目。每日试 rebase（`sync-dryrun.yml`、`.github/scripts/try-rebase.mjs`）对上游最新调用同一份代码。
+- 定位函数时，函数体的开头是签名后第一个不在括号内的 `{`：已知限制：构造函数的成员初始化列表里若有花括号初始化，函数体会在那里被截断；遇到这种函数先不要登记。
+
 ## 更新条目
 
 - 移植新的界面逻辑：在同一个 PR 里添加或扩充对应的 `<group>.txt`，并同步 `mirror-map.json` 与 `MIRRORS.md`。

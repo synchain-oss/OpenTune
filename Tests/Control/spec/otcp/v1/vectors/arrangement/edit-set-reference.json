@@ -1,0 +1,98 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "arrangement/edit-set-reference",
+  "type": "request",
+  "description": "op setReference binds a clip to an overlapping clip on another track, which AUTO in reference mode then aligns it to. Reference binding is an experimental feature of OpenTune (warning EXPERIMENTAL_FEATURE); the binding is part of the arrangement and one undo step.",
+  "capability": "arrangement.v1",
+  "since": "1.0",
+  "method": "arrangement.edit",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      },
+      {
+        "bind": "ref",
+        "trackId": 1,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "arrangement.edit",
+    "params": {
+      "expectedArrangementRevision": { "$ref": "runner.arrangementRevision" },
+      "ops": [
+        {
+          "op": "setReference",
+          "placementId": { "$ref": "clip.placementId" },
+          "referencePlacementId": { "$ref": "ref.placementId" }
+        }
+      ]
+    }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "placement",
+          "ref": { "placementId": { "$ref": "clip.placementId" } },
+          "label": { "$any": true },
+          "fields": {
+            "referencePlacementId": {
+              "before": null,
+              "after": { "$ref": "ref.placementId" },
+              "unit": null
+            }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": {
+          "before": { "$ref": "runner.arrangementRevision" },
+          "after": { "$any": "string" }
+        },
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": { "$any": "object" },
+      "undo": {
+        "undoable": true,
+        "undoId": { "$any": "string" },
+        "description": { "$any": "string" },
+        "innerActions": { "$any": "array" },
+        "steps": 1
+      },
+      "dirty": { "before": false, "after": true },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [
+        {
+          "code": "EXPERIMENTAL_FEATURE",
+          "subject": { "placementId": { "$ref": "clip.placementId" } },
+          "data": null
+        }
+      ],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

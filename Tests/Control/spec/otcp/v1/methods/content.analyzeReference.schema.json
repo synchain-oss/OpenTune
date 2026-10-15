@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/content.analyzeReference.schema.json",
+  "title": "content.analyzeReference",
+  "description": "Computes the reference alignment data of a clip's reference binding as a job of kind referenceAnalysis, as OpenTune does when such a clip is selected: the alignment features of the clip placementId and of the clip it is bound to. AUTO in reference mode (content.autoTune) aligns with this data, and content.getDetails reports whether it exists (reference.alignmentReady). The placement needs a reference binding (else INVALID_ARGUMENT(reference_not_bound)), both clips need a finished pitch analysis (NOT_READY(f0_not_ready) while one runs), and a placement that does not exist gives NOT_FOUND(unknown_handle). A call for a placement whose reference analysis job is not terminal returns that job. The data is derived from the audio and changes no edit, so the method is not a write and creates no undo entry; the job's result (jobResult) names the binding and reports alignmentReady. Cancelling discards the analysis (PROTOCOL.md section 12.3).",
+  "x-otcp": {
+    "method": "content.analyzeReference",
+    "layer": "L6",
+    "capability": "reference.v1",
+    "since": "1.0",
+    "write": "no",
+    "resultKind": "plain",
+    "startsJob": "referenceAnalysis",
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "NOT_FOUND",
+      "NOT_READY",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ],
+    "jobErrors": ["CANCELLED", "INTERNAL"]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["placementId"],
+      "additionalProperties": false,
+      "properties": {
+        "placementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "required": ["job"],
+      "additionalProperties": false,
+      "properties": {
+        "job": { "$ref": "../schemas/common.schema.json#/$defs/jobRef" }
+      }
+    },
+    "jobResult": {
+      "type": "object",
+      "required": ["placementId", "referencePlacementId", "alignmentReady"],
+      "additionalProperties": false,
+      "properties": {
+        "placementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        },
+        "referencePlacementId": {
+          "$ref": "../schemas/common.schema.json#/$defs/placementId"
+        },
+        "alignmentReady": { "type": "boolean" }
+      }
+    }
+  }
+}

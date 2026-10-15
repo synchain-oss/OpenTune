@@ -123,7 +123,9 @@
             }
           }
         },
-        "referenceClip": { "$ref": "#/$defs/bindName" }
+        "referenceClip": { "$ref": "#/$defs/bindName" },
+        "fadeInSec": { "$ref": "common.schema.json#/$defs/secNonNegative" },
+        "fadeOutSec": { "$ref": "common.schema.json#/$defs/secNonNegative" }
       }
     },
     "givenFile": {
@@ -133,20 +135,48 @@
       "properties": {
         "bind": { "$ref": "#/$defs/name" },
         "kind": {
-          "enum": ["audio", "absent", "existing", "noAccess", "undecodable"]
+          "enum": [
+            "audio",
+            "absent",
+            "existing",
+            "noAccess",
+            "undecodable",
+            "project",
+            "projectMissingMedia"
+          ]
         },
         "extension": {
           "description": "Default .wav.",
           "type": "string",
           "pattern": "^\\.[a-z0-9]{1,8}$"
         },
-        "durationSec": { "type": "number", "exclusiveMinimum": 0 }
+        "durationSec": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "description": "For kind audio, the length of the file; for kind project or projectMissingMedia, the length of the project's clip."
+        }
       },
-      "if": { "properties": { "kind": { "const": "existing" } } },
-      "then": {
-        "description": "The runner also binds <bind>.next, so bind has no dot of its own.",
-        "properties": { "bind": { "$ref": "#/$defs/bindName" } }
-      }
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "existing" } } },
+          "then": {
+            "description": "The runner also binds <bind>.next, so bind has no dot of its own.",
+            "properties": { "bind": { "$ref": "#/$defs/bindName" } }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "kind": { "enum": ["project", "projectMissingMedia"] }
+            }
+          },
+          "then": {
+            "description": "A project file has the extension .otproj.",
+            "required": ["extension"],
+            "properties": { "extension": { "const": ".otproj" } }
+          }
+        }
+      ]
     },
     "givenHistoryEntry": {
       "type": "object",
@@ -159,7 +189,8 @@
           "enum": ["noteEdit", "pitchShift", "clipMove", "clipSplit"]
         },
         "clip": { "$ref": "#/$defs/bindName" },
-        "trackDeletedAfter": { "type": "boolean" }
+        "trackDeletedAfter": { "type": "boolean" },
+        "laterTrackDeletedAfter": { "type": "boolean" }
       }
     },
     "given": {
@@ -193,14 +224,12 @@
         },
         "editingScheme": { "enum": ["openTune", "openDyne"] },
         "dirty": { "type": "boolean" },
-        "clips": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/givenClip" }
+        "clips": { "type": "array", "items": { "$ref": "#/$defs/givenClip" } },
+        "clipOnEveryTrack": {
+          "description": "Every track slot that no clip of clips is on holds one more clip (vectors/README.md, Preconditions).",
+          "const": true
         },
-        "files": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/givenFile" }
-        },
+        "files": { "type": "array", "items": { "$ref": "#/$defs/givenFile" } },
         "history": {
           "type": "object",
           "required": ["undo", "redo"],
@@ -224,6 +253,73 @@
           "items": {
             "$ref": "common.schema.json#/$defs/capability",
             "not": { "const": "session.v1" }
+          }
+        },
+        "visibleTrackCount": {
+          "description": "The number of track slots shown, counted from track 0, or all.",
+          "anyOf": [{ "type": "integer", "minimum": 1 }, { "const": "all" }]
+        },
+        "dialogs": {
+          "description": "Dialogs open in OpenTune, from the bottom of the stack to the top.",
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["kind"],
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "enum": [
+                  "trackColour",
+                  "confirm",
+                  "pitchShift",
+                  "preferences",
+                  "message",
+                  "unknown"
+                ]
+              },
+              "trackId": { "$ref": "common.schema.json#/$defs/trackId" },
+              "colour": { "type": "string", "pattern": "^#[0-9A-Fa-f]{6}$" }
+            },
+            "if": { "properties": { "kind": { "const": "trackColour" } } },
+            "then": { "required": ["trackId", "colour"] },
+            "else": {
+              "allOf": [
+                { "not": { "required": ["trackId"] } },
+                { "not": { "required": ["colour"] } }
+              ]
+            }
+          }
+        },
+        "onboarding": {
+          "description": "notShown, shown or showing (vectors/README.md, Preconditions).",
+          "enum": ["notShown", "shown", "showing"]
+        },
+        "preferences": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "tuningHz": { "type": "number", "minimum": 400, "maximum": 500 },
+            "hybridMode": { "type": "boolean" },
+            "experimentalFeatures": { "type": "boolean" },
+            "recentProjects": {
+              "description": "Binds of given files, the most recent first.",
+              "type": "array",
+              "items": { "$ref": "#/$defs/name" }
+            }
+          }
+        },
+        "projectFile": {
+          "description": "Bind of the given file that is the current project's file.",
+          "$ref": "#/$defs/name"
+        },
+        "audio": {
+          "type": "object",
+          "required": ["running"],
+          "additionalProperties": false,
+          "properties": {
+            "running": { "type": "boolean" },
+            "failsToOpen": { "type": "boolean" }
           }
         }
       }

@@ -1,6 +1,6 @@
 # OpenTune Control Protocol (OTCP), version 1
 
-Status: `1.0.0-rc.1`, draft. This release candidate defines the transport, the session, discovery, the result-clarity conventions and the methods of layers L2 to L5; the schemas of the methods of layers L6 and L8 and of the UI-bridge methods are added in a later release candidate (section 22).
+Status: `1.0.0-rc.2`, draft. This release candidate defines the transport, the session, discovery, the result-clarity conventions and every method of version 1, in layers L2 to L6 and L8 (section 22).
 
 OTCP is a local control interface built into OpenTune Standalone. A client on the same computer, for example an MCP server, uses it to perform operations that a person can perform in the OpenTune window and to receive clear, structured results. OTCP is JSON-RPC 2.0 over TCP on the loopback address, one JSON message per line.
 
@@ -80,7 +80,7 @@ A minor version MAY only add: methods, optional params members, result members, 
 
 1. Each message is one JSON value, encoded as UTF-8 without a byte order mark, followed by one LF. The message itself MUST NOT contain a raw LF; senders MUST NOT emit CR. Receivers MUST accept a CR immediately before the LF (it is JSON whitespace).
 2. Lines are measured in bytes, excluding the LF.
-3. A receiver MUST treat a line that is not valid UTF-8 or not valid JSON as a parse error. The server MUST also treat nesting deeper than 64 arrays or objects as a parse error; the outermost value has depth 1. After authentication, the server answers a parse error with `INVALID_ARGUMENT(parse_error)` and `id` null and keeps the session open; before authentication, section 3.5 applies.
+3. A receiver MUST treat a line that is not valid UTF-8 or not valid JSON as a parse error. A JSON string, a member name included, whose escapes encode a lone surrogate is not valid JSON in this sense, because it encodes no Unicode text: a `\uD800` to `\uDBFF` escape that is not immediately followed by a `\uDC00` to `\uDFFF` escape, or a `\uDC00` to `\uDFFF` escape that does not immediately follow a `\uD800` to `\uDBFF` escape (letter case does not matter). This holds for every string in the line, also for one that a parser would drop, such as the first value of a member name that appears twice in an object (rule 5). Senders MUST NOT emit such escapes. The server MUST also treat nesting deeper than 64 arrays or objects as a parse error; the outermost value has depth 1. After authentication, the server answers a parse error with `INVALID_ARGUMENT(parse_error)` and `id` null and keeps the session open; before authentication, section 3.5 applies.
 4. After authentication, the server MUST ignore lines that are empty or contain only JSON whitespace.
 5. Senders SHOULD NOT emit duplicate member names in an object; the server SHOULD treat them as a parse error.
 
@@ -98,7 +98,7 @@ A minor version MAY only add: methods, optional params members, result members, 
 5. After authentication the server handles each line as follows; the first case that applies decides, and every error response in this list has `executed` false:
    1. The line is longer than `maxLineBytes`: `INVALID_ARGUMENT(line_too_long)` with `id` null, then the server closes the connection (section 3.4 rule 3).
    2. The line is empty or contains only JSON whitespace: ignored, no response (section 3.2 rule 4).
-   3. The line is not valid UTF-8 or not valid JSON, or is nested too deeply: `INVALID_ARGUMENT(parse_error)` with `id` null (section 3.2 rule 3).
+   3. The line is not valid UTF-8 or not valid JSON, also because a string escapes a lone surrogate, or is nested too deeply: `INVALID_ARGUMENT(parse_error)` with `id` null (section 3.2 rule 3), also when the line has an `id` member.
    4. The line is a JSON array (a JSON-RPC batch). Batches are not supported: one error response `INVALID_ARGUMENT(batch_unsupported)` with `id` null; none of the elements is executed.
    5. The line is a notification (rule 4): ignored, no response.
    6. The line is any other value that is not a valid request under rule 3: `INVALID_ARGUMENT(invalid_request)`. The response carries the value's `id` if the value is an object whose `id` member is valid under rule 3, otherwise `id` null.
@@ -241,7 +241,7 @@ The content is a JSON object defined by `schemas/discovery-file.schema.json`, at
 
 ### 5.5 Ready file
 
-If the option `--control-api-ready-file=<path>` is given, the server writes `{pid, instanceId}` (`schemas/discovery-file.schema.json#/$defs/readyFile`) to that path after the discovery file is in place, using a temporary file in the same directory and a rename that replaces any existing file of that name. The temporary file is created with the same protection as that of the discovery file: on POSIX systems with `O_CREAT|O_EXCL|O_NOFOLLOW` and mode 0600 (section 5.2 rule 2), on Windows with the DACL of section 5.2 rule 3. The ready file contains no secrets. A launcher uses it to learn which discovery file belongs to the process it started. If writing it fails, the server logs the failure and keeps running.
+If the option `--control-api-ready-file=<path>` is given, the server writes `{pid, instanceId}` (`schemas/discovery-file.schema.json#/$defs/readyFile`) to that path after the discovery file is in place, using a temporary file in the same directory and a rename that replaces any existing file of that name. The temporary file is created with the same protection as that of the discovery file: on POSIX systems with `O_CREAT|O_EXCL|O_NOFOLLOW` and mode 0600 (section 5.2 rule 2), on Windows with the DACL of section 5.2 rule 3. The ready file contains no secrets. A launcher uses it to learn which discovery file belongs to the process it started. If writing it fails, the server logs the failure and keeps running. On a normal stop the server MAY delete the ready file after its discovery file (section 5.4 rule 1). It MUST NOT delete it unless, read immediately before, the file still holds exactly the `pid` and `instanceId` that this instance wrote: a ready file that another process has written to the same path since, for example a later start with the same option, stays in place.
 
 ## 6. Enabling the control API
 
@@ -429,7 +429,7 @@ A terminal job is retained for at least `jobRetentionMs` (30 minutes) after `fin
 
 ### 12.5 Repeated requests
 
-`export.start` with the same normalized params as an export job that is not terminal returns that job instead of starting a second one (section 19). `import.start` with the `idempotencyKey` of an import job that is still retained returns that job, so that a client can repeat a call whose response it lost without importing the files twice (its schema defines the rule). Other methods start a new job on every call unless their schema says otherwise.
+`export.start` with the same normalized params as an export job that is not terminal returns that job instead of starting a second one (section 19). `import.start` with the `idempotencyKey` of an import job that is still retained returns that job, so that a client can repeat a call whose response it lost without importing the files twice (its schema defines the rule). `content.analyzeReference` for a placement whose reference analysis job is not terminal returns that job. Other methods start a new job on every call unless their schema says otherwise.
 
 ## 13. Concurrency, busy state and UI priority
 
@@ -452,7 +452,7 @@ A write is refused with `BUSY` and `executed` false, without waiting, while:
 | an export holds the export lock (shared by the UI and this API) | `export_in_progress` |
 | a project save or open is running                               | `project_operation`  |
 
-These checks run on the main thread, immediately before the write applies. The server SHOULD set `retryAfterMs`.
+These checks run on the main thread, immediately before the write applies. The server SHOULD set `retryAfterMs`. `ui.dismiss` is not refused because a dialog is open (`modal_open`), since closing dialogs is its purpose; the other conditions refuse it like every write.
 
 ### 13.3 Reads
 
@@ -514,8 +514,8 @@ Exactly one of these holds for every write result; `common.schema.json#/$defs/wr
 
 Each entry is `{entity, ref, label, fields}`:
 
-- `entity` names the kind of entity: `note`, `placement`, `track`, `timeHandle`, `key`, `pitchShift`, `content`, `preference`, `tempo`, `transport`, `project`, `dialog` (more MAY be added).
-- `ref` identifies it with handles (`common.schema.json#/$defs/entityRef`).
+- `entity` names the kind of entity: `note`, `placement`, `track`, `timeHandle`, `key`, `pitchShift`, `content`, `preference`, `tempo`, `transport`, `project`, `dialog`, `selection`, `audioDevice` (more MAY be added).
+- `ref` identifies it with handles (`common.schema.json#/$defs/entityRef`). An entity of which the instance has exactly one (`transport`, `tempo`, `project`, `selection`, `audioDevice`) is referenced as `{singleton: <entity>}`, for example `{"singleton": "tempo"}`.
 - `label` is a short display label generated from positions and values, or null. It never contains names taken from files or projects (section 20).
 - `fields` maps each changed member name to `{before, after, unit}`, where `unit` is the member's unit suffix in lower case (`sec`, `frame`, `midi`, `hz`, `cents`, `semitones`, `db`, `linear`, `ms`, `bytes`), `bpm` for tempo, or null for members without a unit (section 8.2).
 
@@ -593,6 +593,7 @@ A revert recipe is `{method, params, requiresConsent}` (`common.schema.json#/$de
 3. A revert recipe SHOULD carry the expected tokens of the state right after the change, so that it fails with `REVISION_CONFLICT` instead of overwriting later changes.
 4. The `params` of a revert recipe MUST NOT contain any member by which a method takes the end user's consent (section 20.2 rule 3): `confirm`, any member whose name starts with `discard`, and any member that a later version defines for the same purpose. If the method of the recipe needs such consent to restore the state, the recipe carries `requiresConsent: true`. A client MUST NOT send such a recipe until the end user has explicitly agreed to that restoration; only then does the client add the method's consent members itself. A recipe never counts as consent, like any other part of a result.
 5. Rules 1 to 4 apply equally to the revert recipes of side effects (`sideEffects.<name>.revert`, section 14.6).
+6. View state is exempt from rules 1 and 2: the play state and the playback position, the loop flag, the selection, the workspace the window shows, the number of visible tracks, open dialogs and the scale shown in the transport bar. It is not saved with the project, OpenTune changes some of it by itself (the position moves during playback, the shown scale follows the selection), and the protocol restores it only where a method's schema gives a revert recipe. A change of view state has the undo reason `not_persisted_state` and carries no `IRREVERSIBLE` warning for that change. Rules 1 to 5 still apply to every other effect of the same call, for example to notes generated because a clip was selected, or to a colour committed because a dialog was closed.
 
 ### 15.3 edit.undo and edit.redo
 
@@ -601,9 +602,10 @@ A revert recipe is `{method, params, requiresConsent}` (`common.schema.json#/$de
 3. Clients MUST NOT set `force` unless the end user explicitly asked to undo or redo a change that was not made through the client. Once the client has applied such an entry at the end user's request, rule 8 lets it name the entry; it still undoes or redoes the entry again only when the end user asks.
 4. If the top entry is a clip split, merge or delete, the call fails with `UNSUPPORTED(undo_unsafe_build)`, also with `force` (15.4).
 5. If the step changes nothing (`revisionDiff` is empty), the result is a success with `applied: true`, `noOp: true` and the warning `UNDO_NO_EFFECT`. The step is still used up and the project is still marked as changed, as in the OpenTune UI.
-6. An entry is possibly stale when a track was deleted after the entry was recorded and no call with `force` has applied the entry since that deletion; `edit.getHistory` reports this as `possiblyStale`. Without `force`, a possibly stale entry recorded through this API whose track has since moved fails with `UNDO_CONFLICT(stale_entry)`. A possibly stale entry recorded in the UI is applied, and the result carries the warning `UNDO_ENTRY_POSSIBLY_STALE`. A call with `force` that applies an entry clears its `possiblyStale`: the end user has confirmed the entry, so later steps on it neither fail with `stale_entry` nor carry the warning, until another track is deleted.
+6. Deleting a track (`track.delete`, or deleting a track in the OpenTune UI) is a barrier in the undo and redo histories: OpenTune keys clip entries by track position, and an entry recorded before the deletion may address a track that has moved since (section 15.4 rule 3). An entry is possibly stale when a track was deleted after the entry was recorded and no call with `force` has applied the entry since that deletion; `edit.getHistory` reports this as `possiblyStale`. The server cannot inspect an entry recorded in the UI, so every such entry recorded before a deletion is possibly stale. For an entry recorded through this API the server knows the tracks it addresses (the tracks of the clips it changed), and the entry is possibly stale only when a deletion removed one of these tracks or moved it down. An entry recorded through this API that addresses no track, such as a note edit, which addresses its content, or that addresses only tracks before the deleted one, is not possibly stale and is applied as usual, without a warning. When a deletion removed the content that an entry recorded through this API addresses (the deleted track held every clip that showed the content), the entry is applied as the OpenTune UI applies it: the step is used up and changes nothing, so the result has `noOp` true and the warning `UNDO_NO_EFFECT` (rule 5). Without `force`, a possibly stale entry recorded through this API fails with `UNDO_CONFLICT(stale_entry)`, and a possibly stale entry recorded in the UI (which has an `undoId` because a call with `force` applied it before, rule 8) is applied with the warning `UNDO_ENTRY_POSSIBLY_STALE`. A client can therefore tell from `origin` and `possiblyStale` which of the two happens before it calls. A call with `force` applies a possibly stale entry without that warning, since the end user asked for that step after seeing `possiblyStale`, and clears its `possiblyStale`: the end user has confirmed the entry, so later steps on it neither fail with `stale_entry` nor carry the warning, until another track deletion makes the entry possibly stale again. `track.delete` reports how many entries it made possibly stale. Opening a project clears both histories, and with them every barrier.
 7. Like the UI, the server refreshes derived state after the step; any work this queues is reported in `sideEffects`.
 8. When `edit.undo` or `edit.redo` applies an entry that has no `undoId` (an entry created in the OpenTune UI, applied with `force`), the server assigns it one and reports it in the result's `entry`; `edit.getHistory` shows it from then on. The entry keeps that `undoId` while it stays in the history. The result's `entry` shows the entry as it is after the step. The revert recipe of every step (`edit.redo` for an undo, `edit.undo` for a redo) names the entry's `undoId` and never carries `force`. Because the entry has an `undoId` (this rule) and a call with `force` cleared its `possiblyStale` (rule 6), the recipe of a step applied with `force` is a complete request as well: sent unchanged while the entry is still on top, it takes back exactly the step the end user asked for (section 15.2).
+9. Some changes of a content have no undo entry: those of writes that are not undoable, whether or not they give a revert recipe (for example `content.setKey`, `content.autoTune` in mode `notesOnly` and op `seed` of `content.editTimeGrid`), and notes generated as a side effect (section 21). No undo or redo step takes such a change back. Every undo entry recorded through this API puts back only the aspects of a content that its own change touched: the notes with the corrected pitch, the key, the pitch shift and the time grid. Once a change without an undo entry has changed one of these aspects of a content, the entries recorded through this API before it no longer put back that aspect of that content, so it keeps the value the change set; an entry recorded in the UI, which the server cannot inspect, is applied as OpenTune applies it. Such a change also clears the redo history, so that no redo step writes older values over it. A step that has nothing left to put back is used up and changes nothing: the result has `noOp` true and the warning `UNDO_NO_EFFECT` (rule 5).
 
 ### 15.4 Known OpenTune behaviours
 
@@ -612,7 +614,7 @@ The protocol reports these behaviours of OpenTune as they are; it does not chang
 1. After a clip split, merge or delete, OpenTune frees objects that its undo entry needs, so undoing the entry does not restore the clips. The server pushes the same undo entry as the UI (so the UI behaves as before) and reports the change as `undo: {undoable: false, reason: "upstream_undo_defect", …}` with the warning `UPSTREAM_UNDO_DEFECT`; `edit.undo` and `edit.redo` refuse such entries (15.3 rule 4).
 2. Undoing a clip trim in the UI does not restore fades that the trim shortened. Trims made through this API record the fades in the same undo entry, so their undo restores them; the result carries `FADES_RECLAMPED` when fades were shortened.
 3. After a track is deleted, earlier clip undo entries may do nothing, while the UI still uses up the step. See 15.3 rules 5 and 6.
-4. Closing the track-colour dialog, also with Escape, commits the colour shown. The dialog methods refuse to close such a dialog unless the client accepts the commit, and report it with `DIALOG_CLOSE_COMMITTED`.
+4. Closing the track-colour dialog, also with Escape, commits the colour shown. `ui.dismiss` refuses to close such a dialog with `INVALID_ARGUMENT(dialog_commits_on_close)` unless its params contain `confirm: true` (section 20.2 rule 3), and reports a commit with `DIALOG_CLOSE_COMMITTED`.
 5. "Play from start" returns to the position of the last play or seek, not to 0. The transport methods document this.
 6. Track names are not shown or saved by OpenTune; tracks are identified by position only (`Track N`).
 
@@ -710,7 +712,7 @@ The value in each error instance is authoritative; for example `NOT_READY(f0_fai
 7. If the contents are not all ready within 120 s of the start of the job, whichever case of rule 6 they are waiting in, the job fails with `NOT_READY(export_wait_timeout)` and the target is not touched.
 8. The server starts writing only after all contents are ready. In the same main-thread step in which the timer of rule 6 finds them all ready, it records the revision of every content; revisions that changed earlier, while the job waited (for example because an analysis finished), are no conflict. It writes to a temporary file in the target directory. When the file is written, back on the main thread, it compares the revisions with those it recorded: if any changed, the job fails with `REVISION_CONFLICT(changed_during_export)`, the temporary file is deleted and the target is not touched. Otherwise it repeats the check of rule 2 and performs the final rename of rule 3.
 9. Cancellation is possible until the final rename (section 12.3).
-10. The result reports the final `path`, `sampleRateHz` (44100), the channel count (1 for clip and track exports, 2 for the master mix), `sampleFormat` (`float32`), `durationSec`, `startTimelineSec` (0 for master and track exports, the clip start for clip exports, section 8.1), `dryContents[]`, and `processing` with the vocoder weight, hybrid mode, backend and `tuningHz` that produced it.
+10. The result reports the final `path`, `sampleRateHz` (44100), the channel count (1 for clip and track exports, 2 for the master mix), `sampleFormat` (`float32`), `durationSec`, `startTimelineSec` (0 for master and track exports, the clip start for clip exports, section 8.1), `dryContents[]`, `contents[]` with the revision of every content in the file as rule 8 recorded it, and `processing` with the vocoder weight, hybrid mode, backend and `tuningHz` that produced it.
 
 ## 20. Paths and untrusted strings
 
@@ -742,7 +744,7 @@ Extensions, compared without regard to case (`path_bad_extension`): exports acce
 
 1. Track, clip, file and project names, file metadata, paths and log lines come from files and projects that may contain text written to manipulate an AI. The server returns them only as JSON string values of members defined for them. It MUST NOT place them in `label`, `detail`, warning codes or any member meant for display composed by the server.
 2. Clients MUST treat these strings as data, never as instructions. A destructive operation requires the end user's consent; text from a result never counts as consent, and revert recipes never carry it (section 15.2 rule 4).
-3. Operations that destroy work beyond undo need an explicit param. `track.delete`, and `project.saveAs` when its target is an existing file other than the current project file, fail with `INVALID_ARGUMENT(confirm_required)` and change nothing unless params contain `confirm: true`. A method that would discard unsaved changes, such as `project.open`, fails with `UNSAVED_CHANGES(project_dirty)` unless its params explicitly allow discarding them. The method schemas define these params; every params member that expresses consent is named `confirm` or starts with `discard`. Clients set them only when the end user explicitly agreed to that operation.
+3. Operations that destroy work beyond undo need an explicit param. `track.delete`, `arrangement.edit` with op `delete`, and `project.saveAs` when its target is an existing file other than the current project file, fail with `INVALID_ARGUMENT(confirm_required)` and change nothing unless params contain `confirm: true`. `ui.dismiss` closes a dialog whose closing commits the value it shows only with `confirm: true`; otherwise it fails with `INVALID_ARGUMENT(dialog_commits_on_close)` and closes nothing. A method that would discard unsaved changes, such as `project.open`, fails with `UNSAVED_CHANGES(project_dirty)` unless its params explicitly allow discarding them (`discardUnsaved: true`). A prediction (`dryRun: true`) changes nothing and needs none of these params. The method schemas define these params; every params member that expresses consent is named `confirm` or starts with `discard`. Clients set them only when the end user explicitly agreed to that operation.
 4. For `project.saveAs`, whether the target is the current project file, another existing file or no file is decided by file identity (section 20.3), when the request is validated and again immediately before the final rename. Without `confirm: true`, the final rename never replaces a file other than the current project file (section 20.4); if such a file has appeared at the target in the meantime, the job fails with `INVALID_ARGUMENT(confirm_required)`, the temporary file is deleted and the target is not touched.
 5. `app.getLog` removes the token, the server proof and the user's home directory from the lines it returns.
 
@@ -786,7 +788,7 @@ The scheme changes what some operations do. The protocol never hides these diffe
 1. **AUTO.** `content.autoTune` takes an explicit `mode` and never infers it from the scheme. The AUTO button in OpenTune runs regeneration in the `openTune` scheme and snapping of existing notes in the `openDyne` scheme; a clip with a reference binding may make the button run reference alignment instead. `content.getDetails` reports which mode the button would run.
 2. **Focus on import.** `import.start` selects the last imported clip by default, as the UI does. In the `openDyne` scheme, a focused clip whose analysis finishes gets notes generated even when the request did not ask for note generation; this has no undo entry and marks the project as changed. The job result reports `notesGenerated` and `notesGeneratedBy` (`request` or `focus`). `focus: false` avoids it.
 3. **Selection.** In the `openDyne` scheme, selecting or opening a clip whose analysis is finished and whose notes were never generated makes OpenTune generate them, with no undo entry, and marks the project as changed. `ui.setSelection` reports this in `sideEffects.notesGenerated` with the warning `SELECTION_GENERATED_NOTES`, and with `dryRun` it predicts it without selecting.
-4. **Changing the scheme.** Switching to `openDyne` with `prefs.set` may generate notes for the clip open in the editor; the result reports it.
+4. **Changing the scheme.** Switching to `openDyne` with `prefs.set` may generate notes for the clip open in the editor; the result reports it in `sideEffects.notesGenerated` with the warning `SCHEME_GENERATED_NOTES`.
 5. Other methods behave the same in both schemes unless their schema says otherwise.
 
 ## 22. Layers and method index
@@ -803,7 +805,7 @@ The scheme changes what some operations do. The protocol never hides these diffe
 
 `ui.onboardingClose` is an additional capability of `ui.dismiss`: without it, `ui.dismiss` can prevent the first-run overlay but not close one that is already showing.
 
-Every method of version 1 (also in `methods/index.json`). Write: `yes` changes state, `conditional` changes state only for some params or as a reported side effect, `no` never does. Schema: `defined` means `methods/<method>.schema.json` is normative; `pending` means the schema is added before the `1.0.0-rc.1` tag; `planned` means it is added in a later `1.0.0` release candidate. Until its schema is defined, a method has no normative shape: an implementation MAY provide it provisionally, following this document, for development against a release candidate, and MUST change it to match the schema once the schema is defined. The final `1.0.0` defines a schema for every method in this table.
+Every method of version 1 (also in `methods/index.json`). Write: `yes` changes state, `conditional` changes state only for some params or as a reported side effect, `no` never does. Schema: `defined` means `methods/<method>.schema.json` is normative; `pending` means the schema is added before the `1.0.0-rc.1` tag; `planned` means it is added in a later `1.0.0` release candidate. Until its schema is defined, a method has no normative shape: an implementation MAY provide it provisionally, following this document, for development against a release candidate, and MUST change it to match the schema once the schema is defined. Since `1.0.0-rc.2` every method in this table has a defined schema.
 
 | Method                     | Layer | Capability       | Write       | Since | Schema  | Purpose                                                                                    |
 | -------------------------- | ----- | ---------------- | ----------- | ----- | ------- | ------------------------------------------------------------------------------------------ |
@@ -821,8 +823,8 @@ Every method of version 1 (also in `methods/index.json`). Write: `yes` changes s
 | `job.cancel`               | L3    | `jobs.v1`        | no          | 1.0   | defined | Request cancellation of a job.                                                             |
 | `import.start`             | L3    | `import.v1`      | yes         | 1.0   | defined | Import audio files (single, sequential, one track per file) as a job.                      |
 | `export.start`             | L3    | `export.v1`      | yes         | 1.0   | defined | Export a clip, a track or the master mix as a job (section 19).                            |
-| `ui.getState`              | L3    | `ui.bridge`      | no          | 1.0   | planned | Busy state, dialogs, view, selection.                                                      |
-| `ui.dismiss`               | L3    | `ui.bridge`      | conditional | 1.0   | planned | Close dialogs or the first-run overlay.                                                    |
+| `ui.getState`              | L3    | `ui.bridge`      | no          | 1.0   | defined | Busy state, dialogs, view, selection.                                                      |
+| `ui.dismiss`               | L3    | `ui.bridge`      | conditional | 1.0   | defined | Close dialogs or the first-run overlay.                                                    |
 | `content.setKey`           | L4    | `edit.v1`        | yes         | 1.0   | defined | Set a clip's key (not undoable, with revert recipe).                                       |
 | `content.autoTune`         | L4    | `edit.v1`        | yes         | 1.0   | defined | AUTO on ranges with an explicit mode, scale and parameters.                                |
 | `content.editNotes`        | L4    | `edit.v1`        | yes         | 1.0   | defined | Target pitch, cent shift, snap and parameters of selected notes.                           |
@@ -832,24 +834,24 @@ Every method of version 1 (also in `methods/index.json`). Write: `yes` changes s
 | `edit.redo`                | L4    | `history.v1`     | yes         | 1.0   | defined | Redo the expected entry (section 15.3).                                                    |
 | `content.shiftTiming`      | L5    | `timing.v1`      | yes         | 1.0   | defined | Shift a section earlier or later.                                                          |
 | `content.editTimeGrid`     | L5    | `timing.v1`      | yes         | 1.0   | defined | Seed time-grid anchors (job) and move handles.                                             |
-| `transport.control`        | L6    | `transport.v1`   | yes         | 1.0   | planned | Play, pause, stop, seek.                                                                   |
-| `transport.setTempo`       | L6    | `transport.v1`   | yes         | 1.0   | planned | Tempo and time signature.                                                                  |
-| `transport.setLoop`        | L6    | `transport.v1`   | yes         | 1.0   | planned | Loop flag.                                                                                 |
-| `arrangement.edit`         | L6    | `arrangement.v1` | yes         | 1.0   | planned | Move, trim, gain, fades, split, merge, delete, reference binding.                          |
-| `arrangement.copy`         | L6    | `arrangement.v1` | yes         | 1.0   | planned | Copy or duplicate clips.                                                                   |
-| `track.set`                | L6    | `tracks.v1`      | yes         | 1.0   | planned | Mute, solo, volume, colour.                                                                |
-| `track.add`                | L6    | `tracks.v1`      | yes         | 1.0   | planned | Show more tracks.                                                                          |
-| `track.duplicate`          | L6    | `tracks.v1`      | yes         | 1.0   | planned | Duplicate a track.                                                                         |
-| `track.delete`             | L6    | `tracks.v1`      | yes         | 1.0   | planned | Delete a track (irreversible).                                                             |
-| `ui.setSelection`          | L6    | `ui.bridge`      | conditional | 1.0   | planned | Select or open a clip, with predicted side effects.                                        |
-| `content.analyzeReference` | L6    | `reference.v1`   | no          | 1.0   | planned | Reference alignment analysis as a job.                                                     |
-| `project.save`             | L8    | `project.io`     | yes         | 1.0   | planned | Save the project as a job.                                                                 |
-| `project.saveAs`           | L8    | `project.io`     | yes         | 1.0   | planned | Save under a new path; replacing another project needs confirmation.                       |
-| `project.open`             | L8    | `project.io`     | yes         | 1.0   | planned | Open a project as a job; never saves implicitly.                                           |
-| `project.clearRecent`      | L8    | `project.io`     | yes         | 1.0   | planned | Clear the recent-projects list.                                                            |
-| `prefs.set`                | L8    | `prefs.write`    | yes         | 1.0   | planned | Change processing preferences (user-global, with revert values).                           |
-| `audio.get`                | L8    | `audio.device`   | no          | 1.0   | planned | Audio device settings.                                                                     |
-| `audio.set`                | L8    | `audio.device`   | yes         | 1.0   | planned | Change the audio device, with rollback on failure.                                         |
+| `transport.control`        | L6    | `transport.v1`   | yes         | 1.0   | defined | Play, pause, stop, seek.                                                                   |
+| `transport.setTempo`       | L6    | `transport.v1`   | yes         | 1.0   | defined | Tempo and time signature.                                                                  |
+| `transport.setLoop`        | L6    | `transport.v1`   | yes         | 1.0   | defined | Loop flag.                                                                                 |
+| `arrangement.edit`         | L6    | `arrangement.v1` | yes         | 1.0   | defined | Move, trim, gain, fades, split, merge, delete, reference binding.                          |
+| `arrangement.copy`         | L6    | `arrangement.v1` | yes         | 1.0   | defined | Copy or duplicate clips.                                                                   |
+| `track.set`                | L6    | `tracks.v1`      | yes         | 1.0   | defined | Mute, solo, volume, colour.                                                                |
+| `track.add`                | L6    | `tracks.v1`      | yes         | 1.0   | defined | Show more tracks.                                                                          |
+| `track.duplicate`          | L6    | `tracks.v1`      | yes         | 1.0   | defined | Duplicate a track.                                                                         |
+| `track.delete`             | L6    | `tracks.v1`      | yes         | 1.0   | defined | Delete a track (irreversible).                                                             |
+| `ui.setSelection`          | L6    | `ui.bridge`      | conditional | 1.0   | defined | Select or open a clip, with predicted side effects.                                        |
+| `content.analyzeReference` | L6    | `reference.v1`   | no          | 1.0   | defined | Reference alignment analysis as a job.                                                     |
+| `project.save`             | L8    | `project.io`     | yes         | 1.0   | defined | Save the project as a job.                                                                 |
+| `project.saveAs`           | L8    | `project.io`     | yes         | 1.0   | defined | Save under a new path; replacing another project needs confirmation.                       |
+| `project.open`             | L8    | `project.io`     | yes         | 1.0   | defined | Open a project as a job; never saves implicitly.                                           |
+| `project.clearRecent`      | L8    | `project.io`     | yes         | 1.0   | defined | Clear the recent-projects list.                                                            |
+| `prefs.set`                | L8    | `prefs.write`    | yes         | 1.0   | defined | Change processing preferences (user-global, with revert values).                           |
+| `audio.get`                | L8    | `audio.device`   | no          | 1.0   | defined | Audio device settings.                                                                     |
+| `audio.set`                | L8    | `audio.device`   | yes         | 1.0   | defined | Change the audio device, with rollback on failure.                                         |
 
 ## 23. Method schema files and test vectors
 

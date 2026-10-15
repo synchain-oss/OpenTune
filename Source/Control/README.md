@@ -2,7 +2,7 @@
 
 # OpenTune control API (OTCP v1)
 
-> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、忙碌检查、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
+> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、忙碌检查、编辑器 bridge、导入、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
 
 This directory holds the local control API of OpenTune Standalone: a JSON-RPC protocol over a loopback
 TCP connection (OTCP v1, specified in `Tests/Control/spec/otcp/v1/PROTOCOL.md`), with which another
@@ -33,7 +33,8 @@ without this directory.
 | `Ops/OpsSupport.*` | What the operations share: parameter reader, handle resolution, the world revision vector and `asOf`, number and text output. |
 | `ControlJobs.*` | The jobs of the instance: registry, the tick that advances running jobs on the message thread, the long poll of `job.get`, cancellation, retention. |
 | `Ops/WriteEnvelope.*` | What every write shares: the busy checks, the dirty flag, revert recipes, the UI snapshot, `revisionDiff` and the write envelope builder. |
-| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/JobOps.*` | The methods, one file per group (see "Method table"). |
+| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*` | The methods, one file per group (see "Method table"). |
+| `../Standalone/ControlEditorBridge.*` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor; compiled into the application wrapper only. |
 
 The channel files (options to server) use only the standard library and the operating system; the
 unit tests (`Tests/Control/ControlUnitTests.cpp`) compile them on their own. The service files and every
@@ -112,6 +113,10 @@ option, so a build with the option OFF compiles exactly the upstream code.
 | `Source/Utils/AppLogger.cpp` (include, `initialize`) | `OPENTUNE_DATA_DIR` replaces the per-user OpenTune folder | Logs of tests stay in the test's directory. | Tests write into the user's real log folder. |
 | `Source/Content/StandaloneContentRepository.h` (end of the class) | Member `contentEpoch_` and public `getContentEpoch()` | The content epoch of the handles (PROTOCOL.md section 9). | Handles cannot tell the contents of a project opened later from earlier ones. |
 | `Source/Content/StandaloneContentRepository.cpp` (`clear()`) | `contentEpoch_` is incremented | `clear()` discards every content when a project is opened (`ProjectSession::commitPreparedOpen`) and clip ids restart at 1, so handles from before become `NOT_FOUND(stale_handle)` instead of naming new contents. | Old handles would silently name the contents of the newly opened project. |
+| `Source/Standalone/PluginEditor.h` (end of the class) | `friend class ControlEditorBridge;` and member `controlEditorBridge_` | The bridge reads the editor's state and calls its functions while the editor keeps its members private. | The control API cannot reach the editor: results report `no_editor`, busy checks cannot see the UI. |
+| `Source/Standalone/PluginEditor.cpp` (includes) | `#include "ControlEditorBridge.h"` | Complete type for the constructor and destructor. | Does not compile with the option ON. |
+| `Source/Standalone/PluginEditor.cpp` (end of the constructor) | Create the bridge, which registers itself with `ControlService::setUiBridge()` | The API reaches the editor only once it is complete. | No bridge is registered. |
+| `Source/Standalone/PluginEditor.cpp` (first statement of the destructor) | `controlEditorBridge_.reset()`, which unregisters it | The API never reaches an editor that is being torn down. | Requests could reach a half-destroyed editor. |
 
 ## Request handling
 
@@ -190,11 +195,17 @@ envelopes of the editing methods compare two captures for `revisionDiff`.
   project state is a write envelope (built with `ControlWriteEnvelope`, below). The work makes a
   `ControlOpContext` for each step from the `ControlOpEnvironment` the starting operation kept
   (`ControlOpContext::environment()`), because the bridge can come and go between steps.
+- A step must return quickly and should not run a nested message loop (a modal dialog,
+  `runDispatchLoopUntil`). If one does, the registry stays consistent: the timer that fires inside the
+  loop calls no work, and `ControlJobs::stop()` called inside the loop stops the timer without destroying
+  it under its own callback; no work is called after the stop.
 - A job created cancellable stays so until it ends, until its work calls `endCancellability()` (the
   point of no return of its kind, section 12.3), or until `job.cancel` requested cancellation. The work
   stops at its next step.
 - Retention (section 12.4): terminal jobs stay at least 30 minutes after they finished; beyond 64 jobs
-  the terminal job that finished first is evicted first; active jobs are never evicted.
+  the terminal job that finished first is evicted first; active jobs are never evicted. Retention is
+  measured with a monotonic clock, so a change of the system time never evicts a job early; the
+  `*AtMs` timestamps of the job object are wall-clock time.
 - `job.get` with `waitMs` (at most 30 s) holds its response on the registry's waiter thread until the
   job is terminal or the time passed; `ControlJobs::stop()` answers every waiting request with
   `SHUTTING_DOWN` at once. The waiting holds no lock or lease of the processor.
@@ -217,9 +228,13 @@ message thread:
    UI does not mark the project.
 4. End with `committed()`, `predicted()` (dryRun) or `handedToJob(jobRef)`. The envelope captures the
    vector again and computes `revisionDiff`, reads `dirty` and the UI snapshot after the call, and admits
-   exactly the four states of section 14.2. A committed write without recorded changes and with an empty
-   `revisionDiff` is `noOp` (undo reason `no_op`). A job's envelope may report only the contents it
-   touched (`limitDiffToTouchedContents`), because the user can change other contents while the job runs.
+   exactly the four states of section 14.2. A committed write without recorded changes or side effects
+   and with an empty `revisionDiff` is `noOp`; its undo descriptor is the one the method set (an
+   `edit.undo` step that changed nothing, section 15.3 rule 5), otherwise reason `no_op`. A job's envelope
+   may report only the contents it touched (`limitDiffToTouchedContents`), because the user can change
+   other contents while the job runs. A method that hands its work to a job changes nothing before it
+   does: the envelope of that state lists no changes or side effects, so nothing could explain a
+   `revisionDiff` (debug builds assert that it is empty).
 
 The UI snapshot (`ui`) comes from the bridge: `{workspace, pianoRollContentId, activeTrackId,
 selectedPlacementIds, visibleTrackCount}`, or null with `nullReasons.ui` `no_editor` (no editor) or
@@ -236,7 +251,8 @@ selectedPlacementIds, visibleTrackCount}`, or null with `nullReasons.ui` `no_edi
   null then (`controlReportsCapability`). Recipes never carry consent members; `requiresConsent` marks
   those the client may send only after the end user agreed (section 15.2 rule 4).
 - A change that is neither undoable nor revertible gets the warning `IRREVERSIBLE` from the envelope,
-  except view state (reason `not_persisted_state`, section 15.2 rule 6).
+  except view state (reason `not_persisted_state`, section 15.2 rule 6) and a call that changed nothing
+  itself (reason `no_op`, or a `noOp` result).
 
 ## Busy checks
 
@@ -245,9 +261,54 @@ selectedPlacementIds, visibleTrackCount}`, or null with `nullReasons.ui` `no_edi
 not for `ui.dismiss`), an import of the UI (`import_in_progress`), an export (`export_in_progress`), a
 project save or open (`project_operation`). The bridge reports these from the editor's own flags. Without
 an editor nothing is busy. Reads, `session.*` and `job.*` never call it. A job that commits in several
-steps checks again before each commit and waits while the UI is busy. The editor's side of the bridge
-(`Source/Standalone/ControlEditorBridge.*`) is not built yet; until it is, only the headless tests'
-`TestUiBridge` reports these flags.
+steps (`import.start`) checks again before each commit and waits while the UI is busy.
+
+## Editor bridge
+
+`ControlUiBridge` is the narrow interface to what only the Standalone editor owns. The editor
+implements it in `Source/Standalone/ControlEditorBridge.*`, a friend adapter that reads the editor's state
+and calls the editor's own functions without adding behaviour. Its general part provides the project file
+and dirty flag (`ProjectSession`), the busy state, structure-change notifications, the view (workspace,
+piano roll clip, selection, visible track count), the focus of an imported clip
+(`applyPlacementSelectionContext`), revealing tracks, the note generation parameters of the piano roll,
+the project session and its worker pool, and the audio device manager. Dialogs, tracks, project flows and
+preferences follow in files of their own. The headless tests use `Tests/Control/TestUiBridge.h`.
+
+## Import
+
+`import.start` (`Ops/ImportOps.cpp`) follows the editor's import (`importAudioRequested`,
+`startPendingImport`, `processNextImportInQueue` in `Source/Standalone/PluginEditor.cpp`) and calls the
+same processor functions:
+
+- before the job: the idempotency key, the track handle, the busy state, every path (section 20.1, on the
+  raw text before any file access) and its extension, the track capacity of the layout;
+- per file, on a thread of the job: the format reader (`AudioFormatRegistry::registerImportFormats`) and
+  `OpenTuneAudioProcessor::prepareImport()`; a file that fails gets its item error and the others go on;
+- per file, on the message thread: `commitPreparedImportAsPlacement()` at the start the layout gives (the
+  end of the last clip on the track, as `computeTrackAppendStartSeconds`, without `startTimelineSec`);
+  the project is marked as changed and hidden tracks that now hold a clip are revealed;
+- after the last commit: the last clip is focused (`focus`), and `requestContentRefresh()` asks for every
+  analysis, with note generation for `generateNotes` (OpenTune's default parameters) or, in the openDyne
+  scheme, for the focused clip (the editor's parameters, as the UI); the job ends when every analysis has
+  finished.
+
+The result has no undo entry (reason `ui_parity`, as the UI). Its revert recipe would delete the clips
+with `arrangement.edit`; while the instance does not report `arrangement.v1`, no request can delete them,
+so `revert` is null and the result carries `IRREVERSIBLE`. An import that committed no clip is a no-op
+(reason `no_op`).
+
+Known OpenTune behaviours, reported as they are:
+
+- After a project was opened, OpenTune gives a new clip an id that a clip of the project may already
+  use, and the commit fails; each failed attempt uses up that id, so the import fails once per id in
+  use. The job repeats the commit, at most once more than there are clips, and logs it; the result
+  carries no warning, because the protocol defines no warning code for it. The UI's import fails in this
+  situation.
+- `commitPreparedImportAsPlacement()` selects every clip it commits and makes its track the active
+  track, also with `focus: false`. The job does not undo that; the result's `ui` snapshot
+  (`activeTrackId`, `selectedPlacementIds`) shows it. `focus` decides only whether the editor shows the
+  last clip, and with it whether the openDyne scheme generates its notes.
+- The editor does not mark the project as changed after its own import; the job does (section 15.5).
 
 ## Dirty flag and revision tokens
 
@@ -295,18 +356,23 @@ check; `DispatchShutdown` and `DispatchTimeout` a request that waits for the mes
 service stops or its dispatch timeout passes; `Vectors` runs the specification's vectors of the
 implemented methods against the real dispatcher (the others are listed as skipped, with the reason).
 
-`Tests/Control/ControlJobTests.cpp` holds the scenarios of the jobs and the write envelope. `Jobs` covers
-`job.get` without the message thread, the long poll while the session sends other requests, cancellation
-in every state, retention with an injected clock and `executed`; `JobShutdown` destroys the processor while
-a `job.get` waits for a job whose work owns a thread; `WriteEnvelope` the four states, `IRREVERSIBLE`, the
-UI snapshot, the busy checks and the environment of a job's steps; `JobVectors` the specification's
-vectors of `job/`.
+`Tests/Control/ControlJobTests.cpp` holds the scenarios of the jobs, the write envelope and the import.
+Imported clips get their synthetic analysis through the import's test seam
+(`controlSetImportAnalysisForTesting`). `Jobs` covers `job.get` without the message thread, the long poll
+while the session sends other requests, cancellation in every state, retention with injected wall and
+monotonic clocks, `stop()` from a nested message loop inside a step, and `executed`; `JobShutdown`
+destroys the processor while a `job.get` waits for a job whose work owns a thread; `WriteEnvelope` the
+four states, the no-op rules, `IRREVERSIBLE`, the UI snapshot, the busy checks and the environment of a
+job's steps; `Import` both editing schemes, all layouts, focus and note generation,
+revealed tracks, item failures, the checks before the job, busy and idempotency; `ImportAfterOpen` the
+import after a project was opened; `ImportCancel` a cancellation after the first of three commits;
+`JobVectors` the specification's vectors of `job/` and `import/`.
 
 ## Capabilities and protocol versions
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
-method table: `session.v1` always, and the capability of every registered method (now `read.v1` and
-`jobs.v1`). The listener answers a method of an unreported capability itself with
+method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
+`jobs.v1` and `import.v1`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: while `content.getDetails`, `transport.get`, `prefs.get` and
@@ -323,4 +389,5 @@ method of a capability it reports: while `content.getDetails`, `transport.get`, 
 | `content.getPitchCurve` | `read.v1` | `Ops/ContentReadOps.cpp` | `ControlProcessorTests.Reads`, `.Vectors` | `methods/content.getPitchCurve.schema.json` |
 | `content.segmentNotes` | `read.v1` | `Ops/ContentReadOps.cpp` | `ControlProcessorTests.Reads`, `.Vectors` | `methods/content.segmentNotes.schema.json` |
 | `job.get` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.JobShutdown`, `.JobVectors` | `methods/job.get.schema.json` |
-| `job.cancel` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.JobVectors` | `methods/job.cancel.schema.json` |
+| `job.cancel` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.ImportCancel`, `.JobVectors` | `methods/job.cancel.schema.json` |
+| `import.start` | `import.v1` | `Ops/ImportOps.cpp` | `ControlProcessorTests.Import`, `.ImportAfterOpen`, `.ImportCancel`, `.JobVectors` | `methods/import.start.schema.json` |

@@ -365,7 +365,7 @@ void checkSessionInfo(ApiSession& api)
     CONTROL_CHECK(memberOf(memberOf(info, "runtime"), "pid").asDouble()
                   == static_cast<double>(controlCurrentProcessId()));
     // Only the capabilities this build implements are reported.
-    CONTROL_CHECK(toJsonString(memberOf(info, "capabilities")) == R"(["session.v1","read.v1","jobs.v1"])");
+    CONTROL_CHECK(toJsonString(memberOf(info, "capabilities")) == R"(["session.v1","read.v1","jobs.v1","import.v1"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");

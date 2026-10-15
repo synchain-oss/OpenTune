@@ -106,6 +106,8 @@ struct ControlJobs::Job
     std::int64_t createdAtMs = 0;
     std::int64_t updatedAtMs = 0;
     std::int64_t finishedAtMs = -1;
+    /** Monotonic time of the end, for retention. */
+    std::int64_t finishedSteadyMs = 0;
     std::optional<double> fraction;
     std::string phase;
     std::optional<int> itemsDone;
@@ -136,6 +138,7 @@ public:
 
     void timerCallback() override
     {
+        // stop() called from a nested message loop inside tick() leaves this object alive (see stop()).
         if (!jobs_.tick())
             stopTimer();
     }
@@ -227,6 +230,10 @@ void ControlJobStep::cancel(JsonValue result, bool changedState)
 ControlJobs::ControlJobs(const ControlLimits& limits)
     : limits_(limits)
     , clock_([] { return static_cast<std::int64_t>(juce::Time::currentTimeMillis()); })
+    , steadyClock_([] {
+        return static_cast<std::int64_t>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(SteadyClock::now().time_since_epoch()).count());
+    })
 {}
 
 ControlJobs::~ControlJobs()
@@ -242,16 +249,30 @@ void ControlJobs::setInstanceShort(std::string instanceShort)
     instanceShort_ = std::move(instanceShort);
 }
 
-void ControlJobs::setClockForTesting(Clock clock)
+void ControlJobs::setClockForTesting(Clock clock, Clock steadyClock)
 {
     std::lock_guard<std::mutex> lock(mutex_);
+    if (!steadyClock)
+        steadyClock = clock;
     if (clock)
         clock_ = std::move(clock);
+    if (steadyClock)
+        steadyClock_ = std::move(steadyClock);
 }
 
 std::int64_t ControlJobs::now() const
 {
     return clock_();
+}
+
+std::int64_t ControlJobs::steadyNow() const
+{
+    return steadyClock_();
+}
+
+bool ControlJobs::expiredLocked(const Job& job, std::int64_t steadyNowMs) const
+{
+    return job.terminal() && job.finishedSteadyMs + limits_.jobRetentionMs <= steadyNowMs;
 }
 
 ControlJobs::Started ControlJobs::start(const std::string& kind, bool cancellable, ControlJobWork work,
@@ -266,7 +287,7 @@ ControlJobs::Started ControlJobs::start(const std::string& kind, bool cancellabl
             return started;
         }
         const auto nowMs = now();
-        evictLocked(nowMs);
+        evictLocked(steadyNow());
         if (static_cast<int>(jobs_.size()) >= limits_.jobRetentionCount) {
             started.refusal = "job_limit";
             return started;
@@ -296,10 +317,10 @@ std::string ControlJobs::findByKey(const std::string& kind, const std::string& i
 {
     std::lock_guard<std::mutex> lock(mutex_);
     // Retention decides what is still there; a job evicted by age is evicted at the next start().
-    const auto nowMs = now();
+    const auto steadyNowMs = steadyNow();
     for (const auto& [seq, job] : jobs_) {
-        const bool expired = job->terminal() && job->finishedAtMs + limits_.jobRetentionMs <= nowMs;
-        if (!expired && !job->idempotencyKey.empty() && job->kind == kind && job->idempotencyKey == idempotencyKey) {
+        if (!expiredLocked(*job, steadyNowMs) && !job->idempotencyKey.empty() && job->kind == kind
+            && job->idempotencyKey == idempotencyKey) {
             paramsDigest = job->paramsDigest;
             return job->jobId;
         }
@@ -307,12 +328,13 @@ std::string ControlJobs::findByKey(const std::string& kind, const std::string& i
     return {};
 }
 
-void ControlJobs::evictLocked(std::int64_t nowMs)
+void ControlJobs::evictLocked(std::int64_t steadyNowMs)
 {
     // Terminal jobs older than the retention time first, then, while the registry is full, the
-    // terminal jobs that finished first. Jobs that are not terminal stay.
+    // terminal jobs that finished first (on a tie the lower sequence number, the first in the map).
+    // Jobs that are not terminal stay.
     for (auto it = jobs_.begin(); it != jobs_.end();) {
-        if (it->second->terminal() && it->second->finishedAtMs + limits_.jobRetentionMs <= nowMs)
+        if (expiredLocked(*it->second, steadyNowMs))
             it = jobs_.erase(it);
         else
             ++it;
@@ -321,7 +343,7 @@ void ControlJobs::evictLocked(std::int64_t nowMs)
         auto oldest = jobs_.end();
         for (auto it = jobs_.begin(); it != jobs_.end(); ++it)
             if (it->second->terminal()
-                && (oldest == jobs_.end() || it->second->finishedAtMs < oldest->second->finishedAtMs))
+                && (oldest == jobs_.end() || it->second->finishedSteadyMs < oldest->second->finishedSteadyMs))
                 oldest = it;
         if (oldest == jobs_.end())
             return;
@@ -335,7 +357,7 @@ ControlJobs::Job* ControlJobs::findLocked(const std::string& jobId) const
     if (it == jobs_.end() || it->second->jobId != jobId)
         return nullptr;
     // A job retained beyond its time is gone for every reader (section 12.4).
-    if (it->second->terminal() && it->second->finishedAtMs + limits_.jobRetentionMs <= now())
+    if (expiredLocked(*it->second, steadyNow()))
         return nullptr;
     return it->second.get();
 }
@@ -369,6 +391,7 @@ void ControlJobs::finishLocked(Job& job, const char* state, std::optional<Contro
     job.result = std::move(result);
     job.cancellable = false;
     job.finishedAtMs = now();
+    job.finishedSteadyMs = steadyNow();
     job.updatedAtMs = job.finishedAtMs;
 }
 
@@ -502,6 +525,21 @@ ControlJobs::Cancel ControlJobs::cancel(const std::string& jobId, JsonValue& job
 
 bool ControlJobs::tick()
 {
+    // A step that runs a nested message loop lets the timer fire inside it. The outer tick is still in
+    // that step, so the nested tick calls no work (no step is ever re-entered).
+    if (tickDepth_ > 0) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return !stopped_;
+    }
+    struct DepthGuard
+    {
+        int& depth;
+        explicit DepthGuard(int& d) : depth(d) { ++depth; }
+        ~DepthGuard() { --depth; }
+        DepthGuard(const DepthGuard&) = delete;
+        DepthGuard& operator=(const DepthGuard&) = delete;
+    } depthGuard(tickDepth_);
+
     std::vector<std::pair<std::uint64_t, std::shared_ptr<ControlJobWork>>> active;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -563,8 +601,15 @@ void ControlJobs::stop()
     changed_.notify_all();
     if (waiterThread_.joinable() && waiterThread_.get_id() != std::this_thread::get_id())
         waiterThread_.join();
-    ticker_.reset();
-    // The work of every job is destroyed here; whatever threads it owns are joined by its destructor.
+    if (ticker_ != nullptr) {
+        ticker_->stopTimer();
+        // Called from a nested message loop inside a step, the ticker's timerCallback() has not returned
+        // yet and still uses the ticker: it is destroyed with the registry instead.
+        if (tickDepth_ == 0)
+            ticker_.reset();
+    }
+    // The work of every job is destroyed here, except the works the interrupted tick still holds (they go
+    // when it returns); whatever threads a work owns are joined by its destructor.
     works.clear();
 }
 

@@ -2,6 +2,7 @@
 #include "OpsRegistry.h"
 
 #include "ContentReadOps.h"
+#include "ImportOps.h"
 #include "JobOps.h"
 #include "ProjectReadOps.h"
 #include "SessionOps.h"
@@ -42,7 +43,7 @@ void registerControlMethods(ControlMethodTable& table)
     registerContentReadOps(table); // content.getNotes, content.getPitchCurve, content.segmentNotes;
                                    // later also content.getDetails
     registerJobOps(table);         // job.get, job.cancel
-    // registerImportOps(table);       import.start
+    registerImportOps(table);      // import.start
     // registerExportOps(table);       export.start
     // registerUiOps(table);           ui.getState, ui.dismiss, ui.setSelection
     // registerContentTuneOps(table);  content.setKey, content.autoTune

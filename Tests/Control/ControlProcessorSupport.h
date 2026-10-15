@@ -190,7 +190,7 @@ void scenarioDispatchTimeout();
 /** The specification's vectors of the implemented methods, against the real dispatcher. */
 void scenarioVectors();
 
-// Scenarios of the jobs and the write envelope (ControlJobTests.cpp).
+// Scenarios of the jobs, the write envelope and import.start (ControlJobTests.cpp).
 
 /** job.get and job.cancel: answered without the message thread, the long poll (also while the session
     sends other requests), cancellation per state, retention and eviction, and `executed` of errors. */
@@ -200,7 +200,14 @@ void scenarioJobs();
 void scenarioJobShutdown();
 /** The write envelope in its four states, the IRREVERSIBLE rule, the UI snapshot and the busy checks. */
 void scenarioWriteEnvelope();
-/** The specification's vectors of job.get and job.cancel, against the real dispatcher. */
+/** import.start in both editing schemes and all layouts, focus and note generation, revealed tracks,
+    item failures, the checks before the job, the busy checks and idempotency. */
+void scenarioImport();
+/** Importing after a project was opened succeeds although OpenTune reuses clip ids then. */
+void scenarioImportAfterOpen();
+/** A three-file import cancelled after its first commit reports the committed clip. */
+void scenarioImportCancel();
+/** The specification's vectors of job.get, job.cancel and import.start, against the real dispatcher. */
 void scenarioJobVectors();
 
 } // namespace ControlTest

@@ -14,6 +14,7 @@
 namespace OpenTune {
 
 class ControlDispatcher;
+class ControlJobs;
 class ControlServer;
 class ControlUiBridge;
 class OpenTuneAudioProcessor;
@@ -22,8 +23,7 @@ class OpenTuneAudioProcessor;
  * The control API of one OpenTune Standalone processor. A facade that owns the listener
  * (ControlServer, which also writes and deletes the discovery file through ControlDiscovery), the
  * message-thread marshalling (ControlMessageThread), the dispatcher (ControlDispatcher, the listener's
- * request handler) and, as later parts of the API arrive, the jobs; it keeps the editor's
- * ControlUiBridge pointer.
+ * request handler) and the jobs (ControlJobs); it keeps the editor's ControlUiBridge pointer.
  *
  * Lifecycle (see Source/Control/README.md#lifecycle):
  * - The processor constructor creates the service and calls scheduleStart(). Creating it only reads
@@ -74,7 +74,9 @@ public:
     /**
      * PROTOCOL.md section 3.6 rule 2, in this order: sets the stop flag (requests are answered with
      * SHUTTING_DOWN from now on); kills the liveness token, which wakes every thread waiting for the
-     * message thread and turns every function still queued for it into a no-op; stops the listener
+     * message thread and turns every function still queued for it into a no-op; stops the jobs (waiting
+     * job.get requests are answered with SHUTTING_DOWN, no job work runs again, and the work of every job
+     * is destroyed, joining whatever thread it owns); stops the listener
      * (its own stop flag, SHUTTING_DOWN for new requests, then sessions and listener close, threads are
      * joined with a bounded wait, the discovery file is deleted); deletes the ready file if it still
      * holds what this instance wrote; closes the log gate. Message thread; idempotent and re-entrant
@@ -98,6 +100,8 @@ public:
     /** The dispatcher once the API started (it stays after stop()); nullptr when it never started.
         Holders may keep it beyond the service, for its counters; it never runs a method after stop(). */
     std::shared_ptr<ControlDispatcher> dispatcher() const noexcept { return dispatcher_; }
+    /** The jobs once the API started (they stay after stop(), stopped); nullptr when it never started. */
+    std::shared_ptr<ControlJobs> jobs() const noexcept { return jobs_; }
 
     /** Registers the editor's bridge, or unregisters it with nullptr. Message thread. */
     void setUiBridge(ControlUiBridge* bridge) noexcept { uiBridge_ = bridge; }
@@ -130,7 +134,7 @@ private:
     std::shared_ptr<LogGate> logGate_;
     std::unique_ptr<ControlServer> server_;
     std::shared_ptr<ControlDispatcher> dispatcher_;
-    // The jobs registry is added here by a later part of the API.
+    std::shared_ptr<ControlJobs> jobs_;
     ControlUiBridge* uiBridge_ = nullptr;
     std::string discoveryFile_;
     /** Content of the ready file as this instance wrote it; empty when it wrote none. */

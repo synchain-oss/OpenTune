@@ -10,11 +10,14 @@ name: Control Sanitizers
 # 并用 run-ctest.ps1 -Include Control 运行。依赖与 build-macos 相同（bootstrap-deps.ps1 -Platform macos）。
 # 注意：测试按名字（含 Control）纳入；以后若有链接 JUCE 的测试被纳入，TSan 下可能出现 JUCE 内部的误报，
 # 届时需要白名单或设置 TSAN_OPTIONS=suppressions=<文件>。
-# 触发：手动；PR → feature/** 改到本 workflow 自身时（引入它的 PR 上首跑）。
+# 触发：手动；PR → feature/** 改到控制层源码、测试、cmake/OpenTuneControl.cmake 或本 workflow 自身时。
 on:
   pull_request:
     branches: ['feature/**']
     paths:
+      - 'Source/Control/**'
+      - 'Tests/Control/**'
+      - 'cmake/OpenTuneControl.cmake'
       - '.github/workflows/control-sanitizers.yml'
   workflow_dispatch:
 

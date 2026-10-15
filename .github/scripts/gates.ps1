@@ -14,9 +14,11 @@
      (all registered tests except ARALifecycleContractTests), each through with-build-slot.ps1 (machine-wide
      build slots: 2 by default, -BuildSlots or OPENTUNE_BUILD_SLOTS to change; free-memory check). Every test runs with its own OPENTUNE_DATA_DIR under
      <build>\ot-test-data.
-  3. Test data isolation: %APPDATA%\OpenTune is snapshotted (files, sizes, write times) before and
-     after ctest. Until the OPENTUNE_DATA_DIR hook is in the tree the upstream tests still write there:
-     the row is SKIP and says what was written; once the hook exists any write is FAIL.
+  3. Test data isolation: ctest runs in two passes (tests whose name contains Control, then the rest) and
+     %APPDATA%\OpenTune is snapshotted (files, sizes, write times) around each. Only a change during the
+     Control pass is FAIL (those tests set their own OPENTUNE_DATA_DIR); what the other upstream tests
+     write there is reported as known upstream behaviour (the hook is Standalone-only by rule) and the
+     row stays PASS. Nothing in the user directory is deleted.
   4. The models\ directories that the upstream POST_BUILD step copies next to the binaries (LFS pointers
      plus a 0-byte vocoder placeholder) would shadow the officially installed models: they are deleted
      and their absence is asserted.
@@ -257,24 +259,36 @@ function Test-DataDirHook {
     return (Test-Path -LiteralPath $prefs) -and [bool](Select-String -LiteralPath $prefs -SimpleMatch 'OPENTUNE_DATA_DIR' -Quiet)
 }
 
-# Step 3: did ctest write to the real %APPDATA%\OpenTune? $Diff is $null when ctest did not run.
-function Add-IsolationRow($Diff) {
-    $step = '测试数据隔离（真实 %APPDATA%\OpenTune）'
-    if ($null -eq $Diff) { Add-Row $step 'SKIP' 'ctest 未运行'; return }
-    $hook = Test-DataDirHook
-    if ($Diff.Count -eq 0) {
-        Add-Row $step 'PASS' "ctest 前后 %APPDATA%\OpenTune 没有任何新建、修改或删除$(if (-not $hook) { '（OPENTUNE_DATA_DIR 钩子尚未合入）' })"
-        return
+# Step 3: did the control-layer tests write to the real %APPDATA%\OpenTune? $Control is the change during the
+# control-test pass and $Other the change during the remaining upstream tests (both $null when not run).
+# Only the control pass can FAIL; what the upstream tests write is reported as known upstream behaviour.
+function Get-IsolationVerdict($Control, $Other, [bool]$Hook) {
+    $otherCount = if ($null -eq $Other) { 0 } else { [int]$Other.Count }
+    if ($null -eq $Control) {
+        return [pscustomobject]@{ Status = 'SKIP'; Note = '没有名字含 Control 的测试或 ctest 未运行' }
     }
-    $examples = @(@($Diff.Created) + @($Diff.Changed) | Select-Object -First 3 | ForEach-Object { if ($_ -eq '.') { 'OpenTune\' } else { "OpenTune\$_" } })
-    $what = "ctest 写入了真实的 %APPDATA%\OpenTune：新建 $(@($Diff.Created).Count) 项、修改 $(@($Diff.Changed).Count) 项、删除 $(@($Diff.Removed).Count) 项$(if ($examples.Count) { "（如 $($examples -join '、')）" })"
-    if ($hook) { Add-Row $step 'FAIL' "$what；OPENTUNE_DATA_DIR 钩子已在代码中，测试仍未隔离" }
-    else { Add-Row $step 'SKIP' "OPENTUNE_DATA_DIR 钩子尚未合入，上游测试无法隔离：$what" }
+    if ($Control.Count -gt 0) {
+        $examples = @(@($Control.Created) + @($Control.Changed) | Select-Object -First 3 | ForEach-Object { if ($_ -eq '.') { 'OpenTune' } else { "OpenTune\$_" } })
+        $what = "控制层测试写入了真实的 %APPDATA%\OpenTune：新建 $(@($Control.Created).Count) 项、修改 $(@($Control.Changed).Count) 项、删除 $(@($Control.Removed).Count) 项$(if ($examples.Count) { "（如 $($examples -join '、')）" })"
+        if ($Hook) { return [pscustomobject]@{ Status = 'FAIL'; Note = "$what；OPENTUNE_DATA_DIR 钩子已在代码中，控制层测试仍未隔离" } }
+        return [pscustomobject]@{ Status = 'SKIP'; Note = "OPENTUNE_DATA_DIR 钩子尚未合入：$what" }
+    }
+    $note = '控制层测试前后真实目录无任何新建、修改或删除'
+    if ($otherCount -gt 0) { $note += "；上游测试新写入 $otherCount 个文件或目录（已知上游行为：这些测试链接 VST3 共享代码，数据目录钩子按规则只在 Standalone 中生效；未删除用户目录中的任何文件）" }
+    else { $note += '；其余上游测试也没有写入' }
+    return [pscustomobject]@{ Status = 'PASS'; Note = $note }
+}
+function Add-IsolationRow($Control, $Other, [bool]$RanCtest) {
+    $step = '测试数据隔离（真实 %APPDATA%\OpenTune）'
+    if (-not $RanCtest) { Add-Row $step 'SKIP' 'ctest 未运行'; return }
+    $v = Get-IsolationVerdict $Control $Other (Test-DataDirHook)
+    Add-Row $step $v.Status $v.Note
 }
 
 # Step 2: configure, build and ctest, each under the build slot. Adds the configure/build/ctest rows
 # and sets $script:ctestDataDiff to the change of the real data directory during ctest.
 $script:ctestDataDiff = $null
+$script:ctestControlDiff = $null
 function Invoke-BuildSteps {
     New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
     $cmakeArgs = @()
@@ -318,12 +332,43 @@ function Invoke-BuildSteps {
             Add-Row 'build' 'PASS' "$Config，--parallel $Parallel，$($targets.Count) 个目标（Standalone、VST3 与测试，不含 $($ExcludedTests -join '、')）；$(Format-Timing $build)"
             $summaryPath = Join-Path $logDir 'ctest-summary.json'
             Remove-Item -LiteralPath $summaryPath -ErrorAction SilentlyContinue
+            # Two passes so the real data directory can be attributed: the control-layer tests (names containing
+            # "Control") all set their own OPENTUNE_DATA_DIR and must not touch the real directory at all; the
+            # remaining upstream tests link the VST3 shared code, which the data-directory hook does not cover
+            # (the hook is Standalone-only by rule), so what they write there is known upstream behaviour.
+            $controlNames = @($testTargets.Keys | ForEach-Object { [string]$_ } | Where-Object { $_ -match 'Control' -and $ExcludedTests -notcontains $_ })
+            $otherExclude = @($ExcludedTests) + $controlNames
+            $summaryControlPath = Join-Path $logDir 'ctest-summary-control.json'
+            Remove-Item -LiteralPath $summaryControlPath -ErrorAction SilentlyContinue
+            $ctestControl = $null
+            $script:ctestControlDiff = $null
+            if ($controlNames.Count) {
+                $dataBefore = Get-DirSnapshot $realDataDir
+                $ctestControl = Invoke-InSlot 'ctest-control' @('pwsh', '-NoProfile', '-File', (Join-Path $scripts 'run-ctest.ps1'), '-BuildDir', $BuildDir, '-Config', $Config,
+                    '-Include', 'Control', '-Exclude', ($ExcludedTests -join ','), '-DataRoot', (Join-Path $BuildDir 'ot-test-data-control'), '-SummaryPath', $summaryControlPath)
+                $script:ctestControlDiff = Compare-DirSnapshot $dataBefore (Get-DirSnapshot $realDataDir)
+            }
             $dataBefore = Get-DirSnapshot $realDataDir
             $ctest = Invoke-InSlot 'ctest' @('pwsh', '-NoProfile', '-File', (Join-Path $scripts 'run-ctest.ps1'), '-BuildDir', $BuildDir, '-Config', $Config,
-                '-Exclude', ($ExcludedTests -join ','), '-DataRoot', (Join-Path $BuildDir 'ot-test-data'), '-SummaryPath', $summaryPath)
+                '-Exclude', ($otherExclude -join ','), '-DataRoot', (Join-Path $BuildDir 'ot-test-data'), '-SummaryPath', $summaryPath)
             $script:ctestDataDiff = Compare-DirSnapshot $dataBefore (Get-DirSnapshot $realDataDir)
             $summary = $null
             if (Test-Path -LiteralPath $summaryPath) { $summary = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json }
+            $sc = $null
+            if (Test-Path -LiteralPath $summaryControlPath) { $sc = Get-Content -LiteralPath $summaryControlPath -Raw | ConvertFrom-Json }
+            if ($ctestControl -and $ctestControl.Code -ne 0 -and -not $sc) {
+                Add-Row 'ctest' 'FAIL' "控制层测试 exit $($ctestControl.Code)；日志 $($ctestControl.Log)：$(Get-LogTail $ctestControl)"
+                return
+            }
+            if ($sc) {
+                # Merge the control pass into the overall summary.
+                $ctestCodeControl = $ctestControl.Code
+                $summary = [pscustomobject]@{
+                    passed = [int]$summary.passed + [int]$sc.passed; total = [int]$summary.total + [int]$sc.total
+                    failed = @(@($summary.failed) + @($sc.failed)); excluded = @($summary.excluded)
+                }
+                if ($ctestCodeControl -ne 0) { $ctest = [pscustomobject]@{ Code = $ctestCodeControl; Log = $ctest.Log } }
+            }
             $dataNote = '每个测试设置了独立的 OPENTUNE_DATA_DIR=<build>\ot-test-data\<测试名>（是否生效见「测试数据隔离」一行）'
             if ($ctest.Code -eq 0 -and $summary) {
                 Add-Row 'ctest' 'PASS' "$($summary.passed)/$($summary.total) 通过（排除 $(@($summary.excluded) -join '、')：在锁定的 ARA SDK 2.3.0 下编不过，属上游问题）；$dataNote；$(Format-Timing $ctest)"
@@ -381,7 +426,7 @@ try {
 
     # 3. test data isolation
     if ($SkipBuild) { Add-Row '测试数据隔离（真实 %APPDATA%\OpenTune）' 'SKIP' '-SkipBuild（ctest 未运行）' }
-    else { Add-IsolationRow $script:ctestDataDiff }
+    else { Add-IsolationRow $script:ctestControlDiff $script:ctestDataDiff ($null -ne $script:ctestDataDiff) }
 
     # 4. models\ produced by POST_BUILD must not survive
     $modelDirs = @(Find-ModelDirs)

@@ -39,7 +39,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        branch: [dev, feature/control-api]
+        # PR 事件下两个分支行检出的是同一个合并提交、结果相同，所以只跑 dev 一行（job 级 if 读不到 matrix 上下文，
+        # 因此在 matrix 取值处按事件收窄）。
+        branch: ${{ fromJSON(github.event_name == 'pull_request' && '["dev"]' || '["dev","feature/control-api"]') }}
     env:
       GIT_LFS_SKIP_SMUDGE: '1'
       UPSTREAM_URL: https://github.com/YuFeng926/OpenTune.git
@@ -68,7 +70,7 @@ jobs:
           git log -1 --format='upstream standalone: %H %cs' refs/remotes/upstream/standalone
           node .github/scripts/try-rebase.mjs --upstream refs/remotes/upstream/standalone --summary "$RUNNER_TEMP/sync-dryrun.md"
           {
-            echo "## 分支：${{ matrix.branch }}${{ github.event_name == 'pull_request' && '（PR 触发：实际检出的是本 PR 的合并提交，两行结果相同）' || '' }}"
+            echo "## 分支：${{ matrix.branch }}${{ github.event_name == 'pull_request' && '（PR 触发：实际检出的是本 PR 的合并提交，只跑这一行）' || '' }}"
             echo
             cat "$RUNNER_TEMP/sync-dryrun.md"
           } >> "$GITHUB_STEP_SUMMARY"

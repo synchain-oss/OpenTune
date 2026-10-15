@@ -33,11 +33,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - **新增代码的位置**（`namespace OpenTune`，PascalCase 文件名）：`Source/Control/**`、`Source/Standalone/ControlEditorBridge*`、`Tests/Control/**`、`cmake/OpenTuneControl.cmake`。fork 专用测试放 `Tests/ControlFork/**`。
 - **已声明的钩子**：这是对上游已有文件的全部改动。每处钩子都要加标记 `// OpenTune Control API hook: <purpose>, see Source/Control/README.md#hooks`。
 
-| 钩子 | 文件 | 约行数 |
+| 钩子 | 文件 | 约行数（含 `#if`/`#endif`/include 等条件编译行） |
 |---|---|---|
-| ControlService 成员；构造末尾受保护的 callAsync 启动；析构**第一句** `stop()`；getter（Standalone 宏 + 选项宏） | `Source/PluginProcessor.h/.cpp` | 20–25 |
-| 公开 `ensureRuntimeInitialized()` | `Source/PluginProcessor.h/.cpp` | 6–8 |
-| `OPENTUNE_DATA_DIR` 重定向 | `Source/Utils/AppPreferences.cpp`（+ `AppLogger.cpp`） | 5（+3） |
+| ControlService 成员；构造末尾受保护的 callAsync 启动；析构**第一句** `stop()`；getter（Standalone 宏 + 选项宏） | `Source/PluginProcessor.h/.cpp` | 与下一行合计约 33（.h 21 + .cpp 12） |
+| 公开 `ensureRuntimeInitialized()` | `Source/PluginProcessor.h/.cpp` | 含在上一行的合计内 |
+| `OPENTUNE_DATA_DIR` 重定向 | `Source/Utils/AppPreferences.cpp`（+ `AppLogger.cpp`） | `AppPreferences.cpp` 与 `AppLogger.cpp` 各约 8 |
 | `contentEpoch` + getter | `Source/Content/StandaloneContentRepository.h/.cpp` | 4–6 |
 | `friend class ControlEditorBridge;` + 成员；构造后创建，析构时先注销 | `Source/Standalone/PluginEditor.h/.cpp` | ~6 |
 | 导出锁（UI 与 API 共用）、master 导出错误信息、按 placementId 导出 clip | `Source/PluginProcessor.*`、`Source/Standalone/PluginEditor.cpp` | 15–25 |

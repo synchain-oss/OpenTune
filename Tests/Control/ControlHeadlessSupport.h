@@ -12,10 +12,11 @@
 // Windows and Linux: juce::detail::dispatchNextMessageOnSystemQueue(true), which dispatches one message
 // and returns false at once when none is pending. JUCE defines it only for those platforms, so it
 // cannot be linked on macOS.
-// macOS: MessageManager::runDispatchLoopUntil(kPumpIdleMs), the public JUCE entry that runs the
-// platform loop for a short time and returns. It only reports whether a quit message was posted and
-// never posts one itself, so it does not engage the stopDispatchLoop() latch; the pump never calls
-// stopDispatchLoop().
+// macOS: one CFRunLoopRunInMode() round on the main run loop. JUCE's message queue on macOS is a
+// CFRunLoopSource on that run loop, so this dispatches the posted messages without relying on any JUCE
+// configuration macro (MessageManager::runDispatchLoopUntil() exists only with
+// JUCE_MODAL_LOOPS_PERMITTED, which the product does not enable). It never posts a quit message, so
+// the stopDispatchLoop() latch is not engaged.
 
 #include "ControlTestSupport.h"
 
@@ -24,6 +25,10 @@
 #include "Control/ControlPathPolicy.h"
 
 #include <juce_events/juce_events.h>
+
+#if JUCE_MAC
+#include <CoreFoundation/CoreFoundation.h>
+#endif
 
 #include <algorithm>
 #include <cctype>
@@ -63,8 +68,9 @@ inline bool pumpMessagesUntil(const std::function<bool()>& condition, int timeou
         if (Clock::now() >= deadline)
             return false;
 #if JUCE_MAC
-        // Blocks for up to kPumpIdleMs while idle, so no extra sleep is needed.
-        juce::MessageManager::getInstance()->runDispatchLoopUntil(kPumpIdleMs);
+        // Handles at most one source and returns; waits up to kPumpIdleMs while idle, so no extra
+        // sleep is needed.
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, kPumpIdleMs / 1000.0, true);
 #else
         if (!juce::detail::dispatchNextMessageOnSystemQueue(true))
             sleepMs(kPumpIdleMs);

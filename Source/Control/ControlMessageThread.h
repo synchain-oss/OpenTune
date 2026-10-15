@@ -68,6 +68,11 @@ public:
      * under the same mutex that fn's start takes. If fn has already started when the timeout passes or
      * stop() is called, call() waits until it returns and reports Done or Failed, so that a caller
      * never reports "not executed" for work that was executed.
+     *
+     * fn must not stop the control service synchronously (for example an operation that closes the
+     * application or destroys the processor): ControlService::stop() joins the connection thread that
+     * waits here for fn, so the join would only end at its bounded timeout and detach the thread. Such
+     * an operation posts the stop with post() from fn and returns.
      */
     CallResult call(std::function<void()> fn, int timeoutMs);
 

@@ -86,6 +86,23 @@ bool reject(ControlParamReader& reader, std::string& why, std::string message)
     return failWith(reader, why);
 }
 
+/** The undo description of AUTO regenerate, the text the piano roll gives its AUTO entry
+    (PianoRollComponent::applyAutoTuneToSelection()). Built from UTF-8 here: the piano roll passes the literal
+    through TRANS(), whose juce::String(const char*) reads the bytes as Latin-1, so taking its text would put
+    mojibake into the API's history. */
+juce::String autoTuneDescription()
+{
+    return juce::String::fromUTF8(u8"自动调音");
+}
+
+/** The undo description of SNAP, the text the piano roll gives the AUTO button's snap
+    (PianoRollComponent::applyAutoSnapToAllNotes()) and PianoRollToolHandler its double-click snap; from UTF-8
+    for the same reason as autoTuneDescription(). */
+juce::String snapDescription()
+{
+    return juce::String::fromUTF8(u8"音高吸附");
+}
+
 // ---- content.setKey -------------------------------------------------------------------------------
 
 struct SetKeyParams
@@ -535,7 +552,7 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
     envelope.touchContent(ref.contentId);
     std::vector<CommittedRange> committed;
     std::vector<Note> afterNotes = beforeNotes;
-    const juce::String description = TRANS("自动调音");
+    const juce::String description = autoTuneDescription();
     ContentEditTransaction transaction(processor, ref.key);
     for (const auto& range : ranges) {
         if (params.dryRun) {
@@ -717,7 +734,7 @@ Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& 
     const auto beforeWorld = controlCaptureWorldVersions(context);
     ControlWriteEnvelope envelope(context);
     envelope.touchContent(ref.contentId);
-    const juce::String description = TRANS("音高吸附");
+    const juce::String description = snapDescription();
     ContentEditTransaction transaction(processor, ref.key);
     auto planning = std::make_shared<EditableContentSnapshot>(*ref.snapshot);
     std::size_t commits = 0;

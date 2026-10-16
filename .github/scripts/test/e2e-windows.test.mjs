@@ -162,6 +162,55 @@ describe('scrubPath and scrubDir', () => {
   });
 });
 
+describe('hex secrets without a field name', () => {
+  const hex64 = 'a1b2c3d4'.repeat(8);
+  const hex40 = 'F0e1D2c3B4'.repeat(4);
+  test('scrubLog redacts bare 32-128 digit hex, upper case included, in vitest expected/received form', () => {
+    const msg = `AssertionError: expected '${hex64}' to be '${hex40}' // sha ${hex40}`;
+    const out = scrubLog(msg);
+    assert.ok(!out.includes(hex64) && !out.includes(hex40), out);
+    assert.match(out, /expected '<redacted-hex>' to be '<redacted-hex>'/);
+  });
+
+  test('short hex and ordinary words stay', () => {
+    const t = 'build deadbeef 0123456789abcdef x'.concat(' ', 'a'.repeat(31));
+    assert.equal(scrubLog(t), t);
+  });
+
+  test('scrubDir redacts it in a vitest report', () => {
+    const dir = makeTempDir('e2e-hex');
+    try {
+      fs.writeFileSync(path.join(dir, 'contract.json'), JSON.stringify({ failureMessages: [`expected '${hex64}' to be '${hex64.toUpperCase()}'`] }));
+      scrubDir(dir);
+      const t = fs.readFileSync(path.join(dir, 'contract.json'), 'utf8');
+      assert.ok(!/[0-9a-fA-F]{32}/.test(t), t);
+    } finally {
+      removeDir(dir);
+    }
+  });
+});
+
+describe('smoke skips fail the run', () => {
+  const okLog = { ok: true, backend: 'CPU', f0ModelPath: 'x', problems: [] };
+  const okContract = { testResults: [{ assertionResults: [{ status: 'passed', fullName: 'a' }, { status: 'pending', fullName: 'b' }] }] };
+  test('a SKIP or FLAKY-SKIP smoke step fails and says so; contract skips alone do not', () => {
+    for (const result of ['SKIP', 'FLAKY-SKIP']) {
+      const smoke = { steps: [{ name: 'hello', result: 'PASS' }, { name: 'import', result: result }] };
+      const r = renderSummary({ contract: okContract, smoke, log: okLog });
+      assert.equal(r.failed, true, result);
+      assert.match(r.markdown, /冒烟有未运行的步骤/);
+    }
+    const ok = renderSummary({ contract: okContract, smoke: { steps: [{ name: 'hello', result: 'PASS' }] }, log: okLog });
+    assert.equal(ok.failed, false);
+    assert.match(ok.markdown, /带 given 的向量在 exe 上不适用/);
+  });
+  test('smoke FAIL is the larger of top-level counts and steps', () => {
+    const c = countSmoke({ counts: { PASS: 1, FAIL: 0 }, steps: [{ name: 'a', result: 'FAIL' }] });
+    assert.equal(c.fail, 1);
+    assert.equal(countSmoke({ counts: { FAIL: 3 }, steps: [{ name: 'a', result: 'FAIL' }] }).fail, 3);
+  });
+});
+
 describe('renderSummary', () => {
   const okLog = { ok: true, backend: 'CPU', f0ModelPath: `${MODELS}\\fcpe.onnx`, problems: [] };
   const okContract = { testResults: [{ assertionResults: [{ status: 'passed', fullName: 'a' }] }] };

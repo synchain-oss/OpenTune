@@ -77,6 +77,9 @@ export function checkModels(pin, dir) {
 const SECRET_PATTERNS = [
   [/(bearer\s+)[A-Za-z0-9_\-+/=.]{8,}/gi, '$1<redacted>'],
   [/((?:session[-_ ]?)?token|server[-_ ]?proof|authorization|secret)(\\*["']?\s*[:=]\s*\\*["']?)[A-Za-z0-9_\-+/=.]{8,}/gi, '$1$2<redacted>'],
+  // Field-name independent: any 32-128 digit hex run (tokens, proofs, hashes, 40-digit commit ids; vitest prints
+  // `expected '<hex>' to be '<hex>'` with no field name). The reports do not need commit ids.
+  [/(?<![0-9A-Za-z])[0-9a-fA-F]{32,128}(?![0-9A-Za-z])/g, '<redacted-hex>'],
 ];
 
 /** Redact session tokens, serverProof values and Windows user profile names from log text. */
@@ -178,7 +181,7 @@ export function countSmoke(report) {
   if (top) {
     const n = (k) => (Number.isFinite(Number(top[k])) ? Number(top[k]) : 0);
     c.pass = n('PASS');
-    c.fail = n('FAIL');
+    c.fail = Math.max(n('FAIL'), c.fail); // the larger of the top-level count and the steps tally
     c.skip = n('SKIP');
     c.flakySkip = n('FLAKY-SKIP');
   }
@@ -214,7 +217,14 @@ export function renderSummary({ timings = [], contract = null, smoke = null, log
     rows.push(`| ${name} | ${c.pass} | ${c.fail} | ${c.skip} | ${c.flakySkip} | ${c.failed.length ? cell(c.failed.slice(0, 5).join('；')) : ''} |`);
   };
   add('契约向量', contract ? countVitest(contract) : null);
-  add('冒烟场景', smoke ? countSmoke(smoke) : null);
+  const smokeCount = smoke ? countSmoke(smoke) : null;
+  if (smokeCount && smokeCount.skip + smokeCount.flakySkip > 0) {
+    // Unlike contract vectors (vectors with a `given` do not apply to the exe), a skipped smoke step is a step that did not run.
+    if (smokeCount.fail === 0) smokeCount.fail = 1;
+    smokeCount.failed.unshift('冒烟有未运行的步骤');
+  }
+  add('冒烟场景', smokeCount);
+  lines.push('契约向量的 SKIP 不计为失败：带 given 的向量在 exe 上不适用。冒烟场景的 SKIP / FLAKY-SKIP 计为失败。', '');
   lines.push(`MCP 仓库 ref：\`${mcpRef || '(未记录)'}\``, '', '| 项目 | PASS | FAIL | SKIP | FLAKY-SKIP | 失败项（至多 5 个） |', '|---|---|---|---|---|---|', ...rows, '');
   if (log) {
     if (!log.ok) failed = true;

@@ -105,7 +105,7 @@ No test build has been published yet.
 
 On the very first launch with a fresh data directory, OpenTune shows a modal onboarding dialog that asks you to pick a workflow. While any modal dialog is open, the control API answers write operations with `BUSY(modal_open)`. This is normal upstream behaviour, not a defect: a real user answers the dialog once, and it does not appear again.
 
-The `e2e-windows` workflow starts OpenTune with a new data directory on every launch, so it pre-seeds a minimal preferences file that already marks first-time use as completed (`shared.onboardingShown`), through the `OTCP_TARGET_DATA_TEMPLATE` option of the MCP contract and smoke runners. It then asserts that the seeded value is present in every launch's data directory.
+The `e2e-windows` workflow starts OpenTune with a new data directory on every launch, so it pre-seeds a minimal preferences file that already marks first-time use as completed (`shared.onboardingShown`), through the `OTCP_TARGET_DATA_TEMPLATE` option of the MCP contract and smoke runners. It then asserts that the file was copied into every launch's data directory unmodified. That the app actually read it shows in the contract and smoke runs: no `BUSY(modal_open)` appears.
 
 ## Licensing
 

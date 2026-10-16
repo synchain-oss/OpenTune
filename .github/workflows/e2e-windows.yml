@@ -5,8 +5,8 @@
 name: E2E Windows
 
 # 在 GitHub 的 Windows runner 上，用真实的 OpenTune Standalone 跑 MCP 仓库的契约向量与冒烟场景。
-# 永不设为必需检查：它只在 PR 带 `e2e-windows` 标签时（pull_request: labeled / synchronize）或 workflow_dispatch 时运行；
-# 结果只作参考与预览前的检查依据。
+# 永不设为必需检查：它只在「这次加的标签就是 `e2e-windows`」或「推送（synchronize）且 PR 带该标签」时运行（别的标签事件
+# 不运行；外部 fork 来的 PR 不自动跑），或由 workflow_dispatch 运行；结果只作参考与预览前的检查依据。
 #
 # 流程：
 #   1. build   经 workflow_call 调 build-windows.yml 的出包模式（Standalone Release、控制接口 ON、已删除
@@ -23,10 +23,12 @@ name: E2E Windows
 # 结果统计把 PASS / FAIL / SKIP / FLAKY-SKIP 分开计数（名字含 FLAKY-SKIP 的跳过项计入 FLAKY-SKIP）。
 # 首次引导：真实用户首次启动 OpenTune 时要回答一次首次引导对话框（选工作流程），对话框开着时接口的写操作得 BUSY(modal_open)。
 # 本 workflow 每次启动都用新的数据目录，所以契约与冒烟之前预置一个「已完成首次使用」的首选项模板
-# （shared.onboardingShown=1，经 OTCP_TARGET_DATA_TEMPLATE 在每次启动前复制进数据目录），并断言模板生效。
+# （shared.onboardingShown=1，经 OTCP_TARGET_DATA_TEMPLATE 在每次启动前复制进数据目录），并断言模板已复制进每次启动的
+# 数据目录且未被改写。「程序确实读到了」由契约与冒烟里没有 BUSY(modal_open) 体现，不由这一步断言。
 # 任何 workflow 一律不用 pull_request 的 target 变体（CLAUDE.md §0 第 4 条）。
 on:
-  # 加标签触发：在 PR 上打 `e2e-windows` 标签即运行；之后每次推送（synchronize）在标签仍在时重跑。没有输入参数，
+  # 加标签触发：在 PR 上加上 `e2e-windows` 标签即运行（加别的标签不运行）；之后每次推送（synchronize）在标签仍在时重跑；
+  # 外部 fork 来的 PR 不自动跑。没有输入参数，
   # MCP 仓库 ref 用默认值 feature/v1，脚本名用默认值。workflow_dispatch 只有在本文件合入默认分支（dev）之后才能用
   # （gh workflow run 对只存在于非默认分支的 workflow 返回 404）。两者都不是必需检查。
   pull_request:
@@ -49,15 +51,17 @@ on:
 permissions:
   contents: read
 
-# 按 PR 分组，新运行取消旧运行。打了别的标签的 labeled 事件不会运行任何 job，它用独立分组，免得取消正在跑的那次。
+# 按 PR 分组，新运行取消旧运行。只有「会运行 job」的事件（与下面 job 的 if 同一条件）才进入 PR 分组；其他事件
+# （别的标签、外部 fork 的 PR）用按运行编号的独立分组，不会取消正在跑的那次。被调用的 build-windows 的并发分组含
+# 调用方的 workflow 名与 PR 号，只在本运行真正发起它时才存在。
 concurrency:
-  group: e2e-windows-${{ (github.event_name == 'pull_request' && (github.event.action != 'labeled' || github.event.label.name == 'e2e-windows')) && format('pr-{0}', github.event.pull_request.number) || (github.event_name == 'pull_request' && format('ignored-{0}', github.run_id)) || github.ref }}
+  group: e2e-windows-${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'e2e-windows') && (github.event.action != 'labeled' || github.event.label.name == 'e2e-windows')) && format('pr-{0}', github.event.pull_request.number)) || (github.event_name == 'pull_request' && format('ignored-{0}', github.run_id)) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     name: build (Standalone Release, no models)
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e-windows') }}
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'e2e-windows') && (github.event.action != 'labeled' || github.event.label.name == 'e2e-windows')) }}
     uses: ./.github/workflows/build-windows.yml
     with:
       release-package: true
@@ -65,7 +69,7 @@ jobs:
   e2e-windows:
     name: e2e-windows
     needs: build
-    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e-windows') }}
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'e2e-windows') && (github.event.action != 'labeled' || github.event.label.name == 'e2e-windows')) }}
     runs-on: windows-2022
     timeout-minutes: 60
     defaults:
@@ -147,10 +151,10 @@ jobs:
 
       # 官方安装包是 Inno Setup 程序：只在 runner 上静默安装（用 /DIR= 指到临时目录）。模型由安装程序放在共享的
       # %ProgramData%\OpenTune\Models，而不是安装目录里。
-      # 安装包若在 /VERYSILENT 下仍启动程序（postinstall 没带 skipifsilent），它继承这里的临时 APPDATA，不会写真实的用户目录。
+      # 安装包若在 /VERYSILENT 下仍启动程序（postinstall 没带 skipifsilent），它可能写真实的用户目录。覆盖 APPDATA 环境变量
+      # 对 JUCE 与 Inno 不起作用（二者经系统接口取已知文件夹，不读该变量），所以这里不覆盖；真正的保护是下一步：
+      # 结束官方程序并检查真实 %APPDATA%\OpenTune 不存在，否则失败。
       - name: Install the official OpenTune silently
-        env:
-          APPDATA: ${{ env.E2E_WORK }}\appdata-official
         run: |
           $sw = [Diagnostics.Stopwatch]::StartNew()
           try {
@@ -297,8 +301,8 @@ jobs:
           }
           Get-ChildItem -LiteralPath $dst -Recurse -File | ForEach-Object { Write-Host "kept: $($_.FullName.Substring($dst.Length)) $($_.Length)" }
 
-      # 证明模板生效：每次启动的数据目录里 app-preferences.settings 的 shared.onboardingShown 必须为 1。
-      - name: Assert the onboarding template took effect in every kept data directory
+      # 断言模板已复制进每次启动的数据目录且未被改写：app-preferences.settings 的 shared.onboardingShown 必须为 1（程序是否读到它，看契约与冒烟里有无 BUSY(modal_open)）。
+      - name: Assert the onboarding template was copied into every kept data directory unmodified
         id: template
         if: ${{ !cancelled() }}
         continue-on-error: true
@@ -308,7 +312,7 @@ jobs:
           if ($files.Count -eq 0) { throw "onboarding template not applied: no app-preferences.settings in any kept data directory" }
           $bad = @($files | Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -notmatch '<VALUE\s+name="shared\.onboardingShown"\s+val="1"' })
           foreach ($f in $files) { Write-Host "preferences: $($f.FullName.Substring($env:E2E_KEEP.Length)) onboardingShown=$(if ($bad.FullName -contains $f.FullName) { 'missing or 0' } else { '1' })" }
-          if ($bad.Count) { throw "onboarding template did not take effect: shared.onboardingShown is not 1 in $($bad.Count) kept data directories" }
+          if ($bad.Count) { throw "onboarding template was not copied unmodified: shared.onboardingShown is not 1 in $($bad.Count) kept data directories" }
 
       - name: Summary (PASS / FAIL / SKIP / FLAKY-SKIP, backend, timings)
         id: summary
@@ -326,7 +330,7 @@ jobs:
           $code = $LASTEXITCODE
           Copy-Item -LiteralPath $env:GITHUB_STEP_SUMMARY -Destination "$env:E2E_OUT\summary.md" -ErrorAction SilentlyContinue
           if ($code -ne 0) { throw "e2e-windows has failing or missing results" }
-          if ($env:TEMPLATE_OUTCOME -ne 'success') { throw "onboarding template did not take effect (shared.onboardingShown is not 1 in a kept data directory)" }
+          if ($env:TEMPLATE_OUTCOME -ne 'success') { throw "onboarding template was not copied unmodified (shared.onboardingShown is not 1 in a kept data directory)" }
           if ($env:CONTRACT_OUTCOME -ne 'success' -or $env:SMOKE_OUTCOME -ne 'success') { throw "contract or smoke step did not succeed" }
 
       # 上传前对整个输出目录（契约报告、冒烟报告、日志、摘要）再脱敏一遍：vitest 的失败信息可能带请求或响应体。

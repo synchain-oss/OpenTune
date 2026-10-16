@@ -105,7 +105,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 数据目录全新时的首次启动，OpenTune 会弹出模态的首次引导对话框，让用户选择工作流程。任何模态对话框打开期间，控制接口对写操作返回 `BUSY(modal_open)`。这是上游的正常流程，不是缺陷：真实用户回答一次后就不会再出现。
 
-`e2e-windows` 工作流每次启动都使用新的数据目录，所以它借助 MCP 契约与冒烟运行器的 `OTCP_TARGET_DATA_TEMPLATE` 选项，预置一个最小首选项文件，把「已完成首次使用」（`shared.onboardingShown`）写好，并断言每次启动的数据目录里这个值确实存在。
+`e2e-windows` 工作流每次启动都使用新的数据目录，所以它借助 MCP 契约与冒烟运行器的 `OTCP_TARGET_DATA_TEMPLATE` 选项，预置一个最小首选项文件，把「已完成首次使用」（`shared.onboardingShown`）写好，并断言该文件已复制进每次启动的数据目录且未被改写。程序是否读到它，由契约与冒烟运行中没有出现 `BUSY(modal_open)` 体现。
 
 ## 许可
 

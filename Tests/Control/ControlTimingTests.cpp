@@ -465,9 +465,9 @@ void checkGridRoundingMatchesReadback(TimingFixture& f)
     for (const char* text : {"1.1234565", "1.1234575", "0.9999995", "1.5000005", "1.2499995", "1.3333335"}) {
         const auto result = f.api.result(
             "content.editTimeGrid",
-            jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + ",\"op\":\"moveHandles\",\"expectedGridRevision\":"
-                   + jsonQuoted(f.gridRevision()) + ",\"moves\":[{\"handleId\":" + jsonQuoted(handleId)
-                   + ",\"outputSec\":" + text + "}]}"));
+            jsonOf("{\"contentId\":" + jsonQuoted(f.contentId)
+                   + ",\"op\":\"moveHandles\",\"expectedGridRevision\":" + jsonQuoted(f.gridRevision())
+                   + ",\"moves\":[{\"handleId\":" + jsonQuoted(handleId) + ",\"outputSec\":" + text + "}]}"));
         const auto& changes = memberOf(result, "changes");
         if (!CONTROL_CHECK(changes.size() == 1))
             continue;
@@ -478,9 +478,8 @@ void checkGridRoundingMatchesReadback(TimingFixture& f)
         const auto read = handles.size() != 0 ? toJsonString(memberOf(handles.at(0), "outputSec")) : std::string();
         if (!CONTROL_CHECK(written == read))
             note(std::string("moveHandles to ") + text + ": written " + written + ", read back " + read);
-        f.api.result("edit.undo",
-                     jsonOf("{\"expectedUndoId\":" + jsonQuoted(memberOf(memberOf(result, "undo"), "undoId").text())
-                            + "}"));
+        f.api.result("edit.undo", jsonOf("{\"expectedUndoId\":"
+                                         + jsonQuoted(memberOf(memberOf(result, "undo"), "undoId").text()) + "}"));
     }
     CONTROL_CHECK(sameHandles(innerOf(*f.processor, f.clip.key), before));
 }

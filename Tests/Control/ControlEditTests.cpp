@@ -1599,8 +1599,8 @@ void checkChangesMatchReadback(EditFixture& f, const JsonValue& result, const st
     CONTROL_CHECK(changes.size() != 0);
     for (std::size_t i = 0; i < changes.size(); ++i) {
         const auto& change = changes.at(i);
-        const auto index = static_cast<std::size_t>(
-            memberOf(memberOf(memberOf(change, "ref"), "note"), "index").asDouble());
+        const auto index =
+            static_cast<std::size_t>(memberOf(memberOf(memberOf(change, "ref"), "note"), "index").asDouble());
         if (!CONTROL_CHECK(index < notes.size()))
             continue;
         for (const char* member : kEditedNoteMembers) {
@@ -1636,18 +1636,18 @@ void checkEditRoundingMatchesReadback(EditFixture& f)
     // 97.45 cents on a note at 64 reads 64.9745 (the value of the first report), and its neighbours.
     for (const char* cents : {"97.45", "12.345", "0.05", "33.335", "49.995", "-97.45", "-12.345", "150.005", "1199.995",
                               "0.0049", "-0.0051", "66.665"})
-        checkWriteRoundsLikeTheRead(
-            f, std::string("shiftCents ") + cents,
-            std::string(R"([{"op":"shiftCents","select":{"all":true},"deltaCents":)") + cents + "}]");
+        checkWriteRoundsLikeTheRead(f, std::string("shiftCents ") + cents,
+                                    std::string(R"([{"op":"shiftCents","select":{"all":true},"deltaCents":)") + cents
+                                        + "}]");
     // A swept grid of deltas, so that float noise lands on both sides of the boundary.
     for (int k = 0; k < 24; ++k)
-        checkWriteRoundsLikeTheRead(
-            f, "shiftCents sweep " + std::to_string(k),
-            R"([{"op":"shiftCents","select":{"all":true},"deltaCents":)" + std::to_string(3.1415 + 7.3333 * k) + "}]");
+        checkWriteRoundsLikeTheRead(f, "shiftCents sweep " + std::to_string(k),
+                                    R"([{"op":"shiftCents","select":{"all":true},"deltaCents":)"
+                                        + std::to_string(3.1415 + 7.3333 * k) + "}]");
     for (const char* midi : {"64.97455", "69.12345", "60.00005", "71.99995", "100.55555", "33.33335", "0.00005"})
-        checkWriteRoundsLikeTheRead(
-            f, std::string("setTargetPitch ") + midi,
-            std::string(R"([{"op":"setTargetPitch","select":{"all":true},"targetMidi":)") + midi + "}]");
+        checkWriteRoundsLikeTheRead(f, std::string("setTargetPitch ") + midi,
+                                    std::string(R"([{"op":"setTargetPitch","select":{"all":true},"targetMidi":)") + midi
+                                        + "}]");
     // The knob members round with four decimals as well.
     // (retuneSpeed, vibratoDepth, vibratoRateHz, pitchDriftScale), each inside its range.
     const char* const knobSets[] = {

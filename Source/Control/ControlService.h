@@ -14,6 +14,7 @@
 namespace OpenTune {
 
 class ControlDispatcher;
+class ControlHistory;
 class ControlJobs;
 class ControlServer;
 class ControlUiBridge;
@@ -102,6 +103,9 @@ public:
     std::shared_ptr<ControlDispatcher> dispatcher() const noexcept { return dispatcher_; }
     /** The jobs once the API started (they stay after stop(), stopped); nullptr when it never started. */
     std::shared_ptr<ControlJobs> jobs() const noexcept { return jobs_; }
+    /** What the instance knows about OpenTune's undo history (Edit/ControlOriginAction.h) once the API
+        started; nullptr before. Message thread. */
+    std::shared_ptr<ControlHistory> history() const noexcept { return history_; }
 
     /** Registers the editor's bridge, or unregisters it with nullptr. Message thread. */
     void setUiBridge(ControlUiBridge* bridge) noexcept { uiBridge_ = bridge; }
@@ -132,6 +136,7 @@ private:
     ControlApiOptions options_;
     std::shared_ptr<ControlMessageThread> messageThread_;
     std::shared_ptr<LogGate> logGate_;
+    std::shared_ptr<ControlHistory> history_;
     std::unique_ptr<ControlServer> server_;
     std::shared_ptr<ControlDispatcher> dispatcher_;
     std::shared_ptr<ControlJobs> jobs_;

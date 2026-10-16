@@ -193,7 +193,7 @@ void ControlDispatcher::execute(const ControlMethod& method, const void* parsed,
     const auto facts = currentFacts();
     try {
         ControlOpContext context(*setup_.processor, setup_.uiBridge ? setup_.uiBridge() : nullptr, *facts, probe_,
-                                 setup_.jobs.get(), setup_.uiBridge);
+                                 setup_.jobs.get(), setup_.uiBridge, setup_.history);
         auto result = method.run(context, parsed);
         if (result.ok()) {
             outcome.result = std::move(result).value();

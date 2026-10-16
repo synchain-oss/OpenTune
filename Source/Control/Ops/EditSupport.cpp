@@ -1,0 +1,370 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+#include "EditSupport.h"
+
+#include "OpsJson.h"
+
+#include "Content/EditableContentSnapshot.h"
+#include "PluginProcessor.h"
+#include "Utils/PitchUtils.h"
+#include "Utils/TuningConfig.h"
+
+#include <algorithm>
+#include <cmath>
+
+namespace OpenTune {
+
+namespace {
+
+const ControlContentVersions* findVersions(const ControlWorldVersions& world, const std::string& contentId)
+{
+    for (const auto& versions : world.contents)
+        if (versions.contentId == contentId)
+            return &versions;
+    return nullptr;
+}
+
+const ControlEditState::Content* findContent(const ControlEditState& state, const std::string& contentId)
+{
+    for (const auto& content : state.contents)
+        if (content.contentId == contentId)
+            return &content;
+    return nullptr;
+}
+
+const ControlPlacementRef* findPlacement(const ControlEditState& state, std::uint64_t placementId)
+{
+    for (const auto& placement : state.placements)
+        if (placement.placement.placementId == placementId)
+            return &placement;
+    return nullptr;
+}
+
+/** Adds {before, after, unit} to fields when the values differ. */
+void addField(JsonValue& fields, const char* name, JsonValue before, JsonValue after, const char* unit)
+{
+    if (toJsonString(before) == toJsonString(after))
+        return;
+    auto field = JsonValue::object();
+    field.appendMember("before", std::move(before));
+    field.appendMember("after", std::move(after));
+    field.appendMember("unit", unit != nullptr ? JsonValue::string(unit) : JsonValue());
+    fields.appendMember(name, std::move(field));
+}
+
+JsonValue contentRef(const std::string& contentId)
+{
+    auto ref = JsonValue::object();
+    ref.appendMember("contentId", JsonValue::string(contentId));
+    return ref;
+}
+
+JsonValue placementRef(const std::string& placementId)
+{
+    auto ref = JsonValue::object();
+    ref.appendMember("placementId", JsonValue::string(placementId));
+    return ref;
+}
+
+/** The origin of a key as common.schema.json#/$defs/key names it; null for a content without a key. */
+JsonValue originJson(const DetectedKey& key)
+{
+    if (key.origin == Origin::Unset)
+        return JsonValue();
+    return JsonValue::string(key.origin == Origin::Manual ? "manual" : "automatic");
+}
+
+JsonValue colourJson(std::uint32_t argb)
+{
+    static const char* const digits = "0123456789ABCDEF";
+    std::string text = "#";
+    for (int shift = 20; shift >= 0; shift -= 4)
+        text += digits[(argb >> shift) & 0xf];
+    return JsonValue::string(text);
+}
+
+bool renderInputChanged(const ControlContentVersions& was, const ControlContentVersions& now)
+{
+    return was.notes != now.notes || was.pitch != now.pitch || was.content != now.content || was.grid != now.grid
+           || was.pitchShift != now.pitchShift;
+}
+
+void describeContents(const ControlEditState& before, const ControlEditState& after, ControlWriteEnvelope& envelope)
+{
+    std::vector<std::string> ids;
+    for (const auto& versions : before.versions.contents)
+        ids.push_back(versions.contentId);
+    for (const auto& versions : after.versions.contents)
+        if (std::find(ids.begin(), ids.end(), versions.contentId) == ids.end())
+            ids.push_back(versions.contentId);
+    for (const auto& id : ids) {
+        const auto* was = findVersions(before.versions, id);
+        const auto* now = findVersions(after.versions, id);
+        if (was == nullptr || now == nullptr) {
+            // A content that a step brought back or that left with its clip.
+            if (was == nullptr)
+                envelope.addCreated("content", contentRef(id), JsonValue());
+            else
+                envelope.addRemoved("content", contentRef(id), JsonValue());
+            envelope.touchContent(id);
+            continue;
+        }
+        auto fields = JsonValue::object();
+        addField(fields, "revision", JsonValue::string(was->revision()), JsonValue::string(now->revision()), nullptr);
+        addField(fields, "gridRevision", JsonValue::string(was->grid), JsonValue::string(now->grid), nullptr);
+        addField(fields, "referenceRevision", JsonValue::string(was->reference), JsonValue::string(now->reference),
+                 nullptr);
+        if (fields.size() != 0)
+            envelope.addChange("content", contentRef(id), JsonValue(), std::move(fields));
+        const auto* wasValues = findContent(before, id);
+        const auto* nowValues = findContent(after, id);
+        if (wasValues != nullptr && nowValues != nullptr) {
+            auto key = JsonValue::object();
+            addField(key, "root", JsonValue::integer(static_cast<int>(wasValues->key.root)),
+                     JsonValue::integer(static_cast<int>(nowValues->key.root)), nullptr);
+            addField(key, "scale", JsonValue::string(controlScaleName(wasValues->key.scale)),
+                     JsonValue::string(controlScaleName(nowValues->key.scale)), nullptr);
+            addField(key, "origin", originJson(wasValues->key), originJson(nowValues->key), nullptr);
+            if (key.size() != 0)
+                envelope.addChange("key", contentRef(id), JsonValue(), std::move(key));
+            auto shift = JsonValue::object();
+            addField(shift, "semitones", JsonValue::integer(wasValues->pitchShift.semitone),
+                     JsonValue::integer(nowValues->pitchShift.semitone), "semitones");
+            addField(shift, "cents", JsonValue::integer(wasValues->pitchShift.cents),
+                     JsonValue::integer(nowValues->pitchShift.cents), "cents");
+            if (shift.size() != 0)
+                envelope.addChange("pitchShift", contentRef(id), JsonValue(), std::move(shift));
+        }
+        if (was->revision() != now->revision() || was->grid != now->grid || was->key != now->key
+            || was->pitchShift != now->pitchShift || was->reference != now->reference)
+            envelope.touchContent(id);
+    }
+}
+
+JsonValue placementFields(const ControlPlacementRef* was, const ControlPlacementRef& now,
+                          const std::string& wasReference, const std::string& nowReference)
+{
+    auto fields = JsonValue::object();
+    if (was == nullptr)
+        return fields;
+    const auto& a = was->placement;
+    const auto& b = now.placement;
+    addField(fields, "trackId", JsonValue::integer(was->trackId), JsonValue::integer(now.trackId), nullptr);
+    addField(fields, "startTimelineSec", controlJsonSeconds(a.timelineStartSeconds),
+             controlJsonSeconds(b.timelineStartSeconds), "sec");
+    addField(fields, "durationSec", controlJsonSeconds(a.durationSeconds), controlJsonSeconds(b.durationSeconds),
+             "sec");
+    addField(fields, "clipInSec", controlJsonSeconds(a.clipInSeconds), controlJsonSeconds(b.clipInSeconds), "sec");
+    addField(fields, "gainLinear", controlJsonNumber(a.gain, 6), controlJsonNumber(b.gain, 6), "linear");
+    addField(fields, "fadeInSec", controlJsonSeconds(a.fadeInDuration), controlJsonSeconds(b.fadeInDuration), "sec");
+    addField(fields, "fadeOutSec", controlJsonSeconds(a.fadeOutDuration), controlJsonSeconds(b.fadeOutDuration), "sec");
+    addField(fields, "referencePlacementId", wasReference.empty() ? JsonValue() : JsonValue::string(wasReference),
+             nowReference.empty() ? JsonValue() : JsonValue::string(nowReference), nullptr);
+    return fields;
+}
+
+void describePlacements(ControlOpContext& context, const ControlEditState& before, const ControlEditState& after,
+                        ControlWriteEnvelope& envelope)
+{
+    const auto reference = [&context](std::uint64_t id) {
+        return id != 0 ? controlPlacementId(context, id) : std::string();
+    };
+    for (const auto& now : after.placements) {
+        const auto* was = findPlacement(before, now.placement.placementId);
+        if (was == nullptr) {
+            envelope.addCreated("placement", placementRef(now.placementId), JsonValue());
+            envelope.touchPlacement(now.placement.placementId);
+            continue;
+        }
+        auto fields = placementFields(was, now, reference(was->placement.referencePlacementId),
+                                      reference(now.placement.referencePlacementId));
+        if (fields.size() == 0)
+            continue;
+        envelope.addChange("placement", placementRef(now.placementId), JsonValue(), std::move(fields));
+        envelope.touchPlacement(now.placement.placementId);
+    }
+    for (const auto& was : before.placements)
+        if (findPlacement(after, was.placement.placementId) == nullptr)
+            envelope.addRemoved("placement", placementRef(was.placementId), JsonValue());
+}
+
+void describeTracks(const ControlEditState& before, const ControlEditState& after, ControlWriteEnvelope& envelope)
+{
+    const auto count = std::min(before.tracks.size(), after.tracks.size());
+    for (std::size_t trackId = 0; trackId < count; ++trackId) {
+        const auto& was = before.tracks[trackId];
+        const auto& now = after.tracks[trackId];
+        auto fields = JsonValue::object();
+        addField(fields, "muted", JsonValue::boolean(was.muted), JsonValue::boolean(now.muted), nullptr);
+        addField(fields, "solo", JsonValue::boolean(was.solo), JsonValue::boolean(now.solo), nullptr);
+        addField(fields, "volumeLinear", controlJsonNumber(was.volumeLinear, 6), controlJsonNumber(now.volumeLinear, 6),
+                 "linear");
+        addField(fields, "colour", colourJson(was.colour), colourJson(now.colour), nullptr);
+        addField(fields, "visible", JsonValue::boolean(was.visible), JsonValue::boolean(now.visible), nullptr);
+        if (fields.size() == 0)
+            continue;
+        auto ref = JsonValue::object();
+        ref.appendMember("trackId", JsonValue::integer(static_cast<std::int64_t>(trackId)));
+        envelope.addChange("track", std::move(ref), JsonValue::string("Track " + std::to_string(trackId + 1)),
+                           std::move(fields));
+    }
+}
+
+} // namespace
+
+// ---- Params ---------------------------------------------------------------------------------------
+
+bool controlReadRevisionToken(ControlParamReader& reader, std::string_view name, std::optional<std::string>& out)
+{
+    const JsonValue* value = reader.member(name);
+    if (value == nullptr)
+        return true;
+    const auto valid = [](char c) {
+        return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '.' || c == '_'
+               || c == ':' || c == '-';
+    };
+    if (!value->isString() || value->text().empty() || value->text().size() > 128
+        || !std::all_of(value->text().begin(), value->text().end(), valid))
+        return reader.fail(std::string(name) + " must be a revision token");
+    out = value->text();
+    return true;
+}
+
+std::optional<Scale> controlScaleFromName(std::string_view name)
+{
+    for (const auto scale : {Scale::Major, Scale::Minor, Scale::Chromatic, Scale::HarmonicMinor, Scale::Dorian,
+                             Scale::Mixolydian, Scale::PentatonicMajor, Scale::PentatonicMinor})
+        if (name == controlScaleName(scale))
+            return scale;
+    return std::nullopt;
+}
+
+bool controlParseKeyInput(const JsonValue& value, DetectedKey& out)
+{
+    const JsonValue* root = value.isObject() ? value.find("root") : nullptr;
+    const JsonValue* scale = value.isObject() ? value.find("scale") : nullptr;
+    if (root == nullptr || scale == nullptr || value.size() != 2 || !root->isNumber() || !scale->isString())
+        return false;
+    const double number = root->asDouble();
+    const auto parsedScale = controlScaleFromName(scale->text());
+    if (std::floor(number) != number || number < 0 || number > 11 || !parsedScale)
+        return false;
+    // makeDetectedKeyFromUi(): a key chosen by hand is manual, with confidence 1.
+    out = DetectedKey{};
+    out.root = static_cast<Key>(static_cast<int>(number));
+    out.scale = *parsedScale;
+    out.confidence = 1.0f;
+    out.origin = Origin::Manual;
+    return true;
+}
+
+// ---- Checks ---------------------------------------------------------------------------------------
+
+std::optional<Error> controlCheckContentReady(ControlOpContext& context, const ControlContentRef& content)
+{
+    const auto& snapshot = *content.snapshot;
+    switch (snapshot.originalF0State) {
+        case OriginalF0State::NotRequested:
+        case OriginalF0State::Extracting:
+            return controlOpError("NOT_READY", "f0_not_ready", "the pitch analysis of the content has not finished");
+        case OriginalF0State::Failed:
+            // The reason the processor recorded when the analysis failed (its F0 failure hook).
+            if (context.processor().getContentF0FailureReason(content.key) == std::optional<std::string>("f0_empty"))
+                return controlOpError("NOT_READY", "f0_empty", "the pitch analysis found no voiced frame");
+            return controlOpError("NOT_READY", "f0_failed", "the pitch analysis of the content failed");
+        case OriginalF0State::Ready:
+            break;
+    }
+    const bool voiced = snapshot.hasUsableOriginalF0()
+                        && std::any_of(snapshot.pitchCurve->getOriginalF0().begin(),
+                                       snapshot.pitchCurve->getOriginalF0().end(), [](float hz) { return hz > 0.0f; });
+    if (!voiced)
+        return controlOpError("NOT_READY", "f0_empty", "the pitch analysis found no voiced frame");
+    return std::nullopt;
+}
+
+std::optional<Error> controlCheckExpectedTokens(const ControlContentVersions& versions,
+                                                const std::optional<std::string>& expectedRevision,
+                                                const std::optional<std::string>& expectedKeyRevision)
+{
+    if (expectedRevision && *expectedRevision != versions.revision())
+        return controlOpError("REVISION_CONFLICT", "content_changed",
+                              "the content's revision differs from expectedRevision; read it again");
+    if (expectedKeyRevision && *expectedKeyRevision != versions.key)
+        return controlOpError("REVISION_CONFLICT", "key_changed",
+                              "the content's key revision differs from expectedKeyRevision; read it again");
+    return std::nullopt;
+}
+
+// ---- Results ----------------------------------------------------------------------------------------
+
+JsonValue controlNoteRefJson(const std::string& contentId, std::size_t index, const std::string& revision)
+{
+    auto note = JsonValue::object();
+    note.appendMember("index", JsonValue::integer(static_cast<std::int64_t>(index)));
+    note.appendMember("atRevision", JsonValue::string(revision));
+    auto ref = JsonValue::object();
+    ref.appendMember("contentId", JsonValue::string(contentId));
+    ref.appendMember("note", std::move(note));
+    return ref;
+}
+
+JsonValue controlNoteLabelJson(std::size_t index, const Note& note)
+{
+    std::optional<double> targetMidi;
+    if (note.isVoiced && note.getAdjustedPitch() > 0.0f)
+        targetMidi = PitchUtils::freqToMidi(note.getAdjustedPitch(), TuningConfig::currentTuningHz());
+    return JsonValue::string(controlNoteLabel(index, targetMidi, note.startTime, note.endTime));
+}
+
+void controlAddReRenderQueued(ControlWriteEnvelope& envelope, const ControlWorldVersions& before,
+                              const ControlWorldVersions& after)
+{
+    auto ids = JsonValue::array();
+    for (const auto& now : after.contents)
+        if (const auto* was = findVersions(before, now.contentId); was != nullptr && renderInputChanged(*was, now))
+            ids.append(JsonValue::string(now.contentId));
+    if (ids.size() == 0)
+        return;
+    auto effect = JsonValue::object();
+    effect.appendMember("contentIds", std::move(ids));
+    effect.appendMember("revert", JsonValue());
+    envelope.addSideEffect("reRenderQueued", std::move(effect));
+}
+
+// ---- The effect of an undo or redo step --------------------------------------------------------------
+
+ControlEditState controlCaptureEditState(ControlOpContext& context)
+{
+    ControlEditState state;
+    state.versions = controlCaptureWorldVersions(context);
+    for (const auto& key : controlLiveContents(context))
+        if (const auto snapshot = controlLiveSnapshot(context, key))
+            state.contents.push_back(
+                {controlContentId(context, key), snapshot->detectedKey, snapshot->pitchShiftSettings});
+    state.placements = controlLivePlacements(context);
+    if (const auto* arrangement = context.processor().getStandaloneArrangement()) {
+        bool derived = false;
+        const int visible = controlVisibleTrackCount(context, derived);
+        for (int trackId = 0; trackId < arrangement->getNumTracks(); ++trackId) {
+            ControlEditState::Track track;
+            track.muted = arrangement->isTrackMuted(trackId);
+            track.solo = arrangement->isTrackSolo(trackId);
+            track.volumeLinear = arrangement->getTrackVolume(trackId);
+            track.colour = arrangement->getTrackColour(trackId).getARGB();
+            track.visible = trackId < visible;
+            state.tracks.push_back(track);
+        }
+    }
+    return state;
+}
+
+void controlDescribeEffect(ControlOpContext& context, const ControlEditState& before, const ControlEditState& after,
+                           ControlWriteEnvelope& envelope)
+{
+    describeContents(before, after, envelope);
+    describePlacements(context, before, after, envelope);
+    describeTracks(before, after, envelope);
+    controlAddReRenderQueued(envelope, before.versions, after.versions);
+}
+
+} // namespace OpenTune

@@ -1,0 +1,237 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: E2E Windows
+
+# 在 GitHub 的 Windows runner 上，用真实的 OpenTune Standalone 跑 MCP 仓库的契约向量与冒烟场景。
+# 永不设为必需检查：它只在 workflow_dispatch（以及 manager 在预览前手动运行）时触发，不挂在 PR 上；
+# 结果只作参考与预览前的检查依据。
+#
+# 流程：
+#   1. build   经 workflow_call 调 build-windows.yml 的出包模式（Standalone Release、控制接口 ON、已删除
+#              POST_BUILD 生成的 models\ 并断言它不存在），得到 artifact opentune-windows-release-inputs。
+#   2. e2e     下载该 artifact 并再次断言没有 models\ 或 *.onnx；下载钉版的官方安装包（.github/e2e/official-install.json），
+#              核对 sha256 后静默安装到 runner 的临时目录（官方安装包只在 runner 上运行，绝不在开发机上运行）；
+#              核对官方模型目录里 fcpe / GAME 的 sha256；检出 MCP 仓库，npm ci，用 OTCP_TARGET_EXE 指向我们的构建，
+#              依次跑契约向量与冒烟场景；检查 OpenTune 日志里 F0 模型确实来自官方模型目录，并记录后端
+#              （CPU / DirectML）；上传每步耗时、结果摘要与脱敏日志。
+# 与 MCP 仓库的约定（见 inputs）：
+#   契约：`npm run test:contract`，读取 OTCP_TARGET_EXE；本 workflow 追加 vitest 的 json 报告参数。
+#   冒烟：`npm run e2e:exe`，读取 OTCP_TARGET_EXE，并把 {"steps":[{"name","status","ms"}]} 写到 OTCP_E2E_REPORT。
+# 结果统计把 PASS / FAIL / SKIP / FLAKY-SKIP 分开计数（名字含 FLAKY-SKIP 的跳过项计入 FLAKY-SKIP）。
+# 任何 workflow 一律不用 pull_request 的 target 变体（CLAUDE.md §0 第 4 条）。
+on:
+  workflow_dispatch:
+    inputs:
+      mcp-ref:
+        description: 'synchain-oss/opentune-mcp-server 的分支、tag 或提交（默认 feature/v1）'
+        type: string
+        default: feature/v1
+      contract-script:
+        description: 'MCP 仓库里跑契约向量的 npm 脚本'
+        type: string
+        default: test:contract
+      smoke-script:
+        description: 'MCP 仓库里跑冒烟场景的 npm 脚本'
+        type: string
+        default: 'e2e:exe'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: build (Standalone Release, no models)
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      release-package: true
+
+  e2e-windows:
+    name: e2e-windows
+    needs: build
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      MCP_REPOSITORY: synchain-oss/opentune-mcp-server
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Set work paths
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP 'ot-e2e'
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          @(
+            "E2E_WORK=$work"
+            "E2E_APP=$work\app"
+            "E2E_OFFICIAL=$work\official"
+            "E2E_DATA=$work\data"
+            "E2E_OUT=$work\out"
+            "E2E_TIMINGS=$work\out\timings.json"
+            "E2E_PIN=$env:GITHUB_WORKSPACE\.github\e2e\official-install.json"
+            "E2E_SCRIPT=$env:GITHUB_WORKSPACE\.github\scripts\e2e-windows.mjs"
+            "E2E_MODELS=$env:ProgramData\OpenTune\Models"
+          ) >> $env:GITHUB_ENV
+          New-Item -ItemType Directory -Force -Path "$work\out\logs", "$work\data" | Out-Null
+
+      - name: Download our Standalone build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: opentune-windows-release-inputs
+          path: ${{ runner.temp }}\ot-e2e\app-artifact
+
+      # 官方安装的 models\ 会被我们构建旁边的 models\ 遮住（模型解析先找自己目录）：build 已删除并断言，这里再断言一次。
+      - name: Assert our build has no models and no onnx files
+        run: |
+          $src = Join-Path $env:E2E_WORK 'app-artifact\app'
+          $exe = Join-Path $src 'OpenTune.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "OpenTune.exe missing from the build artifact" }
+          $bad = @(Get-ChildItem -LiteralPath (Join-Path $env:E2E_WORK 'app-artifact') -Recurse -Force |
+            Where-Object { ($_.PSIsContainer -and $_.Name -ieq 'models') -or $_.Name -like '*.onnx' })
+          if ($bad.Count) { throw "build artifact must not contain models: $(($bad | ForEach-Object { $_.FullName.Substring($env:E2E_WORK.Length) }) -join '; ')" }
+          Move-Item -LiteralPath $src -Destination $env:E2E_APP
+          Write-Host "our build: $(Get-ChildItem -LiteralPath $env:E2E_APP | ForEach-Object Name | Join-String -Separator ', '); no models\ and no onnx files"
+
+      - name: Download the pinned official installer (sha256 verified)
+        run: |
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          try {
+            $pin = Get-Content -Raw -LiteralPath $env:E2E_PIN | ConvertFrom-Json
+            $setup = Join-Path $env:E2E_WORK 'OpenTune-Setup.exe'
+            for ($i = 1; ; $i++) {
+              try { Invoke-WebRequest -Uri $pin.installer.url -OutFile $setup -UseBasicParsing; break }
+              catch { if ($i -ge 3) { throw }; Start-Sleep -Seconds (5 * $i) }
+            }
+            node $env:E2E_SCRIPT check-installer --pin $env:E2E_PIN --file $setup
+            if ($LASTEXITCODE -ne 0) { throw "installer does not match the pin" }
+            "E2E_SETUP=$setup" >> $env:GITHUB_ENV
+          } finally {
+            node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'download installer' --seconds $sw.Elapsed.TotalSeconds
+          }
+
+      # 官方安装包是 Inno Setup 程序：只在 runner 上静默安装（用 /DIR= 指到临时目录）。模型由安装程序放在共享的
+      # %ProgramData%\OpenTune\Models，而不是安装目录里。
+      - name: Install the official OpenTune silently
+        run: |
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          try {
+            $pin = Get-Content -Raw -LiteralPath $env:E2E_PIN | ConvertFrom-Json
+            $log = Join-Path $env:E2E_OUT 'official-install.log'
+            $setupArgs = @($pin.installer.silentArgs) + @("/DIR=$env:E2E_OFFICIAL", "/LOG=$log")
+            $p = Start-Process -FilePath $env:E2E_SETUP -ArgumentList $setupArgs -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "official installer exited with $($p.ExitCode)" }
+            if (-not (Test-Path -LiteralPath (Join-Path $env:E2E_OFFICIAL 'OpenTune.exe'))) { throw "official OpenTune.exe not found after install" }
+          } finally {
+            node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'install official OpenTune' --seconds $sw.Elapsed.TotalSeconds
+          }
+      - name: Official models match the pinned sha256 (fcpe, GAME)
+        run: |
+          node $env:E2E_SCRIPT check-models --pin $env:E2E_PIN --dir $env:E2E_MODELS
+          if ($LASTEXITCODE -ne 0) { throw "official models do not match the pin" }
+
+      - name: Check out the MCP repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.MCP_REPOSITORY }}
+          ref: ${{ inputs.mcp-ref }}
+          path: ot-mcp
+          fetch-depth: 1
+          persist-credentials: false
+      - name: npm ci
+        working-directory: ot-mcp
+        run: |
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          try {
+            npm ci --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) { throw "npm ci failed ($LASTEXITCODE)" }
+          } finally {
+            node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'npm ci' --seconds $sw.Elapsed.TotalSeconds
+          }
+
+      # 契约与冒烟各自 continue-on-error：两者都跑完、日志都检查完之后，由最后一步统一判定。
+      # 数据目录是临时的（OPENTUNE_DATA_DIR），不会碰 runner 上的任何真实用户目录。
+      - name: Contract vectors against our Standalone
+        id: contract
+        continue-on-error: true
+        working-directory: ot-mcp
+        env:
+          OTCP_TARGET_EXE: ${{ env.E2E_APP }}\OpenTune.exe
+          OPENTUNE_DATA_DIR: ${{ env.E2E_DATA }}
+          CONTRACT_SCRIPT: ${{ inputs.contract-script }}
+        run: |
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          try {
+            npm run $env:CONTRACT_SCRIPT -- --reporter=default --reporter=json "--outputFile.json=$env:E2E_OUT\contract.json"
+            if ($LASTEXITCODE -ne 0) { throw "contract vectors failed ($LASTEXITCODE)" }
+          } finally {
+            node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'contract vectors' --seconds $sw.Elapsed.TotalSeconds
+          }
+      - name: Smoke scenario (hello, import, Ready, autoTune, export)
+        id: smoke
+        continue-on-error: true
+        working-directory: ot-mcp
+        env:
+          OTCP_TARGET_EXE: ${{ env.E2E_APP }}\OpenTune.exe
+          OPENTUNE_DATA_DIR: ${{ env.E2E_DATA }}
+          OTCP_E2E_REPORT: ${{ env.E2E_OUT }}\smoke.json
+          SMOKE_SCRIPT: ${{ inputs.smoke-script }}
+        run: |
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          try {
+            npm run $env:SMOKE_SCRIPT
+            if ($LASTEXITCODE -ne 0) { throw "smoke scenario failed ($LASTEXITCODE)" }
+          } finally {
+            node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'smoke scenario' --seconds $sw.Elapsed.TotalSeconds
+          }
+
+      # F0 模型必须来自官方模型目录（日志里的 "Loaded F0 model (<后端>): <路径>"）；日志脱敏后才上传。
+      - name: Check the OpenTune log (models directory, backend) and scrub it
+        id: logcheck
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          Get-Process -Name OpenTune -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          node $env:E2E_SCRIPT check-log --log-dir "$env:E2E_DATA\Logs" --models-dir $env:E2E_MODELS `
+            --out-dir "$env:E2E_OUT\logs" --report "$env:E2E_OUT\log-report.json"
+          if ($LASTEXITCODE -ne 0) { throw "log check failed" }
+
+      - name: Summary (PASS / FAIL / SKIP / FLAKY-SKIP, backend, timings)
+        id: summary
+        if: ${{ !cancelled() }}
+        env:
+          CONTRACT_OUTCOME: ${{ steps.contract.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          LOG_OUTCOME: ${{ steps.logcheck.outcome }}
+          MCP_REF: ${{ inputs.mcp-ref }}
+        run: |
+          Write-Host "contract: $env:CONTRACT_OUTCOME; smoke: $env:SMOKE_OUTCOME; log check: $env:LOG_OUTCOME"
+          node $env:E2E_SCRIPT summary --timings $env:E2E_TIMINGS --contract "$env:E2E_OUT\contract.json" `
+            --smoke "$env:E2E_OUT\smoke.json" --log "$env:E2E_OUT\log-report.json" `
+            --mcp-ref $env:MCP_REF --out $env:GITHUB_STEP_SUMMARY
+          $code = $LASTEXITCODE
+          Copy-Item -LiteralPath $env:GITHUB_STEP_SUMMARY -Destination "$env:E2E_OUT\summary.md" -ErrorAction SilentlyContinue
+          if ($code -ne 0) { throw "e2e-windows has failing or missing results" }
+          if ($env:CONTRACT_OUTCOME -ne 'success' -or $env:SMOKE_OUTCOME -ne 'success') { throw "contract or smoke step did not succeed" }
+
+      - name: Upload results (timings, contract and smoke reports, scrubbed logs)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-windows-results
+          path: ${{ env.E2E_OUT }}
+          if-no-files-found: warn
+          retention-days: 14

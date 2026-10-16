@@ -219,6 +219,8 @@ struct TimingFixture
     std::optional<std::pair<Clip, std::string>> add(const ClipSpec& spec)
     {
         auto added = fixtureAddClip(*processor, spec);
+        // The render that importing the clip requested is over before the first timed request.
+        CONTROL_CHECK(settleBackgroundWork(*processor));
         const auto handles = fixtureHandlesOf(api.result("project.get"), spec.trackId, spec.startTimelineSec);
         if (!CONTROL_CHECK(handles.has_value()))
             return std::nullopt;
@@ -959,6 +961,7 @@ std::string runTimingVector(const JsonValue& vector)
             matcher.bindings[memberOf(grid.at(h), "bind").text()] = JsonValue::string(clip.handleIds[h]);
         specs.emplace_back(spec.name, spec);
     }
+    CONTROL_CHECK(settleBackgroundWork(*f.processor));
     if (!establishFailedJobs(*service.jobs(), memberOf(given, "jobs"), matcher))
         return "given.jobs could not be established";
     f.bridge.project.dirty = memberOf(given, "dirty").asBoolean();
@@ -1020,7 +1023,55 @@ std::string runTimingVector(const JsonValue& vector)
     return failure;
 }
 
+// ---- Scenario: the aspects of the tokens, for the time grid ----------------------------------------------
+
+/** A time-grid edit moves gridRevision and not revision, so a note edit that addresses notes by index with the
+    revision read before the grid edit still works (a write depends only on the aspects it declares). */
+void scenarioTimingTokenAspectsImpl()
+{
+    TimingFixture f;
+    if (!f.open(gridSpec("tokens", true)))
+        return;
+    if (!CONTROL_CHECK(f.clip.handleIds.size() == 3))
+        return;
+    const auto revisionOf = [&f] { return memberOf(freshTokens(f.api, f.contentId), "revision").text(); };
+    const auto editNotesBy = [&f](const std::string& revision, int index) {
+        return f.api.result("content.editNotes",
+                            jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + ",\"expectedRevision\":"
+                                   + jsonQuoted(revision) + R"(,"ops":[{"op":"shiftCents","select":{"indices":[)"
+                                   + std::to_string(index) + R"(]},"deltaCents":50}]})"));
+    };
+
+    // content.shiftTiming: the grid revision changes, the revision does not.
+    const auto revision = revisionOf();
+    const auto grid = f.gridRevision();
+    const auto shifted = f.api.result("content.shiftTiming",
+                                      jsonOf(f.shiftParams(R"({"startOutputSec":1.5,"endOutputSec":2.5})", 0.25)));
+    CONTROL_CHECK(memberOf(shifted, "applied").asBoolean() && !memberOf(shifted, "noOp").asBoolean());
+    CONTROL_CHECK(revisionOf() == revision && f.gridRevision() != grid);
+    const auto first = editNotesBy(revision, 0);
+    CONTROL_CHECK(memberOf(first, "applied").asBoolean() && !memberOf(first, "noOp").asBoolean());
+    CONTROL_CHECK(revisionOf() != revision);
+
+    // content.editTimeGrid moveHandles: the same.
+    const auto revisionAfterNotes = revisionOf();
+    const auto gridAfterShift = f.gridRevision();
+    const auto moved = f.api.result("content.editTimeGrid", jsonOf(f.movesParams({{f.clip.handleIds[0], 1.1}})));
+    CONTROL_CHECK(memberOf(moved, "applied").asBoolean() && !memberOf(moved, "noOp").asBoolean());
+    CONTROL_CHECK(revisionOf() == revisionAfterNotes && f.gridRevision() != gridAfterShift);
+    // And the other way round: a note edit leaves the grid revision as it is.
+    const auto gridBeforeNotes = f.gridRevision();
+    const auto second = editNotesBy(revisionAfterNotes, 1);
+    CONTROL_CHECK(memberOf(second, "applied").asBoolean() && !memberOf(second, "noOp").asBoolean());
+    CONTROL_CHECK(f.gridRevision() == gridBeforeNotes);
+}
+
 } // namespace
+
+void scenarioTimingTokenAspects()
+{
+    scenarioTimingTokenAspectsImpl();
+}
 
 void scenarioTiming()
 {

@@ -83,6 +83,11 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/JobOps.h
         Source/Control/Ops/ImportOps.cpp
         Source/Control/Ops/ImportOps.h
+        # export.start: file identity and the final rename (operating system only), and the export job.
+        Source/Control/ControlFileIdentity.cpp
+        Source/Control/ControlFileIdentity.h
+        Source/Control/Ops/ExportOps.cpp
+        Source/Control/Ops/ExportOps.h
         # Undo and redo, key and AUTO: the undo entries of the API (ControlOriginAction) and what the instance
         # knows about OpenTune's history (ControlHistory), undo entries built from snapshots as the piano roll
         # builds them (ContentEditTransaction), what content edits share, edit.getHistory, edit.undo,
@@ -212,6 +217,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         endif()
         # Jobs, import and the write envelope.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlJobTests.cpp)
+        # export.start and the export lock.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlExportTests.cpp)
         # Undo and redo, key and AUTO, with the contents they share with the reads.
         target_sources(OpenTuneControlProcessorTests PRIVATE
             Tests/Control/ControlEditTests.cpp
@@ -265,6 +272,12 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ImportCancel|--control-api"
             "JobVectors|--control-api"
         )
+        # export.start and the export lock (Tests/Control/ControlExportTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "Export|--control-api"
+            "ExportFailures|--control-api"
+            "ExportVectors|--control-api"
+        )
         # Undo and redo, key and AUTO (Tests/Control/ControlEditTests.cpp).
         list(APPEND _opentune_control_scenarios
             "Undo|--control-api"
@@ -297,6 +310,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # Every vector starts a processor of its own.
         set_tests_properties(ControlProcessorTests.Vectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.JobVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.ExportVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.EditVectors PROPERTIES TIMEOUT 300)
     endif()
 endif()

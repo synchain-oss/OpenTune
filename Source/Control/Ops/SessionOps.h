@@ -1,9 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #pragma once
 
+#include "OpsJson.h"
 #include "OpsRegistry.h"
 
 namespace OpenTune {
+
+/** The state of the inference runtime that session.info reports with the processing preferences (the
+    backend of AccelerationDetector and the process-wide vocoder of ProcessRenderRuntime); export results
+    report the backend as well. Message thread, where session.info reads it too. */
+ControlProcessingRuntime controlProcessingRuntime();
 
 /**
  * The session methods the dispatcher runs: session.info (methods/session.info.schema.json). The

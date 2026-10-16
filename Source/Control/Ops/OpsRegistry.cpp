@@ -5,6 +5,7 @@
 #include "ContentDetailsOps.h"
 #include "ContentReadOps.h"
 #include "ContentTuneOps.h"
+#include "ExportOps.h"
 #include "ImportOps.h"
 #include "JobOps.h"
 #include "ProjectReadOps.h"
@@ -55,7 +56,7 @@ void registerControlMethods(ControlMethodTable& table)
     registerAppReadOps(table);        // prefs.get, app.getLog
     registerJobOps(table);            // job.get, job.cancel
     registerImportOps(table);         // import.start
-    // registerExportOps(table);       export.start
+    registerExportOps(table);         // export.start
     // registerUiOps(table);           ui.getState, ui.dismiss, ui.setSelection
     registerContentTuneOps(table); // content.setKey, content.autoTune
     // registerContentEditOps(table);  content.editNotes, content.setPitchShift

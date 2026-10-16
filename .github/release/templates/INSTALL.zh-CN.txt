@@ -1,0 +1,93 @@
+OpenTune {{APP_VERSION}}（含本机控制接口）非官方测试版 {{BUILD_LABEL}}
+安装说明（Windows 10 / 11，x64）
+
+(English: INSTALL.txt)
+
+这不是 OpenTune 官方版本。唯一的官方渠道是
+{{OFFICIAL_RELEASES_URL}}。请先阅读 README-UNOFFICIAL.zh-CN.txt。
+
+以下命令在 Windows PowerShell 中运行。把 <文件夹> 换成你解压到的文件夹。
+
+
+1. 先安装官方 OpenTune
+----------------------
+
+- 从 {{OFFICIAL_RELEASES_URL}}
+  安装官方 OpenTune {{MIN_OFFICIAL_VERSION}} 或更新版本，选择为本机所有用户安装，
+  使用默认位置（C:\Program Files\OpenTune）。
+- 本压缩包不含任何模型权重。本测试版使用该官方安装中的模型
+  （C:\Program Files\OpenTune\models）。没有官方安装时，音高检测、音符生成与渲染都无法使用。
+
+
+2. 校验下载的文件
+-----------------
+
+- 计算 zip 的 SHA-256，与发布页面上的值比对：
+
+    Get-FileHash -Algorithm SHA256 .\{{PACKAGE_NAME}}.zip
+
+- 解压前先解除 zip 的「来自互联网」标记，避免解压出的每个文件都被 Windows 标记：
+
+    Unblock-File .\{{PACKAGE_NAME}}.zip
+
+
+3. 解压
+-------
+
+- 解压到你自己的文件夹，不要放在「Program Files」下，例如 %USERPROFILE%\Apps。
+  不要解压到官方安装目录，也不要替换任何官方文件。
+- 按 SHA256SUMS 校验解压出的每个文件（没有输出即全部一致）：
+
+    cd <文件夹>
+    Get-Content .\SHA256SUMS | ForEach-Object {
+      $hash, $name = $_ -split '  ', 2
+      if ((Get-FileHash -Algorithm SHA256 -LiteralPath $name).Hash -ne $hash) { "不一致: $name" }
+    }
+
+
+4. GPU 加速：一次性复制 D3D12Core.dll（可选）
+--------------------------------------------
+
+本压缩包不含 DirectX 12 Agility 运行库，需要从你的官方安装中复制一次。
+不复制时，本测试版用 CPU 做 AI 推理，速度较慢。
+
+    New-Item -ItemType Directory -Force -Path '<文件夹>\D3D12' | Out-Null
+    Copy-Item -LiteralPath "$env:ProgramFiles\OpenTune\D3D12\D3D12Core.dll" -Destination '<文件夹>\D3D12\D3D12Core.dll'
+    (Get-FileHash -Algorithm SHA256 -LiteralPath '<文件夹>\D3D12\D3D12Core.dll').Hash
+
+- 哈希必须是
+  {{D3D12CORE_SHA256}}
+  （DirectX 12 Agility SDK {{D3D12_AGILITY_VERSION}}，即构建本测试版时使用的版本）。
+  如果不一致，请把 <文件夹>\D3D12 文件夹删掉，本测试版会改用 CPU 运行。
+- 只复制 D3D12Core.dll，不要复制 D3D12SDKLayers.dll（调试层）。
+- 如果你使用 OpenTune MCP Server，它的 doctor 命令会检查这份复制及其哈希。
+
+
+5. 启动
+-------
+
+- OpenTune-AI.cmd：以开启本机控制接口的方式启动 OpenTune。需要让 OpenTune MCP Server
+  操作 OpenTune 时用它。
+- OpenTune.exe：以关闭控制接口的方式启动 OpenTune。
+- Windows SmartScreen：这些文件没有代码签名，SmartScreen 可能提示「Windows 已保护你的电脑」。
+  如果第 2、3 步的哈希一致，点击「更多信息」，再点「仍要运行」。
+- 智能应用控制（Windows 11）：开启时可能拦截本测试版这类未签名程序，而且无法为单个程序
+  设置例外。这时本测试版无法在这台电脑上运行。我们不建议仅为本测试版关闭智能应用控制。
+
+
+6. 设置与日志与官方 OpenTune 共用
+--------------------------------
+
+- 本测试版与官方 OpenTune 使用同一份设置与日志文件（在你的用户目录 %APPDATA% 下）。
+  在其中一个里做的修改，另一个里也会看到。
+- 控制接口开启期间，OpenTune 会在 %LOCALAPPDATA%\OpenTune\control\instances\ 写入发现文件，
+  正常退出时删除。
+
+
+7. 卸载
+-------
+
+- 关闭 OpenTune。
+- 删除 <文件夹>。
+- 删除 %LOCALAPPDATA%\OpenTune\control\（控制接口的文件）。
+- 不要删除 %APPDATA%\OpenTune：官方 OpenTune 也在使用它。

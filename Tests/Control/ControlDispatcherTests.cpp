@@ -359,7 +359,7 @@ void checkSessionInfo(ApiSession& api)
                   == static_cast<double>(controlCurrentProcessId()));
     // Only the capabilities this build implements completely are reported.
     CONTROL_CHECK(toJsonString(memberOf(info, "capabilities"))
-                  == R"(["session.v1","read.v1","jobs.v1","import.v1","history.v1"])");
+                  == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","history.v1"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");
@@ -764,7 +764,7 @@ void checkErrors(ApiSession& api, const ClipHandles& handles)
     CONTROL_CHECK(api.fails("project.get", json(R"({"verbose":true})"), "INVALID_ARGUMENT", "invalid_params"));
     // A method of a capability this build does not report (a later part implements it), and a method the
     // protocol does not define.
-    CONTROL_CHECK(api.fails("export.start", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
+    CONTROL_CHECK(api.fails("project.save", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
     CONTROL_CHECK(api.fails("track.rename", JsonValue::object(), "UNSUPPORTED", "unknown_method"));
 }
 
@@ -1231,7 +1231,7 @@ const std::set<std::string> kImplementedMethods = {"session.info",
                                                    "prefs.get",
                                                    "app.getLog"};
 /** The capabilities whose vectors this runner runs; ControlJobTests.cpp (JobVectors) runs those of
-    jobs.v1 and import.v1. */
+    jobs.v1 and import.v1, ControlExportTests.cpp (ExportVectors) those of export.v1. */
 const std::set<std::string> kReportedCapabilities = {"session.v1", "read.v1"};
 
 /**
@@ -1808,7 +1808,7 @@ void scenarioCompleteness()
         return;
     const auto& methods = memberOf(parsed.value, "methods");
     const auto reported = dispatcher->capabilities();
-    for (const char* capability : {"session.v1", "read.v1", "jobs.v1", "import.v1"})
+    for (const char* capability : {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "history.v1"})
         CONTROL_CHECK(std::find(reported.begin(), reported.end(), capability) != reported.end());
 
     // The listener answers session.hello itself, so the dispatcher's method table has no entry for it.
@@ -1837,8 +1837,9 @@ void scenarioCompleteness()
         const char* capability = controlMethodCapability(method);
         CONTROL_CHECK(capability == nullptr || std::string(capability) != "read.v1");
     }
-    // session.info, the eight reads, job.get, job.cancel and import.start.
-    CONTROL_CHECK(checked >= 12);
+    // session.info, the eight reads, job.get, job.cancel, import.start, export.start and the three methods of
+    // the undo history.
+    CONTROL_CHECK(checked >= 16);
     if (!kUnimplementedReportedMethods.empty())
         note("exempt methods remain; the list must be empty before dev is merged");
     note(std::to_string(checked) + " methods of the reported capabilities are registered");

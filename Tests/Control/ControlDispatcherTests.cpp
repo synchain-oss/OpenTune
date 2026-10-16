@@ -359,7 +359,7 @@ void checkSessionInfo(ApiSession& api)
                   == static_cast<double>(controlCurrentProcessId()));
     // Only the capabilities this build implements completely are reported.
     CONTROL_CHECK(toJsonString(memberOf(info, "capabilities"))
-                  == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","history.v1"])");
+                  == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","history.v1","timing.v1"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");
@@ -1808,7 +1808,8 @@ void scenarioCompleteness()
         return;
     const auto& methods = memberOf(parsed.value, "methods");
     const auto reported = dispatcher->capabilities();
-    for (const char* capability : {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "history.v1"})
+    for (const char* capability :
+         {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "history.v1", "timing.v1"})
         CONTROL_CHECK(std::find(reported.begin(), reported.end(), capability) != reported.end());
 
     // The listener answers session.hello itself, so the dispatcher's method table has no entry for it.

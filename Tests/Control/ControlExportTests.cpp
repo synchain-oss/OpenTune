@@ -22,6 +22,7 @@
 #include "Utils/Note.h"
 #include "Utils/PitchCurve.h"
 #include "Utils/PitchUtils.h"
+#include "Utils/TimeGrid.h"
 #include "Utils/TuningConfig.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -1164,6 +1165,123 @@ void scenarioExportVectors()
     for (const char* id : kMustRunExportVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
     note(std::to_string(passed) + " vectors passed, " + std::to_string(skipped) + " skipped");
+}
+
+// ---- A clip whose time grid is not the identity ----------------------------------------------------
+
+namespace {
+
+/** The largest absolute sample of a WAV file; 0 for a file that cannot be read. */
+float peakOf(const std::string& path)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    const std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(juceFileOf(path)));
+    if (reader == nullptr)
+        return 0.0f;
+    juce::AudioBuffer<float> audio(static_cast<int>(reader->numChannels), static_cast<int>(reader->lengthInSamples));
+    reader->read(&audio, 0, audio.getNumSamples(), 0, true, true);
+    float peak = 0.0f;
+    for (int channel = 0; channel < audio.getNumChannels(); ++channel)
+        peak = std::max(peak, audio.findMinMax(channel, 0, audio.getNumSamples()).getEnd());
+    return peak;
+}
+
+/** A grid that plays the first second of a clip in 1.2 s and the rest faster: one handle at 1 s of the content,
+    at 1.2 s of the output. */
+std::shared_ptr<const TimeGridSnapshot> stretchedGrid(double durationSec)
+{
+    std::vector<TimeHandle> handles(3);
+    handles[0].id = 1;
+    handles[0].kind = HandleKind::ClipStart;
+    handles[1].id = 2;
+    handles[1].source_seconds = 1.0;
+    handles[1].output_seconds = 1.2;
+    handles[1].kind = HandleKind::UserAdded;
+    handles[2].id = 3;
+    handles[2].source_seconds = durationSec;
+    handles[2].output_seconds = durationSec;
+    handles[2].kind = HandleKind::ClipEnd;
+    return TimeGridSnapshot::makeFromHandles(std::move(handles));
+}
+
+/** Whether the time-stretch output of a content was built at its current revisions, read the way the export reads
+    it (TimeStretchCache::sliceCanonicalForOutputRange). */
+bool stretchOutputCurrent(OpenTuneAudioProcessor& processor, const ContentKey& key)
+{
+    const auto snapshot = processor.getContentSnapshot(key);
+    auto* service = processor.getContentRenderService();
+    juce::AudioBuffer<float> probe(1, 1);
+    return snapshot != nullptr && service != nullptr
+           && service->getTimeStretchCache().sliceCanonicalForOutputRange(key, snapshot->contentRevision,
+                                                                          snapshot->timeGridRevision, 0, probe, 0, 1)
+                  > 0;
+}
+
+} // namespace
+
+void scenarioExportTimeStretch()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    TestUiBridge bridge;
+    ScopedBridge registered(service, bridge);
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    auto* renderService = processor->getContentRenderService();
+    if (!CONTROL_CHECK(renderService != nullptr))
+        return;
+    const auto media = exportDirectory("stretch-media");
+    const auto out = exportDirectory("stretch-out");
+    const auto handles = handlesOf(api, *processor);
+
+    // 1. The grid changes while the render is settled: OpenTune queues the time-stretch rebuild itself
+    // (setContentTimeGrid). While the render worker holds it back, the export waits and writes nothing; once the
+    // rebuild ran, the file holds the stretched render, not silence.
+    const auto queued = addClip(*processor, media, "queued", 0, 1.0, 3.0, Analysis::Ready);
+    CONTROL_CHECK(settleRender(*processor, queued.key));
+    renderService->pauseRenderWorker();
+    CONTROL_CHECK(processor->setContentTimeGrid(queued.key, stretchedGrid(queued.durationSec)));
+    CONTROL_CHECK(!stretchOutputCurrent(*processor, queued.key));
+    const auto queuedPath = (out / "queued.wav").u8string();
+    const auto queuedJob = startExport(api, clipParams(handles.placement(queued.placementId), queuedPath));
+    pumpMessagesFor(kQuietPumpMs);
+    const auto waiting = jobOf(service, queuedJob);
+    CONTROL_CHECK(memberOf(waiting, "state").text() == "running"
+                  && memberOf(memberOf(waiting, "progress"), "phase").text() == "waiting");
+    CONTROL_CHECK(filesIn(out).empty());
+    renderService->resumeRenderWorker();
+    const auto written = waitJob(api, queuedJob);
+    CONTROL_CHECK(memberOf(written, "state").text() == "succeeded");
+    CONTROL_CHECK(stretchOutputCurrent(*processor, queued.key));
+    checkFormat(resultOf(written), 1, queued.durationSec, queued.startSec);
+    CONTROL_CHECK(peakOf(queuedPath) > kRenderLevel / 2);
+
+    // 2. The grid changed before the render settled, and the render settled without OpenTune's completion
+    // callback: nothing queued the rebuild. The job queues it (as setContentTimeGrid would) and waits for it.
+    const auto unqueued = addClip(*processor, media, "unqueued", 1, 0.5, 2.0, Analysis::Ready);
+    CONTROL_CHECK(processor->setContentTimeGrid(unqueued.key, stretchedGrid(unqueued.durationSec)));
+    CONTROL_CHECK(settleRender(*processor, unqueued.key));
+    CONTROL_CHECK(pumpMessagesUntil(
+        [renderService] { return renderService->renderQueueDepth() == 0 && renderService->renderInFlight() == 0; },
+        kDriveTimeoutMs));
+    CONTROL_CHECK(!stretchOutputCurrent(*processor, unqueued.key));
+    const auto unqueuedPath = (out / "unqueued.wav").u8string();
+    const auto rebuilt = exportAndWait(api, clipParams(handles.placement(unqueued.placementId), unqueuedPath));
+    CONTROL_CHECK(memberOf(rebuilt, "state").text() == "succeeded");
+    CONTROL_CHECK(stretchOutputCurrent(*processor, unqueued.key));
+    checkFormat(resultOf(rebuilt), 1, unqueued.durationSec, unqueued.startSec);
+    CONTROL_CHECK(peakOf(unqueuedPath) > kRenderLevel / 2);
+
+    // 3. With the identity grid nothing is stretched, and the export does not wait for a rebuild.
+    const auto plain = addClip(*processor, media, "plain", 2, 0.0, 1.5, Analysis::Ready);
+    CONTROL_CHECK(settleRender(*processor, plain.key));
+    const auto plainJob =
+        exportAndWait(api, clipParams(handles.placement(plain.placementId), (out / "plain.wav").u8string()));
+    CONTROL_CHECK(memberOf(plainJob, "state").text() == "succeeded");
 }
 
 } // namespace ControlTest

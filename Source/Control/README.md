@@ -2,7 +2,7 @@
 
 # OpenTune control API (OTCP v1)
 
-> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、撤销历史（撤销识别、ControlOriginAction、没有撤销条目的写入）、ContentEditTransaction 与它镜像的上游函数、内容写入的就绪门、忙碌检查、编辑器 bridge、导入、导出（界面与接口共用的导出锁、逐内容的就绪判定、临时文件与最终改名）、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
+> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、撤销历史（撤销识别、ControlOriginAction、没有撤销条目的写入）、ContentEditTransaction 与它镜像的上游函数、内容写入的就绪门、忙碌检查、编辑器 bridge、导入、导出（界面与接口共用的导出锁、逐内容的就绪判定、等待伸缩重建、临时文件与最终改名）、时间网格（照时间工具的两轮夹紧移动手柄、整段平移、以 job 种子锚点、TimeGridEditAction 撤销步、它镜像的上游函数）、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
 
 This directory holds the local control API of OpenTune Standalone: a JSON-RPC protocol over a loopback
 TCP connection (OTCP v1, specified in `Tests/Control/spec/otcp/v1/PROTOCOL.md`), with which another
@@ -33,7 +33,8 @@ without this directory.
 | `Ops/OpsSupport.*` | What the operations share: parameter reader, handle resolution, the world revision vector and `asOf`, number and text output. |
 | `ControlJobs.*` | The jobs of the instance: registry, the tick that advances running jobs on the message thread, the long poll of `job.get`, cancellation, retention. |
 | `Ops/WriteEnvelope.*` | What every write shares: the busy checks, the dirty flag, revert recipes, the UI snapshot, `revisionDiff` and the write envelope builder. |
-| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*`, `Ops/ExportOps.*`, `Ops/UndoOps.*`, `Ops/ContentTuneOps.*` | The methods, one file per group (see "Method table"). |
+| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*`, `Ops/ExportOps.*`, `Ops/UndoOps.*`, `Ops/ContentTuneOps.*`, `Ops/TimingOps.*` | The methods, one file per group (see "Method table"). |
+| `Edit/TimeGridOps.*` | The handle moves of OpenTune's time tool without the piano roll: the two passes of its limits, and the commit of a grid as the piano roll commits one (see "Time grid"). |
 | `Ops/EditSupport.*` | What the content edits and the undo steps share: params forms of tokens and keys, the readiness gate, the expected-token checks, note references, `reRenderQueued`, and the description of an undo step's effect from two snapshots. |
 | `Edit/ControlOriginAction.*` | The undo entry of a change made through the API (upstream undo actions wrapped with an `undoId`), and `ControlHistory`: undoIds, the API's entries, the undoIds of UI entries, changes without an undo entry. |
 | `Edit/ContentEditTransaction.*` | Undo entries built from snapshots around a commit of the content commands, as the piano roll builds them (see "ContentEditTransaction"). |
@@ -321,10 +322,11 @@ API reads it through the hook `peekUndo` / `peekRedo` / `size` / `cursor` and ap
   (`controlDescribeEffect`: contents, keys, pitch shifts, clips, tracks), so it also covers entries the
   API cannot inspect; an empty `revisionDiff` gives `noOp` and `UNDO_NO_EFFECT`. The step's own revert
   recipe is the opposite step with the entry's `undoId`, never with `force`.
-- **Changes without an undo entry** (`content.setKey`, `content.autoTune` mode `notesOnly`; section 15.3
-  rule 9) are never taken back: `ControlHistory::onChangeWithoutEntry()` masks that aspect of that content
-  in every entry the API recorded before (their undo then skips it) and clears the redo history with the
-  hook's `clearRedo()`. UI entries are applied as OpenTune applies them.
+- **Changes without an undo entry** (`content.setKey`, `content.autoTune` mode `notesOnly`,
+  `content.editTimeGrid` op `seed`; section 15.3 rule 9) are never taken back:
+  `ControlHistory::onChangeWithoutEntry()` masks that aspect of that content in every entry the API recorded
+  before (their undo then skips it) and clears the redo history with the hook's `clearRedo()`. UI entries are
+  applied as OpenTune applies them.
 - Track deletion barriers (`possiblyStale`, `UNDO_CONFLICT(stale_entry)`, `UNDO_ENTRY_POSSIBLY_STALE`)
   come with the track methods; until then no entry is possibly stale.
 
@@ -377,7 +379,8 @@ before each commit and waits while the UI is busy, also while an export holds th
 implements it in `Source/Standalone/ControlEditorBridge.*`, a friend adapter that reads the editor's state
 and calls the editor's own functions without adding behaviour. Its general part provides the project file
 and dirty flag (`ProjectSession`), the busy state, structure-change notifications, the editor's steps after
-an undo or redo (`afterUndoRedo()`), the view (workspace,
+an undo or redo (`afterUndoRedo()`), the refresh after a time-grid edit (`onTimeGridChanged()`: the piano roll's
+`onTimeGridRevisionChanged()`, as its own commit of a grid does, and a redraw of the arrangement), the view (workspace,
 piano roll clip, selection, visible track count), the focus of an imported clip
 (`applyPlacementSelectionContext`), revealing tracks, the note generation parameters of the piano roll,
 the project session and its worker pool, and the audio device manager. Dialogs, tracks, project flows and
@@ -461,8 +464,16 @@ clip or track and stereo for the master mix.
   uncorrected (`analysisFailed`); a failed render block: one more `requestFullContentRender()` (its
   reconcile retries a failed block of the same revision), then `RENDER_FAILED(render_chunk_failed)`;
   render work pending: wait; ready once the render cache is settled at its revision
-  (`RenderCache::isCanonicalSettled`). A content whose render was never requested gets one request. After
-  120 s: `NOT_READY(export_wait_timeout)`. A clip export whose clip is deleted meanwhile fails with
+  (`RenderCache::isCanonicalSettled`). A content whose render was never requested gets one request. A
+  content whose time grid is not the identity is played and exported from its time-stretch output (the
+  Stage2 rebuild), which OpenTune's export reads only when it was built at the content's current content
+  and time-grid revisions (`readExportPlaybackAudio`); otherwise the content would be silent in the file. Such a
+  content is ready, or exported dry, only once that output is current (`TimeStretchCache::
+  sliceCanonicalForOutputRange`, the export's own read). OpenTune queues the rebuild when the grid changes
+  while the render is settled and when a render block settles; when the render is settled, no output is
+  current and the render worker is idle, the job queues it once for these revisions, as `setContentTimeGrid()`
+  does (`ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled`). After 120 s:
+  `NOT_READY(export_wait_timeout)`. A clip export whose clip is deleted meanwhile fails with
   `REVISION_CONFLICT(changed_during_export)`.
 - In the tick that finds every content ready, the job records a token of the inputs (each clip's track,
   position, length, source window, gain and fades, its track's volume, and per content the revision, time
@@ -491,6 +502,87 @@ Known OpenTune behaviours, reported as they are:
   fixed detail: the API never forwards OpenTune's texts.
 - The processor's export functions wait for every render work of the process (`drainRenderWorker`), not
   only for the exported contents.
+
+## Time grid
+
+A content's time grid (`Utils/TimeGrid.h`) maps the source audio (the `content` clock) to what plays (the
+`output` clock) through handles between ClipStart and ClipEnd; OpenTune's time tool (an experimental tool of
+the piano roll) places, drags, inserts and deletes them. The API reports the handles between the end points
+(`content.getDetails` `timeGrid`, with each handle's stable id as `handleId`) and edits them with
+`content.shiftTiming` and `content.editTimeGrid` (`Ops/TimingOps.cpp`, capability `timing.v1`). The grid has its
+own token, `gridRevision` (`expectedGridRevision`, `REVISION_CONFLICT(grid_changed)`); a grid change never
+changes the content's `revision`.
+
+- **Checks**, in order: the handle, the busy state, the readiness gate, `expectedGridRevision`, a grid with
+  handles (`NOT_READY(grid_not_seeded)`, not retryable: waiting does not seed it), then each handle named once
+  (`INVALID_ARGUMENT(duplicate_handle)`) and an inner handle of this grid (`NOT_FOUND(unknown_handle)`; the end
+  points, which the API does not report, are no handles of the API).
+- **Moves** follow the time tool's drag (`PianoRollToolHandler::handleTimeToolMouseDrag`), computed by
+  `Edit/TimeGridOps.cpp` without the piano roll, in two passes: a moved handle is limited to its neighbours plus
+  and minus 30 ms (`TimeGridSnapshot::kMinOutputSpacingSeconds`; the time tool drops the spacing only while Alt
+  is held, which the API has no equivalent of); when several handles move, every inner handle is then limited
+  from left to right to its limited left neighbour plus the spacing and its right neighbour minus the spacing,
+  as the time tool's group drag does. When a handle has no room between its neighbours (a grid the time tool
+  made tighter than 30 ms), nothing moves, as the time tool keeps the grid as it was. A limited move is applied
+  as far as allowed and reported in `clamped` and with the warning `CLAMPED`; a call that moves nothing is a
+  no-op.
+  - `content.shiftTiming` moves every handle whose output time lies in the range (a content range is mapped
+    through the current grid with `tauForward`) by `deltaSec`: a group drag whose dragged handle is the one
+    that leads in the direction of the move, so that the section stops at its neighbour and moves as a whole.
+  - `content.editTimeGrid` op `moveHandles` moves each named handle to its output time; with several moves the
+    first pass limits each one by its neighbours' targets (for one move these are the neighbours as they are,
+    exactly the time tool's drag).
+- **Commit and undo**, as the piano roll's `commitTimeGrid`: a `TimeGridEditAction` with the grid before and
+  after, `ContentEditCommands::setTimeGrid()` (the processor's `setContentTimeGrid()`, which publishes the grid
+  for playback and queues the time-stretch rebuild), and one undo entry per call, wrapped in a
+  `ControlOriginAction` (aspect time grid). The description is "拖动时间手柄" ("drag time handle"), the text the
+  time tool means for its drag (see "Known OpenTune behaviours" below). The project is marked as changed (the
+  UI does not mark it after a time-grid edit), `reRenderQueued` names the content, and the editor is told
+  through `ControlUiBridge::onTimeGridChanged()`.
+- **Seed** (`content.editTimeGrid` op `seed`) places the initial handles as OpenTune does when the time tool is
+  picked (`PianoRollComponent::setCurrentTool` calls `OpenTuneAudioProcessor::ensureTimeToolAnchorSeed()`). That
+  function seeds from the content's timing analysis (the reference feature analysis) and, while that analysis
+  is not ready, starts it and registers the content for a seeding of its own once it finishes. The API runs
+  the seed as a job of kind `timeGridSeed` instead: the job asks for the analysis with
+  `preheatReferenceAlignmentFeatures()` (which does nothing while it runs or is ready), waits, and calls
+  `ensureTimeToolAnchorSeed()` only once the analysis is ready, which then seeds at once. So a cancelled job
+  leaves no deferred seeding behind. Every step checks that the content still exists (`NOT_FOUND
+  (unknown_handle)`) and that its pitch analysis is still ready; the first step and the seeding step check
+  the busy state; an analysis that failed or found no onset ends the job with `INTERNAL`, as the time tool then
+  places no handle; after 120 s it ends with `NOT_READY`. A grid that has handles by then is left as it is
+  (a no-op). Seeding has no undo entry, as in the UI (`ui_parity`, no revert recipe, `IRREVERSIBLE`); like
+  every change without an undo entry it masks the grid in earlier entries of the API and clears the redo
+  history (PROTOCOL.md section 15.3 rule 9). The seeded handles have output equal to content, so the content
+  sounds the same and nothing is rendered again.
+- **Export**: a content whose grid is not the identity is exported only once its time-stretch output is
+  current (see "Export").
+- Inserting and deleting handles, and setting or resetting a whole grid, are not part of this build.
+
+The upstream functions it follows (lines of the locked upstream base). A change of these functions upstream
+needs the same change here:
+
+| Upstream function | Followed in |
+|---|---|
+| `PianoRollToolHandler::handleTimeToolMouseDrag()` (`Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp:3462-3565`) | `TimeGridOps::planShift()`, `planMoves()`: the limit of the dragged handle, the uniform distance of a group, the second pass |
+| `PianoRollToolHandler::handleTimeToolMouseUp()` (`PianoRollToolHandler.cpp:3567-3597`) | the commit of a moved grid and its description |
+| the piano roll's `commitTimeGrid` (`Source/Standalone/UI/PianoRollComponent.cpp:293-315`) | `TimeGridOps::commit()` and the undo entry of `Ops/TimingOps.cpp` |
+| `PianoRollComponent::setCurrentTool()` (`PianoRollComponent.cpp:3902-3915`) | the seed job's call of `ensureTimeToolAnchorSeed()` |
+| `OpenTuneAudioProcessor::setContentTimeGrid()` (`Source/PluginProcessor.cpp:5130-5186`) | the export's request of the time-stretch rebuild |
+
+Known OpenTune behaviours, reported as they are:
+
+- The time tool's own description literal of its drag ("拖动时间手柄") is stored in
+  `PianoRollToolHandler.cpp` with a broken encoding, so the UI's entries carry garbled text; the API's entries
+  carry the intended text. The UI never shows the description.
+- The UI does not mark the project as changed after a time-grid edit or a seed; the API does (section 15.5).
+- `ensureTimeToolAnchorSeed()` replaces a grid whose handles are all of kind `UserAdded` and that is the identity;
+  the API never calls it for a grid that has handles.
+- The reference analysis service runs only one synchronous analysis (the standard producer, which the
+  time tool's seeding uses by default) per session: `ReferenceAnalysisService::workerLoop` moves its finished
+  job out of `activeJob` with `std::move`, which leaves the optional engaged, so the worker never takes the next
+  job. A later seed of another content, from the UI or the API, waits for an analysis that never finishes; the
+  seed job ends with `NOT_READY` after its wait limit, or when it is cancelled, and never seeds without the
+  analysis. `TimeGridSeed` shows it.
 
 ## Dirty flag and revision tokens
 
@@ -597,11 +689,28 @@ vectors of `edit/`, `content/set-key-*` and `content/auto-tune-*` (`given.histor
 same actions; vectors of later parts are listed as skipped, with the reason). The shared contents with
 synthetic F0 are in `ControlContentFixtures.h`, defined in `ControlDispatcherTests.cpp`.
 
+`Tests/Control/ControlTimingTests.cpp` holds the scenarios of the time grid, on contents with synthetic F0 whose
+grids are applied as OpenTune's content owner applies one. `Timing` runs a table of `content.shiftTiming` and
+`moveHandles` writes with hand-computed handle positions (a handle and a section moved freely, up to a
+neighbour, up to ClipStart and ClipEnd, a content range, several moves the same way and across each other), each
+checked against its result (changes, `clamped`, `CLAMPED`, one undo entry, only the grid aspect, `reRenderQueued`,
+dirty, the editor's notification, tokens equal to a fresh read, `revision` unchanged) and undone back to the exact
+grid before; OpenTune's own undo and redo; `grid_changed`, `grid_not_seeded`, `duplicate_handle`,
+`unknown_handle` (also for an end point), no-ops, `dryRun`, a handle without room, the readiness gate, busy, a stale
+handle and the params. `TimeGridSeed` seeds from a timing analysis with known onsets (hand-computed handles), from
+OpenTune's own analysis (the same handles as `ensureTimeToolAnchorSeed()` gives the UI for that analysis), leaves a
+seeded grid alone, and covers cancellation and the failures of the job's checks (content removed, a dialog opened,
+the pitch analysis running again, an analysis that failed or found no onset), which write no handle.
+`TimingVectors` runs the specification's vectors `content/shift-timing-*` and `content/edit-time-grid-*`.
+`ControlExportTests.cpp` (`ExportTimeStretch`) exports a clip with a stretched grid while its time-stretch rebuild
+is held back (the job waits and writes nothing), and one whose rebuild nothing had queued (the job queues it); both
+files hold the stretched render, not silence.
+
 ## Capabilities and protocol versions
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
-`jobs.v1`, `import.v1`, `export.v1` and `history.v1`). The listener answers a method of an unreported capability itself with
+`jobs.v1`, `import.v1`, `export.v1`, `history.v1` and `timing.v1`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
@@ -629,9 +738,11 @@ report it with the test seam `controlSetReportIncompleteCapabilitiesForTesting()
 | `job.get` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.JobShutdown`, `.JobVectors` | `methods/job.get.schema.json` |
 | `job.cancel` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.ImportCancel`, `.JobVectors` | `methods/job.cancel.schema.json` |
 | `import.start` | `import.v1` | `Ops/ImportOps.cpp` | `ControlProcessorTests.Import`, `.ImportAfterOpen`, `.ImportCancel`, `.JobVectors` | `methods/import.start.schema.json` |
-| `export.start` | `export.v1` | `Ops/ExportOps.cpp` (identity and rename in `ControlFileIdentity.cpp`) | `ControlProcessorTests.Export`, `.ExportFailures`, `.ExportVectors` | `methods/export.start.schema.json` |
+| `export.start` | `export.v1` | `Ops/ExportOps.cpp` (identity and rename in `ControlFileIdentity.cpp`) | `ControlProcessorTests.Export`, `.ExportFailures`, `.ExportVectors`, `.ExportTimeStretch` | `methods/export.start.schema.json` |
 | `edit.getHistory` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.EditVectors` | `methods/edit.getHistory.schema.json` |
 | `edit.undo` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.AutoTune`, `.EditVectors` | `methods/edit.undo.schema.json` |
 | `edit.redo` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.EditVectors` | `methods/edit.redo.schema.json` |
 | `content.setKey` | `edit.v1` (not reported yet) | `Ops/ContentTuneOps.cpp` | `ControlProcessorTests.SetKey`, `.Undo`, `.EditVectors` | `methods/content.setKey.schema.json` |
 | `content.autoTune` (modes `regenerate`, `notesOnly`) | `edit.v1` (not reported yet) | `Ops/ContentTuneOps.cpp` (undo entries in `Edit/ContentEditTransaction.cpp`) | `ControlProcessorTests.AutoTune`, `.Undo`, `.EditVectors` | `methods/content.autoTune.schema.json` |
+| `content.shiftTiming` | `timing.v1` | `Ops/TimingOps.cpp` (moves in `Edit/TimeGridOps.cpp`) | `ControlProcessorTests.Timing`, `.TimingVectors` | `methods/content.shiftTiming.schema.json` |
+| `content.editTimeGrid` (ops `seed`, `moveHandles`) | `timing.v1` | `Ops/TimingOps.cpp` (moves in `Edit/TimeGridOps.cpp`) | `ControlProcessorTests.Timing`, `.TimeGridSeed`, `.TimingVectors` | `methods/content.editTimeGrid.schema.json` |

@@ -75,6 +75,16 @@ void ControlEditorBridge::onUndoRedoApplied()
     editor_.afterUndoRedo();
 }
 
+void ControlEditorBridge::onTimeGridChanged()
+{
+    // PianoRollComponent::onTimeGridRevisionChanged(): what the piano roll's own commit of a time-grid edit does
+    // (its commitTimeGrid takes the new grid revision of the content it shows and redraws); it does nothing when
+    // the piano roll shows another content. The arrangement draws clips through their time grids, so it is
+    // redrawn as after an undo of a time-grid edit (afterUndoRedo).
+    editor_.pianoRoll_.onTimeGridRevisionChanged();
+    editor_.arrangementView_.requestContentRedraw();
+}
+
 bool ControlEditorBridge::focusPlacement(int trackId, std::uint64_t placementId)
 {
     // The editor's steps after its own import commit (startPendingImport): redraw the arrangement and

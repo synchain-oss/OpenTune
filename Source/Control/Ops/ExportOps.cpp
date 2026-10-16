@@ -577,7 +577,9 @@ struct Readiness
  *   (OpenTuneAudioProcessor::requestFullContentRender, whose reconcile retries a failed block of the same
  *   revision), then RENDER_FAILED(render_chunk_failed); render work pending: wait; else ready once the
  *   render cache is settled at its current revision (RenderCache::isCanonicalSettled). A content whose
- *   render was never requested gets one request. NOT_READY(export_wait_timeout) after the wait limit.
+ *   render was never requested gets one request. A content whose time grid is not the identity is exported
+ *   from its time-stretch output, so it is ready (or exported dry) only once that output was rebuilt at its
+ *   current revisions (stretchCurrent). NOT_READY(export_wait_timeout) after the wait limit.
  * - In the tick that finds every content ready it records the inputs and the revisions and starts the
  *   writer on a temporary file in the target directory.
  * - Once the file is written: the inputs are compared with the recorded ones (REVISION_CONFLICT
@@ -622,9 +624,61 @@ private:
     {
         bool renderRequested = false;
         bool renderRetried = false;
+        /** The content and time-grid revisions for which the job asked for the time-stretch rebuild. */
+        std::optional<std::pair<std::uint64_t, std::uint64_t>> stretchRequestedFor;
     };
 
     Readiness classify(ControlOpContext& context, const ContentKey& key)
+    {
+        auto readiness = classifyRender(context, key);
+        if ((readiness.state == Readiness::State::Ready || readiness.state == Readiness::State::Dry)
+            && !stretchCurrent(context, key))
+            return Readiness{};
+        return readiness;
+    }
+
+    /**
+     * Section 19 rule 6 for a content whose time grid is not the identity: OpenTune plays and exports such a
+     * content from its time-stretch output (the Stage2 rebuild, Stage2TimeStretchRebuilder), not from its render,
+     * and its export reads that output only when it was built at the content's current content and time-grid
+     * revisions (readExportPlaybackAudio in Utils/PlaybackAudioReader.h); otherwise the content would be silent or
+     * old in the file. The content is ready only once that output is current, which the export's own read
+     * (TimeStretchCache::sliceCanonicalForOutputRange) tells.
+     *
+     * OpenTune queues the rebuild itself when the grid changes while the render is settled
+     * (OpenTuneAudioProcessor::setContentTimeGrid) and when a render block settles. When the render is settled, no
+     * output is current and the render worker has nothing queued or running, the job queues the rebuild once for
+     * these revisions, as setContentTimeGrid does (ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled
+     * with the published playback source). A rebuild that never completes ends in the wait limit.
+     */
+    bool stretchCurrent(ControlOpContext& context, const ContentKey& key)
+    {
+        const auto snapshot = controlLiveSnapshot(context, key);
+        if (snapshot == nullptr || snapshot->timeGrid == nullptr || snapshot->timeGrid->isIdentity())
+            return true;
+        auto* service = context.processor().getContentRenderService();
+        if (service == nullptr)
+            return true;
+        juce::AudioBuffer<float> probe(1, 1);
+        if (service->getTimeStretchCache().sliceCanonicalForOutputRange(key, snapshot->contentRevision,
+                                                                        snapshot->timeGridRevision, 0, probe, 0, 1)
+            > 0)
+            return true;
+        auto& progress = contentProgress_[key];
+        const std::pair<std::uint64_t, std::uint64_t> revisions{snapshot->contentRevision, snapshot->timeGridRevision};
+        if (progress.stretchRequestedFor == revisions || service->renderQueueDepth() != 0
+            || service->renderInFlight() != 0)
+            return false;
+        const auto cache = service->getRenderCache(key);
+        PlaybackReadSource source;
+        if (cache != nullptr && cache->isCanonicalSettled() && service->getPlaybackReadSource(key, source)
+            && service->enqueueStage2RebuildWhenCanonicalSettled(key, snapshot, source.audioBuffer,
+                                                                 source.audioSampleRate))
+            progress.stretchRequestedFor = revisions;
+        return false;
+    }
+
+    Readiness classifyRender(ControlOpContext& context, const ContentKey& key)
     {
         auto& processor = context.processor();
         Readiness readiness;

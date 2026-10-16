@@ -107,7 +107,7 @@ inline std::optional<JsonValue> authenticate(TestClient& client, int port, const
  * and no render cache has a pending or running block; the failure is posted right after its block is marked, so
  * after kSettleGraceMs more the messages posted until then are dispatched (drainPostedMessages).
  */
-inline bool settleBackgroundWork(OpenTuneAudioProcessor& processor)
+inline bool settleBackgroundWork(OpenTuneAudioProcessor& processor, int timeoutMs = kSettleTimeoutMs)
 {
     auto* service = processor.getContentRenderService();
     auto* repository = processor.getStandaloneContentRepository();
@@ -124,12 +124,12 @@ inline bool settleBackgroundWork(OpenTuneAudioProcessor& processor)
                         return false;
             return true;
         },
-        kSettleTimeoutMs);
+        timeoutMs);
     pumpMessagesFor(kSettleGraceMs);
-    const auto remaining = std::max<long long>(0, kSettleTimeoutMs - millisecondsSince(started));
+    const auto remaining = std::max<long long>(0, timeoutMs - millisecondsSince(started));
     const bool drained = drainPostedMessages(static_cast<int>(remaining));
     if (!idle || !drained)
-        note("the background work of the scenario's setup did not settle within " + std::to_string(kSettleTimeoutMs)
+        note("the background work of the scenario's setup did not settle within " + std::to_string(timeoutMs)
              + " ms (render work idle: " + (idle ? "yes" : "no") + ", messages drained: " + (drained ? "yes" : "no")
              + ")");
     return idle && drained;
@@ -494,6 +494,10 @@ void scenarioAutoTune();
     one call), dryRun equal to the commit, tokens equal to a fresh read, undo and redo back to the exact states,
     the checks before the change, no-ops and the params. */
 void scenarioEditNotes();
+/** Several notes edited in one call after a render: every block of every edited note is queued and rendered anew
+    (content.editNotes, AUTO and SNAP), and the file of an export holds the new pitches. It runs about 12 s on a
+    developer machine, so it has a timeout of its own. */
+void scenarioEditMultiNoteRender();
 /** content.setPitchShift: revision stays while the pitchShift component changes (also for the undo, the redo,
     the UI's Ctrl+Z and the UI's dialog), KEY_NOT_TRANSPOSED, no-ops, undo back to the exact state, and the undo of
     a shift after notesOnly, which puts back the shift only. */

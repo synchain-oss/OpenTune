@@ -760,8 +760,8 @@ Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& 
         passes.emplace_back(std::nullopt);
     } else {
         for (const auto& range : frameRanges(curve, params))
-            passes.emplace_back(std::make_pair(range.startFrame * secondsPerFrame,
-                                               range.endFrameExclusive * secondsPerFrame));
+            passes.emplace_back(
+                std::make_pair(range.startFrame * secondsPerFrame, range.endFrameExclusive * secondsPerFrame));
     }
     const auto beforeWorld = controlCaptureWorldVersions(context);
     ControlWriteEnvelope envelope(context);

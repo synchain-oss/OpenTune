@@ -1390,9 +1390,9 @@ bool centsNear(const std::vector<double>& measured, const std::vector<double>& e
 /**
  * Total time the multi-note render scenario may wait for renders and for the export job: 30 s before the ctest
  * timeout of the test, which the scenario reads from OPENTUNE_SCENARIO_TIMEOUT_SEC (cmake/OpenTuneControl.cmake sets
- * 300 s, and a longer one for a sanitizer build, where the real render work runs several times slower: a ThreadSanitizer
- * run took 248 to 260 s on a macOS runner). 270 s without that variable. The waits share this budget, each one takes
- * what is left of it.
+ * 300 s, and a longer one for a sanitizer build, where the real render work runs several times slower: a
+ * ThreadSanitizer run took 248 to 260 s on a macOS runner). 270 s without that variable. The waits share this budget,
+ * each one takes what is left of it.
  */
 int multiNoteRenderBudgetMs()
 {

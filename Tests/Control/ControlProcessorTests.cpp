@@ -222,7 +222,7 @@ void scenarioStartAndHello()
         CONTROL_CHECK(memberOf(*hello, "appVersion").text() == ControlService::buildIdentity().appVersion);
         // session.v1 and the capabilities of the methods the dispatcher implements.
         CONTROL_CHECK(toJsonString(memberOf(*hello, "capabilities"))
-                      == R"(["session.v1","read.v1","jobs.v1","import.v1"])");
+                      == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1"])");
     }
     // The runtime was initialised before the listener started: the logger writes under the data dir.
     checkLogInsideDataDirectory();
@@ -536,6 +536,9 @@ const Scenario kScenarios[] = {
     {"ImportAfterOpen", scenarioImportAfterOpen, false},
     {"ImportCancel", scenarioImportCancel, false},
     {"JobVectors", scenarioJobVectors, false},
+    {"Export", scenarioExport, false},
+    {"ExportFailures", scenarioExportFailures, false},
+    {"ExportVectors", scenarioExportVectors, false},
 };
 
 int runScenario(const Scenario& scenario)

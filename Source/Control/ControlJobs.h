@@ -157,6 +157,11 @@ public:
         was started with; empty id when none. Message thread. */
     std::string findByKey(const std::string& kind, const std::string& idempotencyKey, std::string& paramsDigest) const;
 
+    /** The job of that kind that is not terminal and was started with that params digest; empty when none.
+        For methods whose repeated call with the same params returns the job that still runs
+        (export.start, PROTOCOL.md section 12.5). Message thread. */
+    std::string findActiveByDigest(const std::string& kind, const std::string& paramsDigest) const;
+
     /** The job object (common.schema.json#/$defs/job). Any thread. */
     Lookup get(const std::string& jobId, JsonValue& job) const;
     /** {jobId, kind, state} of a job (common.schema.json#/$defs/jobRef), or null. Any thread. */

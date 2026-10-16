@@ -69,23 +69,22 @@ bool hasWarning(const JsonValue& warnings, const char* code)
 
 std::optional<Error> controlCheckBusy(ControlOpContext& context, ControlBusyScope scope)
 {
-    auto* bridge = context.bridge();
-    if (bridge == nullptr)
-        return std::nullopt;
     // ControlUiBridge::queryBusy(): the editor's own flags of gestures, modal dialogs and running
     // operations. The UI has priority: the write is refused rather than queued.
-    const auto busy = bridge->queryBusy();
-    if (!busy)
-        return std::nullopt;
-    if (busy->pointerDown)
+    auto* bridge = context.bridge();
+    const auto busy = bridge != nullptr ? bridge->queryBusy() : std::nullopt;
+    // OpenTuneAudioProcessor::isExportLockHeld(): the export lock that the editor's export and export.start
+    // share. It belongs to the processor, so it is held also without an editor.
+    const bool exportLocked = context.processor().isExportLockHeld();
+    if (busy && busy->pointerDown)
         return controlOpError("BUSY", "pointer_down", "the user is in the middle of a mouse or pen gesture");
-    if (busy->modalOpen && scope != ControlBusyScope::DialogDismiss)
+    if (busy && busy->modalOpen && scope != ControlBusyScope::DialogDismiss)
         return controlOpError("BUSY", "modal_open", "a modal dialog is open in OpenTune");
-    if (busy->importRunning)
+    if (busy && busy->importRunning)
         return controlOpError("BUSY", "import_in_progress", "an import started in the OpenTune UI is running");
-    if (busy->exportRunning)
+    if (exportLocked || (busy && busy->exportRunning))
         return controlOpError("BUSY", "export_in_progress", "an export is running");
-    if (busy->operationRunning)
+    if (busy && busy->operationRunning)
         return controlOpError("BUSY", "project_operation", "a project save or open is running");
     return std::nullopt;
 }

@@ -98,11 +98,22 @@ private:
  * place in memory and would carry its undoId. Opening a project forgets all of them (the content epoch
  * changes and OpenTune clears its history).
  *
+ * A full history moves every position: once it holds kUndoHistoryCapacity entries, UndoManager::addAction()
+ * drops the oldest one and every entry moves down by one, and the read hooks cannot tell that apart from an
+ * undo followed by a new entry. Whenever the history is found full and changed since it was last observed,
+ * the undoIds of UI entries are therefore forgotten: such an entry is never confirmed at a position that may
+ * hold another entry, and a call that names it fails with UNDO_CONFLICT(top_mismatch) instead. Steps the API
+ * applies itself (noteOwnStep) move no position and keep them.
+ *
  * Threading: message thread only. Owned by ControlService and shared with every ControlOriginAction.
  */
 class ControlHistory
 {
 public:
+    /** The number of entries OpenTune's UndoManager keeps (its private maxSize_); addAction() drops the oldest
+        entry beyond it. */
+    static constexpr int kUndoHistoryCapacity = 500;
+
     /** An entry of the history as the protocol describes it (common.schema.json#/$defs/historyEntry). */
     struct Entry
     {
@@ -132,6 +143,10 @@ public:
      */
     void onChangeWithoutEntry(UndoManager& manager, const ContentKey& content, ControlContentAspect aspect);
 
+    /** The API has just applied UndoManager::undo() or redo() itself, right after describe() checked the top:
+        a step moves the cursor but no entry, so the history as it is now counts as observed. */
+    void noteOwnStep(const UndoManager& manager);
+
     /** Called by ControlOriginAction for its lifetime. */
     void add(ControlOriginAction* action);
     void remove(ControlOriginAction* action);
@@ -146,11 +161,28 @@ private:
         std::string undoId;
     };
 
+    /** What the read hooks show of the history. */
+    struct Observation
+    {
+        int size = 0;
+        int cursor = 0;
+        const UndoAction* undoTop = nullptr;
+        const UndoAction* redoTop = nullptr;
+
+        bool operator==(const Observation& other) const
+        {
+            return size == other.size && cursor == other.cursor && undoTop == other.undoTop && redoTop == other.redoTop;
+        }
+        bool operator!=(const Observation& other) const { return !(*this == other); }
+    };
+
+    static Observation observe(const UndoManager& manager);
     void prune(const UndoManager& manager, std::uint64_t epoch);
     const UiEntry* findUiEntry(const UndoAction& action, int index) const;
 
     std::uint64_t nextSeq_ = 1;
     std::optional<std::uint64_t> epoch_;
+    std::optional<Observation> lastObserved_;
     std::vector<UiEntry> uiEntries_;
     std::vector<ControlOriginAction*> actions_;
 };

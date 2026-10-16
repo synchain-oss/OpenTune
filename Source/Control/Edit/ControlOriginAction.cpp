@@ -82,16 +82,37 @@ std::string ControlHistory::nextUndoId(const std::string& instanceShort)
     return "u:" + instanceShort + ":" + std::to_string(nextSeq_++);
 }
 
+ControlHistory::Observation ControlHistory::observe(const UndoManager& manager)
+{
+    // UndoManager::size(), cursor(), peekUndo() and peekRedo(): the read hook on OpenTune's history.
+    return {manager.size(), manager.cursor(), manager.peekUndo(), manager.peekRedo()};
+}
+
 void ControlHistory::prune(const UndoManager& manager, std::uint64_t epoch)
 {
     // Opening a project clears OpenTune's history (ProjectSession::commitPreparedOpen) and starts a new
     // content epoch; an entry beyond the history's end left it.
-    if (epoch_ != epoch)
+    if (epoch_ != epoch) {
         uiEntries_.clear();
+        lastObserved_.reset();
+    }
     epoch_ = epoch;
+    // A full history that changed since it was last observed may have dropped its oldest entry
+    // (UndoManager::addAction() at its capacity), which moves every entry down by one position; that
+    // position may now hold another entry, also one that took the memory of a dropped one. The positions of
+    // UI entries can no longer be confirmed, so their undoIds are forgotten.
+    const auto now = observe(manager);
+    if (now.size >= kUndoHistoryCapacity && lastObserved_ != now)
+        uiEntries_.clear();
+    lastObserved_ = now;
     uiEntries_.erase(std::remove_if(uiEntries_.begin(), uiEntries_.end(),
                                     [&manager](const UiEntry& entry) { return entry.index >= manager.size(); }),
                      uiEntries_.end());
+}
+
+void ControlHistory::noteOwnStep(const UndoManager& manager)
+{
+    lastObserved_ = observe(manager);
 }
 
 const ControlHistory::UiEntry* ControlHistory::findUiEntry(const UndoAction& action, int index) const

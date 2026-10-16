@@ -309,7 +309,12 @@ API reads it through the hook `peekUndo` / `peekRedo` / `size` / `cursor` and ap
   gives it one and recognises it by its object, class, description and position in the history. OpenTune's
   history has no identity of its own for entries: if the user discards such an entry in the UI and makes
   the same kind of edit at the same position, the new entry can take the old one's memory and inherit its
-  undoId. Opening a project clears OpenTune's history and these ids.
+  undoId. Opening a project clears OpenTune's history and these ids. A full history (500 entries, the
+  `UndoManager`'s capacity) drops its oldest entry on each new one and moves every entry down by one
+  position, which the read hook cannot tell from an undo followed by a new entry: whenever the history is
+  found full and changed since the API last looked at it, `ControlHistory` forgets the undoIds of UI
+  entries, so a call that names one gets `UNDO_CONFLICT(top_mismatch)` rather than a step on another entry.
+  Steps the API applies itself move no entry and keep them.
 - **After a step** the project is marked as changed (also when the step changed nothing, as in the UI) and
   the editor runs its own steps after an undo (`afterUndoRedo()` through `ControlUiBridge::
   onUndoRedoApplied()`). The result describes the effect from snapshots before and after the step
@@ -581,11 +586,13 @@ bridge for the dirty flag and the selection; entries the user would make in the 
 pushes them (the upstream actions, unwrapped). `Undo` covers undo and redo of an API entry back to the exact
 states (also with OpenTune's own `UndoManager::undo()`, as the UI's Ctrl+Z), `top_mismatch` with the user's
 edit left intact, `force` and the undoIds of UI entries, the redo through the revert recipe, changes without
-an undo entry (`UNDO_NO_EFFECT`, the cleared redo history, the later key kept), a clip split on top and a
-project opened since; `SetKey` the key aspect only, the revert recipe round trip, `key_changed`, the no-op,
-the UI's scale and the readiness gate; `AutoTune` the hand-computed removed and dropped notes, created notes
-inside the range and in key, several ranges as one step, `dryRun`, the params defaults and the checks before
-the change; `IncompleteCapability` that `edit.v1` is not reported yet; `EditVectors` the specification's
+an undo entry (`UNDO_NO_EFFECT`, the cleared redo history, the later key kept), a full history whose
+entries moved (the undoId of a UI entry is no longer confirmed), a clip split on top and a project opened
+since; `SetKey` the key aspect only, the revert recipe round trip, `key_changed`, the no-op, the UI's scale
+and the readiness gate; `AutoTune` the hand-computed removed and dropped notes, created notes inside the
+range and in key, several ranges as one step, `dryRun` (its `sideEffects` equal those of the commit, for
+`regenerate` and `notesOnly`), the params defaults and the checks before the change (also `clipKey` on a
+content without a key); `IncompleteCapability` that `edit.v1` is not reported yet; `EditVectors` the specification's
 vectors of `edit/`, `content/set-key-*` and `content/auto-tune-*` (`given.history` is established with the
 same actions; vectors of later parts are listed as skipped, with the reason). The shared contents with
 synthetic F0 are in `ControlContentFixtures.h`, defined in `ControlDispatcherTests.cpp`.

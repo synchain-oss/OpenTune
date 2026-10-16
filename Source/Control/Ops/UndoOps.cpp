@@ -149,6 +149,8 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
     UndoAction* applied = undo ? manager.undo() : manager.redo();
     jassert(applied == top);
     juce::ignoreUnused(applied);
+    // The step moved the cursor, no entry: the history as it is now is the one describe() checked.
+    history.value()->noteOwnStep(manager);
     // Rule 8: an entry of the UI applied with force gets an undoId now.
     const std::string undoId =
         entry.undoId ? *entry.undoId

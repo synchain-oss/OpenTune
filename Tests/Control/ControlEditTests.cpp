@@ -202,6 +202,45 @@ std::string pushControlPitchShift(ControlService& service, OpenTuneAudioProcesso
     return undoId;
 }
 
+/** How often a MarkerAction was undone and redone. */
+struct MarkerCounts
+{
+    int undos = 0;
+    int redos = 0;
+};
+
+/** An entry of the history that changes nothing and counts its steps: a stand-in for any entry the user makes
+    in the UI, cheap enough to fill OpenTune's history to its capacity. */
+class MarkerAction final : public UndoAction
+{
+public:
+    explicit MarkerAction(juce::String description, std::shared_ptr<MarkerCounts> counts = nullptr)
+        : description_(std::move(description))
+        , counts_(std::move(counts))
+    {}
+    void undo() override
+    {
+        if (counts_ != nullptr)
+            ++counts_->undos;
+    }
+    void redo() override
+    {
+        if (counts_ != nullptr)
+            ++counts_->redos;
+    }
+    juce::String getDescription() const override { return description_; }
+
+private:
+    juce::String description_;
+    std::shared_ptr<MarkerCounts> counts_;
+};
+
+void pushMarkers(UndoManager& manager, int count)
+{
+    for (int i = 0; i < count; ++i)
+        manager.addAction(std::make_unique<MarkerAction>("filler"));
+}
+
 /** A clip split the user made in the arrangement: the first clip of the track split in its middle, and the
     SplitPlacementAction on the history, as ArrangementViewComponent pushes it. */
 bool pushUiSplit(OpenTuneAudioProcessor& processor, int trackId)
@@ -492,6 +531,84 @@ void checkChangesWithoutEntry(EditFixture& f)
     CONTROL_CHECK(memberOf(keyUndone, "changes").size() == 1);
 }
 
+/** ControlHistory on its own: the undoId of a UI entry is confirmed at its position while the history is not
+    full, also after other changes; once the history is full and changed, every position may have moved
+    (UndoManager::addAction() drops the oldest entry), so the id is no longer confirmed; the API's own steps
+    keep it. The remembered entries are objects outside the history standing in for the entry at that
+    position, which is what an entry that took the memory of a dropped one would look like. */
+void checkHistoryCapacityRule()
+{
+    constexpr int capacity = ControlHistory::kUndoHistoryCapacity;
+    constexpr std::uint64_t epoch = 1;
+    UndoManager manager;
+    ControlHistory history;
+    pushMarkers(manager, 1);
+    const MarkerAction atFirst("edit");
+    const auto id = history.assignUndoId(manager, atFirst, 0, epoch, "01234567");
+    CONTROL_CHECK(history.describe(manager, atFirst, 0, epoch).undoId == id);
+    pushMarkers(manager, capacity - 2);
+    CONTROL_CHECK(manager.size() == capacity - 1 && history.describe(manager, atFirst, 0, epoch).undoId == id);
+    // The history becomes full: from now on positions can move without a sign, the id is forgotten.
+    pushMarkers(manager, 1);
+    CONTROL_CHECK(manager.size() == capacity && !history.describe(manager, atFirst, 0, epoch).undoId.has_value());
+
+    // At the capacity, an id assigned now survives the API's own undo and redo (noteOwnStep) ...
+    const MarkerAction atTop("edit");
+    const auto topId = history.assignUndoId(manager, atTop, capacity - 1, epoch, "01234567");
+    CONTROL_CHECK(manager.undo() != nullptr);
+    history.noteOwnStep(manager);
+    CONTROL_CHECK(history.describe(manager, atTop, capacity - 1, epoch).undoId == topId);
+    CONTROL_CHECK(manager.redo() != nullptr);
+    history.noteOwnStep(manager);
+    CONTROL_CHECK(history.describe(manager, atTop, capacity - 1, epoch).undoId == topId);
+    // ... and not a new entry of the UI, which drops the oldest entry.
+    pushMarkers(manager, 1);
+    CONTROL_CHECK(manager.size() == capacity
+                  && !history.describe(manager, atTop, capacity - 1, epoch).undoId.has_value());
+}
+
+/** Through the API: a UI entry that edit.undo applied with force (it got an undoId) moves down by one position
+    when the user's new entries overflow the history. On top again, it is not confirmed: the call with its
+    undoId fails with UNDO_CONFLICT(top_mismatch) and nothing is undone. */
+void checkFullHistory(EditFixture& f)
+{
+    constexpr int capacity = ControlHistory::kUndoHistoryCapacity;
+    auto& manager = f.processor->getUndoManager();
+    pushMarkers(manager, capacity - 2 - manager.size());
+    auto counts = std::make_shared<MarkerCounts>();
+    auto target = std::make_unique<MarkerAction>("target", counts);
+    const UndoAction* targetAddress = target.get();
+    manager.addAction(std::move(target));
+    CONTROL_CHECK(manager.size() == capacity - 1);
+
+    // Below the capacity the forced step names the entry, and its revert recipe takes it back.
+    const auto forced = f.api.result("edit.undo", jsonOf(R"({"force":true})"));
+    const auto uiId = memberOf(memberOf(forced, "entry"), "undoId").text();
+    CONTROL_CHECK(!uiId.empty() && counts->undos == 1);
+    CONTROL_CHECK(memberOf(memberOf(memberOf(forced, "undo"), "revert"), "params").isObject());
+    f.undo(uiId, "edit.redo");
+    CONTROL_CHECK(counts->redos == 1 && memberOf(memberOf(f.history(), "undoTop"), "undoId").text() == uiId);
+
+    // The user adds two entries: the first fills the history, the second drops the oldest one and moves every
+    // entry down by one. Two Ctrl+Z bring the target back on top.
+    pushMarkers(manager, 2);
+    CONTROL_CHECK(manager.size() == capacity);
+    CONTROL_CHECK(manager.undo() != nullptr && manager.undo() != nullptr);
+    CONTROL_CHECK(manager.peekUndo() == targetAddress);
+    CONTROL_CHECK(memberOf(memberOf(f.history(), "undoTop"), "undoId").isNull());
+    CONTROL_CHECK(f.api.fails("edit.undo", jsonOf("{\"expectedUndoId\":" + jsonQuoted(uiId) + "}"), "UNDO_CONFLICT",
+                              "top_mismatch"));
+    CONTROL_CHECK(counts->undos == 1 && manager.peekUndo() == targetAddress);
+
+    // At the capacity a forced step still names its entry, and its revert recipe works while the history
+    // stays as the step left it.
+    const auto again = f.api.result("edit.undo", jsonOf(R"({"force":true})"));
+    const auto newId = memberOf(memberOf(again, "entry"), "undoId").text();
+    CONTROL_CHECK(!newId.empty() && newId != uiId && counts->undos == 2);
+    f.undo(newId, "edit.redo");
+    CONTROL_CHECK(counts->redos == 2);
+}
+
 void scenarioUndoImpl()
 {
     EditFixture f;
@@ -504,6 +621,8 @@ void scenarioUndoImpl()
     const auto lastId = memberOf(memberOf(f.history(), "undoTop"), "undoId").text();
     checkUnsafeTop(f);
     checkProjectOpenClearsHistory(f, lastId.empty() ? "u:01234567:1" : lastId);
+    checkHistoryCapacityRule();
+    checkFullHistory(f);
     CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 
@@ -657,7 +776,12 @@ void scenarioAutoTuneImpl()
     CONTROL_CHECK(toJsonString(memberOf(applied, "keyUsed")) == R"({"root":0,"scale":"major"})");
     CONTROL_CHECK(memberOf(memberOf(applied, "noteCount"), "before").asDouble() == 4);
     CONTROL_CHECK(VectorMatcher::equal(resultTokens(applied, f.contentId), freshTokens(f.api, f.contentId)));
-    CONTROL_CHECK(memberOf(memberOf(applied, "sideEffects"), "reRenderQueued").isObject());
+    // The prediction lists the side effects of the commit, member for member (PROTOCOL.md sections 14.4 and
+    // 14.6: every side effect carries revert).
+    const std::string reRender =
+        R"({"reRenderQueued":{"contentIds":[)" + jsonQuoted(f.contentId) + R"(],"revert":null}})";
+    CONTROL_CHECK(toJsonString(memberOf(applied, "sideEffects")) == reRender);
+    CONTROL_CHECK(toJsonString(memberOf(predicted, "sideEffects")) == reRender);
     f.undo(memberOf(undo, "undoId").text());
     CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before));
 
@@ -674,15 +798,23 @@ void scenarioAutoTuneImpl()
     f.undo(memberOf(memberOf(two, "undo"), "undoId").text());
     CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before));
 
-    // notesOnly replaces every note, without an undo entry or revert recipe.
-    const auto notesOnly = f.api.result(
-        "content.autoTune", jsonOf("{\"contentId\":" + jsonQuoted(f.contentId)
-                                   + ",\"mode\":\"notesOnly\",\"expectedRevision\":" + jsonQuoted(f.revision()) + "}"));
+    // notesOnly replaces every note, without an undo entry or revert recipe. Its dryRun predicts the same
+    // side effects as the commit and changes nothing.
+    const std::string notesOnlyParams = "{\"contentId\":" + jsonQuoted(f.contentId)
+                                        + ",\"mode\":\"notesOnly\",\"expectedRevision\":" + jsonQuoted(f.revision());
+    const auto notesOnlyPredicted = f.api.result("content.autoTune", jsonOf(notesOnlyParams + ",\"dryRun\":true}"));
+    CONTROL_CHECK(memberOf(notesOnlyPredicted, "dryRun").asBoolean()
+                  && !memberOf(notesOnlyPredicted, "applied").asBoolean());
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before));
+    const auto notesOnly = f.api.result("content.autoTune", jsonOf(notesOnlyParams + "}"));
     CONTROL_CHECK(toJsonString(memberOf(notesOnly, "undo"))
                   == R"({"undoable":false,"reason":"ui_parity","revert":null})");
     CONTROL_CHECK(noteIndexes(memberOf(notesOnly, "removed")) == (std::vector<int>{0, 1, 2, 3}));
     CONTROL_CHECK(memberOf(notesOnly, "keyUsed").isNull() && hasWarning(notesOnly, "IRREVERSIBLE"));
     CONTROL_CHECK(VectorMatcher::equal(resultTokens(notesOnly, f.contentId), freshTokens(f.api, f.contentId)));
+    CONTROL_CHECK(toJsonString(memberOf(notesOnly, "sideEffects")) == reRender);
+    CONTROL_CHECK(toJsonString(memberOf(notesOnlyPredicted, "sideEffects")) == reRender);
+    CONTROL_CHECK(memberOf(notesOnlyPredicted, "created").size() == memberOf(notesOnly, "created").size());
 
     // The checks before the change: tokens, clipKey, unsupported modes, params.
     CONTROL_CHECK(
@@ -703,6 +835,37 @@ void scenarioAutoTuneImpl()
                                    + R"(,"mode":"regenerate","expectedRevision":)" + jsonQuoted(f.revision())
                                    + R"(,"key":"clipKey","expectedKeyRevision":)" + jsonQuoted(f.keyRevision()) + "}"));
     CONTROL_CHECK(toJsonString(memberOf(withClipKey, "keyUsed")) == R"({"root":2,"scale":"major"})");
+    // clipKey on a content without a key: there is no key to use, so the call is refused (INVALID_ARGUMENT,
+    // without a reason: the protocol has none for it) and changes nothing.
+    {
+        ClipSpec spec;
+        spec.name = "keyless";
+        spec.trackId = 1;
+        spec.notes = {{0.5, 1.5, 64.0}};
+        const auto keyless = fixtureAddClip(*f.processor, spec);
+        CONTROL_CHECK(f.processor->getContentSnapshot(keyless.key)->detectedKey.origin == Origin::Unset);
+        const auto handles = fixtureHandlesOf(f.api.result("project.get"), spec.trackId, 0.0);
+        if (CONTROL_CHECK(handles.has_value())) {
+            const auto tokens = freshTokens(f.api, handles->contentId);
+            const auto undoCount = memberOf(f.history(), "undoCount").asDouble();
+            CONTROL_CHECK(f.api.fails("content.autoTune",
+                                      jsonOf("{\"contentId\":" + jsonQuoted(handles->contentId)
+                                             + R"(,"mode":"regenerate","expectedRevision":)"
+                                             + jsonQuoted(memberOf(tokens, "revision").text())
+                                             + R"(,"key":"clipKey","expectedKeyRevision":)"
+                                             + jsonQuoted(memberOf(tokens, "keyRevision").text()) + "}"),
+                                      "INVALID_ARGUMENT", ""));
+            CONTROL_CHECK(VectorMatcher::equal(freshTokens(f.api, handles->contentId), tokens));
+            CONTROL_CHECK(memberOf(f.history(), "undoCount").asDouble() == undoCount);
+            // An explicit key works on the same content.
+            const auto explicitKey =
+                f.api.result("content.autoTune", jsonOf("{\"contentId\":" + jsonQuoted(handles->contentId)
+                                                        + R"(,"mode":"regenerate","expectedRevision":)"
+                                                        + jsonQuoted(memberOf(tokens, "revision").text())
+                                                        + R"(,"key":{"root":0,"scale":"major"}})"));
+            CONTROL_CHECK(toJsonString(memberOf(explicitKey, "keyUsed")) == R"({"root":0,"scale":"major"})");
+        }
+    }
     for (const char* mode : {"snapNotes", "reference"}) {
         const std::string extra = std::string(mode) == "reference" ? ",\"placementId\":" + jsonQuoted(f.placementId)
                                                                    : R"(,"key":{"root":0,"scale":"major"})";

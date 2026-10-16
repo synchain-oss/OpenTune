@@ -474,6 +474,19 @@ std::pair<std::size_t, std::size_t> listNotes(ControlWriteEnvelope& envelope, co
             created.size() > kMaxListedEntries ? created.size() - kMaxListedEntries : 0};
 }
 
+/** The reRenderQueued side effect that a commit of the prediction would report: {contentIds: [contentId],
+    revert: null}, the same form as controlAddReRenderQueued() gives it after a commit (PROTOCOL.md section
+    14.6), since a commit of the AUTO commands advances the notes revision of the content. */
+void addPredictedReRenderQueued(ControlWriteEnvelope& envelope, const std::string& contentId)
+{
+    auto effect = JsonValue::object();
+    auto ids = JsonValue::array();
+    ids.append(JsonValue::string(contentId));
+    effect.appendMember("contentIds", std::move(ids));
+    effect.appendMember("revert", JsonValue());
+    envelope.addSideEffect("reRenderQueued", std::move(effect));
+}
+
 /** The members of the result besides the envelope (methods/content.autoTune.schema.json result). */
 void appendAutoTuneMembers(JsonValue& result, TuneMode mode, const std::optional<DetectedKey>& keyUsed,
                            const NoteGeneratorParams& generator, std::size_t before, std::size_t after,
@@ -604,13 +617,8 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
     }
     JsonValue result;
     if (params.dryRun) {
-        if (!committed.empty()) {
-            auto effect = JsonValue::object();
-            auto ids = JsonValue::array();
-            ids.append(JsonValue::string(ref.contentId));
-            effect.appendMember("contentIds", std::move(ids));
-            envelope.addSideEffect("reRenderQueued", std::move(effect));
-        }
+        if (!committed.empty())
+            addPredictedReRenderQueued(envelope, ref.contentId);
         result = envelope.predicted(context);
     } else {
         controlAddReRenderQueued(envelope, beforeWorld, controlCaptureWorldVersions(context));
@@ -666,6 +674,10 @@ Result<JsonValue> runNotesOnly(ControlOpContext& context, const AutoTuneParams& 
     envelope.addWarning("REPLACES_ALL_NOTES", contentRef(ref.contentId), std::move(counts));
     JsonValue result;
     if (params.dryRun) {
+        // The topology commit of generateNotesOnlyByContentKey() always advances the notes revision, so the
+        // commit reports the content in reRenderQueued (PROTOCOL.md section 14.4 rule 2: the prediction lists
+        // the side effects the commit would have).
+        addPredictedReRenderQueued(envelope, ref.contentId);
         result = envelope.predicted(context);
     } else {
         // No request can bring the previous notes back.
@@ -702,7 +714,14 @@ Result<JsonValue> runAutoTune(ControlOpContext& context, const AutoTuneParams& p
         return *conflict;
     if (params.mode == TuneMode::NotesOnly)
         return runNotesOnly(context, params, ref, versions);
-    // clipKey: the content's own key, guarded by expectedKeyRevision above.
+    // clipKey: the content's own key, guarded by expectedKeyRevision above. A content without a key
+    // (content.getDetails reports key null) has none to use: the default value of DetectedKey would be
+    // snapped to and reported as keyUsed as if it were the content's key. The protocol has no reason code
+    // for this, so the error carries none.
+    if (params.clipKey && ref.snapshot->detectedKey.origin == Origin::Unset)
+        return controlOpError("INVALID_ARGUMENT", "",
+                              "key clipKey names the content's own key, but the content has no key; give the key "
+                              "explicitly");
     DetectedKey key = params.key.value_or(ref.snapshot->detectedKey);
     return runRegenerate(context, params, ref, versions, key);
 }

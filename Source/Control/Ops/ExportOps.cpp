@@ -378,7 +378,7 @@ std::string inputsToken(ControlOpContext& context, const ExportPlan& plan,
             hasher.add(std::string_view("gone"));
             continue;
         }
-        auto current = controlContentVersions(controlContentId(context, key), *snapshot);
+        auto current = controlContentVersions(context, controlContentId(context, key), *snapshot);
         hasher.add(std::string_view(current.revision()))
             .add(std::string_view(current.grid))
             .add(std::string_view(current.pitchShift));

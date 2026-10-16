@@ -2,7 +2,7 @@
 
 # OpenTune control API (OTCP v1)
 
-> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、忙碌检查、编辑器 bridge、导入、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
+> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、撤销历史（撤销识别、ControlOriginAction、没有撤销条目的写入）、ContentEditTransaction 与它镜像的上游函数、内容写入的就绪门、忙碌检查、编辑器 bridge、导入、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
 
 This directory holds the local control API of OpenTune Standalone: a JSON-RPC protocol over a loopback
 TCP connection (OTCP v1, specified in `Tests/Control/spec/otcp/v1/PROTOCOL.md`), with which another
@@ -33,7 +33,10 @@ without this directory.
 | `Ops/OpsSupport.*` | What the operations share: parameter reader, handle resolution, the world revision vector and `asOf`, number and text output. |
 | `ControlJobs.*` | The jobs of the instance: registry, the tick that advances running jobs on the message thread, the long poll of `job.get`, cancellation, retention. |
 | `Ops/WriteEnvelope.*` | What every write shares: the busy checks, the dirty flag, revert recipes, the UI snapshot, `revisionDiff` and the write envelope builder. |
-| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*` | The methods, one file per group (see "Method table"). |
+| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*`, `Ops/UndoOps.*`, `Ops/ContentTuneOps.*` | The methods, one file per group (see "Method table"). |
+| `Ops/EditSupport.*` | What the content edits and the undo steps share: params forms of tokens and keys, the readiness gate, the expected-token checks, note references, `reRenderQueued`, and the description of an undo step's effect from two snapshots. |
+| `Edit/ControlOriginAction.*` | The undo entry of a change made through the API (upstream undo actions wrapped with an `undoId`), and `ControlHistory`: undoIds, the API's entries, the undoIds of UI entries, changes without an undo entry. |
+| `Edit/ContentEditTransaction.*` | Undo entries built from snapshots around a commit of the content commands, as the piano roll builds them (see "ContentEditTransaction"). |
 | `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme, the processing object of `session.info` and `prefs.get`). |
 | `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
 | `../Standalone/ControlEditorBridge.*` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor; compiled into the application wrapper only. |
@@ -130,6 +133,9 @@ option, so a build with the option OFF compiles exactly the upstream code.
 | `Source/Standalone/PluginEditor.cpp` (includes) | `#include "ControlEditorBridge.h"` | Complete type for the constructor and destructor. | Does not compile with the option ON. |
 | `Source/Standalone/PluginEditor.cpp` (end of the constructor) | Create the bridge, which registers itself with `ControlService::setUiBridge()` | The API reaches the editor only once it is complete. | No bridge is registered. |
 | `Source/Standalone/PluginEditor.cpp` (first statement of the destructor) | `controlEditorBridge_.reset()`, which unregisters it | The API never reaches an editor that is being torn down. | Requests could reach a half-destroyed editor. |
+| `Source/Utils/UndoManager.h` (public section; 8 lines: `#if`, marker, five inline functions, `#endif`) | `peekUndo()`, `peekRedo()`, `size()`, `cursor()` and `clearRedo()` | Reads the tops and the counts of OpenTune's history (`edit.getHistory`, the entry checks of `edit.undo` and `edit.redo`); `clearRedo()` discards the redo history after a change without an undo entry (PROTOCOL.md section 15.3 rule 9), as `addAction()` discards it. No data member, so the class layout is the same with the option OFF. | The API cannot tell which entry is on top, so it cannot refuse a step the client did not expect; a change without an undo entry leaves older redo steps that would write over it. |
+| `Source/Standalone/PluginEditor.cpp` (`performUndoRedoAction`; 8 lines) | The steps after an undo or redo moved into `afterUndoRedo()` (a pure refactor: with the option OFF the function reads as upstream) | The editor bridge runs the same steps after an undo or redo applied through the API (`ControlUiBridge::onUndoRedoApplied()`): mark the project as changed, redraw the arrangement, refresh the reference context. | After an API undo the editor would not redraw or refresh until the next user action. |
+| `Source/Standalone/PluginEditor.h` (the control block at the end of the class; 2 lines: marker and declaration) | Private `afterUndoRedo()`, reached by the friend `ControlEditorBridge` | As above. | As above. |
 
 ## Request handling
 
@@ -273,6 +279,72 @@ selectedPlacementIds, visibleTrackCount}`, or null with `nullReasons.ui` `no_edi
   except view state (reason `not_persisted_state`, section 15.2 rule 6) and a call that changed nothing
   itself (reason `no_op`, or a `noOp` result).
 
+## Undo history
+
+OpenTune has one undo history, the processor's `UndoManager`, which the UI's Ctrl+Z and the API share. The
+API reads it through the hook `peekUndo` / `peekRedo` / `size` / `cursor` and applies steps with
+`UndoManager::undo()` / `redo()`, exactly as the UI does (`Ops/UndoOps.cpp`).
+
+- **Entries made through the API** are `ControlOriginAction`s (`Edit/ControlOriginAction.*`): the upstream
+  undo actions the UI would push for the same change (every upstream `UndoAction` class has a public
+  constructor), wrapped with the entry's `undoId` (`u:<instanceIdShort>:<seq>`) and, per inner action, the
+  content and the aspect it puts back (notes with the corrected pitch, key, pitch shift, time grid). The
+  user can undo them in the UI like their own; `edit.undo` recognises them by their wrapper.
+- **Undo identification.** `edit.undo` and `edit.redo` apply the top entry only when it is the entry the
+  client names (`expectedUndoId`), else `UNDO_CONFLICT(top_mismatch)` and nothing changes, so an AI never
+  undoes the user's edit by accident; `force` (only on the end user's explicit request) applies whatever is
+  on top. An empty history is `UNDO_CONFLICT(history_empty)`; a clip split, merge or delete on top is
+  `UNSUPPORTED(undo_unsafe_build)`, also with `force` (OpenTune frees what their undo needs).
+- **Entries made in the UI** have no `undoId` until a call with `force` applies one; `ControlHistory` then
+  gives it one and recognises it by its object, class, description and position in the history. OpenTune's
+  history has no identity of its own for entries: if the user discards such an entry in the UI and makes
+  the same kind of edit at the same position, the new entry can take the old one's memory and inherit its
+  undoId. Opening a project clears OpenTune's history and these ids.
+- **After a step** the project is marked as changed (also when the step changed nothing, as in the UI) and
+  the editor runs its own steps after an undo (`afterUndoRedo()` through `ControlUiBridge::
+  onUndoRedoApplied()`). The result describes the effect from snapshots before and after the step
+  (`controlDescribeEffect`: contents, keys, pitch shifts, clips, tracks), so it also covers entries the
+  API cannot inspect; an empty `revisionDiff` gives `noOp` and `UNDO_NO_EFFECT`. The step's own revert
+  recipe is the opposite step with the entry's `undoId`, never with `force`.
+- **Changes without an undo entry** (`content.setKey`, `content.autoTune` mode `notesOnly`; section 15.3
+  rule 9) are never taken back: `ControlHistory::onChangeWithoutEntry()` masks that aspect of that content
+  in every entry the API recorded before (their undo then skips it) and clears the redo history with the
+  hook's `clearRedo()`. UI entries are applied as OpenTune applies them.
+- Track deletion barriers (`possiblyStale`, `UNDO_CONFLICT(stale_entry)`, `UNDO_ENTRY_POSSIBLY_STALE`)
+  come with the track methods; until then no entry is possibly stale.
+
+## ContentEditTransaction
+
+A content edit through the API records its undo entry the way the piano roll does, without the piano roll
+(`PianoRollComponent` stays untouched): `Edit/ContentEditTransaction.*` captures the notes and correction
+segments before a commit of OpenTune's content commands, and after it keeps, for the affected frame range,
+the notes and segments before and after, cut to the range, in a `PianoRollEditAction` with the UI's
+description. Several commits of one call (the ranges of `content.autoTune`) are one `ControlOriginAction`,
+so one call is one undo step. The actions use the processor's own `ContentEditCommands`, the instance the
+piano roll uses.
+
+The upstream functions it and the AUTO method follow (lines of the locked upstream base). A change of these
+functions upstream needs the same change here; the drift guard over them is registered in a later part:
+
+| Upstream function | Followed in |
+|---|---|
+| `PianoRollComponent::captureBeforeUndoSnapshot()` (`Source/Standalone/UI/PianoRollComponent.cpp:1182-1187`) | `ContentEditTransaction::captureBefore()` |
+| `PianoRollComponent::recordUndoAction()` (`PianoRollComponent.cpp:1189-1267`) | `ContentEditTransaction::recordRange()`, `notesInRange()`, `segmentsInRange()` |
+| `PianoRollComponent::applyAutoTuneToSelection()`, the openTune scheme (`PianoRollComponent.cpp:5288-5341`) | `content.autoTune` mode `regenerate` (`Ops/ContentTuneOps.cpp`): range resolution, capture, commit, undo range |
+| `OpenTuneAudioProcessor::autoTuneContentRangeByContentKey()` and `commitAutoTuneGeneratedNotesByContentKey()` (`Source/PluginProcessor.cpp:5375-5493`) | the `dryRun` prediction of `regenerate` and the removed / dropped notes of its result |
+| `OpenTuneAudioProcessor::generateNotesOnlyByContentKey()` (`PluginProcessor.cpp:5334-5373`) | the `dryRun` prediction of `notesOnly` |
+| `OpenTuneAudioProcessorEditor::scaleChanged()` (`Source/Standalone/PluginEditor.cpp:3040-3078`) | `content.setKey`: the manual key, the no-op, the dirty flag |
+
+## Readiness gate
+
+A content write (capability `edit.v1` or `timing.v1`) checks, after the handle and the busy state and
+before the expected tokens, that the content's pitch analysis is ready with voiced frames
+(`controlCheckContentReady`, PROTOCOL.md section 11): `NOT_READY(f0_not_ready)` (retryable) while it was
+not requested or runs, `NOT_READY(f0_empty)` when it found no voiced frame and `NOT_READY(f0_failed)` when it
+failed otherwise (both not retryable; the processor's failure-reason hook tells the two apart). OpenTune
+generates the notes of an analysis in the message-thread step that marks it ready, so `notes_generating`
+never applies in this build.
+
 ## Busy checks
 
 `controlCheckBusy(context)` refuses a write with `BUSY` while the user is in the middle of something
@@ -287,7 +359,8 @@ steps (`import.start`) checks again before each commit and waits while the UI is
 `ControlUiBridge` is the narrow interface to what only the Standalone editor owns. The editor
 implements it in `Source/Standalone/ControlEditorBridge.*`, a friend adapter that reads the editor's state
 and calls the editor's own functions without adding behaviour. Its general part provides the project file
-and dirty flag (`ProjectSession`), the busy state, structure-change notifications, the view (workspace,
+and dirty flag (`ProjectSession`), the busy state, structure-change notifications, the editor's steps after
+an undo or redo (`afterUndoRedo()`), the view (workspace,
 piano roll clip, selection, visible track count), the focus of an imported clip
 (`applyPlacementSelectionContext`), revealing tracks, the note generation parameters of the piano roll,
 the project session and its worker pool, and the audio device manager. Dialogs, tracks, project flows and
@@ -417,15 +490,34 @@ of the audio; `ImportAfterOpen` the import after a project was opened and when i
 audio; `ImportCancel` a cancellation after the first of three commits while the UI is busy;
 `JobVectors` the specification's vectors of `job/` and `import/`.
 
+`Tests/Control/ControlEditTests.cpp` holds the scenarios of the undo history, the key and AUTO, with a test
+bridge for the dirty flag and the selection; entries the user would make in the UI are pushed as the UI
+pushes them (the upstream actions, unwrapped). `Undo` covers undo and redo of an API entry back to the exact
+states (also with OpenTune's own `UndoManager::undo()`, as the UI's Ctrl+Z), `top_mismatch` with the user's
+edit left intact, `force` and the undoIds of UI entries, the redo through the revert recipe, changes without
+an undo entry (`UNDO_NO_EFFECT`, the cleared redo history, the later key kept), a clip split on top and a
+project opened since; `SetKey` the key aspect only, the revert recipe round trip, `key_changed`, the no-op,
+the UI's scale and the readiness gate; `AutoTune` the hand-computed removed and dropped notes, created notes
+inside the range and in key, several ranges as one step, `dryRun`, the params defaults and the checks before
+the change; `IncompleteCapability` that `edit.v1` is not reported yet; `EditVectors` the specification's
+vectors of `edit/`, `content/set-key-*` and `content/auto-tune-*` (`given.history` is established with the
+same actions; vectors of later parts are listed as skipped, with the reason). The shared contents with
+synthetic F0 are in `ControlContentFixtures.h`, defined in `ControlDispatcherTests.cpp`.
+
 ## Capabilities and protocol versions
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
-`jobs.v1` and `import.v1`). The listener answers a method of an unreported capability itself with
+`jobs.v1`, `import.v1` and `history.v1`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
 `ControlProcessorTests.Completeness` fails when a reported capability has a method that is not registered.
+
+A capability of which only some methods are registered is not reported (`controlCapabilityIsIncomplete`):
+now `edit.v1`, whose `content.setKey` and `content.autoTune` exist while `content.editNotes` and
+`content.setPitchShift` follow. Its methods are refused by the listener until then; the headless tests
+report it with the test seam `controlSetReportIncompleteCapabilitiesForTesting()` to run them.
 
 ## Method table
 
@@ -444,3 +536,8 @@ method of a capability it reports: `read.v1` is complete (all eight reads are re
 | `job.get` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.JobShutdown`, `.JobVectors` | `methods/job.get.schema.json` |
 | `job.cancel` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.ImportCancel`, `.JobVectors` | `methods/job.cancel.schema.json` |
 | `import.start` | `import.v1` | `Ops/ImportOps.cpp` | `ControlProcessorTests.Import`, `.ImportAfterOpen`, `.ImportCancel`, `.JobVectors` | `methods/import.start.schema.json` |
+| `edit.getHistory` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.EditVectors` | `methods/edit.getHistory.schema.json` |
+| `edit.undo` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.AutoTune`, `.EditVectors` | `methods/edit.undo.schema.json` |
+| `edit.redo` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.EditVectors` | `methods/edit.redo.schema.json` |
+| `content.setKey` | `edit.v1` (not reported yet) | `Ops/ContentTuneOps.cpp` | `ControlProcessorTests.SetKey`, `.Undo`, `.EditVectors` | `methods/content.setKey.schema.json` |
+| `content.autoTune` (modes `regenerate`, `notesOnly`) | `edit.v1` (not reported yet) | `Ops/ContentTuneOps.cpp` (undo entries in `Edit/ContentEditTransaction.cpp`) | `ControlProcessorTests.AutoTune`, `.Undo`, `.EditVectors` | `methods/content.autoTune.schema.json` |

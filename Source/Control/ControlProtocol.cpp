@@ -333,6 +333,13 @@ bool controlErrorRetryableByDefault(std::string_view kind)
     return kind == "NOT_READY" || kind == "BUSY" || kind == "TIMEOUT";
 }
 
+bool controlErrorRetryable(std::string_view kind, std::string_view reason)
+{
+    if (kind == "NOT_READY" && (reason == "f0_failed" || reason == "f0_empty" || reason == "grid_not_seeded"))
+        return false;
+    return controlErrorRetryableByDefault(kind);
+}
+
 std::string controlErrorResponse(const ControlRequestId& id, std::string_view kind, std::string_view reason,
                                  std::string_view detail, bool executed, std::optional<bool> retryable)
 {
@@ -349,7 +356,7 @@ std::string controlErrorResponse(const ControlRequestId& id, std::string_view ki
         appendJsonQuoted(line, reason);
     }
     line += ",\"retryable\":";
-    line += retryable.value_or(controlErrorRetryableByDefault(kind)) ? "true" : "false";
+    line += retryable.value_or(controlErrorRetryable(kind, reason)) ? "true" : "false";
     line += ",\"detail\":";
     appendJsonQuoted(line, sanitizeDetail(detail));
     line += ",\"executed\":";

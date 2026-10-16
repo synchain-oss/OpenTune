@@ -6,6 +6,7 @@
 // finished analysis, so no model is needed. Requests go over a real session while the test thread, the
 // message thread, pumps messages. Registered with the other processor scenarios in ControlProcessorTests.cpp.
 
+#include "ControlContentFixtures.h"
 #include "ControlProcessorSupport.h"
 #include "TestUiBridge.h"
 
@@ -57,42 +58,7 @@ constexpr int kSixSecondFrames = 600;
 
 // ---- Contents with a synthetic analysis --------------------------------------------------------
 
-struct NoteSpec
-{
-    double startSec = 0.0;
-    double endSec = 0.0;
-    double targetMidi = 0.0;
-};
-
-enum class Analysis {
-    NotRequested,
-    Running,
-    Failed,
-    Ready
-};
-
-struct ClipSpec
-{
-    std::string name = "clip";
-    int trackId = 0;
-    double startTimelineSec = 0.0;
-    double durationSec = 6.0;
-    Analysis analysis = Analysis::Ready;
-    std::vector<NoteSpec> notes;
-    std::optional<DetectedKey> key;
-    std::optional<PitchShiftSettings> pitchShift;
-    /** Content times of the handles between the end points of the time grid (output equals content). */
-    std::vector<double> gridHandlesContentSec;
-};
-
-struct Clip
-{
-    ContentKey key;
-    std::uint64_t placementId = 0;
-    std::string sourcePath;
-    /** The handleIds of the time grid's inner handles, in order. */
-    std::vector<std::string> handleIds;
-};
+// NoteSpec, Analysis, ClipSpec and Clip: ControlContentFixtures.h.
 
 float hzOf(double midi)
 {
@@ -334,16 +300,7 @@ const JsonValue& nullReason(const JsonValue& object, const char* member)
     return memberOf(memberOf(object, "nullReasons"), member);
 }
 
-/** The handles and tokens of one clip as project.get reports them. */
-struct ClipHandles
-{
-    std::string contentId;
-    std::string placementId;
-    std::string geometryHash;
-    JsonValue placement;
-    JsonValue content;
-    JsonValue tokens;
-};
+// ClipHandles: ControlContentFixtures.h.
 
 std::optional<ClipHandles> handlesOf(const JsonValue& project, int trackId, double startTimelineSec)
 {
@@ -400,8 +357,9 @@ void checkSessionInfo(ApiSession& api)
     CONTROL_CHECK(memberOf(info, "sourceUrl").text() == memberOf(api.discovery(), "sourceUrl").text());
     CONTROL_CHECK(memberOf(memberOf(info, "runtime"), "pid").asDouble()
                   == static_cast<double>(controlCurrentProcessId()));
-    // Only the capabilities this build implements are reported.
-    CONTROL_CHECK(toJsonString(memberOf(info, "capabilities")) == R"(["session.v1","read.v1","jobs.v1","import.v1"])");
+    // Only the capabilities this build implements completely are reported.
+    CONTROL_CHECK(toJsonString(memberOf(info, "capabilities"))
+                  == R"(["session.v1","read.v1","jobs.v1","import.v1","history.v1"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");
@@ -1535,6 +1493,33 @@ std::string runVector(const JsonValue& vector)
 }
 
 } // namespace
+
+// ---- Shared with ControlEditTests.cpp (ControlContentFixtures.h) -----------------------------------
+
+Clip fixtureAddClip(OpenTuneAudioProcessor& processor, const ClipSpec& spec)
+{
+    return addClip(processor, spec);
+}
+
+std::optional<ClipHandles> fixtureHandlesOf(const JsonValue& project, int trackId, double startTimelineSec)
+{
+    return handlesOf(project, trackId, startTimelineSec);
+}
+
+std::string fixtureOtherInstanceShort(const std::string& instanceShort)
+{
+    return otherInstanceShort(instanceShort);
+}
+
+std::optional<Scale> fixtureScaleOf(const std::string& name)
+{
+    return scaleOf(name);
+}
+
+bool fixtureSaveAndReopen(OpenTuneAudioProcessor& processor)
+{
+    return saveAndReopen(processor);
+}
 
 // ---- Scenarios -------------------------------------------------------------------------------------
 

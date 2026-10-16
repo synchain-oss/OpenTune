@@ -271,5 +271,22 @@ void scenarioImportCancel();
 /** The specification's vectors of job.get, job.cancel and import.start, against the real dispatcher. */
 void scenarioJobVectors();
 
+// Scenarios of the undo history, the key and AUTO (ControlEditTests.cpp).
+
+/** edit.getHistory, edit.undo and edit.redo: undo and redo restore the exact states, conflicts leave the user's
+    edits as they are, force and the undoIds of UI entries, unsafe entries, changes without an undo entry, dirty,
+    the editor's refresh and a project opened since. */
+void scenarioUndo();
+/** content.setKey: the key aspect only, the revert recipe round trip, key_changed, no-op, the UI's scale, the
+    readiness gate and the params. */
+void scenarioSetKey();
+/** content.autoTune regenerate and notesOnly: hand-computed removed and dropped notes, created notes in range and
+    in key, one undo step for several ranges, dryRun, defaults of the params, the checks before the change. */
+void scenarioAutoTune();
+/** edit.v1 is not reported while some of its methods are missing; history.v1 is. */
+void scenarioIncompleteCapability();
+/** The specification's vectors of edit.*, content.setKey and content.autoTune, against the real dispatcher. */
+void scenarioEditVectors();
+
 } // namespace ControlTest
 } // namespace OpenTune

@@ -83,7 +83,21 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/JobOps.h
         Source/Control/Ops/ImportOps.cpp
         Source/Control/Ops/ImportOps.h
-        # Note edits, undo and redo: added later.
+        # Undo and redo, key and AUTO: the undo entries of the API (ControlOriginAction) and what the instance
+        # knows about OpenTune's history (ControlHistory), undo entries built from snapshots as the piano roll
+        # builds them (ContentEditTransaction), what content edits share, edit.getHistory, edit.undo,
+        # edit.redo, content.setKey and content.autoTune.
+        Source/Control/Edit/ControlOriginAction.cpp
+        Source/Control/Edit/ControlOriginAction.h
+        Source/Control/Edit/ContentEditTransaction.cpp
+        Source/Control/Edit/ContentEditTransaction.h
+        Source/Control/Ops/EditSupport.cpp
+        Source/Control/Ops/EditSupport.h
+        Source/Control/Ops/UndoOps.cpp
+        Source/Control/Ops/UndoOps.h
+        Source/Control/Ops/ContentTuneOps.cpp
+        Source/Control/Ops/ContentTuneOps.h
+        # Note edits: added later.
         # Time grid: added later.
     )
 
@@ -198,6 +212,11 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         endif()
         # Jobs, import and the write envelope.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlJobTests.cpp)
+        # Undo and redo, key and AUTO, with the contents they share with the reads.
+        target_sources(OpenTuneControlProcessorTests PRIVATE
+            Tests/Control/ControlEditTests.cpp
+            Tests/Control/ControlContentFixtures.h
+        )
         if(MSVC)
             target_compile_options(OpenTuneControlProcessorTests PRIVATE /utf-8 /EHsc /bigobj)
         endif()
@@ -246,6 +265,14 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ImportCancel|--control-api"
             "JobVectors|--control-api"
         )
+        # Undo and redo, key and AUTO (Tests/Control/ControlEditTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "Undo|--control-api"
+            "SetKey|--control-api"
+            "AutoTune|--control-api"
+            "IncompleteCapability|--control-api"
+            "EditVectors|--control-api"
+        )
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
             string(REPLACE "|" ";" _opentune_control_scenario "${_opentune_control_scenario}")
             list(GET _opentune_control_scenario 0 _opentune_control_name)
@@ -270,5 +297,6 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # Every vector starts a processor of its own.
         set_tests_properties(ControlProcessorTests.Vectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.JobVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.EditVectors PROPERTIES TIMEOUT 300)
     endif()
 endif()

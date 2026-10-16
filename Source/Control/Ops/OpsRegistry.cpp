@@ -4,10 +4,12 @@
 #include "AppReadOps.h"
 #include "ContentDetailsOps.h"
 #include "ContentReadOps.h"
+#include "ContentTuneOps.h"
 #include "ImportOps.h"
 #include "JobOps.h"
 #include "ProjectReadOps.h"
 #include "SessionOps.h"
+#include "UndoOps.h"
 
 #include "Control/ContentHandles.h"
 
@@ -22,6 +24,12 @@ namespace {
 /** Context of an error that changed nothing, and of one after a change (executed true). Same length. */
 constexpr std::string_view kErrorContextPrefix = "otcp:";
 constexpr std::string_view kErrorAfterChangePrefix = "otcp!";
+
+std::atomic<bool>& reportIncompleteCapabilities()
+{
+    static std::atomic<bool> report{false};
+    return report;
+}
 
 Error makeOpError(std::string_view prefix, std::string_view kind, std::string_view reason, std::string detail)
 {
@@ -49,9 +57,9 @@ void registerControlMethods(ControlMethodTable& table)
     registerImportOps(table);         // import.start
     // registerExportOps(table);       export.start
     // registerUiOps(table);           ui.getState, ui.dismiss, ui.setSelection
-    // registerContentTuneOps(table);  content.setKey, content.autoTune
+    registerContentTuneOps(table); // content.setKey, content.autoTune
     // registerContentEditOps(table);  content.editNotes, content.setPitchShift
-    // registerUndoOps(table);         edit.getHistory, edit.undo, edit.redo
+    registerUndoOps(table); // edit.getHistory, edit.undo, edit.redo
     // registerTimingOps(table);       content.shiftTiming, content.editTimeGrid
     // registerTransportOps(table);    transport.control, transport.setTempo, transport.setLoop
     // registerArrangementOps(table);  arrangement.edit, arrangement.copy, content.analyzeReference
@@ -63,20 +71,28 @@ void registerControlMethods(ControlMethodTable& table)
 
 ControlOpContext::ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiBridge* bridge,
                                    const ControlInstanceFacts& facts, ControlThreadProbe& probe, ControlJobs* jobs,
-                                   std::function<ControlUiBridge*()> bridgeAccessor)
+                                   std::function<ControlUiBridge*()> bridgeAccessor,
+                                   std::shared_ptr<ControlHistory> history)
     : processor_(processor)
     , bridge_(bridge)
     , facts_(facts)
     , probe_(probe)
     , jobs_(jobs)
     , bridgeAccessor_(std::move(bridgeAccessor))
+    , history_(std::move(history))
     , instanceShort_(controlInstanceShort(facts.instanceId))
 {}
 
 ControlOpContext::ControlOpContext(const ControlOpEnvironment& environment)
     : ControlOpContext(*environment.processor, environment.bridge ? environment.bridge() : nullptr, environment.facts,
-                       *environment.probe, environment.jobs, environment.bridge)
+                       *environment.probe, environment.jobs, environment.bridge, environment.history)
 {}
+
+std::shared_ptr<ControlHistory> ControlOpContext::history()
+{
+    requireMessageThread();
+    return history_;
+}
 
 ControlJobs* ControlOpContext::jobs()
 {
@@ -98,6 +114,7 @@ ControlOpEnvironment ControlOpContext::environment()
     environment.facts = facts_;
     environment.probe = &probe_;
     environment.jobs = jobs_;
+    environment.history = history_;
     return environment;
 }
 
@@ -203,12 +220,24 @@ const ControlMethod* ControlMethodTable::find(std::string_view name) const
 std::vector<std::string> ControlMethodTable::capabilities() const
 {
     std::vector<std::string> out{"session.v1"};
+    const bool reportIncomplete = reportIncompleteCapabilities().load();
     for (const auto& method : methods_) {
         const char* capability = controlMethodCapability(method.name);
-        if (capability != nullptr && std::find(out.begin(), out.end(), capability) == out.end())
+        if (capability != nullptr && std::find(out.begin(), out.end(), capability) == out.end()
+            && (reportIncomplete || !controlCapabilityIsIncomplete(capability)))
             out.emplace_back(capability);
     }
     return out;
+}
+
+bool controlCapabilityIsIncomplete(std::string_view capability)
+{
+    return capability == "edit.v1";
+}
+
+void controlSetReportIncompleteCapabilitiesForTesting(bool report)
+{
+    reportIncompleteCapabilities() = report;
 }
 
 } // namespace OpenTune

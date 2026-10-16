@@ -67,6 +67,14 @@ void ControlEditorBridge::onStructureChanged()
     editor_.arrangementView_.requestContentRedraw();
 }
 
+void ControlEditorBridge::onUndoRedoApplied()
+{
+    // The editor's own steps after its undo and redo (performUndoRedoAction): mark the project as changed,
+    // redraw the arrangement and refresh the reference context. The piano roll follows the new revisions on
+    // the editor's next heartbeat, as after the UI's own undo.
+    editor_.afterUndoRedo();
+}
+
 bool ControlEditorBridge::focusPlacement(int trackId, std::uint64_t placementId)
 {
     // The editor's steps after its own import commit (startPendingImport): redraw the arrangement and

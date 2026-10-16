@@ -2936,6 +2936,14 @@ void OpenTuneAudioProcessorEditor::performUndoRedoAction(bool isUndo)
     if (action == nullptr)
         return;
 
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: the steps after an undo or redo, shared with the editor bridge, see Source/Control/README.md#hooks
+    afterUndoRedo();
+}
+
+void OpenTuneAudioProcessorEditor::afterUndoRedo()
+{
+#endif
     projectSession_.markDirty();
     arrangementView_.requestContentRedraw();
     referenceRefreshPending_ = true;

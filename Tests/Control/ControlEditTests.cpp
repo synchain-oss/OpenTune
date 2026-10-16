@@ -12,6 +12,8 @@
 #include "TestUiBridge.h"
 
 #include "Content/EditableContentSnapshot.h"
+#include "Content/StandaloneClipContent.h"
+#include "Content/StandaloneContentRepository.h"
 #include "Control/ControlDispatcher.h"
 #include "Control/ControlJobs.h"
 #include "Control/Edit/ContentEditTransaction.h"
@@ -24,8 +26,12 @@
 #include "Utils/ScaleUiMapping.h"
 #include "Utils/TuningConfig.h"
 
+#include <juce_audio_formats/juce_audio_formats.h>
+
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
+#include <filesystem>
 #include <map>
 #include <set>
 #include <tuple>
@@ -314,6 +320,31 @@ bool isErrorOf(const JsonValue& response, const std::string& kind, const std::st
                     && memberOf(data, "executed").isBoolean() && !memberOf(data, "executed").asBoolean();
     if (!ok)
         note("expected " + kind + "(" + reason + "), got " + toJsonString(response));
+    return ok;
+}
+
+/** Whether text is valid UTF-8 without control characters (C0, DEL or C1). The UTF-8 bytes of a Chinese text
+    read as Latin-1 (juce::String(const char*), which TRANS() takes) hold C1 controls, so this tells such mojibake
+    from the text. */
+bool isCleanText(const std::string& text)
+{
+    if (text.empty() || !juce::CharPointer_UTF8::isValidString(text.c_str(), static_cast<int>(text.size())))
+        return false;
+    for (juce::CharPointer_UTF8 p(text.c_str()); !p.isEmpty();) {
+        const auto c = p.getAndAdvance();
+        if (c < 0x20 || (c >= 0x7f && c <= 0x9f))
+            return false;
+    }
+    return true;
+}
+
+/** An undo description of an API entry: the expected UTF-8 text, and clean (isCleanText). */
+bool isUndoDescription(const JsonValue& undo, const std::string& expected)
+{
+    const auto& text = memberOf(undo, "description").text();
+    const bool ok = text == expected && isCleanText(text);
+    if (!ok)
+        note("undo description " + toJsonString(memberOf(undo, "description")) + ", expected " + expected);
     return ok;
 }
 
@@ -797,7 +828,11 @@ void scenarioAutoTuneImpl()
     const auto& undo = memberOf(applied, "undo");
     CONTROL_CHECK(memberOf(undo, "undoable").asBoolean()
                   && toJsonString(memberOf(undo, "innerActions")) == R"(["PianoRollEditAction"])");
-    CONTROL_CHECK(memberOf(undo, "description").text() == TRANS("自动调音").toStdString());
+    // The piano roll's text for its AUTO entry, from UTF-8 (its TRANS() literal reads the bytes as Latin-1), in
+    // the result and in edit.getHistory.
+    const std::string autoText = juce::String::fromUTF8(u8"自动调音").toStdString();
+    CONTROL_CHECK(isUndoDescription(undo, autoText));
+    CONTROL_CHECK(isUndoDescription(memberOf(f.history(), "undoTop"), autoText));
     CONTROL_CHECK(toJsonString(memberOf(applied, "paramsUsed"))
                   == R"({"retuneSpeed":0.15,"vibratoDepth":0,"vibratoRateHz":7.5,"noteSplitCents":80})");
     CONTROL_CHECK(toJsonString(memberOf(applied, "keyUsed")) == R"({"root":0,"scale":"major"})");
@@ -1140,7 +1175,7 @@ void checkNoteEditCase(EditFixture& f, const NoteEditCase& c)
     CONTROL_CHECK(notesReferencedAt(memberOf(applied, "changes"), memberOf(tokens, "revision").text()));
     // One undo step with the UI's description, one PianoRollEditAction per op that changed notes.
     const auto& undo = memberOf(applied, "undo");
-    CONTROL_CHECK(memberOf(undo, "undoable").asBoolean() && memberOf(undo, "description").text() == c.description);
+    CONTROL_CHECK(memberOf(undo, "undoable").asBoolean() && isUndoDescription(undo, c.description));
     const auto& inner = memberOf(undo, "innerActions");
     CONTROL_CHECK(inner.size() == c.commits);
     for (std::size_t i = 0; i < inner.size(); ++i)
@@ -1272,17 +1307,268 @@ void checkNoteEditErrors(EditFixture& f)
     CONTROL_CHECK(sameNotes(stateOf(*f.processor, f.clip.key).notes, before.notes));
 }
 
+// ---- The render of edits of several notes --------------------------------------------------------------
+
+/** The bursts clip: sine bursts with silence between them, so that OpenTune's render plans one block per burst
+    (RenderChunkPlanner splits at the silent gaps prepareImport detects), and one note per burst. */
+constexpr int kBurstCount = 5;
+constexpr double kBurstLeadSec = 0.3;
+constexpr double kBurstSec = 0.6;
+constexpr double kBurstGapSec = 0.3;
+constexpr double kBurstTailSec = 0.4;
+/** The tone is this many cents above A3 (220 Hz), so that AUTO and SNAP to the chromatic scale move it. */
+constexpr double kBurstDetuneCents = 30.0;
+/** The middle of a burst is measured: the light pitch path reaches a new target within some tens of
+    milliseconds of the burst's start. */
+constexpr double kBurstMarginSec = 0.15;
+/** A pure tone renders within 0.1 cent of its target; the estimator adds less than that. */
+constexpr double kBurstCentsTolerance = 2.0;
+
+double burstToneHz()
+{
+    return 220.0 * std::pow(2.0, kBurstDetuneCents / 1200.0);
+}
+
+double burstStartSec(int burst)
+{
+    return kBurstLeadSec + burst * (kBurstSec + kBurstGapSec);
+}
+
+double burstDurationSec()
+{
+    return burstStartSec(kBurstCount) - kBurstGapSec + kBurstTailSec;
+}
+
+/** The frequency of a tone over samples [start, end), from its rising zero crossings (linearly interpolated). */
+double toneHzOf(const float* samples, int start, int end, double sampleRate)
+{
+    double first = -1.0;
+    double last = -1.0;
+    int crossings = 0;
+    for (int i = std::max(start, 1); i < end; ++i) {
+        if (samples[i - 1] < 0.0f && samples[i] >= 0.0f) {
+            const double at = (i - 1) + static_cast<double>(-samples[i - 1]) / (samples[i] - samples[i - 1]);
+            if (first < 0.0)
+                first = at;
+            last = at;
+            ++crossings;
+        }
+    }
+    return crossings >= 2 && last > first ? (crossings - 1) * sampleRate / (last - first) : 0.0;
+}
+
+/** The pitch of each burst in cents against the tone, measured in the middle of the burst. */
+std::vector<double> burstCents(const float* samples, int count, double sampleRate)
+{
+    std::vector<double> cents;
+    for (int burst = 0; burst < kBurstCount; ++burst) {
+        const int start = static_cast<int>((burstStartSec(burst) + kBurstMarginSec) * sampleRate);
+        const int end =
+            std::min(count, static_cast<int>((burstStartSec(burst) + kBurstSec - kBurstMarginSec) * sampleRate));
+        const double hz = toneHzOf(samples, start, end, sampleRate);
+        cents.push_back(hz > 0.0 ? 1200.0 * std::log2(hz / burstToneHz()) : -10000.0);
+    }
+    return cents;
+}
+
+bool centsNear(const std::vector<double>& measured, const std::vector<double>& expected, const std::string& what)
+{
+    bool ok = measured.size() == expected.size();
+    for (std::size_t i = 0; ok && i < measured.size(); ++i)
+        ok = std::abs(measured[i] - expected[i]) <= kBurstCentsTolerance;
+    if (!ok) {
+        std::string text = what + ": burst pitches (cents)";
+        for (std::size_t i = 0; i < measured.size(); ++i)
+            text += " " + std::to_string(measured[i]) + (i < expected.size() ? "/" + std::to_string(expected[i]) : "");
+        note(text);
+    }
+    return ok;
+}
+
+/**
+ * Edits of several notes re-render every block of every edited note, and what the export reads afterwards (the
+ * stored audio with the render on top, readExportPlaybackAudio for a content without a stretched time grid) holds
+ * every burst at its new target, as the file of an export does at the end. Each edit runs while OpenTune's render
+ * worker is paused, so that the blocks the commit invalidated can be read: every block that holds an edited note must
+ * be pending, since the render was settled before. Then the worker renders them.
+ *
+ * Every target stays within 75 cents of the tone, so the blocks render through OpenTune's light pitch path
+ * (ProcessRenderRuntime, chunkNeedsVocoder() false with hybrid mode on, the default), which needs no model: the test
+ * runs the same without the models of an installation. A block left with its old audio would be measured at the
+ * previous target, one never rendered at the tone (0 cents).
+ */
+void checkMultiNoteRender()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    constexpr double rate = 44100.0;
+    const int samples = static_cast<int>(std::llround(burstDurationSec() * rate));
+    juce::AudioBuffer<float> audio(1, samples);
+    audio.clear();
+    const double radiansPerSample = 2.0 * juce::MathConstants<double>::pi * burstToneHz() / rate;
+    for (int burst = 0; burst < kBurstCount; ++burst)
+        for (int i = static_cast<int>(burstStartSec(burst) * rate);
+             i < static_cast<int>((burstStartSec(burst) + kBurstSec) * rate); ++i)
+            audio.setSample(0, i, 0.3f * static_cast<float>(std::sin(radiansPerSample * i)));
+    const juce::AudioBuffer<float> dry(audio);
+    const auto media = isolatedDataDirectory() / "bursts";
+    std::error_code ignored;
+    std::filesystem::remove_all(media, ignored);
+    std::filesystem::create_directories(media, ignored);
+    const juce::File source(juce::String::fromUTF8((media / "bursts.wav").u8string().c_str()));
+    {
+        source.deleteFile();
+        std::unique_ptr<juce::OutputStream> stream(source.createOutputStream().release());
+        juce::WavAudioFormat wav;
+        auto writer = stream != nullptr ? wav.createWriterFor(stream, juce::AudioFormatWriterOptions{}
+                                                                          .withSampleRate(rate)
+                                                                          .withNumChannels(1)
+                                                                          .withBitsPerSample(16))
+                                        : nullptr;
+        CONTROL_CHECK(writer != nullptr && writer->writeFromAudioSampleBuffer(audio, 0, samples));
+    }
+
+    // Imported as the editor imports, with a synthetic analysis at the tone in the bursts and a note per burst.
+    OpenTuneAudioProcessor::PreparedImport prepared;
+    if (!CONTROL_CHECK(processor->prepareImport(std::move(audio), rate, "bursts", source.getFullPathName(), prepared)))
+        return;
+    OpenTuneAudioProcessor::ImportPlacement placement;
+    placement.trackId = 0;
+    placement.timelineStartSeconds = 0.0;
+    const auto committed = processor->commitPreparedImportAsPlacement(std::move(prepared), placement);
+    if (!CONTROL_CHECK(committed.isValid()))
+        return;
+    const auto key = committed.contentKey;
+    constexpr double frameSec = 0.01;
+    std::vector<float> f0(static_cast<std::size_t>(std::llround(burstDurationSec() / frameSec)), 0.0f);
+    std::vector<Note> notes;
+    for (int burst = 0; burst < kBurstCount; ++burst) {
+        const auto first = static_cast<std::size_t>(std::ceil(burstStartSec(burst) / frameSec));
+        const auto end = static_cast<std::size_t>((burstStartSec(burst) + kBurstSec) / frameSec);
+        for (auto frame = first; frame < std::min(end, f0.size()); ++frame)
+            f0[frame] = static_cast<float>(burstToneHz());
+        Note note; // OpenTune's default note parameters
+        note.startTime = burstStartSec(burst);
+        note.endTime = burstStartSec(burst) + kBurstSec;
+        note.pitch = static_cast<float>(burstToneHz());
+        note.originalPitch = static_cast<float>(burstToneHz());
+        note.isVoiced = true;
+        notes.push_back(note);
+    }
+    auto curve = std::make_shared<PitchCurve>();
+    curve->setHopSize(160);
+    curve->setSampleRate(16000.0);
+    curve->setOriginalF0(f0);
+    auto* owner = processor->getStandaloneContentRepository()->findClip(key);
+    if (!CONTROL_CHECK(owner != nullptr))
+        return;
+    owner->applyOriginalF0(curve);
+    CONTROL_CHECK(processor->replaceContentNotesForFullMutation(key, notes));
+    CONTROL_CHECK(processor->setContentOriginalF0State(key, OriginalF0State::Ready));
+    processor->requestFullContentRender(key);
+    CONTROL_CHECK(settleBackgroundWork(*processor));
+    auto* render = processor->getContentRenderService();
+    const auto cache = render != nullptr ? render->getRenderCache(key) : nullptr;
+    if (!CONTROL_CHECK(cache != nullptr && cache->isCanonicalSettled()))
+        return;
+    // Every burst its own block: the uncorrected clip renders nothing (blank blocks).
+    CONTROL_CHECK(cache->getChunkStats().blank >= kBurstCount);
+
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    const auto handles = fixtureHandlesOf(api.result("project.get"), 0, 0.0);
+    if (!CONTROL_CHECK(handles.has_value()))
+        return;
+    const auto revision = [&] { return memberOf(freshTokens(api, handles->contentId), "revision").text(); };
+    const auto heard = [&] {
+        juce::AudioBuffer<float> out(dry);
+        cache->overlayCanonicalAudio(out, 0, out.getNumSamples(), 0);
+        return burstCents(out.getReadPointer(0), out.getNumSamples(), rate);
+    };
+    const auto edit = [&](const std::string& what, const std::string& method, const std::string& params,
+                          const std::vector<double>& expected) {
+        note("render of " + what);
+        render->pauseRenderWorker();
+        const auto result = api.result(method, jsonOf("{\"contentId\":" + jsonQuoted(handles->contentId)
+                                                      + ",\"expectedRevision\":" + jsonQuoted(revision()) + params
+                                                      + "}"));
+        CONTROL_CHECK(memberOf(result, "applied").asBoolean());
+        const auto pending = cache->getPendingJobs();
+        for (int burst = 0; burst < kBurstCount; ++burst) {
+            const auto middle = static_cast<std::int64_t>((burstStartSec(burst) + kBurstSec / 2) * rate);
+            const auto holds = [middle](const RenderCache::PendingJob& job) {
+                return job.startSample <= middle && middle < job.endSampleExclusive;
+            };
+            if (!CONTROL_CHECK(std::any_of(pending.begin(), pending.end(), holds)))
+                note(what + ": the block of burst " + std::to_string(burst) + " was not queued for the render");
+        }
+        render->resumeRenderWorker();
+        CONTROL_CHECK(settleBackgroundWork(*processor) && cache->isCanonicalSettled());
+        CONTROL_CHECK(centsNear(heard(), expected, what));
+    };
+    const std::vector<double> all45(kBurstCount, 45.0);
+    edit("one op over every note", "content.editNotes",
+         R"(,"ops":[{"op":"shiftCents","select":{"all":true},"deltaCents":45}])", all45);
+    std::string ops;
+    std::vector<double> mixed;
+    for (int burst = 0; burst < kBurstCount; ++burst) {
+        const int delta = burst % 2 == 0 ? -90 : -20;
+        ops += std::string(ops.empty() ? "" : ",") + R"({"op":"shiftCents","select":{"indices":[)"
+               + std::to_string(burst) + R"(]},"deltaCents":)" + std::to_string(delta) + "}";
+        mixed.push_back(45.0 + delta);
+    }
+    edit("one op per note", "content.editNotes", ",\"ops\":[" + ops + "]", mixed);
+    // AUTO to the chromatic scale: new notes at A3, 30 cents below the tone.
+    const std::vector<double> atA3(kBurstCount, -kBurstDetuneCents);
+    edit("AUTO regenerate", "content.autoTune", R"(,"mode":"regenerate","key":{"root":0,"scale":"chromatic"})", atA3);
+    edit("a shift after AUTO", "content.editNotes",
+         R"(,"ops":[{"op":"shiftCents","select":{"all":true},"deltaCents":20}])",
+         std::vector<double>(kBurstCount, 20.0 - kBurstDetuneCents));
+    // SNAP takes the offset from the base pitch alone: back to A3.
+    edit("SNAP", "content.autoTune", R"(,"mode":"snapNotes","key":{"root":0,"scale":"chromatic"})", atA3);
+
+    // The file of an export of the clip holds the same, with no content exported dry.
+    const auto out = media / "export.wav";
+    const auto start = api.result("export.start", jsonOf(R"({"kind":"clip","target":{"placementId":)"
+                                                         + jsonQuoted(handles->placementId) + R"(},"path":)"
+                                                         + jsonQuoted(out.u8string()) + "}"));
+    const auto jobId = memberOf(memberOf(start, "job"), "jobId").text();
+    const auto job = memberOf(
+        api.result("job.get", jsonOf(R"({"jobId":)" + jsonQuoted(jobId) + R"(,"waitMs":30000})")), "job");
+    if (!CONTROL_CHECK(memberOf(job, "state").text() == "succeeded")) {
+        note("export job " + toJsonString(job));
+        return;
+    }
+    CONTROL_CHECK(toJsonString(memberOf(memberOf(job, "result"), "dryContents")) == "[]");
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    const std::unique_ptr<juce::AudioFormatReader> reader(
+        formats.createReaderFor(juce::File(juce::String::fromUTF8(out.u8string().c_str()))));
+    if (!CONTROL_CHECK(reader != nullptr && reader->lengthInSamples >= samples))
+        return;
+    juce::AudioBuffer<float> file(1, samples);
+    reader->read(&file, 0, samples, 0, true, false);
+    CONTROL_CHECK(
+        centsNear(burstCents(file.getReadPointer(0), samples, reader->sampleRate), atA3, "the exported file"));
+}
+
 void scenarioEditNotesImpl()
 {
-    EditFixture f;
-    if (!f.open(fourNoteSpec()))
-        return;
-    const auto initial = stateOf(*f.processor, f.clip.key);
-    for (const auto& c : noteEditCases())
-        checkNoteEditCase(f, c);
-    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
-    checkNoteEditErrors(f);
-    CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
+    {
+        EditFixture f;
+        if (!f.open(fourNoteSpec()))
+            return;
+        const auto initial = stateOf(*f.processor, f.clip.key);
+        for (const auto& c : noteEditCases())
+            checkNoteEditCase(f, c);
+        CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
+        checkNoteEditErrors(f);
+        CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
+    }
+    checkMultiNoteRender();
 }
 
 // ---- Scenario: content.setPitchShift -----------------------------------------------------------------
@@ -1374,7 +1660,7 @@ void checkPitchShift()
     const auto& undo = memberOf(shifted, "undo");
     CONTROL_CHECK(memberOf(undo, "undoable").asBoolean()
                   && toJsonString(memberOf(undo, "innerActions")) == R"(["PitchShiftEditAction"])");
-    CONTROL_CHECK(memberOf(undo, "description").text() == "Pitch Shift +2st");
+    CONTROL_CHECK(isUndoDescription(undo, "Pitch Shift +2st"));
     CONTROL_CHECK(f.bridge.dirtyMarks > marks);
     CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":2,"cents":0})");
     // OpenTune scales the stored notes with the shift (commitPitchShiftEdit()), so the targets read two
@@ -1669,7 +1955,8 @@ void scenarioSnapNotesImpl()
     const auto before = stateOf(*f.processor, f.clip.key);
     const auto notesBefore = notesNow(f);
     const std::string cMajor = R"({"root":0,"scale":"major"})";
-    const std::string snap = TRANS("音高吸附").toStdString();
+    // The text of the button's SNAP, from UTF-8 (the piano roll's TRANS() literal reads the bytes as Latin-1).
+    const std::string snap = juce::String::fromUTF8(u8"音高吸附").toStdString();
 
     // Every note to C major, hand-computed from the base pitches: 64 and 69 are in the scale; 69.3 goes to 69
     // and 66.2 to 67, through the cent offset (SNAP keeps the base pitch).
@@ -1690,8 +1977,9 @@ void scenarioSnapNotesImpl()
     CONTROL_CHECK(toJsonString(memberOf(applied, "noteCount")) == R"({"before":4,"after":4})");
     CONTROL_CHECK(toJsonString(memberOf(applied, "omittedCount")) == R"({"changes":0,"created":0,"removed":0})");
     const auto& undo = memberOf(applied, "undo");
-    CONTROL_CHECK(memberOf(undo, "description").text() == snap
+    CONTROL_CHECK(isUndoDescription(undo, snap)
                   && toJsonString(memberOf(undo, "innerActions")) == R"(["PianoRollEditAction"])");
+    CONTROL_CHECK(isUndoDescription(memberOf(f.history(), "undoTop"), snap));
     CONTROL_CHECK(VectorMatcher::equal(resultTokens(applied, f.contentId), freshTokens(f.api, f.contentId)));
     const auto after = stateOf(*f.processor, f.clip.key);
     // SNAP again over note 2, whose frames are voiced and now corrected: nothing moves, nothing to do.

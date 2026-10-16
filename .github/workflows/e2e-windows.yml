@@ -302,6 +302,7 @@ jobs:
           # Screenshots are uploaded as they are (images cannot be scrubbed): keep only the newest few. The window lists
           # are text; scrub them (user names in titles and paths) before anything is printed or uploaded.
           node $env:E2E_SCRIPT prune-screenshots --dir $env:E2E_DIAG --keep 8
+          if ($LASTEXITCODE -ne 0) { Write-Host "::warning::pruning the screenshots failed (exit $LASTEXITCODE); the artifact may be larger than intended" }
           node $env:E2E_SCRIPT scrub --dir $env:E2E_DIAG
           if ($LASTEXITCODE -ne 0) { throw "scrubbing the diagnostics failed; not printing the window lists" }
           Get-ChildItem -LiteralPath $env:E2E_DIAG | ForEach-Object { Write-Host "diag: $($_.Name) $($_.Length)" }

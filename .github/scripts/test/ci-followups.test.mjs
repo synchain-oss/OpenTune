@@ -72,6 +72,8 @@ describe('gates.ps1 drift-pins row', () => {
     assert.match(row, /'diff', '--no-renames', '--name-only', "\$Base\.\.\.HEAD"/);
     assert.match(row, /'diff', '--no-renames', '--name-only', 'HEAD'/);
     assert.match(row, /'ls-files', '--others', '--exclude-standard'/);
+    // The upstream .gitignore ignores .github/ wholesale, so the exclude-standard listing never shows untracked pin files.
+    assert.match(row, /'ls-files', '--others', '--', '\.github\/drift-pins', '\.github\/scripts\/drift-pins\.mjs'/);
   });
 
   test('a failing git command is a FAIL, never an empty list', () => {
@@ -83,6 +85,10 @@ describe('gates.ps1 drift-pins row', () => {
 
 describe('e2e-windows workflow', () => {
   const wf = read('.github', 'workflows', 'e2e-windows.yml');
+
+  test('a failing screenshot prune is surfaced as a warning', () => {
+    assert.match(wf, /prune-screenshots[^\r\n]*\r?\n\s*if \(\$LASTEXITCODE -ne 0\) \{ Write-Host "::warning::/);
+  });
 
   test('has-scenario is fail-closed: exit code and answer are checked before the effects scenario counts as not run', () => {
     const i = wf.indexOf('has-scenario --dir');

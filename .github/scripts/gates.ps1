@@ -556,7 +556,9 @@ try {
         foreach ($dpGit in @(
             @('diff', '--no-renames', '--name-only', "$Base...HEAD"),
             @('diff', '--no-renames', '--name-only', 'HEAD'),
-            @('ls-files', '--others', '--exclude-standard'))) {
+            @('ls-files', '--others', '--exclude-standard'),
+            # The upstream .gitignore ignores .github/ wholesale (.*/), so the line above never lists untracked pin files.
+            @('ls-files', '--others', '--', '.github/drift-pins', '.github/scripts/drift-pins.mjs'))) {
             $dpLines = @(& git @dpGit 2> $null)
             if ($LASTEXITCODE -ne 0) { throw "git $($dpGit -join ' ') 失败（exit $LASTEXITCODE），无法确定改动文件列表" }
             foreach ($dpLine in $dpLines) { if ($dpLine -and -not $dpFiles.Contains([string]$dpLine)) { $dpFiles.Add([string]$dpLine) } }

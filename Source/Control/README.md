@@ -291,7 +291,7 @@ API reads it through the hook `peekUndo` / `peekRedo` / `size` / `cursor` and ap
   content and the aspect it puts back (notes with the corrected pitch, key, pitch shift, time grid). The
   user can undo them in the UI like their own; `edit.undo` recognises them by their wrapper.
 - **Undo identification.** `edit.undo` and `edit.redo` apply the top entry only when it is the entry the
-  client names (`expectedUndoId`), else `UNDO_CONFLICT(top_mismatch)` and nothing changes, so an AI never
+  client names (`expectedUndoId`), else `UNDO_CONFLICT(top_mismatch)` and nothing changes, so a client never
   undoes the user's edit by accident; `force` (only on the end user's explicit request) applies whatever is
   on top. An empty history is `UNDO_CONFLICT(history_empty)`; a clip split, merge or delete on top is
   `UNSUPPORTED(undo_unsafe_build)`, also with `force` (OpenTune frees what their undo needs).

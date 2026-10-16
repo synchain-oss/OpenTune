@@ -11,6 +11,9 @@ import { after, before, describe, test } from 'node:test';
 import {
   checkInstaller,
   checkModels,
+  hashPrefix,
+  pinnedInstaller,
+  pinnedModelsDir,
   scrubDir,
   scrubPath,
   countSmoke,
@@ -337,6 +340,57 @@ describe('pin checks (temp files)', () => {
     assert.equal(checkInstaller(pin, path.join(tmp, 'nope.exe')).length, 1);
   });
 
+  test('pinnedInstaller: the main installer, an older one by version, or none', () => {
+    const pin = { installer: { version: '1.8.1', sha256: 'a' }, olderInstallers: [{ version: '1.7.9', sha256: 'b' }] };
+    assert.equal(pinnedInstaller(pin).sha256, 'a');
+    assert.equal(pinnedInstaller(pin, '1.8.1').sha256, 'a');
+    assert.equal(pinnedInstaller(pin, '1.7.9').sha256, 'b');
+    assert.equal(pinnedInstaller(pin, '1.0.0'), null);
+    assert.equal(pinnedInstaller({ installer: { version: '1.8.1' } }, '1.7.9'), null);
+    assert.match(checkInstaller(pin, path.join(tmp, 'nope.exe'), '1.0.0')[0], /no pinned installer for version 1\.0\.0/);
+  });
+
+  test('pinnedModelsDir: the entry\'s own modelsDir with {app}, else the top-level one with %VAR%', () => {
+    const pin = { modelsDir: '%ProgramData%\\OpenTune\\Models', installer: { version: '1.8.1' }, olderInstallers: [{ version: '1.7.9', modelsDir: '{app}\\models' }] };
+    const env = { ProgramData: 'C:\\ProgramData' };
+    assert.equal(pinnedModelsDir(pin, '1.8.1', { appDir: 'C:\\Program Files\\OpenTune', env }), 'C:\\ProgramData\\OpenTune\\Models');
+    assert.equal(pinnedModelsDir(pin, '1.7.9', { appDir: 'C:\\Program Files\\OpenTune\\', env }), 'C:\\Program Files\\OpenTune\\models');
+    assert.equal(pinnedModelsDir(pin, '1.0.0', { env }), null);
+    assert.equal(pinnedModelsDir(pin, undefined, { env: {} }), '%ProgramData%\\OpenTune\\Models', 'an unknown variable stays as written');
+    const pinFile = path.join(tmp, 'models-dir-pin.json');
+    fs.writeFileSync(pinFile, JSON.stringify(pin));
+    const r = spawnSync(process.execPath, [path.join(SCRIPTS, 'e2e-windows.mjs'), 'models-dir', '--pin', pinFile, '--version', '1.7.9', '--app', 'D:\\x\\official'], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), 'D:\\x\\official\\models');
+  });
+
+  test('the real pin: 1.8.1 uses the shared folder, 1.7.9 the install folder', () => {
+    const real = JSON.parse(fs.readFileSync(PIN_FILE, 'utf8'));
+    const env = { ProgramData: 'C:\\ProgramData' };
+    assert.equal(pinnedModelsDir(real, real.installer.version, { appDir: 'C:\\Program Files\\OpenTune', env }), MODELS);
+    assert.equal(pinnedModelsDir(real, '1.7.9', { appDir: 'C:\\Program Files\\OpenTune', env }), 'C:\\Program Files\\OpenTune\\models');
+  });
+
+  test('CLI: check-installer and check-models ::error:: lines show both hash prefixes, not <redacted-hex>', () => {
+    const exe = path.join(tmp, 'Older-Setup.exe');
+    fs.writeFileSync(exe, 'older installer bytes');
+    const model = path.join(tmp, 'hex-models');
+    fs.mkdirSync(model, { recursive: true });
+    fs.writeFileSync(path.join(model, 'fcpe.onnx'), 'fcpe');
+    const pinned = 'c0ffee'.repeat(10).slice(0, 64);
+    const pinFile = path.join(tmp, 'hex-pin.json');
+    fs.writeFileSync(pinFile, JSON.stringify({ installer: { version: '1.8.1', sha256: 'f'.repeat(64) }, olderInstallers: [{ version: '1.7.9', sha256: pinned }], models: [{ path: 'fcpe.onnx', sha256: pinned }] }));
+    const run = (...args) => spawnSync(process.execPath, [path.join(SCRIPTS, 'e2e-windows.mjs'), ...args, '--pin', pinFile], { encoding: 'utf8' });
+    const inst = run('check-installer', '--file', exe, '--version', '1.7.9');
+    assert.equal(inst.status, 1);
+    assert.ok(inst.stdout.includes(`sha256 ${hashPrefix(sha256File(exe))}, pinned ${hashPrefix(pinned)}`), inst.stdout);
+    assert.doesNotMatch(inst.stdout, /redacted/);
+    const models = run('check-models', '--dir', model);
+    assert.equal(models.status, 1);
+    assert.ok(models.stdout.includes(`fcpe.onnx: sha256 ${hashPrefix(sha256File(path.join(model, 'fcpe.onnx')))}, pinned ${hashPrefix(pinned)}`), models.stdout);
+    assert.doesNotMatch(models.stdout, /redacted/);
+  });
+
   test('CLI: check-models exits 1 with a problem and 0 without', () => {
     const model = path.join(tmp, 'cli-models');
     fs.mkdirSync(model, { recursive: true });
@@ -385,6 +439,25 @@ describe('official-install.json', () => {
     assert.match(pin.installer.sha256, /^[0-9a-f]{64}$/);
     assert.ok(pin.installer.size > 0);
     assert.ok(pin.installer.silentArgs.includes('/VERYSILENT'));
+  });
+
+  test('older installers have the same fields, other versions and the release asset url', () => {
+    assert.ok(Array.isArray(pin.olderInstallers) && pin.olderInstallers.length >= 1);
+    const versions = new Set([pin.installer.version]);
+    for (const i of pin.olderInstallers) {
+      assert.match(i.version, /^\d+\.\d+\.\d+$/);
+      assert.ok(!versions.has(i.version), `duplicate version ${i.version}`);
+      versions.add(i.version);
+      assert.match(i.url, new RegExp(`^https://github\\.com/YuFeng926/OpenTune/releases/download/[^/]+/OpenTune-${i.version.replace(/\./g, '\\.')}-Windows-x64-Setup\\.exe$`));
+      assert.match(i.sha256, /^[0-9a-f]{64}$/);
+      assert.ok(i.size > 0);
+      assert.deepEqual(i.silentArgs, pin.installer.silentArgs);
+    }
+  });
+
+  test('the minimum official version of the test build is pinned', () => {
+    const release = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, '.github', 'release', 'release.json'), 'utf8'));
+    assert.ok(pinnedInstaller(pin, release.minOfficialVersion), `no pinned installer for minOfficialVersion ${release.minOfficialVersion}`);
   });
 
   test('models include fcpe and the GAME set, each with a sha256', () => {

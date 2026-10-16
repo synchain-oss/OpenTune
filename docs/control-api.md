@@ -107,6 +107,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 `e2e-windows` 工作流每次启动都使用新的数据目录，所以它借助 MCP 契约与冒烟运行器的 `OTCP_TARGET_DATA_TEMPLATE` 选项，预置一个最小首选项文件，把「已完成首次使用」（`shared.onboardingShown`）写好，并断言该文件已复制进每次启动的数据目录且未被改写。程序是否读到它，由契约与冒烟运行中没有出现 `BUSY(modal_open)` 体现。
 
+冒烟运行里的效果场景（验证「接口说改了什么，声音里就改了什么」）使用另一个模板（`OTCP_E2E_EFFECTS_DATA_TEMPLATE`），其中另外写入 `shared.rendering.lightPitchCorrection=0`，即在关闭混合模式的实例上运行；工作流并核对至少有一个保留的数据目录含该键且为 0。原因：真实用户默认开启混合模式，在该模式下修正量小于 75 音分的渲染块走轻量变调路径，真实人声与谐波音上的小修正可能听不出来。这是 OpenTune 自身行为（界面同样），可在首选项里关闭混合模式。契约与其他场景仍使用默认（混合模式开启）的模板。
+
 ## 许可
 
 - OpenTune 采用 AGPL-3.0。本 fork 及我们的全部改动同样按 AGPL-3.0 提供，唯一的例外是 `Tests/Control/spec/otcp/v1/` 中的 OTCP 规范副本，它与正本一样采用 MIT 许可。我们新增的源文件标注 `SPDX-License-Identifier: AGPL-3.0-or-later`。

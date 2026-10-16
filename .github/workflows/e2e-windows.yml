@@ -25,6 +25,10 @@ name: E2E Windows
 # 本 workflow 每次启动都用新的数据目录，所以契约与冒烟之前预置一个「已完成首次使用」的首选项模板
 # （shared.onboardingShown=1，经 OTCP_TARGET_DATA_TEMPLATE 在每次启动前复制进数据目录），并断言模板已复制进每次启动的
 # 数据目录且未被改写。「程序确实读到了」由契约与冒烟里没有 BUSY(modal_open) 体现，不由这一步断言。
+# 效果场景（随冒烟一起运行）要验证「接口说改了什么，声音里就改了什么」，所以它在另一个模板（OTCP_E2E_EFFECTS_DATA_TEMPLATE）
+# 启动的实例上运行：该模板另外写入 shared.rendering.lightPitchCorrection=0（关闭混合模式）。原因：混合模式（真实用户默认开启）下，
+# 修正量小于 75 音分的渲染块走轻量变调路径，真实人声与谐波音上的小修正基本不被应用——这是 OpenTune 自身行为（界面同样），
+# 用户可在首选项里关闭。契约与其他冒烟场景仍用默认（混合模式开启）的模板，与真实用户一致。
 # 任何 workflow 一律不用 pull_request 的 target 变体（CLAUDE.md §0 第 4 条）。
 on:
   # 加标签触发：在 PR 上加上 `e2e-windows` 标签即运行（加别的标签不运行）；之后每次推送（synchronize）在标签仍在时重跑；
@@ -104,6 +108,7 @@ jobs:
             "E2E_DATA=$work\data"
             "E2E_KEEP=$work\kept"
             "E2E_TEMPLATE=$work\template"
+            "E2E_TEMPLATE_EFFECTS=$work\template-effects"
             "E2E_DIAG=$work\out\diag"
             "E2E_DIAG_SCRIPT=$env:GITHUB_WORKSPACE\.github\scripts\e2e-diag.ps1"
             "E2E_OUT=$work\out"
@@ -215,9 +220,10 @@ jobs:
 
       # 首次引导模板：每次启动前由 MCP 运行器把它的内容复制进这次启动的数据目录。文件名与位置同 AppPreferences 的默认值
       # （数据目录顶层的 app-preferences.settings，JUCE PropertiesFile 的 XML 格式），只写一个键，其余取默认值。
-      - name: Seed the onboarding-completed preferences template
+      # 效果场景模板另加 shared.rendering.lightPitchCorrection=0（关闭混合模式；JUCE 把布尔值写作 0/1），其余同上。
+      - name: Seed the onboarding-completed preferences templates (default, and effects with hybrid mode off)
         run: |
-          New-Item -ItemType Directory -Force -Path $env:E2E_TEMPLATE | Out-Null
+          New-Item -ItemType Directory -Force -Path $env:E2E_TEMPLATE, $env:E2E_TEMPLATE_EFFECTS | Out-Null
           $xml = @'
           <?xml version="1.0" encoding="UTF-8"?>
 
@@ -227,6 +233,16 @@ jobs:
           '@
           [IO.File]::WriteAllText((Join-Path $env:E2E_TEMPLATE 'app-preferences.settings'), (($xml -replace "`r`n", "`n").TrimEnd() + "`n"), [Text.UTF8Encoding]::new($false))
           Get-Content -Raw -LiteralPath (Join-Path $env:E2E_TEMPLATE 'app-preferences.settings') | Write-Host
+          $xmlEffects = @'
+          <?xml version="1.0" encoding="UTF-8"?>
+
+          <PROPERTIES>
+            <VALUE name="shared.onboardingShown" val="1"/>
+            <VALUE name="shared.rendering.lightPitchCorrection" val="0"/>
+          </PROPERTIES>
+          '@
+          [IO.File]::WriteAllText((Join-Path $env:E2E_TEMPLATE_EFFECTS 'app-preferences.settings'), (($xmlEffects -replace "`r`n", "`n").TrimEnd() + "`n"), [Text.UTF8Encoding]::new($false))
+          Get-Content -Raw -LiteralPath (Join-Path $env:E2E_TEMPLATE_EFFECTS 'app-preferences.settings') | Write-Host
 
       # 诊断（不绕过任何对话框）：契约与冒烟运行期间，每 15 秒记录一次桌面截图与 OpenTune 顶层窗口标题与类名。
       - name: Diagnostics sampler (screenshots and top-level windows) in the background
@@ -253,7 +269,7 @@ jobs:
           } finally {
             node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'contract vectors' --seconds $sw.Elapsed.TotalSeconds
           }
-      - name: Smoke scenario (hello, import, Ready, autoTune, export)
+      - name: Smoke scenario (hello, import, Ready, autoTune, export, effects)
         id: smoke
         continue-on-error: true
         timeout-minutes: 20
@@ -263,6 +279,7 @@ jobs:
           OPENTUNE_DATA_DIR: ${{ env.E2E_DATA }}
           OTCP_TARGET_DATA_DIR: ${{ env.E2E_KEEP }}
           OTCP_TARGET_DATA_TEMPLATE: ${{ env.E2E_TEMPLATE }}
+          OTCP_E2E_EFFECTS_DATA_TEMPLATE: ${{ env.E2E_TEMPLATE_EFFECTS }}
           OTCP_E2E_REPORT: ${{ env.E2E_OUT }}\smoke.json
         run: |
           $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -314,6 +331,8 @@ jobs:
           Get-ChildItem -LiteralPath $dst -Recurse -File | ForEach-Object { Write-Host "kept: $($_.FullName.Substring($dst.Length)) $($_.Length)" }
 
       # 断言模板已复制进每次启动的数据目录且未被改写：app-preferences.settings 的 shared.onboardingShown 必须为 1（程序是否读到它，看契约与冒烟里有无 BUSY(modal_open)）。
+      # 另外至少有一个保留目录含 shared.rendering.lightPitchCorrection 且为 0（效果场景的实例）。局限：无法区分哪个保留目录属于
+      # 效果场景，所以只核对「至少一个」。
       - name: Assert the onboarding template was copied into every kept data directory unmodified
         id: template
         if: ${{ !cancelled() }}
@@ -325,6 +344,9 @@ jobs:
           $bad = @($files | Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -notmatch '<VALUE\s+name="shared\.onboardingShown"\s+val="1"' })
           foreach ($f in $files) { Write-Host "preferences: $($f.FullName.Substring($env:E2E_KEEP.Length)) onboardingShown=$(if ($bad.FullName -contains $f.FullName) { 'missing or 0' } else { '1' })" }
           if ($bad.Count) { throw "onboarding template was not copied unmodified: shared.onboardingShown is not 1 in $($bad.Count) kept data directories" }
+          $hybridOff = @($files | Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -match '<VALUE\s+name="shared\.rendering\.lightPitchCorrection"\s+val="0"' })
+          Write-Host "kept data directories with lightPitchCorrection=0 (effects scenario): $($hybridOff.Count)"
+          if ($hybridOff.Count -eq 0) { throw "effects template not applied: no kept data directory has shared.rendering.lightPitchCorrection=0" }
 
       - name: Summary (PASS / FAIL / SKIP / FLAKY-SKIP, backend, timings)
         id: summary

@@ -922,6 +922,7 @@ private:
             }
             return readiness;
         }
+        progress.stuckSince.reset();
         if (stats.failed > 0) {
             if (progress.renderRetried) {
                 readiness.state = Readiness::State::Fail;

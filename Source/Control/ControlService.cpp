@@ -4,6 +4,7 @@
 #include "ControlDispatcher.h"
 #include "ControlJobs.h"
 #include "ControlServer.h"
+#include "Edit/ControlOriginAction.h"
 
 #include "PluginProcessor.h"
 #include "Utils/AppLogger.h"
@@ -163,6 +164,9 @@ bool ControlService::startListening()
     // The jobs live as long as the dispatcher can reach them; stop() stops them before the listener.
     auto jobs = std::make_shared<ControlJobs>(config.limits);
     setup.jobs = jobs;
+    // The undo entries the API records keep it alive beyond the service (OpenTune's UndoManager outlives it).
+    history_ = std::make_shared<ControlHistory>();
+    setup.history = history_;
     auto dispatcher = std::make_shared<ControlDispatcher>(std::move(setup));
     config.handler = dispatcher;
     auto gate = logGate_;

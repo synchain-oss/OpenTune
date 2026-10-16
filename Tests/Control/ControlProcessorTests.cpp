@@ -220,9 +220,10 @@ void scenarioStartAndHello()
         CONTROL_CHECK(memberOf(*hello, "serverProof").text() == serverProof);
         CONTROL_CHECK(memberOf(*hello, "pid").asDouble() == static_cast<double>(controlCurrentProcessId()));
         CONTROL_CHECK(memberOf(*hello, "appVersion").text() == ControlService::buildIdentity().appVersion);
-        // session.v1 and the capabilities of the methods the dispatcher implements.
+        // session.v1 and the capabilities of the methods the dispatcher implements, without the incomplete
+        // edit.v1.
         CONTROL_CHECK(toJsonString(memberOf(*hello, "capabilities"))
-                      == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1"])");
+                      == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","history.v1"])");
     }
     // The runtime was initialised before the listener started: the logger writes under the data dir.
     checkLogInsideDataDirectory();
@@ -539,6 +540,11 @@ const Scenario kScenarios[] = {
     {"Export", scenarioExport, false},
     {"ExportFailures", scenarioExportFailures, false},
     {"ExportVectors", scenarioExportVectors, false},
+    {"Undo", scenarioUndo, false},
+    {"SetKey", scenarioSetKey, false},
+    {"AutoTune", scenarioAutoTune, false},
+    {"IncompleteCapability", scenarioIncompleteCapability, false},
+    {"EditVectors", scenarioEditVectors, false},
 };
 
 int runScenario(const Scenario& scenario)

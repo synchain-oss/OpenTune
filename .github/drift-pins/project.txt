@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# group: project
+# pinned-at: upstream/20261008-addb4f4
+# ported-to: Source/Control/Ops/AppReadOps.cpp
+#
+# Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
+Source/Utils/ProjectSession.cpp	ProjectSession::getRecentProjects	L836-L845	fn-v1	50a8852a690ecf6acf066f41a464ea6fb0aa067e9cb687b5fb88c9f220d6f7e9

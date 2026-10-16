@@ -1,5 +1,5 @@
 {
-  "comment": "Pinned official OpenTune Windows installer used by the e2e-windows workflow and the side-car smoke test of prerelease.yml (installed on the CI runner only, never on a developer machine). The installer sha256 equals the GitHub release asset digest. Model hashes are the git-lfs object ids of the same files in the source tree; the first green run confirms they match what the installer ships. The installer is an Inno Setup program and puts the models in the shared folder below, not in the chosen install directory. olderInstallers lists older official releases that only the side-car smoke test installs (the minimum official version the test build supports, minOfficialVersion in .github/release/release.json); each has the fields of installer, and its models are checked against the same list.",
+  "comment": "Pinned official OpenTune Windows installer used by the e2e-windows workflow and the side-car smoke test of prerelease.yml (installed on the CI runner only, never on a developer machine). The installer sha256 equals the GitHub release asset digest. Model hashes are the git-lfs object ids of the same files in the source tree; the first green run confirms they match what the installer ships. The installer is an Inno Setup program and puts the models in the shared folder below, not in the chosen install directory. olderInstallers lists older official releases that only the side-car smoke test installs (the minimum official version the test build supports, minOfficialVersion in .github/release/release.json); each has the fields of installer, and its models are checked against the same list. An installer entry may set its own modelsDir, where {app} is the install folder: official 1.7.9 installs the models into {app}\\models, 1.8.1 into the shared folder.",
   "installer": {
     "version": "1.8.1",
     "release": "https://github.com/YuFeng926/OpenTune/releases/tag/OPTV1.8.1",
@@ -15,7 +15,8 @@
       "url": "https://github.com/YuFeng926/OpenTune/releases/download/OpenTuneV1.7.9/OpenTune-1.7.9-Windows-x64-Setup.exe",
       "sha256": "4c80a04aa8d17340dc914916c16b62517fcb7acc256f8fe845f5ce71f1cc26d6",
       "size": 238377440,
-      "silentArgs": ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]
+      "silentArgs": ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"],
+      "modelsDir": "{app}\\models"
     }
   ],
   "modelsDir": "%ProgramData%\\OpenTune\\Models",

@@ -15,8 +15,9 @@ OpenTune {{APP_VERSION}}（含本机控制接口）非官方测试版 {{BUILD_LA
 - 从 {{OFFICIAL_RELEASES_URL}}
   安装官方 OpenTune {{MIN_OFFICIAL_VERSION}} 或更新版本，选择为本机所有用户安装，
   使用默认位置（C:\Program Files\OpenTune）。
-- 本压缩包不含任何模型权重。本测试版使用官方安装程序放在共享文件夹
-  C:\ProgramData\OpenTune\Models 里的模型。没有这些模型时，音高检测、音符生成与渲染都无法使用。
+- 本压缩包不含任何模型权重。本测试版使用该官方安装中的模型。官方安装程序把模型放在共享文件夹
+  C:\ProgramData\OpenTune\Models（OpenTune 1.8.1），或 C:\Program Files\OpenTune\models
+  （OpenTune 1.7.9）。没有这些模型时，音高检测、音符生成与渲染都无法使用。
 
 
 2. 校验下载的文件

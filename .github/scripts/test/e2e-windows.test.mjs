@@ -13,6 +13,7 @@ import {
   checkModels,
   hashPrefix,
   pinnedInstaller,
+  pinnedModelsDir,
   scrubDir,
   scrubPath,
   countSmoke,
@@ -346,6 +347,27 @@ describe('pin checks (temp files)', () => {
     assert.equal(pinnedInstaller(pin, '1.0.0'), null);
     assert.equal(pinnedInstaller({ installer: { version: '1.8.1' } }, '1.7.9'), null);
     assert.match(checkInstaller(pin, path.join(tmp, 'nope.exe'), '1.0.0')[0], /no pinned installer for version 1\.0\.0/);
+  });
+
+  test('pinnedModelsDir: the entry\'s own modelsDir with {app}, else the top-level one with %VAR%', () => {
+    const pin = { modelsDir: '%ProgramData%\\OpenTune\\Models', installer: { version: '1.8.1' }, olderInstallers: [{ version: '1.7.9', modelsDir: '{app}\\models' }] };
+    const env = { ProgramData: 'C:\\ProgramData' };
+    assert.equal(pinnedModelsDir(pin, '1.8.1', { appDir: 'C:\\Program Files\\OpenTune', env }), 'C:\\ProgramData\\OpenTune\\Models');
+    assert.equal(pinnedModelsDir(pin, '1.7.9', { appDir: 'C:\\Program Files\\OpenTune\\', env }), 'C:\\Program Files\\OpenTune\\models');
+    assert.equal(pinnedModelsDir(pin, '1.0.0', { env }), null);
+    assert.equal(pinnedModelsDir(pin, undefined, { env: {} }), '%ProgramData%\\OpenTune\\Models', 'an unknown variable stays as written');
+    const pinFile = path.join(tmp, 'models-dir-pin.json');
+    fs.writeFileSync(pinFile, JSON.stringify(pin));
+    const r = spawnSync(process.execPath, [path.join(SCRIPTS, 'e2e-windows.mjs'), 'models-dir', '--pin', pinFile, '--version', '1.7.9', '--app', 'D:\\x\\official'], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(r.stdout.trim(), 'D:\\x\\official\\models');
+  });
+
+  test('the real pin: 1.8.1 uses the shared folder, 1.7.9 the install folder', () => {
+    const real = JSON.parse(fs.readFileSync(PIN_FILE, 'utf8'));
+    const env = { ProgramData: 'C:\\ProgramData' };
+    assert.equal(pinnedModelsDir(real, real.installer.version, { appDir: 'C:\\Program Files\\OpenTune', env }), MODELS);
+    assert.equal(pinnedModelsDir(real, '1.7.9', { appDir: 'C:\\Program Files\\OpenTune', env }), 'C:\\Program Files\\OpenTune\\models');
   });
 
   test('CLI: check-installer and check-models ::error:: lines show both hash prefixes, not <redacted-hex>', () => {

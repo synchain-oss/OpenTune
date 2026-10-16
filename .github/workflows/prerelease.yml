@@ -172,7 +172,7 @@ jobs:
   #      或 /DIR= runner 临时目录（官方安装包只在 runner 上运行，绝不在开发机上运行）；记录耗时与实际安装位置；核对模型。
   #   2. 解压本次打出的 zip 到 runner 临时目录（不在 Program Files 下），按 SHA256SUMS 与白名单核对。
   #   3. OpenTune MCP Server 的 doctor --json，以及经 MCP 的 opentune_launch（OPENTUNE_MCP_OPENTUNE_PATH = 解压出的 exe）
-  #      启动并导入一段生成的音频：ORT DLL 来自解压目录、modelsDir 是官方共享模型目录、CPU 推理不崩溃。
+  #      启动并导入一段生成的音频：ORT DLL 来自解压目录、modelsDir 是官方安装的模型目录、CPU 推理不崩溃。
   #   4. 按 INSTALL 第 4 步从官方安装复制 D3D12Core.dll：哈希一致、没有 SDKLayers；再跑 doctor 与一次启动
   #      （runner 没有 GPU 时 DirectML 一项记 FLAKY-SKIP）。
   #   5. 对解压出的 exe 跑 MCP 仓库的契约向量与冒烟场景（与 e2e-windows 同样的脚本与首次引导模板），检查日志里的模型目录。
@@ -228,7 +228,6 @@ jobs:
             "SC_PIN=$env:GITHUB_WORKSPACE\.github\e2e\official-install.json"
             "SC_SCRIPT=$env:GITHUB_WORKSPACE\.github\scripts\sidecar-smoke.mjs"
             "E2E_SCRIPT=$env:GITHUB_WORKSPACE\.github\scripts\e2e-windows.mjs"
-            "SC_MODELS=$env:ProgramData\OpenTune\Models"
           ) >> $env:GITHUB_ENV
 
       - name: Download the package of this run
@@ -260,6 +259,8 @@ jobs:
           }
 
       # 安装位置取安装程序写下的卸载项（InstallLocation），与期望位置比对：默认目录是 %ProgramFiles%\OpenTune。
+      # 模型目录按钉版文件里这个版本的 modelsDir（实测：1.8.1 放在共享的 %ProgramData%\OpenTune\Models，
+      # 1.7.9 放在安装目录的 models\），之后的模型核对、启动日志与日志检查都按它比对。
       - name: Install the official OpenTune silently (default folder, or /DIR= a runner temp folder)
         run: |
           $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -278,8 +279,12 @@ jobs:
           $entry = @(Get-ItemProperty -Path $keys -ErrorAction SilentlyContinue | Where-Object { "$($_.DisplayName)" -like 'OpenTune*' }) | Select-Object -First 1
           $dir = if ($entry -and $entry.InstallLocation) { "$($entry.InstallLocation)".TrimEnd('\') } else { '' }
           Write-Host "uninstall entry: $($entry.PSChildName); DisplayName $($entry.DisplayName); DisplayVersion $($entry.DisplayVersion); InstallLocation $dir"
+          $models = node $env:E2E_SCRIPT models-dir --pin $env:SC_PIN --version $env:OT_VERSION "--app=$dir"
+          if ($LASTEXITCODE -ne 0) { throw "no models folder for OpenTune $env:OT_VERSION in official-install.json" }
+          Write-Host "models folder of this version: $models"
           "SC_OFFICIAL=$dir" >> $env:GITHUB_ENV
-          node $env:SC_SCRIPT install --steps $env:SC_STEPS "--dir=$dir" --expect-dir $expect --models-dir $env:SC_MODELS `
+          "SC_MODELS=$models" >> $env:GITHUB_ENV
+          node $env:SC_SCRIPT install --steps $env:SC_STEPS "--dir=$dir" --expect-dir $expect --models-dir $models `
             --location $env:OT_LOCATION --version $env:OT_VERSION "--registry-version=$($entry.DisplayVersion)" --seconds $seconds `
             --out "$env:SC_OUT\official-install.json"
           if ($LASTEXITCODE -ne 0) { throw "the official installation is not where or what it should be" }

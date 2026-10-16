@@ -4,7 +4,7 @@
 //
 // sidecar-smoke helper (prerelease.yml, job sidecar-smoke): checks that the unofficial test build works
 // when it is extracted to a folder of its own on a machine with official OpenTune installed (the
-// "side-car" set-up of INSTALL.txt): models from the official shared folder, the ONNX Runtime DLL from
+// "side-car" set-up of INSTALL.txt): models from the official installation, the ONNX Runtime DLL from
 // the extracted folder, CPU inference without D3D12Core.dll, and the one-time D3D12 copy. Each command
 // appends rows {group, name, result, seconds, note} to the steps file; `summary` renders them. Results
 // are PASS, FAIL, SKIP (a check the MCP doctor does not implement yet) and FLAKY-SKIP (a known
@@ -95,7 +95,8 @@ export function inspectInstall({ dir, expectDir, modelsDir, location, version, r
   rows.push(row('install', '官方安装里有 D3D12\\D3D12Core.dll', hasCore ? 'PASS' : 'FAIL', `D3D12 文件夹：${info.d3d12Files.join(', ') || '（不存在）'}`));
   info.installDirHasModels = fs.existsSync(path.join(dir, 'models'));
   const modelsOk = Boolean(modelsDir) && fs.existsSync(modelsDir) && fs.statSync(modelsDir).isDirectory();
-  rows.push(row('install', '模型装在共享目录（不在安装目录里）', modelsOk ? 'PASS' : 'FAIL', `${modelsDir}${modelsOk ? ' 存在' : ' 不存在'}；安装目录下${info.installDirHasModels ? '有' : '没有'} models\\`));
+  const kind = isUnder(modelsDir, dir) ? '安装目录里' : '共享目录';
+  rows.push(row('install', `模型在这个版本的安装程序放置的目录（${kind}）`, modelsOk ? 'PASS' : 'FAIL', `${modelsDir}${modelsOk ? ' 存在' : ' 不存在'}；安装目录下${info.installDirHasModels ? '有' : '没有'} models\\`));
   return { rows, info };
 }
 
@@ -241,7 +242,7 @@ export function evaluateLaunch({ phase, facts, log, sidecarDir, officialDir, mod
     ortNote = rt.ortDll;
   }
   rows.push(row(group, `加载的 ORT DLL 来自 side-car 目录，不是官方安装目录${tag}`, ortResult, ortNote));
-  rows.push(row(group, `日志里的 modelsDir 是官方共享模型目录${tag}`, rt && sameDir(rt.modelsDir, modelsDir) ? 'PASS' : 'FAIL', rt ? `modelsDir=${rt.modelsDir}` : '日志里没有 modelsDir'));
+  rows.push(row(group, `日志里的 modelsDir 是官方安装的模型目录${tag}`, rt && sameDir(rt.modelsDir, modelsDir) ? 'PASS' : 'FAIL', rt ? `modelsDir=${rt.modelsDir}` : '日志里没有 modelsDir'));
 
   const last = log.loads.at(-1) ?? null;
   const inferOk = Boolean(last) && facts.aliveAfter === true && facts.status === 'READY';

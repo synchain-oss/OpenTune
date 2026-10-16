@@ -17,9 +17,11 @@ you extract the package to.
   {{OFFICIAL_RELEASES_URL}}
   for all users of the computer, in the default location
   (C:\Program Files\OpenTune).
-- This package contains no model weights. This build uses the models that the
-  official installer puts in the shared folder C:\ProgramData\OpenTune\Models.
-  Without them, pitch detection, note generation and rendering do not work.
+- This package contains no model weights. This build uses the models of that
+  installation. The official installer puts them in the shared folder
+  C:\ProgramData\OpenTune\Models (OpenTune 1.8.1) or in
+  C:\Program Files\OpenTune\models (OpenTune 1.7.9). Without them, pitch
+  detection, note generation and rendering do not work.
 
 
 2. Check the download

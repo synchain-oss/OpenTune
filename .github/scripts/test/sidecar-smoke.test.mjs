@@ -71,6 +71,15 @@ describe('inspectInstall', () => {
     assert.match(rows[0].note, /18\.3 秒/);
     assert.deepEqual(info.d3d12Files, ['D3D12Core.dll', 'D3D12SDKLayers.dll']);
     assert.equal(info.installDirHasModels, false);
+    assert.match(rows[2].name, /共享目录/);
+  });
+
+  test('an older installer that puts the models into the install folder passes with that folder', () => {
+    const dir = make('inst-179', { models: true });
+    const { rows, info } = inspectInstall({ dir, expectDir: dir, modelsDir: path.join(dir, 'models'), location: 'default', version: '1.7.9', registryVersion: '1.7.9' });
+    assert.deepEqual(results(rows), ['PASS', 'PASS', 'PASS']);
+    assert.match(rows[2].name, /安装目录里/);
+    assert.equal(info.installDirHasModels, true);
   });
 
   test('fails for another folder, another version, no uninstall entry, no D3D12Core.dll or no shared models', () => {

@@ -8,6 +8,8 @@
 //   check-installer --pin <json> --file <Setup.exe> [--version <x.y.z>]
 //                                                             sha256 and size of the downloaded installer; --version picks
 //                                                             one of olderInstallers[] instead of the main installer
+//   models-dir      --pin <json> [--version <x.y.z>] [--app <install dir>]
+//                                                             print where that installer puts the models ({app}, %VAR% expanded)
 //   check-models    --pin <json> --dir <models dir>           every pinned model exists with the pinned sha256
 //                   (the ::error:: lines of these two show the first 12 hex digits of each hash: a full hash would
 //                   be redacted like a token, and both sides would read <redacted-hex>)
@@ -65,6 +67,18 @@ export const hashPrefix = (hex) => `${String(hex).slice(0, 12)}...`;
 export function pinnedInstaller(pin, version) {
   if (!version || pin.installer?.version === version) return pin.installer ?? null;
   return (pin.olderInstallers ?? []).find((i) => i?.version === version) ?? null;
+}
+
+/**
+ * Where the pinned installer of a version puts the models: its own `modelsDir`, else the top-level one.
+ * `{app}` stands for the install folder (official 1.7.9 installs the models there; 1.8.1 uses the shared
+ * %ProgramData% folder), `%NAME%` for an environment variable. Null when the version is not pinned.
+ */
+export function pinnedModelsDir(pin, version, { appDir = '', env = process.env } = {}) {
+  const inst = pinnedInstaller(pin, version);
+  if (!inst) return null;
+  const raw = String(inst.modelsDir ?? pin.modelsDir ?? '');
+  return raw.replace(/\{app\}/gi, appDir.replace(/[\\/]+$/, '')).replace(/%([A-Za-z0-9_()]+)%/g, (m, name) => env[name] ?? m);
 }
 
 /** Problems (strings) with the installer file against the pin; empty when it matches. */
@@ -334,6 +348,7 @@ const CLI_SPEC = {
   pin: 'string',
   file: 'string',
   version: 'string',
+  app: 'string',
   dir: 'string',
   'log-dir': 'string',
   'data-root': 'string',
@@ -372,6 +387,16 @@ function main(argv) {
       need('pin', 'file');
       report(checkInstaller(readJson(opts.pin), opts.file, opts.version), 'installer sha256 and size match the pin');
       break;
+    case 'models-dir': {
+      need('pin');
+      const dir = pinnedModelsDir(readJson(opts.pin), opts.version, { appDir: opts.app ?? '' });
+      if (!dir) {
+        process.stdout.write(`::error::no pinned installer for version ${opts.version}\n`);
+        process.exit(1);
+      }
+      process.stdout.write(`${dir}\n`);
+      break;
+    }
     case 'check-models': {
       need('pin', 'dir');
       const pin = readJson(opts.pin);
@@ -426,7 +451,7 @@ function main(argv) {
       break;
     }
     default:
-      usage('unknown command (check-installer | check-models | check-log | scrub | record | summary)');
+      usage('unknown command (check-installer | models-dir | check-models | check-log | scrub | record | summary)');
   }
 }
 

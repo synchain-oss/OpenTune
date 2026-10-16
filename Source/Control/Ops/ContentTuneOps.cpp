@@ -10,6 +10,7 @@
 #include "Control/ControlUiBridge.h"
 #include "Control/Edit/ContentEditTransaction.h"
 #include "Control/Edit/ControlOriginAction.h"
+#include "Control/Edit/NoteCorrection.h"
 #include "PluginProcessor.h"
 #include "Utils/LegacyNoteGenerator.h"
 #include "Utils/NoteGeneratorTypes.h"
@@ -122,8 +123,8 @@ Result<JsonValue> runSetKey(ControlOpContext& context, const SetKeyParams& param
         return *busy;
     if (auto notReady = controlCheckContentReady(context, ref))
         return *notReady;
-    if (auto conflict = controlCheckExpectedTokens(controlContentVersions(ref.contentId, *ref.snapshot), std::nullopt,
-                                                   params.expectedKeyRevision))
+    if (auto conflict = controlCheckExpectedTokens(controlContentVersions(context, ref.contentId, *ref.snapshot),
+                                                   std::nullopt, params.expectedKeyRevision))
         return *conflict;
     auto history = historyOf(context);
     if (!history.ok())
@@ -170,7 +171,7 @@ Result<JsonValue> runSetKey(ControlOpContext& context, const SetKeyParams& param
         revertParams.appendMember("contentId", JsonValue::string(ref.contentId));
         revertParams.appendMember("key", keyInputJson(previous));
         revertParams.appendMember("expectedKeyRevision",
-                                  JsonValue::string(controlContentVersions(ref.contentId, *now).key));
+                                  JsonValue::string(controlContentVersions(context, ref.contentId, *now).key));
         revert = controlRevertRecipe("content.setKey", std::move(revertParams));
     }
     if (keyShownInUi(context, ref.key)) {
@@ -474,32 +475,20 @@ std::pair<std::size_t, std::size_t> listNotes(ControlWriteEnvelope& envelope, co
             created.size() > kMaxListedEntries ? created.size() - kMaxListedEntries : 0};
 }
 
-/** The reRenderQueued side effect that a commit of the prediction would report: {contentIds: [contentId],
-    revert: null}, the same form as controlAddReRenderQueued() gives it after a commit (PROTOCOL.md section
-    14.6), since a commit of the AUTO commands advances the notes revision of the content. */
-void addPredictedReRenderQueued(ControlWriteEnvelope& envelope, const std::string& contentId)
-{
-    auto effect = JsonValue::object();
-    auto ids = JsonValue::array();
-    ids.append(JsonValue::string(contentId));
-    effect.appendMember("contentIds", std::move(ids));
-    effect.appendMember("revert", JsonValue());
-    envelope.addSideEffect("reRenderQueued", std::move(effect));
-}
-
-/** The members of the result besides the envelope (methods/content.autoTune.schema.json result). */
+/** The members of the result besides the envelope (methods/content.autoTune.schema.json result). omitted is
+    {removed, created}; generator is null for snapNotes, which takes no generator params. */
 void appendAutoTuneMembers(JsonValue& result, TuneMode mode, const std::optional<DetectedKey>& keyUsed,
-                           const NoteGeneratorParams& generator, std::size_t before, std::size_t after,
-                           std::pair<std::size_t, std::size_t> omitted)
+                           const std::optional<NoteGeneratorParams>& generator, std::size_t before, std::size_t after,
+                           std::pair<std::size_t, std::size_t> omitted, std::size_t omittedChanges = 0)
 {
     auto omittedCount = JsonValue::object();
-    omittedCount.appendMember("changes", JsonValue::integer(0));
+    omittedCount.appendMember("changes", JsonValue::integer(static_cast<std::int64_t>(omittedChanges)));
     omittedCount.appendMember("created", JsonValue::integer(static_cast<std::int64_t>(omitted.second)));
     omittedCount.appendMember("removed", JsonValue::integer(static_cast<std::int64_t>(omitted.first)));
     result.appendMember("omittedCount", std::move(omittedCount));
     result.appendMember("mode", JsonValue::string(modeName(mode)));
     result.appendMember("keyUsed", keyUsed ? keyInputJson(*keyUsed) : JsonValue());
-    result.appendMember("paramsUsed", paramsUsedJson(generator));
+    result.appendMember("paramsUsed", generator ? paramsUsedJson(*generator) : JsonValue());
     auto noteCount = JsonValue::object();
     noteCount.appendMember("before", JsonValue::integer(static_cast<std::int64_t>(before)));
     noteCount.appendMember("after", JsonValue::integer(static_cast<std::int64_t>(after)));
@@ -606,7 +595,7 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
         envelope.setUndoable(undoId, description.toStdString(), names);
         controlMarkDirty(context);
         if (const auto now = controlLiveSnapshot(context, ref.key))
-            revisionAfter = controlContentVersions(ref.contentId, *now).revision();
+            revisionAfter = controlContentVersions(context, ref.contentId, *now).revision();
     }
     const auto omitted = listNotes(envelope, ref.contentId, beforeNotes, versions.revision(), afterNotes, revisionAfter,
                                    removed, created);
@@ -618,7 +607,7 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
     JsonValue result;
     if (params.dryRun) {
         if (!committed.empty())
-            addPredictedReRenderQueued(envelope, ref.contentId);
+            controlAddPredictedReRenderQueued(envelope, ref.contentId);
         result = envelope.predicted(context);
     } else {
         controlAddReRenderQueued(envelope, beforeWorld, controlCaptureWorldVersions(context));
@@ -657,7 +646,7 @@ Result<JsonValue> runNotesOnly(ControlOpContext& context, const AutoTuneParams& 
         history.value()->onChangeWithoutEntry(processor.getUndoManager(), ref.key, ControlContentAspect::NotesAndPitch);
         if (const auto now = controlLiveSnapshot(context, ref.key)) {
             afterNotes = now->notes;
-            revisionAfter = controlContentVersions(ref.contentId, *now).revision();
+            revisionAfter = controlContentVersions(context, ref.contentId, *now).revision();
         }
     }
     // generateNotesOnlyByContentKey() replaces the notes of a range that covers the whole content: every note
@@ -677,7 +666,7 @@ Result<JsonValue> runNotesOnly(ControlOpContext& context, const AutoTuneParams& 
         // The topology commit of generateNotesOnlyByContentKey() always advances the notes revision, so the
         // commit reports the content in reRenderQueued (PROTOCOL.md section 14.4 rule 2: the prediction lists
         // the side effects the commit would have).
-        addPredictedReRenderQueued(envelope, ref.contentId);
+        controlAddPredictedReRenderQueued(envelope, ref.contentId);
         result = envelope.predicted(context);
     } else {
         // No request can bring the previous notes back.
@@ -691,13 +680,109 @@ Result<JsonValue> runNotesOnly(ControlOpContext& context, const AutoTuneParams& 
     return result;
 }
 
+/**
+ * Mode snapNotes: SNAP, the AUTO button in the openDyne scheme (PianoRollComponent::applyAutoSnapToAllNotes(),
+ * ported in controlPlanAutoSnap()), with the explicit key. Without ranges it snaps every note, as the button does
+ * without a note selection; with ranges, each range is one pass over the notes that overlap it (resolved to frames
+ * as for regenerate), as the button does with those notes selected. Every pass that changes something is one
+ * commit and one PianoRollEditAction ("音高吸附"); the call is one ControlOriginAction.
+ */
+Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& params, const ControlContentRef& ref,
+                               const ControlContentVersions& versions, const DetectedKey& key)
+{
+    auto history = historyOf(context);
+    if (!history.ok())
+        return history.error();
+    auto& processor = context.processor();
+    // makeScaleSnapConfig(); chromatic (no scale snap) quantizes to semitones, as the button's ScaleSnapConfig{}.
+    const auto scaleSnap = makeScaleSnapConfig(key).value_or(ScaleSnapConfig{});
+    const auto& curve = *ref.snapshot->pitchCurve;
+    const double secondsPerFrame = curve.getHopSize() / curve.getSampleRate();
+    const auto beforeNotes = ref.snapshot->notes;
+    // The passes: every note, or per range the notes that overlap its frames.
+    std::vector<std::optional<std::vector<std::size_t>>> passes;
+    if (params.ranges.empty()) {
+        passes.emplace_back(std::nullopt);
+    } else {
+        for (const auto& range : frameRanges(curve, params)) {
+            const double startSec = range.startFrame * secondsPerFrame;
+            const double endSec = range.endFrameExclusive * secondsPerFrame;
+            std::vector<std::size_t> targets;
+            for (std::size_t i = 0; i < beforeNotes.size(); ++i)
+                if (beforeNotes[i].endTime > startSec && beforeNotes[i].startTime < endSec)
+                    targets.push_back(i);
+            passes.emplace_back(std::move(targets));
+        }
+    }
+    const auto beforeWorld = controlCaptureWorldVersions(context);
+    ControlWriteEnvelope envelope(context);
+    envelope.touchContent(ref.contentId);
+    const juce::String description = TRANS("音高吸附");
+    ContentEditTransaction transaction(processor, ref.key);
+    auto planning = std::make_shared<EditableContentSnapshot>(*ref.snapshot);
+    std::size_t commits = 0;
+    std::optional<Error> failure;
+    for (const auto& targets : passes) {
+        // A prediction plans every pass on the notes it predicted so far; a commit on the content as it is now.
+        if (!params.dryRun)
+            if (const auto live = controlLiveSnapshot(context, ref.key))
+                planning = std::make_shared<EditableContentSnapshot>(*live);
+        const auto plan = controlPlanAutoSnap(*planning, targets, scaleSnap);
+        if (plan.status != ControlAutoSnapPlan::Status::Commit)
+            continue;
+        if (params.dryRun) {
+            planning->notes = plan.notes;
+        } else if (!controlCommitCorrection(processor, transaction, ref.key, plan.commit, description)) {
+            const char* detail = "OpenTune did not commit the snap";
+            if (commits == 0)
+                return controlOpError("INTERNAL", "", detail);
+            failure = controlOpErrorAfterChange("INTERNAL", "", detail);
+            break;
+        }
+        ++commits;
+    }
+
+    std::vector<Note> afterNotes = planning->notes;
+    std::string revisionAfter = versions.revision();
+    auto inner = transaction.takeActions();
+    if (!params.dryRun && !inner.empty()) {
+        auto& manager = processor.getUndoManager();
+        const auto undoId = history.value()->nextUndoId(context.instanceShort());
+        auto action = std::make_unique<ControlOriginAction>(history.value(), undoId, description, std::move(inner));
+        const auto names = action->innerActionNames();
+        // UndoManager::addAction(), as the piano roll pushes its entry; it discards the redo history.
+        manager.addAction(std::move(action));
+        envelope.setUndoable(undoId, description.toStdString(), names);
+        // PluginEditor::autoTuneRequested() marks the project as changed after the button's SNAP.
+        controlMarkDirty(context);
+    }
+    if (failure)
+        return *failure;
+    if (!params.dryRun)
+        if (const auto now = controlLiveSnapshot(context, ref.key)) {
+            if (now->notes.size() == beforeNotes.size())
+                afterNotes = now->notes;
+            revisionAfter = controlContentVersions(context, ref.contentId, *now).revision();
+        }
+    const auto omittedChanges =
+        controlListNoteChanges(envelope, ref.contentId, beforeNotes, afterNotes, revisionAfter, kMaxListedEntries);
+    JsonValue result;
+    if (params.dryRun) {
+        if (commits != 0)
+            controlAddPredictedReRenderQueued(envelope, ref.contentId);
+        result = envelope.predicted(context);
+    } else {
+        controlAddReRenderQueued(envelope, beforeWorld, controlCaptureWorldVersions(context));
+        result = envelope.committed(context);
+    }
+    appendAutoTuneMembers(result, TuneMode::SnapNotes, key, std::nullopt, beforeNotes.size(), afterNotes.size(), {0, 0},
+                          omittedChanges);
+    return result;
+}
+
 Result<JsonValue> runAutoTune(ControlOpContext& context, const AutoTuneParams& params)
 {
-    // Modes this build does not implement: SNAP follows with the note edits, reference alignment with the
-    // reference methods (x-otcp.valueCapabilities: reference.v1).
-    if (params.mode == TuneMode::SnapNotes)
-        return controlOpError("UNSUPPORTED", "capability_missing",
-                              "content.autoTune mode snapNotes is not implemented by this build (edit.v1)");
+    // Reference alignment comes with the reference methods (x-otcp.valueCapabilities: reference.v1).
     if (params.mode == TuneMode::Reference)
         return controlOpError("UNSUPPORTED", "capability_missing",
                               "content.autoTune mode reference needs the capability reference.v1");
@@ -709,7 +794,7 @@ Result<JsonValue> runAutoTune(ControlOpContext& context, const AutoTuneParams& p
         return *busy;
     if (auto notReady = controlCheckContentReady(context, ref))
         return *notReady;
-    const auto versions = controlContentVersions(ref.contentId, *ref.snapshot);
+    const auto versions = controlContentVersions(context, ref.contentId, *ref.snapshot);
     if (auto conflict = controlCheckExpectedTokens(versions, params.expectedRevision, params.expectedKeyRevision))
         return *conflict;
     if (params.mode == TuneMode::NotesOnly)
@@ -723,6 +808,8 @@ Result<JsonValue> runAutoTune(ControlOpContext& context, const AutoTuneParams& p
                               "key clipKey names the content's own key, but the content has no key; give the key "
                               "explicitly");
     DetectedKey key = params.key.value_or(ref.snapshot->detectedKey);
+    if (params.mode == TuneMode::SnapNotes)
+        return runSnapNotes(context, params, ref, versions, key);
     return runRegenerate(context, params, ref, versions, key);
 }
 

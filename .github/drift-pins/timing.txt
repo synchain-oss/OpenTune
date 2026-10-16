@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# group: timing
+# pinned-at: upstream/20261008-addb4f4
+# ported-to: Source/Control/Edit/TimeGridOps.cpp
+# ported-to: Source/Control/Edit/TimeGridOps.h
+# ported-to: Source/Control/Ops/TimingOps.cpp
+#
+# Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
+Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	PianoRollToolHandler::handleTimeToolMouseDrag	L3462-L3565	fn-v1	380d9b4473071ad6956f47007d4be9e1f503d56e6c29ee95fab7d9301dfcd374
+Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	PianoRollToolHandler::handleTimeToolMouseUp	L3567-L3593	fn-v1	86eb0526c37cf75f2e231ad0486b198a6162600d736501832141de49a0ee27a4
+Source/Standalone/UI/PianoRollComponent.cpp	toolCtx.commitTimeGrid	L293-L315	stmt-v1	b6a2b19747de4b0620767daed0488f7ae9814b8ad1b3bb2cc9182fc33290e44a
+Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::setCurrentTool	L3902-L4017	fn-v1	5dea5c9a87b45ffac8a47828b080f3de98de9f7001a9884f839d180a81616f45
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::ensureTimeToolAnchorSeed	L4219-L4325	fn-v1	f5b0de0f5f5e478beacfc4a2b5f2b7dc6a11489861fb191d93afbb2547421c98
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures	L4328-L4483	fn-v1	aad66fcc5ba8434bcb6b52865f0820145b8fb259a62e6b6b4d81902ddb908b92

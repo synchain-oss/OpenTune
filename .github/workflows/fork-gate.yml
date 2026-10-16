@@ -62,6 +62,10 @@ jobs:
           GITLEAKS: ${{ steps.tools.outputs.gitleaks }}
           CLANG_FORMAT: ${{ steps.tools.outputs.clang_format }}
         run: node --test ".github/scripts/test/*.test.mjs"
+      # 镜像锁清单（.github/drift-pins/）、mirror-map.json 与 MIRRORS.md 三处一致。只读工作区文件，不需要 git 历史。
+      # 不一致时输出写明改了哪里、该跑什么（OpenTuneControlMirrorDriftTests --update，再 drift-pins.mjs --write）。
+      - name: Mirror pins agree with mirror-map.json and MIRRORS.md
+        run: node .github/scripts/drift-pins.mjs --check
 
   delta-checks:
     name: delta-checks

@@ -28,6 +28,8 @@
      control API exists.
   6. fork-checks.mjs: identity, attribution and every other delta check (same code as the fork-gate
      workflow); layer from -Layer, PR range from -Base.
+  6b. drift-pins.mjs --check: .github/drift-pins/, Source/Control/mirror-map.json and MIRRORS.md agree
+     (every layer, needs no build).
   7. gitleaks on the delta (commits and files); gitleaks 8.30.1 is fetched and sha256-verified by
      fetch-tool.mjs into -ToolsDir.
   8. Staged state: check-ignored-delta (ignored-path allow-list and path guard on the index).
@@ -542,6 +544,19 @@ try {
     $fc = Invoke-NodeJson $fcArgs
     if ($null -eq $fc.Data) { Add-Row 'fork-checks' 'FAIL' "fork-checks.mjs 运行失败（exit $($fc.Code)）：$($fc.Stderr)" }
     else { Add-CheckRows 'fork-checks' $fc.Data }
+
+    # 6b. mirror pins: .github/drift-pins/, mirror-map.json and MIRRORS.md agree (needs no build)
+    $dpErr = [System.IO.Path]::GetTempFileName()
+    try {
+        $dpOut = (& node (Join-Path $scripts 'drift-pins.mjs') --check 2> $dpErr | Out-String).Trim()
+        $dpCode = $LASTEXITCODE
+        $dpRaw = [string](Get-Content -LiteralPath $dpErr -Raw -ErrorAction SilentlyContinue)
+        $dpText = ($dpRaw -replace '\r?\n', ' ').Trim()
+        if ($dpCode -eq 0) { Add-Row 'drift-pins（镜像锁清单三处一致）' 'PASS' $dpOut }
+        else { Add-Row 'drift-pins（镜像锁清单三处一致）' 'FAIL' "exit $dpCode：$dpText" }
+    } finally {
+        Remove-Item -LiteralPath $dpErr -ErrorAction SilentlyContinue
+    }
 
     # 7. gitleaks
     $gitleaks = Get-PinnedTool 'gitleaks'

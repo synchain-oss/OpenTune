@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "ControlFileIdentity.h"
 
+#include <utility>
+
 #if defined(_WIN32)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -73,6 +75,45 @@ bool sameName(const std::string& a, const std::string& b)
 
 } // namespace
 
+ControlFileIdStatus controlClassifyOsError(unsigned long code) noexcept
+{
+#if defined(_WIN32)
+    switch (code) {
+        case ERROR_FILE_NOT_FOUND:
+        case ERROR_PATH_NOT_FOUND:
+            return ControlFileIdStatus::Missing;
+        case ERROR_NOT_READY:
+        case ERROR_BAD_NETPATH:
+        case ERROR_BAD_NET_NAME:
+        case ERROR_INVALID_DRIVE:
+        case ERROR_NETNAME_DELETED:
+        case ERROR_DEVICE_NOT_CONNECTED:
+        case ERROR_NO_NETWORK:
+        case ERROR_NO_NET_OR_BAD_PATH:
+        case ERROR_NETWORK_UNREACHABLE:
+            return ControlFileIdStatus::Unavailable;
+        default:
+            return ControlFileIdStatus::Failed;
+    }
+#else
+    switch (static_cast<int>(code)) {
+        case ENOENT:
+        case ENOTDIR:
+            return ControlFileIdStatus::Missing;
+        case ENODEV:
+        case ENXIO:
+        case ESTALE:
+        case EHOSTDOWN:
+        case EHOSTUNREACH:
+        case ENETDOWN:
+        case ENETUNREACH:
+            return ControlFileIdStatus::Unavailable;
+        default:
+            return ControlFileIdStatus::Failed;
+    }
+#endif
+}
+
 ControlFileIdStatus controlFileIdentity(const std::string& utf8Path, ControlFileId& out)
 {
     out = ControlFileId{};
@@ -86,9 +127,7 @@ ControlFileIdStatus controlFileIdentity(const std::string& utf8Path, ControlFile
         CreateFileW(wide.c_str(), FILE_READ_ATTRIBUTES, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                     OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
     if (handle == INVALID_HANDLE_VALUE) {
-        const DWORD error = GetLastError();
-        return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ? ControlFileIdStatus::Missing
-                                                                              : ControlFileIdStatus::Failed;
+        return controlClassifyOsError(GetLastError());
     }
     bool found = false;
 #if defined(_WIN32_WINNT) && _WIN32_WINNT >= 0x0602
@@ -118,42 +157,63 @@ ControlFileIdStatus controlFileIdentity(const std::string& utf8Path, ControlFile
     struct stat info
     {};
     if (::stat(utf8Path.c_str(), &info) != 0)
-        return errno == ENOENT || errno == ENOTDIR ? ControlFileIdStatus::Missing : ControlFileIdStatus::Failed;
+        return controlClassifyOsError(static_cast<unsigned long>(errno));
     out.volume = static_cast<std::uint64_t>(info.st_dev);
     out.idLow = static_cast<std::uint64_t>(info.st_ino);
     return ControlFileIdStatus::Found;
 #endif
 }
 
-std::optional<bool> controlSameFile(const std::string& utf8PathA, const std::string& utf8PathB)
+ControlSameFileProbe::ControlSameFileProbe(std::string utf8Target)
+    : target_(std::move(utf8Target))
+    , targetStatus_(controlFileIdentity(target_, targetId_))
 {
-    ControlFileId idA;
-    ControlFileId idB;
-    const auto statusA = controlFileIdentity(utf8PathA, idA);
-    const auto statusB = controlFileIdentity(utf8PathB, idB);
-    if (statusA == ControlFileIdStatus::Failed || statusB == ControlFileIdStatus::Failed)
+}
+
+std::optional<bool> ControlSameFileProbe::sameAs(const std::string& utf8Other, bool unavailableIsDifferent)
+{
+    // The target must be readable whatever the other path is (rule 4).
+    if (targetStatus_ == ControlFileIdStatus::Failed || targetStatus_ == ControlFileIdStatus::Unavailable)
         return std::nullopt;
-    if (statusA == ControlFileIdStatus::Found && statusB == ControlFileIdStatus::Found)
-        return idA == idB;
-    if (statusA != statusB)
+    ControlFileId otherId;
+    const auto otherStatus = controlFileIdentity(utf8Other, otherId);
+    if (otherStatus == ControlFileIdStatus::Unavailable && unavailableIsDifferent)
+        return false;
+    if (otherStatus == ControlFileIdStatus::Failed || otherStatus == ControlFileIdStatus::Unavailable)
+        return std::nullopt;
+    if (targetStatus_ == ControlFileIdStatus::Found && otherStatus == ControlFileIdStatus::Found)
+        return targetId_ == otherId;
+    if (targetStatus_ != otherStatus)
         return false; // an existing file is never the file of a path where nothing exists
     // Neither exists (rule 3): the same file when both parents exist and are the same directory and the
     // last segments are equal.
-    std::string parentA;
-    std::string nameA;
-    std::string parentB;
-    std::string nameB;
-    if (!splitLastSegment(utf8PathA, parentA, nameA) || !splitLastSegment(utf8PathB, parentB, nameB))
+    std::string parentTarget;
+    std::string nameTarget;
+    std::string parentOther;
+    std::string nameOther;
+    if (!splitLastSegment(target_, parentTarget, nameTarget) || !splitLastSegment(utf8Other, parentOther, nameOther))
         return false;
-    ControlFileId parentIdA;
-    ControlFileId parentIdB;
-    const auto parentStatusA = controlFileIdentity(parentA, parentIdA);
-    const auto parentStatusB = controlFileIdentity(parentB, parentIdB);
-    if (parentStatusA == ControlFileIdStatus::Failed || parentStatusB == ControlFileIdStatus::Failed)
+    if (!parentRead_) {
+        parentStatus_ = controlFileIdentity(parentTarget, parentId_);
+        parentRead_ = true;
+    }
+    if (parentStatus_ == ControlFileIdStatus::Failed || parentStatus_ == ControlFileIdStatus::Unavailable)
         return std::nullopt;
-    if (parentStatusA != ControlFileIdStatus::Found || parentStatusB != ControlFileIdStatus::Found)
+    ControlFileId parentIdOther;
+    const auto parentStatusOther = controlFileIdentity(parentOther, parentIdOther);
+    if (parentStatusOther == ControlFileIdStatus::Unavailable && unavailableIsDifferent)
         return false;
-    return parentIdA == parentIdB && sameName(nameA, nameB);
+    if (parentStatusOther == ControlFileIdStatus::Failed || parentStatusOther == ControlFileIdStatus::Unavailable)
+        return std::nullopt;
+    if (parentStatus_ != ControlFileIdStatus::Found || parentStatusOther != ControlFileIdStatus::Found)
+        return false;
+    return parentId_ == parentIdOther && sameName(nameTarget, nameOther);
+}
+
+std::optional<bool> controlSameFile(const std::string& utf8PathA, const std::string& utf8PathB)
+{
+    // Both paths must be readable here: the first is the target of the probe, the second is checked by it.
+    return ControlSameFileProbe(utf8PathA).sameAs(utf8PathB, false);
 }
 
 ControlRenameResult controlRenameFile(const std::string& utf8From, const std::string& utf8To, bool replace)
@@ -177,9 +237,18 @@ ControlRenameResult controlRenameFile(const std::string& utf8From, const std::st
     // otherwise, and the operation must not fall back to a test followed by a rename that replaces.
     if (::link(utf8From.c_str(), utf8To.c_str()) != 0)
         return errno == EEXIST ? ControlRenameResult::TargetExists : ControlRenameResult::Failed;
-    ::unlink(utf8From.c_str());
-    return ControlRenameResult::Done;
+    // The target is in place now. If the source name cannot be removed, the result says so and the caller
+    // removes it again; the export is still a success, because the target holds the data.
+    const int unlinkReturn = ::unlink(utf8From.c_str());
+    return controlRenameAfterLink(unlinkReturn, unlinkReturn == 0 ? 0 : errno);
 #endif
+}
+
+ControlRenameResult controlRenameAfterLink(int unlinkReturn, int unlinkErrno) noexcept
+{
+    constexpr int kAlreadyGone = 2; // ENOENT on every system that has hard links
+    return unlinkReturn == 0 || unlinkErrno == kAlreadyGone ? ControlRenameResult::Done
+                                                            : ControlRenameResult::DoneSourceRemains;
 }
 
 } // namespace OpenTune

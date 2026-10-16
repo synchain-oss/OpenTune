@@ -75,6 +75,12 @@ later part use JUCE and the processor. `cmake/OpenTuneControl.cmake` lists all f
   file, writing an export) runs on a thread that the work owns and joins in its destructor;
   `ControlJobs::stop()` destroys every work on the message thread, so no such thread outlives the
   processor. OpenTune's export cannot be interrupted, so a stop during an export waits for the write.
+  This is a known exception to the bounded joins: the destructor of the export's writer joins a thread
+  that runs OpenTune's own export function, as the editor's export thread is joined. The worst case is
+  the time that the render worker needs to drain the render queue of the whole process (every pending
+  render of every content, `drainRenderWorker`) plus the time to write the file, so it depends on the
+  number and length of the pending renders and on the speed of the disk. Closing the application during
+  an export therefore waits for OpenTune's own export to finish, as it does without the control API.
 - The listener runs one accepting thread and one thread per connection; every network wait is a poll of
   at most 250 ms that also checks the stop flag.
 - Logging goes through `AppLogger` only and never contains the token, the server proof or request

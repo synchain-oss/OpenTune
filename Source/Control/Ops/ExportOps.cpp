@@ -413,8 +413,12 @@ std::vector<std::string> loadedMediaPaths(ControlOpContext& context)
     identity that the check needs cannot be determined; nullopt otherwise. */
 std::optional<ControlJobError> loadedMediaError(const std::vector<std::string>& media, const std::string& target)
 {
+    // The identity of the target is read once. A media file on a volume that is not available (a removed
+    // card, a disconnected share) cannot be the target, so it does not stop the export; only an identity
+    // that is unreadable for another reason does.
+    ControlSameFileProbe probe(target);
     for (const auto& path : media) {
-        const auto same = controlSameFile(target, path);
+        const auto same = probe.sameAs(path, true);
         if (!same)
             return ControlJobError{"IO_ERROR", "read_failed",
                                    "the identity of the target or of a loaded media file cannot be determined", false};
@@ -456,6 +460,10 @@ private:
  * exportTrackAudio or exportMasterMixAudio of OpenTuneAudioProcessor, which wait for the render worker
  * (drainRenderWorker) and write 44.1 kHz 32-bit float WAV. Then it reads the header of the file back.
  * The destructor joins the thread; OpenTune's export cannot be interrupted, so that waits for the write.
+ * This is the one known exception to the bounded joins of the shutdown contract (Source/Control/README.md):
+ * the editor's own export thread is joined the same way. The worst case is the time that the render worker
+ * needs to drain the process's whole render queue plus the time to write the file, and it depends on the
+ * number and length of the pending renders and on the speed of the disk.
  */
 class ExportWriter
 {
@@ -843,6 +851,12 @@ private:
             if (auto error = loadedMediaError(media, candidate))
                 return error;
             switch (controlRenameFile(from, candidate, params_.ifExists == IfExists::Overwrite)) {
+                case ControlRenameResult::DoneSourceRemains:
+                    // The target holds the data, so the export succeeded; only the temporary name is left
+                    // over. Remove it again now, and say so in the log if that fails too (no path).
+                    if (!temporary_.deleteFile() && temporary_.exists())
+                        AppLogger::logNoThrow("control API: export.start: the temporary file could not be removed");
+                    [[fallthrough]];
                 case ControlRenameResult::Done:
                     finalPath = candidate;
                     return std::nullopt;

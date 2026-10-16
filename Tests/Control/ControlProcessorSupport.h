@@ -8,14 +8,19 @@
 
 #include "ControlHeadlessSupport.h"
 
+#include "Content/StandaloneContentRepository.h"
 #include "Control/ControlService.h"
+#include "Inference/RenderCache.h"
 #include "PluginProcessor.h"
+#include "Render/ContentRenderService.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -40,6 +45,13 @@ constexpr int kWaiterSettleMs = 2000;
 constexpr int kClientExchangeMs = 15000;
 /** Bound of closing the modal windows a scenario left open, until they are deleted. */
 constexpr int kCloseWindowsMs = 2000;
+/** Bound of the background work a scenario's setup starts (the render of imported clips), and of the messages
+    it posts. Without the models a render fails in well under a second; with them it renders a few seconds of
+    audio. */
+constexpr int kSettleTimeoutMs = 30000;
+/** How long the messages keep being dispatched once the background work is over, before the queue is drained: the
+    render worker posts its failure right after it marks the block, so it is posted by then. */
+constexpr int kSettleGraceMs = 200;
 
 /** A member of an object, or a null value when absent. */
 inline const JsonValue& memberOf(const JsonValue& object, const char* name)
@@ -79,6 +91,47 @@ inline std::optional<JsonValue> authenticate(TestClient& client, int port, const
     if (!parsed.ok || parsed.value.find("result") == nullptr)
         return std::nullopt;
     return *parsed.value.find("result");
+}
+
+/**
+ * Waits until the background work of the processor's contents is over, then dispatches the messages that work
+ * posted, so that a scenario's timed requests do not race with it. Message thread only; returns whether both
+ * happened within kSettleTimeoutMs.
+ *
+ * Importing a clip requests its render (RenderCache::reconcileFullPlanAndRequest). Without the models, as on
+ * the build machines, that render fails, and upstream ProcessRenderRuntime::notifyApplicationRenderFailure()
+ * posts a ConfirmDialogContent::showDiagnostic() dialog to the message thread. Building that window is the one
+ * long message of such a scenario (about 0.4 s with a GPU; longer without one), and a request that waits for the
+ * message thread meanwhile waits as long. The work is over once the render worker has nothing queued or running
+ * and no render cache has a pending or running block; the failure is posted right after its block is marked, so
+ * after kSettleGraceMs more the messages posted until then are dispatched (drainPostedMessages).
+ */
+inline bool settleBackgroundWork(OpenTuneAudioProcessor& processor)
+{
+    auto* service = processor.getContentRenderService();
+    auto* repository = processor.getStandaloneContentRepository();
+    if (service == nullptr || repository == nullptr)
+        return true;
+    const auto started = Clock::now();
+    const bool idle = pumpMessagesUntil(
+        [service, repository] {
+            if (service->renderQueueDepth() != 0 || service->renderInFlight() != 0)
+                return false;
+            for (const auto& key : repository->getAllClips())
+                if (const auto cache = service->getRenderCache(key))
+                    if (cache->getChunkStats().hasActiveWork())
+                        return false;
+            return true;
+        },
+        kSettleTimeoutMs);
+    pumpMessagesFor(kSettleGraceMs);
+    const auto remaining = std::max<long long>(0, kSettleTimeoutMs - millisecondsSince(started));
+    const bool drained = drainPostedMessages(static_cast<int>(remaining));
+    if (!idle || !drained)
+        note("the background work of the scenario's setup did not settle within " + std::to_string(kSettleTimeoutMs)
+             + " ms (render work idle: " + (idle ? "yes" : "no") + ", messages drained: " + (drained ? "yes" : "no")
+             + ")");
+    return idle && drained;
 }
 
 /** Constructs a processor with the API enabled and pumps messages until it listens. */
@@ -170,23 +223,67 @@ public:
         return CONTROL_CHECK(authenticate(client_, service.port(), memberOf(discovery_, "token").text()).has_value());
     }
 
-    /** One request and its response, sent and read on a client thread while this thread pumps messages.
-        Returns the parsed response, or null when none arrived. */
+    /**
+     * One request and its response, sent and read on a client thread while this thread pumps messages.
+     * Returns the parsed response, or null when none arrived within kReadTimeoutMs.
+     *
+     * The response is the line with this request's id (or with no id, which the server sends only for a line
+     * it could not parse). A request without a response in time is a failure of the scenario, reported with
+     * the longest single message dispatch on this thread meanwhile and the modal windows before and after, which
+     * tell a message thread kept busy by another message from a slow method. Its response, when it arrives
+     * later, is discarded with a note on how late it was, so that every later request still reads its own
+     * response instead of the one before it.
+     */
     JsonValue request(const std::string& method, JsonValue params = JsonValue::object())
     {
+        const auto id = ++nextId_;
         auto request = JsonValue::object();
         request.appendMember("jsonrpc", JsonValue::string("2.0"));
-        request.appendMember("id", JsonValue::integer(++nextId_));
+        request.appendMember("id", JsonValue::integer(id));
         request.appendMember("method", JsonValue::string(method));
         request.appendMember("params", std::move(params));
         const std::string line = toJsonString(request);
         std::optional<std::string> response;
-        runWhilePumping([this, &line, &response] {
-            if (client_.sendLine(line))
-                response = client_.readLine();
+        bool sentOk = false;
+        std::vector<std::int64_t> late;
+        const int modalBefore = openModalWindows();
+        longestMessageDispatchMs() = 0;
+        const auto sent = Clock::now();
+        sent_[id] = Sent{method, sent};
+        runWhilePumping([this, &line, &response, &sentOk, &late, id, sent] {
+            sentOk = client_.sendLine(line);
+            if (!sentOk)
+                return;
+            for (;;) {
+                const auto left = kReadTimeoutMs - millisecondsSince(sent);
+                if (left <= 0)
+                    return;
+                auto next = client_.readLine(static_cast<int>(left));
+                if (!next)
+                    return;
+                const auto other = responseId(*next);
+                if (!other || *other == id) {
+                    response = std::move(next);
+                    return;
+                }
+                late.push_back(*other);
+            }
         });
-        if (!response)
+        for (const auto other : late)
+            noteLateResponse(other);
+        if (!response) {
+            CONTROL_CHECK(response.has_value());
+            if (!sentOk)
+                note(method + " (request " + std::to_string(id) + "): the request could not be sent");
+            else
+                note(method + " (request " + std::to_string(id) + "): no response within "
+                     + std::to_string(kReadTimeoutMs)
+                     + " ms; the longest single message dispatch on this thread meanwhile took "
+                     + std::to_string(longestMessageDispatchMs()) + " ms; open modal windows "
+                     + std::to_string(modalBefore) + " -> " + std::to_string(openModalWindows()));
             return JsonValue();
+        }
+        sent_.erase(id);
         auto parsed = parseJson(*response);
         return parsed.ok ? parsed.value : JsonValue();
     }
@@ -220,9 +317,48 @@ public:
     TestClient& client() noexcept { return client_; }
 
 private:
+    struct Sent
+    {
+        std::string method;
+        Clock::time_point at;
+    };
+
+    /** The integer id of a response line, or nullopt when it has none (or is not JSON). */
+    static std::optional<std::int64_t> responseId(const std::string& line)
+    {
+        const auto parsed = parseJson(line);
+        if (!parsed.ok)
+            return std::nullopt;
+        const JsonValue* id = parsed.value.find("id");
+        if (id == nullptr || !id->isNumber())
+            return std::nullopt;
+        return static_cast<std::int64_t>(id->asDouble());
+    }
+
+    static int openModalWindows()
+    {
+        const auto* manager = juce::ModalComponentManager::getInstanceWithoutCreating();
+        return manager != nullptr ? manager->getNumModalComponents() : 0;
+    }
+
+    /** A response that arrived for an earlier request, while this session waited for a later one. */
+    void noteLateResponse(std::int64_t id)
+    {
+        const auto found = sent_.find(id);
+        if (found == sent_.end()) {
+            note("discarded a response to request " + std::to_string(id) + ", which this session did not wait for");
+            return;
+        }
+        note("discarded the late response to " + found->second.method + " (request " + std::to_string(id) + "), "
+             + std::to_string(millisecondsSince(found->second.at)) + " ms after it was sent");
+        sent_.erase(found);
+    }
+
     TestClient client_;
     JsonValue discovery_;
     std::int64_t nextId_ = 100;
+    /** The requests whose response has not been read: the one in flight and those that got none in time. */
+    std::map<std::int64_t, Sent> sent_;
 };
 
 // Scenarios of the dispatcher and the read methods (ControlDispatcherTests.cpp).

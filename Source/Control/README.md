@@ -770,6 +770,15 @@ include directories, because `PluginProcessor.h` changes its class layout with t
 with `juce::detail::dispatchNextMessageOnSystemQueue` rather than `runDispatchLoop()`, whose stop latches
 for the rest of the process in JUCE 9.0.3. Run them with `ctest -R Control`.
 
+A request of a scenario (`ApiSession::request`) waits `kReadTimeoutMs` for the line with its own id. One
+without a response in time fails the scenario with the longest single message dispatch on the message thread
+meanwhile and the open modal windows, which tell a message thread kept busy by another message from a slow
+method; its response, if it comes later, is discarded with a note on how late it was, so later requests read
+their own responses. Without the models (as on the build machines) the render that an import requests fails,
+and upstream `ProcessRenderRuntime::notifyApplicationRenderFailure()` builds a diagnostic dialog on the message
+thread; a scenario whose first requests must not race with that calls `settleBackgroundWork()` after its
+setup (render work idle, then the messages posted until then dispatched).
+
 `Tests/Control/ControlMirrorDriftTests.cpp` (standard library and the JSON reader only) compares the hashes of
 `mirror-map.json` with the source tree; see "Mirrors". `ControlMirrorDriftTests` is its ctest name.
 

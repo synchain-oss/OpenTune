@@ -1720,6 +1720,9 @@ void scenarioDetails()
     processor->recordF0FailureReason(clips.failedEmpty.key, "f0_empty");
     CONTROL_CHECK(processor->getStandaloneArrangement()->setPlacementReferencePlacement(0, clips.sung.placementId,
                                                                                         clips.ref.placementId));
+    // The render that importing the sung clip requested, and what it posts when it fails without the models (an
+    // upstream diagnostic dialog built on this thread), are over before the first timed request.
+    CONTROL_CHECK(settleBackgroundWork(*processor));
 
     ApiSession api;
     if (!api.open(service))

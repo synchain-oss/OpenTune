@@ -31,6 +31,7 @@ public:
     void onStructureChanged() override { ++structureChanges; }
     void onUndoRedoApplied() override { ++undoRedoNotifications; }
     void onProjectReloaded() override { ++projectReloads; }
+    void onTimeGridChanged() override { ++timeGridNotifications; }
 
     bool focusPlacement(int trackId, std::uint64_t placementId) override
     {
@@ -60,6 +61,7 @@ public:
     int structureChanges = 0;
     int undoRedoNotifications = 0;
     int projectReloads = 0;
+    int timeGridNotifications = 0;
     int revealCalls = 0;
     /** The placements focusPlacement() was called with, in order. */
     std::vector<std::pair<int, std::uint64_t>> focused;

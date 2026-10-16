@@ -28,6 +28,9 @@
      control API exists.
   6. fork-checks.mjs: identity, attribution and every other delta check (same code as the fork-gate
      workflow); layer from -Layer, PR range from -Base.
+  6b. drift-pins.mjs --check: .github/drift-pins/, Source/Control/mirror-map.json and MIRRORS.md agree
+      (needs no build; same rule as fork-gate, from the files changed against -Base: a mismatch is FAIL when this
+      branch touches the pin files or drift-pins.mjs, otherwise WARN because the manager L0 follow-up regenerates the pins)
   7. gitleaks on the delta (commits and files); gitleaks 8.30.1 is fetched and sha256-verified by
      fetch-tool.mjs into -ToolsDir.
   8. Staged state: check-ignored-delta (ignored-path allow-list and path guard on the index).
@@ -542,6 +545,36 @@ try {
     $fc = Invoke-NodeJson $fcArgs
     if ($null -eq $fc.Data) { Add-Row 'fork-checks' 'FAIL' "fork-checks.mjs 运行失败（exit $($fc.Code)）：$($fc.Stderr)" }
     else { Add-CheckRows 'fork-checks' $fc.Data }
+
+    # 6b. mirror pins: .github/drift-pins/, mirror-map.json and MIRRORS.md agree (needs no build)
+    $dpErr = [System.IO.Path]::GetTempFileName()
+    try {
+        # Same rule as fork-gate: decideEnforcement of drift-pins.mjs, as a pull request into the base branch.
+        $dpChanged = [System.IO.Path]::GetTempFileName()
+        $dpFiles = @(& git diff --no-renames --name-only "$Base...HEAD" 2> $null)
+        Set-Content -LiteralPath $dpChanged -Value $dpFiles
+        $dpBase = $Base -replace '^(refs/remotes/)?origin/', ''
+        $dpArgs = @('--check', '--json', '--event', 'pull_request', '--base', $dpBase, '--changed-files', $dpChanged)
+        $dpOut = (& node (Join-Path $scripts 'drift-pins.mjs') @dpArgs 2> $dpErr | Out-String).Trim()
+        $dpCode = $LASTEXITCODE
+        Remove-Item -LiteralPath $dpChanged -ErrorAction SilentlyContinue
+        $dpRaw = [string](Get-Content -LiteralPath $dpErr -Raw -ErrorAction SilentlyContinue)
+        $dpText = ($dpRaw -replace '\r?\n', ' ').Trim()
+        $dpJson = $null
+        try { $dpJson = $dpOut | ConvertFrom-Json -ErrorAction Stop } catch { }
+        $dpName = 'drift-pins（镜像锁清单三处一致）'
+        if ($null -eq $dpJson) { Add-Row $dpName 'FAIL' "exit ${dpCode}：$dpText $dpOut" }
+        else {
+            $dpProblems = @($dpJson.problems)
+            if ($dpProblems.Count -eq 0) { Add-Row $dpName 'PASS' "$($dpJson.mirrors) 条镜像、$($dpJson.groups) 个组，三处一致" }
+            elseif ($dpJson.advisory) { Add-Row $dpName 'WARN' "不一致（$($dpProblems.Count) 处），本分支没改清单与脚本，只报告；由 manager 的 L0 跟进用 node .github/scripts/drift-pins.mjs --write 补齐。$($dpProblems -join '；')" }
+            else { Add-Row $dpName 'FAIL' "不一致（$($dpProblems.Count) 处）：$($dpProblems -join '；')。$($dpJson.fix)" }
+        }
+    } catch {
+        Add-Row 'drift-pins（镜像锁清单三处一致）' 'FAIL' "drift-pins.mjs 运行失败：$($_.Exception.Message)"
+    } finally {
+        Remove-Item -LiteralPath $dpErr -ErrorAction SilentlyContinue
+    }
 
     # 7. gitleaks
     $gitleaks = Get-PinnedTool 'gitleaks'

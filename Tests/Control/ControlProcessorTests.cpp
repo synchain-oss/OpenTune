@@ -27,13 +27,19 @@
 #include "Control/ControlUiBridge.h"
 #include "Editor/EditorFactory.h"
 #include "PluginProcessor.h"
+#include "Runtime/ProcessRenderRuntime.h"
 #include "Utils/AppLogger.h"
 #include "Utils/AppPreferences.h"
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <mutex>
+#include <string_view>
 #include <thread>
 
 #if defined(_WIN32)
@@ -548,7 +554,7 @@ const Scenario kScenarios[] = {
     {"ExportCancelOverwrite", scenarioExportCancelOverwrite, false},
     {"ExportDestroy", scenarioExportDestroy, true},
     {"ExportUnicodePath", scenarioExportUnicodePath, false},
-    {"ExportKnownDefects", scenarioExportKnownDefects, false},
+    {"ExportDryReasons", scenarioExportDryReasons, false},
     {"Undo", scenarioUndo, false},
     {"SetKey", scenarioSetKey, false},
     {"AutoTune", scenarioAutoTune, false},
@@ -565,6 +571,82 @@ const Scenario kScenarios[] = {
     {"TimingVectors", scenarioTimingVectors, false},
 };
 
+/** Bound of one scenario, below the ctest TIMEOUT that cmake/OpenTuneControl.cmake gives it: 60 s, and 300 s for the
+    scenarios of the specification's vectors, whose names end in "Vectors". */
+constexpr int kScenarioBoundMs = 55000;
+constexpr int kVectorScenarioBoundMs = 290000;
+
+int scenarioBoundMs(const Scenario& scenario)
+{
+    const std::string_view name(scenario.name);
+    const std::string_view suffix("Vectors");
+    const bool vectors = name.size() >= suffix.size() && name.substr(name.size() - suffix.size()) == suffix;
+    return vectors ? kVectorScenarioBoundMs : kScenarioBoundMs;
+}
+
+/**
+ * Ends the process with a failure that names the scenario when it has not finished within its bound, so that a
+ * scenario blocked in a wait without a bound (in upstream code, for example) fails with a message rather than being
+ * killed by ctest at its TIMEOUT without one. The flag is set and notified under the mutex the watchdog waits with.
+ */
+class ScenarioWatchdog
+{
+public:
+    ScenarioWatchdog(const char* name, int boundMs)
+        : thread_([this, name, boundMs] {
+            std::unique_lock<std::mutex> lock(mutex_);
+            if (cv_.wait_for(lock, std::chrono::milliseconds(boundMs), [this] { return done_; }))
+                return;
+            std::cout << "[FAILED] " << name << ": not finished within " << boundMs
+                      << " ms; a wait without a bound did not return" << std::endl;
+            std::cerr << "    FAILED " << name << " did not finish within its bound" << std::endl;
+            std::_Exit(1);
+        })
+    {}
+
+    ~ScenarioWatchdog()
+    {
+        {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            done_ = true;
+        }
+        cv_.notify_all();
+        thread_.join();
+    }
+
+    ScenarioWatchdog(const ScenarioWatchdog&) = delete;
+    ScenarioWatchdog& operator=(const ScenarioWatchdog&) = delete;
+
+private:
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool done_ = false;
+    std::thread thread_;
+};
+
+/**
+ * Takes one owner of OpenTune's process-wide render runtime (ProcessRenderRuntime::retainOwner) for the rest of the
+ * test process, before the scenario creates any processor.
+ *
+ * Why: the runtime shuts down whenever its last owner, a processor, goes away, and starts again with the next one.
+ * That shutdown (releaseOwner, shutdownLocked) waits on workerExitCv_ under shutdownMutex_ until the control worker
+ * has set workerExitDispatchAttempted_; the worker sets it and notifies without that mutex, so the notification can
+ * fall between the waiter's check and its wait and be lost, and the destruction of the processor then never returns.
+ * In the application the runtime starts once and shuts down at exit; a scenario that creates and destroys many
+ * processors (those of the vectors) took that chance at every processor, and the slower timing under a thread
+ * sanitizer makes the window wide enough to hit. With this owner the count never falls to zero between processors,
+ * so no shutdown runs. It is never released, so that the test process never takes that chance either: the runtime's
+ * control worker ends with the process.
+ */
+void holdRenderRuntimeForProcess()
+{
+    static const bool held = [] {
+        ProcessRenderRuntime::getInstance().retainOwner();
+        return true;
+    }();
+    (void)held;
+}
+
 int runScenario(const Scenario& scenario)
 {
     const auto realDiscoveryFile = realDiscoveryFileOfThisProcess();
@@ -575,6 +657,7 @@ int runScenario(const Scenario& scenario)
 
     const auto started = Clock::now();
     std::cout << "[ RUN  ] " << scenario.name << std::endl;
+    const ScenarioWatchdog watchdog(scenario.name, scenarioBoundMs(scenario));
     {
         // The message manager on this thread; no window, no audio device.
         juce::ScopedJuceInitialiser_GUI juceInitialiser;
@@ -582,6 +665,7 @@ int runScenario(const Scenario& scenario)
             std::cerr << "cannot initialise networking" << std::endl;
             return 1;
         }
+        holdRenderRuntimeForProcess();
         scenario.run();
         // Before the message manager goes away: a dialog left open would be deleted at its shutdown,
         // where an upstream dialog uses its freed content (see closeLeftoverModalWindows).

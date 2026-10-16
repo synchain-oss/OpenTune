@@ -566,13 +566,23 @@ clip or track and stereo for the master mix.
 - While it waits, each tick of the job builds again what the file is made of (the clips whose content has
   a playback source with audio, as the processor's export functions choose them: for the master mix only
   the soloed tracks while one is soloed, otherwise the tracks that are not muted) and decides per content
-  (section 19 rule 6): analysis not finished: wait; analysis failed with no voiced frame (`f0_empty`), no
-  usable pitch, or no render block: export it uncorrected and list it in `dryContents` (`unvoiced`,
-  `nothingToRender`); another failure of the analysis: `ANALYSIS_FAILED(f0_failed)`, or with `allowDry`
-  uncorrected (`analysisFailed`); a failed render block: one more `requestFullContentRender()` (its
-  reconcile retries a failed block of the same revision), then `RENDER_FAILED(render_chunk_failed)`;
-  render work pending: wait; ready once the render cache is settled at its revision
-  (`RenderCache::isCanonicalSettled`). A content whose render was never requested gets one request. A
+  (section 19 rule 6): analysis not finished: wait; no voiced frame (an analysis that failed with `f0_empty`,
+  or that ended ready with no F0 frame above 0 Hz, the test of `controlCheckContentReady`): export it
+  uncorrected and list it in `dryContents` as `unvoiced`, before anything about its render; another failure of
+  the analysis: `ANALYSIS_FAILED(f0_failed)`, or with `allowDry` uncorrected (`analysisFailed`); no render
+  block, or only blank ones: uncorrected, `nothingToRender`; render work pending or running: wait; then a
+  failed render block: one more `requestFullContentRender()` (its reconcile retries a failed block of the same
+  revision), then `RENDER_FAILED(render_chunk_failed)`; ready once the render cache is settled at its revision
+  (`RenderCache::isCanonicalSettled`). The job never asks again while blocks are pending: upstream
+  `RenderCache::reconcileFullPlanAndRequest` keeps a block that is still pending at an unchanged revision
+  pending but out of its set of blocks to claim, the worker's queue drops it, and it is rendered only after the
+  content changes. A content without render blocks (its render was never requested) is dry at once when it has
+  nothing to render (no correction segment, the identity pitch shift, no note with an active EQ: OpenTune's
+  render would mark every block blank) and its time grid is the identity; the job then neither asks for a render
+  nor waits for the render worker. Such a content is dry as well when its only render work is blocks out of
+  the worker's reach (pending, none running, none to claim, for 0.5 s) and no block holds the rendered audio of
+  an earlier version; any other content waits for those blocks until the wait limit. Any other content without
+  render blocks gets one render request. A
   content whose time grid is not the identity is played and exported from its time-stretch output (the
   Stage2 rebuild), which OpenTune's export reads only when it was built at the content's current content
   and time-grid revisions (`readExportPlaybackAudio`); otherwise the content would be silent in the file. Such a

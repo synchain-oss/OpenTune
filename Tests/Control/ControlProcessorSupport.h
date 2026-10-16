@@ -442,9 +442,9 @@ void scenarioExportCancelOverwrite();
 void scenarioExportDestroy();
 /** Import and export in a folder and a file named in Chinese with spaces: the paths round trip. */
 void scenarioExportUnicodePath();
-/** Cases that fail today because the export differs from the specification: a content whose analysis found no voiced
-    frame must be listed in dryContents as unvoiced. Registered as expected to fail until the export is fixed. */
-void scenarioExportKnownDefects();
+/** The reasons of dryContents: a content whose analysis found no voiced frame is listed as unvoiced, and a clip
+    imported and never edited, exported at once, as nothingToRender without waiting. */
+void scenarioExportDryReasons();
 /** An export of a clip whose time grid is not the identity waits until OpenTune rebuilt its time-stretch output
     at the current revisions, also when the job has to queue that rebuild itself, and never writes the clip silent. */
 void scenarioExportTimeStretch();

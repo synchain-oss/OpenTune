@@ -1249,26 +1249,31 @@ void scenarioBusyMatrix()
 
     const auto before = observableState(api, *processor, bridge, service, contentId);
     CONTROL_CHECK(before == observableState(api, *processor, bridge, service, contentId));
+    // Every cell: BUSY with the condition's reason and executed false (ApiSession::fails), and nothing a client or
+    // the user could see changed, read once the condition is over.
     int cells = 0;
+    const auto cell = [&](const WriteCall& call, const char* condition, const char* reason) {
+        const bool refused = CONTROL_CHECK(api.fails(call.method, json(call.params), "BUSY", reason));
+        bridge.busy = {};
+        if (processor->isExportLockHeld())
+            processor->releaseExportLock();
+        const bool unchanged = CONTROL_CHECK(observableState(api, *processor, bridge, service, contentId) == before);
+        if (!refused || !unchanged)
+            note(std::string("the cell ") + call.label + " x " + condition + " failed");
+        ++cells;
+    };
     for (const auto& call : calls) {
         for (const auto& condition : conditions) {
             bridge.busy = {};
             bridge.busy.*(condition.flag) = true;
-            if (!api.fails(call.method, json(call.params), "BUSY", condition.reason))
-                note(std::string("the cell ") + call.label + " x " + condition.name + " failed");
-            ++cells;
+            cell(call, condition.name, condition.reason);
         }
         // The export lock that the UI and the API share, held by an export that is not the editor's flag.
         bridge.busy = {};
         CONTROL_CHECK(processor->tryAcquireExportLock());
-        if (!api.fails(call.method, json(call.params), "BUSY", "export_in_progress"))
-            note(std::string("the cell ") + call.label + " x the export lock failed");
-        processor->releaseExportLock();
-        ++cells;
+        cell(call, "the export lock", "export_in_progress");
     }
-    bridge.busy = {};
     CONTROL_CHECK(cells == static_cast<int>(calls.size()) * 6);
-    CONTROL_CHECK(observableState(api, *processor, bridge, service, contentId) == before);
     CONTROL_CHECK(!juceFileOf(std::filesystem::u8path(target)).exists());
 
     // Once nothing is busy any more the writes are not refused.
@@ -1365,9 +1370,11 @@ void scenarioImportFailures()
         const auto& item = memberOf(result, "items").at(0);
         note("item: " + toJsonString(item));
         CONTROL_CHECK(memberOf(item, "imported").asBoolean() && memberOf(item, "f0State").text() == "failed");
+        // The import was executed and its clip stays: executed true (PROTOCOL.md section 17.4).
+        const auto& executed = memberOf(memberOf(memberOf(item, "error"), "data"), "executed");
         CONTROL_CHECK(errorKindOf(memberOf(item, "error")).text() == "ANALYSIS_FAILED"
-                      && errorReasonOf(memberOf(item, "error")).text() == "f0_failed"
-                      && !memberOf(memberOf(memberOf(item, "error"), "data"), "executed").isNull());
+                      && errorReasonOf(memberOf(item, "error")).text() == "f0_failed" && executed.isBoolean()
+                      && executed.asBoolean());
         CONTROL_CHECK(toJsonString(memberOf(result, "counts")) == R"({"requested":1,"imported":1,"failed":0})");
         CONTROL_CHECK(memberOf(result, "applied").asBoolean() && !memberOf(result, "noOp").asBoolean());
         const auto project = api.result("project.get");

@@ -318,6 +318,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "SetKey|--control-api"
             "AutoTune|--control-api"
             "EditNotes|--control-api"
+            "EditMultiNoteRender|--control-api"
             "SetPitchShift|--control-api"
             "SnapNotes|--control-api"
             "EditCapability|--control-api"
@@ -350,6 +351,12 @@ if(OPENTUNE_ENABLE_CONTROL_API)
                 TIMEOUT 60
                 ENVIRONMENT "OPENTUNE_DATA_DIR=${_opentune_control_data};OPENTUNE_LIFECYCLE_TRACE_DIR=${_opentune_control_trace_dir}")
         endforeach()
+        # EditMultiNoteRender renders five blocks five times and exports: about 12 s on a Windows developer machine.
+        # A sanitizer build runs 5 to 15 times slower (ASan/UBSan 2 to 3 times, TSan up to 15 times, on the slower
+        # macOS runners), so 12 s * 15 = 180 s; the timeout adds a margin on top.
+        set(_opentune_control_render_timeout 300)
+        set_tests_properties(ControlProcessorTests.EditMultiNoteRender PROPERTIES
+            TIMEOUT ${_opentune_control_render_timeout})
         # Every vector starts a processor of its own.
         set_tests_properties(ControlProcessorTests.Vectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.JobVectors PROPERTIES TIMEOUT 300)

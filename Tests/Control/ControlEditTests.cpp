@@ -1483,6 +1483,8 @@ void checkMultiNoteRender()
     const auto handles = fixtureHandlesOf(api.result("project.get"), 0, 0.0);
     if (!CONTROL_CHECK(handles.has_value()))
         return;
+    // Nothing of the import may still be running when the first request is timed.
+    CONTROL_CHECK(settleBackgroundWork(*processor));
     const auto revision = [&] { return memberOf(freshTokens(api, handles->contentId), "revision").text(); };
     const auto heard = [&] {
         juce::AudioBuffer<float> out(dry);
@@ -1499,7 +1501,9 @@ void checkMultiNoteRender()
         CONTROL_CHECK(memberOf(result, "applied").asBoolean());
         const auto pending = cache->getPendingJobs();
         for (int burst = 0; burst < kBurstCount; ++burst) {
-            const auto middle = static_cast<std::int64_t>((burstStartSec(burst) + kBurstSec / 2) * rate);
+            // The pending jobs count samples of the render cache, not of the imported file.
+            const auto middle =
+                static_cast<std::int64_t>((burstStartSec(burst) + kBurstSec / 2) * RenderCache::kSampleRate);
             const auto holds = [middle](const RenderCache::PendingJob& job) {
                 return job.startSample <= middle && middle < job.endSampleExclusive;
             };
@@ -1548,12 +1552,15 @@ void checkMultiNoteRender()
     formats.registerBasicFormats();
     const std::unique_ptr<juce::AudioFormatReader> reader(
         formats.createReaderFor(juce::File(juce::String::fromUTF8(out.u8string().c_str()))));
-    if (!CONTROL_CHECK(reader != nullptr && reader->lengthInSamples >= samples))
+    if (!CONTROL_CHECK(reader != nullptr && reader->lengthInSamples > 0))
         return;
-    juce::AudioBuffer<float> file(1, samples);
-    reader->read(&file, 0, samples, 0, true, false);
+    // Measured at the file's own rate and length.
+    const auto fileSamples = static_cast<int>(reader->lengthInSamples);
+    juce::AudioBuffer<float> file(1, fileSamples);
+    reader->read(&file, 0, fileSamples, 0, true, false);
     CONTROL_CHECK(
-        centsNear(burstCents(file.getReadPointer(0), samples, reader->sampleRate), atA3, "the exported file"));
+        centsNear(burstCents(file.getReadPointer(0), fileSamples, reader->sampleRate), atA3, "the exported file"));
+    CONTROL_CHECK(service.dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 
 void scenarioEditNotesImpl()
@@ -1569,7 +1576,6 @@ void scenarioEditNotesImpl()
         checkNoteEditErrors(f);
         CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
     }
-    checkMultiNoteRender();
 }
 
 // ---- Scenario: content.setPitchShift -----------------------------------------------------------------
@@ -2394,6 +2400,11 @@ void scenarioAutoTune()
 void scenarioEditNotes()
 {
     scenarioEditNotesImpl();
+}
+
+void scenarioEditMultiNoteRender()
+{
+    checkMultiNoteRender();
 }
 
 void scenarioSetPitchShift()

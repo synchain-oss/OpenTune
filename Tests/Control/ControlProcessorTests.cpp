@@ -545,6 +545,7 @@ const Scenario kScenarios[] = {
     {"SetKey", scenarioSetKey, false},
     {"AutoTune", scenarioAutoTune, false},
     {"EditNotes", scenarioEditNotes, false},
+    {"EditMultiNoteRender", scenarioEditMultiNoteRender, false},
     {"SetPitchShift", scenarioSetPitchShift, false},
     {"SnapNotes", scenarioSnapNotes, false},
     {"EditCapability", scenarioEditCapability, false},

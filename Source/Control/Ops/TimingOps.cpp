@@ -113,7 +113,8 @@ Result<ControlContentRef> checkGridEdit(ControlOpContext& context, const Control
         return *busy;
     if (auto notReady = controlCheckContentReady(context, ref))
         return *notReady;
-    if (auto conflict = checkGridRevision(controlContentVersions(ref.contentId, *ref.snapshot), expectedGridRevision))
+    if (auto conflict =
+            checkGridRevision(controlContentVersions(context, ref.contentId, *ref.snapshot), expectedGridRevision))
         return *conflict;
     if (!TimeGridOps::isSeeded(ref.snapshot->timeGrid.get()))
         return controlOpError("NOT_READY", "grid_not_seeded",

@@ -66,6 +66,21 @@ JsonValue controlNoteLabelJson(std::size_t index, const Note& note);
 void controlAddReRenderQueued(ControlWriteEnvelope& envelope, const ControlWorldVersions& before,
                               const ControlWorldVersions& after);
 
+/** The reRenderQueued side effect that a commit to the content would report, for a prediction (dryRun): the
+    same form controlAddReRenderQueued() gives it, {contentIds: [contentId], revert: null}. */
+void controlAddPredictedReRenderQueued(ControlWriteEnvelope& envelope, const std::string& contentId);
+
+/**
+ * The changes of notes whose times stay (content.editNotes, content.autoTune mode snapNotes): one entry of entity
+ * note per note whose reported values differ between before and after (the same notes in the same order), with
+ * the fields targetMidi (midi), offsetCents (cents), retuneSpeed, vibratoDepth, vibratoRateHz (hz) and
+ * pitchDriftScale as content.getNotes reports them, referenced at revision (PROTOCOL.md section 14.3). At most
+ * maxListed entries; returns how many changed notes were left out.
+ */
+std::size_t controlListNoteChanges(ControlWriteEnvelope& envelope, const std::string& contentId,
+                                   const std::vector<Note>& before, const std::vector<Note>& after,
+                                   const std::string& revision, std::size_t maxListed);
+
 // ---- The effect of an undo or redo step --------------------------------------------------------------
 
 /** The values from which the effect of an undo or redo step is described. */

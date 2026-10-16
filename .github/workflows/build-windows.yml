@@ -15,6 +15,10 @@ name: Build Windows
 #   workflow_call           被调用时 github.event_name / base_ref 是调用方的事件，不会是 workflow_call。
 #                           所以由输入 `full`（默认 true）显式决定：true 完整编译与测试；false 则继承调用方的
 #                           事件与 base 分支按上面的分档决定
+# 出包模式（workflow_call 输入 release-package: true，由 prerelease.yml 调用）：只构建 Standalone 的 Release（LTCG），
+# 控制接口选项 ON，不构建、不运行测试，不用 sccache（发布用的二进制不经缓存）；删除 models\ 后用
+# release-notices.mjs 按产物实际内容生成 THIRD-PARTY-NOTICES.txt 与 build-info.json，再把打包输入按白名单
+# 上传为 artifact opentune-windows-release-inputs（3 天）。打包、校验与发布在 prerelease.yml。
 # 聚合 job `build-windows` 是稳定的检查上下文（将来设为 dev 的必需检查）：不加 paths 过滤、不改名。
 # 外部 fork 发来的 PR 同样运行（只读 token、无 secrets）；任何 workflow 一律不用 pull_request 的 target 变体
 # （CLAUDE.md §0 第 4 条）。
@@ -30,6 +34,10 @@ on:
         description: 'true（默认）：无论调用方是什么事件都完整编译与测试；false：继承调用方的事件与 base 分支分档'
         type: boolean
         default: true
+      release-package:
+        description: 'true：出包模式（Standalone Release、控制接口 ON、不跑测试），上传打包输入；默认 false'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -83,7 +91,9 @@ jobs:
         shell: pwsh
     env:
       GIT_LFS_SKIP_SMUDGE: '1'
-      OT_CONFIG: RelWithDebInfo
+      # 出包模式只在被 prerelease.yml 以 release-package: true 调用时打开；其他触发方式下 inputs 为空，值为 false。
+      OT_PACKAGE: ${{ inputs.release-package == true && 'true' || 'false' }}
+      OT_CONFIG: ${{ inputs.release-package == true && 'Release' || 'RelWithDebInfo' }}
       SCCACHE_CACHE_SIZE: 2G
       SCCACHE_IDLE_TIMEOUT: '0'
     steps:
@@ -136,14 +146,17 @@ jobs:
           New-Item -ItemType File -Path $voc | Out-Null
 
       # sccache 的版本与 sha256 锁在 .github/scripts/tools.lock.json，由 fetch-tool.mjs 下载并校验。
+      # 出包模式不用 sccache：发布用的二进制从头编译。
       - name: Fetch sccache (pinned in tools.lock.json)
         id: sccache
+        if: env.OT_PACKAGE != 'true'
         run: |
           $out = node .github/scripts/fetch-tool.mjs sccache --dest "$env:RUNNER_TEMP\ot-tools"
           if ($LASTEXITCODE -ne 0 -or -not $out) { throw "fetch-tool sccache failed ($LASTEXITCODE)" }
           $exe = ([string]($out | Select-Object -Last 1)).Trim()
           "path=$($exe -replace '\\', '/')" >> $env:GITHUB_OUTPUT
       - name: Restore sccache cache
+        if: env.OT_PACKAGE != 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.SCCACHE_DIR }}
@@ -163,19 +176,31 @@ jobs:
             $ninja = Join-Path $vs 'Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja\ninja.exe'
           }
           if (-not (Test-Path -LiteralPath $ninja)) { throw "ninja.exe not found" }
-          # sccache 只能缓存 /Z7 目标文件：CMP0141=NEW 让 CMAKE_MSVC_DEBUG_INFORMATION_FORMAT 生效
-          # （上游声明 cmake_minimum_required(3.22)，不设的话 RelWithDebInfo 用 /Zi）。
           $configure = @(
             'cmake', '-S', $env:GITHUB_WORKSPACE, '-B', $env:OT_BUILD, '-G', 'Ninja Multi-Config',
             "-DCMAKE_MAKE_PROGRAM=$($ninja -replace '\\', '/')",
-            "-DCMAKE_CONFIGURATION_TYPES=$env:OT_CONFIG",
-            '-DOPENTUNE_BUILD_TESTS=ON',
-            "-DOPENTUNE_ENABLE_CONTROL_API=$env:CONTROL_API",
-            "-DCMAKE_C_COMPILER_LAUNCHER=$env:SCCACHE",
-            "-DCMAKE_CXX_COMPILER_LAUNCHER=$env:SCCACHE",
-            '-DCMAKE_POLICY_DEFAULT_CMP0141=NEW',
-            '-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded'
+            "-DCMAKE_CONFIGURATION_TYPES=$env:OT_CONFIG"
           )
+          if ($env:OT_PACKAGE -eq 'true') {
+            # 出包：只要 Standalone，控制接口必须 ON；不注册测试，不用编译器缓存。
+            if ($env:CONTROL_API -ne 'ON') { throw "release-package mode needs the control API option ON (got $env:CONTROL_API)" }
+            $configure += @('-DOPENTUNE_BUILD_TESTS=OFF', '-DOPENTUNE_ENABLE_CONTROL_API=ON')
+          } else {
+            # sccache 只能缓存 /Z7 目标文件：CMP0141=NEW 让 CMAKE_MSVC_DEBUG_INFORMATION_FORMAT 生效
+            # （上游声明 cmake_minimum_required(3.22)，不设的话 RelWithDebInfo 用 /Zi）。
+            $configure += @(
+              '-DOPENTUNE_BUILD_TESTS=ON',
+              "-DOPENTUNE_ENABLE_CONTROL_API=$env:CONTROL_API",
+              "-DCMAKE_C_COMPILER_LAUNCHER=$env:SCCACHE",
+              "-DCMAKE_CXX_COMPILER_LAUNCHER=$env:SCCACHE",
+              '-DCMAKE_POLICY_DEFAULT_CMP0141=NEW',
+              '-DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded'
+            )
+          }
+          # 记录实际执行的命令（路径换成占位符），出包模式写进发布说明的「精确构建命令」。
+          ConvertTo-Json -Compress -InputObject @($configure | ForEach-Object {
+            ([string]$_).Replace($env:GITHUB_WORKSPACE, '<src>').Replace($env:OT_BUILD, '<build>').Replace(($ninja -replace '\\', '/'), '<ninja.exe>')
+          }) | Set-Content -LiteralPath "$env:RUNNER_TEMP\ot-cmd-configure.json" -Encoding utf8
           pwsh -NoProfile -File .github/scripts/with-build-slot.ps1 -VsDevShell -MinFreeMB 2048 -WaitMinutes 10 -- @configure
           if ($LASTEXITCODE -ne 0) { throw "configure failed ($LASTEXITCODE)" }
 
@@ -199,19 +224,26 @@ jobs:
               Get-TestTargets $(if ([System.IO.Path]::IsPathRooted($sub)) { $sub } else { Join-Path $Dir $sub }) $Map
             }
           }
-          $tests = [ordered]@{}
-          Get-TestTargets $env:OT_BUILD $tests
-          if ($tests.Count -eq 0) { throw 'no tests registered in CTestTestfile.cmake (OPENTUNE_BUILD_TESTS=ON?)' }
           $targets = [System.Collections.Generic.List[string]]::new()
-          foreach ($t in @('OpenTuneStandalone_Standalone', 'OpenTune_VST3')) { $targets.Add($t) }
-          foreach ($name in @($tests.Keys)) {
-            if ($excluded -contains [string]$name) { continue }
-            $exe = [string]$tests[$name]
-            if ($exe -and -not $targets.Contains($exe)) { $targets.Add($exe) }
+          if ($env:OT_PACKAGE -eq 'true') {
+            # 出包模式：只构建 Standalone（不含 VST3 与测试）。
+            $targets.Add('OpenTuneStandalone_Standalone')
+          } else {
+            $tests = [ordered]@{}
+            Get-TestTargets $env:OT_BUILD $tests
+            if ($tests.Count -eq 0) { throw 'no tests registered in CTestTestfile.cmake (OPENTUNE_BUILD_TESTS=ON?)' }
+            foreach ($t in @('OpenTuneStandalone_Standalone', 'OpenTune_VST3')) { $targets.Add($t) }
+            foreach ($name in @($tests.Keys)) {
+              if ($excluded -contains [string]$name) { continue }
+              $exe = [string]$tests[$name]
+              if ($exe -and -not $targets.Contains($exe)) { $targets.Add($exe) }
+            }
           }
           $jobs = [Environment]::ProcessorCount
           Write-Host "targets ($($targets.Count)): $($targets -join ', '); --parallel $jobs"
           $build = @('cmake', '--build', $env:OT_BUILD, '--config', $env:OT_CONFIG, '--parallel', "$jobs", '--target') + $targets
+          ConvertTo-Json -Compress -InputObject @($build | ForEach-Object { ([string]$_).Replace($env:OT_BUILD, '<build>') }) |
+            Set-Content -LiteralPath "$env:RUNNER_TEMP\ot-cmd-build.json" -Encoding utf8
           pwsh -NoProfile -File .github/scripts/with-build-slot.ps1 -VsDevShell -MinFreeMB 2048 -WaitMinutes 10 -- @build
           if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
 
@@ -219,6 +251,7 @@ jobs:
       # OPENTUNE_DATA_DIR（run-ctest.ps1，与本地 gates 同一份脚本）。失败测试的输出打印到日志。
       - name: ctest (-E ARALifecycleContractTests, per-test OPENTUNE_DATA_DIR)
         id: ctest
+        if: env.OT_PACKAGE != 'true'
         run: |
           $summary = "$env:RUNNER_TEMP\ot-ctest-summary.json"
           pwsh -NoProfile -File .github/scripts/with-build-slot.ps1 -VsDevShell -MinFreeMB 1024 -WaitMinutes 10 -- `
@@ -256,31 +289,72 @@ jobs:
           if ($left.Count) { throw "models\ still present: $(($left | ForEach-Object FullName) -join '; ')" }
           Write-Host "removed $($found.Count) models\ director$(if ($found.Count -eq 1) { 'y' } else { 'ies' }); none left"
 
-      # 产物按白名单暂存：OpenTune.exe、ORT DLL、DirectML.dll 与两者的 LICENSE、测试日志。然后递归、大小写不敏感地
-      # 扫描暂存目录：出现 *.onnx、models\、LFS 指针、D3D12\、D3D12*.dll 或 d3dconfig.exe 即失败。
+      # 出包模式：按产物实际内容生成 THIRD-PARTY-NOTICES.txt 与 build-info.json（链接了哪些组件、ARA 是否被链接、
+      # D3D12Core.dll 的 sha256 与实际执行的构建命令）。D3D12 运行库本身绝不进入 artifact。
+      - name: Generate THIRD-PARTY-NOTICES and build info (release package)
+        id: notices
+        if: ${{ !cancelled() && env.OT_PACKAGE == 'true' && steps.build.outcome == 'success' && steps.models.outcome == 'success' }}
+        run: |
+          $out = "$env:RUNNER_TEMP\ot-release"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $voc = 'pc_nsf_hifigan_44.1k_ONNX\pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx'
+          $commands = @(
+            @{ step = 'Fetch the pinned dependencies (sha256 verified; never any model weights)'; argv = @('pwsh', '-NoProfile', '-File', '.github/scripts/bootstrap-deps.ps1', '-DepsRoot', '<deps>', '-LinkInto', '<src>') },
+            @{ step = 'Empty placeholder for the vocoder file that the POST_BUILD step copies (no model is downloaded)'; argv = @('New-Item', '-ItemType', 'File', '-Force', "<src>\$voc") },
+            @{ step = 'Configure (Visual Studio 2022 x64 developer PowerShell)'; argv = @(Get-Content -Raw -LiteralPath "$env:RUNNER_TEMP\ot-cmd-configure.json" | ConvertFrom-Json) },
+            @{ step = 'Build'; argv = @(Get-Content -Raw -LiteralPath "$env:RUNNER_TEMP\ot-cmd-build.json" | ConvertFrom-Json) },
+            @{ step = 'Delete the models folder created by the POST_BUILD step (placeholders that would hide the official models)'; argv = @('Remove-Item', '-Recurse', '-Force', "<build>\OpenTuneStandalone_artefacts\$env:OT_CONFIG\Standalone\models") },
+            @{ step = 'Third-party notices and build information'; argv = @('node', '.github/scripts/release-notices.mjs', '--build', '<build>', '--deps', '<deps>', '--config', $env:OT_CONFIG, '--out-notices', 'THIRD-PARTY-NOTICES.txt', '--out-info', 'build-info.json') }
+          )
+          ConvertTo-Json -Depth 5 -InputObject $commands | Set-Content -LiteralPath "$out\commands.json" -Encoding utf8
+          $notices = @(
+            '.github/scripts/release-notices.mjs', '--build', $env:OT_BUILD, '--deps', $env:OT_DEPS, '--config', $env:OT_CONFIG,
+            '--commands', "$out\commands.json", '--out-notices', "$out\THIRD-PARTY-NOTICES.txt", '--out-info', "$out\build-info.json"
+          )
+          node @notices
+          if ($LASTEXITCODE -ne 0) { throw "release-notices failed ($LASTEXITCODE)" }
+
+      # 产物按白名单暂存，然后递归、大小写不敏感地扫描暂存目录：出现 *.onnx、models\、LFS 指针、D3D12\、D3D12*.dll
+      # 或 d3dconfig.exe 即失败。
+      #   平时：OpenTune.exe、ORT DLL、DirectML.dll 与两者的 LICENSE、测试日志。
+      #   出包模式：打包输入（app\ 下的三个二进制、DirectML 许可、THIRD-PARTY-NOTICES.txt、build-info.json）。
       - name: Stage artifacts (allow-list) and scan them
         id: stage
-        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.models.outcome == 'success' }}
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.models.outcome == 'success' && (env.OT_PACKAGE != 'true' || steps.notices.outcome == 'success') }}
         run: |
           $app = Join-Path $env:OT_BUILD "OpenTuneStandalone_artefacts\$env:OT_CONFIG\Standalone"
           if (Test-Path -LiteralPath $env:OT_STAGE) { Remove-Item -LiteralPath $env:OT_STAGE -Recurse -Force }
-          New-Item -ItemType Directory -Force -Path "$env:OT_STAGE\app", "$env:OT_STAGE\test-logs" | Out-Null
-          $allow = @(
-            @((Join-Path $app 'OpenTune.exe'), 'app\OpenTune.exe'),
-            @((Join-Path $app 'OpenTuneOnnxRuntime_1_24_4.dll'), 'app\OpenTuneOnnxRuntime_1_24_4.dll'),
-            @((Join-Path $app 'DirectML.dll'), 'app\DirectML.dll'),
-            @((Join-Path $env:OT_DEPS 'microsoft.ai.directml.1.15.4\LICENSE.txt'), 'app\DirectML-LICENSE.txt'),
-            @((Join-Path $env:OT_DEPS 'onnxruntime-dml-1.24.4\LICENSE'), 'app\onnxruntime-LICENSE.txt')
-          )
+          if ($env:OT_PACKAGE -eq 'true') {
+            New-Item -ItemType Directory -Force -Path "$env:OT_STAGE\app", "$env:OT_STAGE\licenses" | Out-Null
+            $rel = "$env:RUNNER_TEMP\ot-release"
+            $info = Get-Content -Raw -LiteralPath "$rel\build-info.json" | ConvertFrom-Json
+            $allow = @(
+              @((Join-Path $app 'OpenTune.exe'), 'app\OpenTune.exe'),
+              @((Join-Path $app $info.ortDll), "app\$($info.ortDll)"),
+              @((Join-Path $app 'DirectML.dll'), 'app\DirectML.dll'),
+              @((Join-Path $env:OT_DEPS "microsoft.ai.directml.$($info.directmlVersion)\LICENSE.txt"), 'licenses\DirectML-LICENSE.txt'),
+              @("$rel\THIRD-PARTY-NOTICES.txt", 'THIRD-PARTY-NOTICES.txt'),
+              @("$rel\build-info.json", 'build-info.json')
+            )
+          } else {
+            New-Item -ItemType Directory -Force -Path "$env:OT_STAGE\app", "$env:OT_STAGE\test-logs" | Out-Null
+            $allow = @(
+              @((Join-Path $app 'OpenTune.exe'), 'app\OpenTune.exe'),
+              @((Join-Path $app 'OpenTuneOnnxRuntime_1_24_4.dll'), 'app\OpenTuneOnnxRuntime_1_24_4.dll'),
+              @((Join-Path $app 'DirectML.dll'), 'app\DirectML.dll'),
+              @((Join-Path $env:OT_DEPS 'microsoft.ai.directml.1.15.4\LICENSE.txt'), 'app\DirectML-LICENSE.txt'),
+              @((Join-Path $env:OT_DEPS 'onnxruntime-dml-1.24.4\LICENSE'), 'app\onnxruntime-LICENSE.txt')
+            )
+          }
           foreach ($pair in $allow) {
             if (-not (Test-Path -LiteralPath $pair[0] -PathType Leaf)) { throw "allow-listed file missing: $($pair[0])" }
             Copy-Item -LiteralPath $pair[0] -Destination (Join-Path $env:OT_STAGE $pair[1])
           }
-          if (Test-Path -LiteralPath $env:OT_TEST_DATA) {
+          if ($env:OT_PACKAGE -ne 'true' -and (Test-Path -LiteralPath $env:OT_TEST_DATA)) {
             Get-ChildItem -LiteralPath $env:OT_TEST_DATA -File -Filter '*.log' | Copy-Item -Destination "$env:OT_STAGE\test-logs"
           }
           $summary = "$env:RUNNER_TEMP\ot-ctest-summary.json"
-          if (Test-Path -LiteralPath $summary) { Copy-Item -LiteralPath $summary -Destination "$env:OT_STAGE\test-logs\ctest-summary.json" }
+          if ($env:OT_PACKAGE -ne 'true' -and (Test-Path -LiteralPath $summary)) { Copy-Item -LiteralPath $summary -Destination "$env:OT_STAGE\test-logs\ctest-summary.json" }
 
           $problems = @()
           foreach ($i in @(Get-ChildItem -LiteralPath $env:OT_STAGE -Recurse -Force)) {
@@ -301,7 +375,7 @@ jobs:
         if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: opentune-windows-rwdi-control-api-${{ matrix.control-api }}
+          name: ${{ env.OT_PACKAGE == 'true' && 'opentune-windows-release-inputs' || format('opentune-windows-rwdi-control-api-{0}', matrix.control-api) }}
           path: ${{ env.OT_STAGE }}
           if-no-files-found: error
           retention-days: 3

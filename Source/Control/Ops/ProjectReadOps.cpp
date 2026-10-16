@@ -214,7 +214,7 @@ Result<JsonValue> runProjectGet(ControlOpContext& context, const ControlNoParams
             continue;
         const auto contentId = controlContentId(context, key);
         contents.append(contentSummaryJson(contentId, *snapshot));
-        versions.push_back(controlContentVersions(contentId, *snapshot));
+        versions.push_back(controlContentVersions(context, contentId, *snapshot));
     }
 
     std::string selectionReason;

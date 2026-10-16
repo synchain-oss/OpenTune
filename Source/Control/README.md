@@ -2,7 +2,7 @@
 
 # OpenTune control API (OTCP v1)
 
-> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、撤销历史（撤销识别、ControlOriginAction、没有撤销条目的写入）、ContentEditTransaction 与它镜像的上游函数、内容写入的就绪门、忙碌检查、编辑器 bridge、导入、导出（界面与接口共用的导出锁、逐内容的就绪判定、临时文件与最终改名）、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
+> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、撤销历史（撤销识别、ControlOriginAction、没有撤销条目的写入）、ContentEditTransaction 与它镜像的上游函数、音符编辑与移调（content.editNotes、content.setPitchShift、AUTO 的 SNAP，修正段按钢琴卷帘的步骤重建，令牌扣除移调步骤）、内容写入的就绪门、忙碌检查、编辑器 bridge、导入、导出（界面与接口共用的导出锁、逐内容的就绪判定、等待伸缩重建、临时文件与最终改名）、时间网格（照时间工具的两轮夹紧移动手柄、整段平移、以 job 种子锚点、TimeGridEditAction 撤销步、它镜像的上游函数）、镜像登记（MIRRORS.md、mirror-map.json、ControlMirrorDriftTests）、AI agent 快速规则、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
 
 This directory holds the local control API of OpenTune Standalone: a JSON-RPC protocol over a loopback
 TCP connection (OTCP v1, specified in `Tests/Control/spec/otcp/v1/PROTOCOL.md`), with which another
@@ -10,6 +10,16 @@ program on the same machine, for example an assistant, can read and edit the ope
 UI does. It is compiled only with the CMake option `OPENTUNE_ENABLE_CONTROL_API` (default OFF) and runs
 only when enabled at run time. With the option OFF, or ON but not enabled, OpenTune behaves exactly as
 without this directory.
+
+## Quick rules for AI agents / AI agent 快速规则
+
+Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant to keep the control API intact.
+如果希望你的 AI agent 不破坏控制接口，可以原样粘进你自己的 `CLAUDE.md` 或 `AGENTS.md`。
+
+1. If you change an upstream function that is listed in `MIRRORS.md`, you must run `ControlMirrorDriftTests` and bring the mirrored code in `Source/Control` in line as `MIRRORS.md` says before you update the hash. The test exists only in a build configured with `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` (both are OFF by default), for example `cmake -S . -B build-control -G Ninja -DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON`, then build it and run `ctest --test-dir build-control -C RelWithDebInfo -R ControlMirrorDrift --no-tests=error`; in a default build `ctest -R Control` finds no test, and without `--no-tests=error` that still exits 0. / 改了 `MIRRORS.md` 里列出的上游函数，必须运行 `ControlMirrorDriftTests`，并按 `MIRRORS.md` 同步 `Source/Control` 里的镜像代码，然后才能更新哈希。这个测试只存在于用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` configure 的构建里（两者默认都是 OFF），例如 `cmake -S . -B build-control -G Ninja -DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON`，构建后运行 `ctest --test-dir build-control -C RelWithDebInfo -R ControlMirrorDrift --no-tests=error`；默认构建里 `ctest -R Control` 找不到任何测试，不加 `--no-tests=error` 时退出码仍是 0。
+2. Do not delete or move code marked `// OpenTune Control API hook`; the list is in "Hooks". / 不要删除或挪动标有 `// OpenTune Control API hook` 的代码，清单见「Hooks」。
+3. With `OPENTUNE_ENABLE_CONTROL_API` OFF, or ON but not enabled at run time, OpenTune must behave as before. / 选项关闭，或开启但运行时未启用时，OpenTune 的行为必须与原来一致。
+4. The control API reads and writes content only on the message thread, through `ControlDispatcher::runOnMessageThread`; never from the network thread. / 控制接口只在消息线程、经 `ControlDispatcher::runOnMessageThread` 读写内容，绝不在网络线程。
 
 ## File map
 
@@ -33,10 +43,14 @@ without this directory.
 | `Ops/OpsSupport.*` | What the operations share: parameter reader, handle resolution, the world revision vector and `asOf`, number and text output. |
 | `ControlJobs.*` | The jobs of the instance: registry, the tick that advances running jobs on the message thread, the long poll of `job.get`, cancellation, retention. |
 | `Ops/WriteEnvelope.*` | What every write shares: the busy checks, the dirty flag, revert recipes, the UI snapshot, `revisionDiff` and the write envelope builder. |
-| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*`, `Ops/ExportOps.*`, `Ops/UndoOps.*`, `Ops/ContentTuneOps.*` | The methods, one file per group (see "Method table"). |
+| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*`, `Ops/ExportOps.*`, `Ops/UndoOps.*`, `Ops/ContentTuneOps.*`, `Ops/ContentEditOps.*`, `Ops/TimingOps.*` | The methods, one file per group (see "Method table"). |
+| `Edit/TimeGridOps.*` | The handle moves of OpenTune's time tool without the piano roll: the two passes of its limits, and the commit of a grid as the piano roll commits one (see "Time grid"). |
 | `Ops/EditSupport.*` | What the content edits and the undo steps share: params forms of tokens and keys, the readiness gate, the expected-token checks, note references, `reRenderQueued`, and the description of an undo step's effect from two snapshots. |
 | `Edit/ControlOriginAction.*` | The undo entry of a change made through the API (upstream undo actions wrapped with an `undoId`), and `ControlHistory`: undoIds, the API's entries, the undoIds of UI entries, changes without an undo entry. |
 | `Edit/ContentEditTransaction.*` | Undo entries built from snapshots around a commit of the content commands, as the piano roll builds them (see "ContentEditTransaction"). |
+| `Edit/NoteCorrection.*` | The correction segments the piano roll rebuilds after an edit of notes, and SNAP (AUTO in the openDyne scheme), computed as the piano roll computes them and committed into a ContentEditTransaction (see "Note edits and the pitch shift"). |
+| `Edit/PitchShiftLedger.*` | The steps of OpenTune's pitch shifts that the `revision` token leaves out (see "Note edits and the pitch shift"). |
+| `mirror-map.json`, `MIRRORS.md` | The upstream functions that the API mirrors, with a hash of each (machine-readable source of truth and the table generated from it); checked by `Tests/Control/ControlMirrorDriftTests.cpp` (see "Mirrors"). |
 | `ControlFileIdentity.*` | File identity (volume and file id, `st_dev` and `st_ino`), "same file" by identity, and the final rename that never replaces (PROTOCOL.md sections 20.3 and 20.4); standard library and operating system only. |
 | `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme, the processing object of `session.info` and `prefs.get`). |
 | `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
@@ -202,7 +216,10 @@ Reads share these conventions (section 16):
   says why (section 11);
 - cursors are `<letter>1.<offset>.<paramsHash>.<tokensHash>`: bound to the selection params of the
   method (other params give `INVALID_ARGUMENT(invalid_params)`) and to the tokens of the read that issued
-  them (changed tokens give `REVISION_CONFLICT(cursor_stale)`).
+  them (changed tokens give `REVISION_CONFLICT(cursor_stale)`). The cursors of `content.getNotes` and
+  `content.getPitchCurve` are bound to the content's pitch shift as well, because a pitch shift moves every
+  target and every `correctedMidi` without changing `revision` ("Note edits and the pitch shift"): after a
+  shift (or its undo) the old cursor is stale and the client reads again.
 
 Handles are `c:<instanceIdShort>:<contentEpoch>:<objectId>` and
 `p:<instanceIdShort>:<contentEpoch>:<placementId>`. A handle of another instance or another content epoch
@@ -321,10 +338,18 @@ API reads it through the hook `peekUndo` / `peekRedo` / `size` / `cursor` and ap
   (`controlDescribeEffect`: contents, keys, pitch shifts, clips, tracks), so it also covers entries the
   API cannot inspect; an empty `revisionDiff` gives `noOp` and `UNDO_NO_EFFECT`. The step's own revert
   recipe is the opposite step with the entry's `undoId`, never with `force`.
-- **Changes without an undo entry** (`content.setKey`, `content.autoTune` mode `notesOnly`; section 15.3
-  rule 9) are never taken back: `ControlHistory::onChangeWithoutEntry()` masks that aspect of that content
-  in every entry the API recorded before (their undo then skips it) and clears the redo history with the
-  hook's `clearRedo()`. UI entries are applied as OpenTune applies them.
+- **Changes without an undo entry** (`content.setKey`, `content.autoTune` mode `notesOnly`,
+  `content.editTimeGrid` op `seed`; section 15.3 rule 9) are never taken back:
+  `ControlHistory::onChangeWithoutEntry()` masks that aspect of that content in every entry the API recorded
+  before (their undo then skips it) and clears the redo history with the hook's `clearRedo()`. UI entries are
+  applied as OpenTune applies them. A pitch shift recorded through the API is the exception: OpenTune's
+  `PitchShiftEditAction` puts back the notes it saved together with the settings, so once `notesOnly`
+  replaced the notes of its content, the entry puts back the settings only,
+  through `ContentEditCommands::commitPitchShiftEdit()` (which scales the notes the content has now, as the
+  pitch-shift dialog does; the action that call returns is discarded). That call applies nothing when the
+  content has no pitch curve or already has a shift of the same total cents: the step is used up, changes
+  nothing and gives `noOp` and `UNDO_NO_EFFECT` (`ControlOriginAction::lastStepTookEffect()`), and the log
+  records it.
 - Track deletion barriers (`possiblyStale`, `UNDO_CONFLICT(stale_entry)`, `UNDO_ENTRY_POSSIBLY_STALE`)
   come with the track methods; until then no entry is possibly stale.
 
@@ -338,17 +363,102 @@ description. Several commits of one call (the ranges of `content.autoTune`) are 
 so one call is one undo step. The actions use the processor's own `ContentEditCommands`, the instance the
 piano roll uses.
 
-The upstream functions it and the AUTO method follow (lines of the locked upstream base). A change of these
-functions upstream needs the same change here; the drift guard over them is registered in a later part:
+The upstream functions it and the AUTO method follow. A change of these functions upstream needs the same
+change here; they are registered in `MIRRORS.md` (see "Mirrors") and `ControlMirrorDriftTests` fails when one
+changes:
 
 | Upstream function | Followed in |
 |---|---|
-| `PianoRollComponent::captureBeforeUndoSnapshot()` (`Source/Standalone/UI/PianoRollComponent.cpp:1182-1187`) | `ContentEditTransaction::captureBefore()` |
-| `PianoRollComponent::recordUndoAction()` (`PianoRollComponent.cpp:1189-1267`) | `ContentEditTransaction::recordRange()`, `notesInRange()`, `segmentsInRange()` |
-| `PianoRollComponent::applyAutoTuneToSelection()`, the openTune scheme (`PianoRollComponent.cpp:5288-5341`) | `content.autoTune` mode `regenerate` (`Ops/ContentTuneOps.cpp`): range resolution, capture, commit, undo range |
-| `OpenTuneAudioProcessor::autoTuneContentRangeByContentKey()` and `commitAutoTuneGeneratedNotesByContentKey()` (`Source/PluginProcessor.cpp:5375-5493`) | the `dryRun` prediction of `regenerate` and the removed / dropped notes of its result |
-| `OpenTuneAudioProcessor::generateNotesOnlyByContentKey()` (`PluginProcessor.cpp:5334-5373`) | the `dryRun` prediction of `notesOnly` |
-| `OpenTuneAudioProcessorEditor::scaleChanged()` (`Source/Standalone/PluginEditor.cpp:3040-3078`) | `content.setKey`: the manual key, the no-op, the dirty flag |
+| `PianoRollComponent::captureBeforeUndoSnapshot()` | `ContentEditTransaction::captureBefore()` |
+| `PianoRollComponent::recordUndoAction()` | `ContentEditTransaction::recordRange()`, `notesInRange()`, `segmentsInRange()` |
+| `PianoRollComponent::applyAutoTuneToSelection()`, the openTune scheme | `content.autoTune` mode `regenerate` (`Ops/ContentTuneOps.cpp`): range resolution, capture, commit, undo range |
+| `OpenTuneAudioProcessor::autoTuneContentRangeByContentKey()` and `commitAutoTuneGeneratedNotesByContentKey()` | the `dryRun` prediction of `regenerate` and the removed / dropped notes of its result |
+| `OpenTuneAudioProcessor::generateNotesOnlyByContentKey()` | the `dryRun` prediction of `notesOnly` |
+| `OpenTuneAudioProcessorEditor::scaleChanged()` | `content.setKey`: the manual key, the no-op, the dirty flag |
+
+## Note edits and the pitch shift
+
+`content.editNotes` (`Ops/ContentEditOps.cpp`) edits existing notes the way the piano roll's gestures do, without
+the piano roll:
+
+- The selection of every op is resolved against the notes at `expectedRevision` (an index beyond them is
+  `NOT_FOUND(unknown_handle)`); editing never adds or removes notes or moves them in time, so later ops address the
+  same notes. `setTargetPitch` sets the target with no cent offset (the base pitch moves, `pitchOffset` becomes 0);
+  `shiftCents` adds to `pitchOffset`, as the pitch move of the piano roll does; `snapToScale` sets the target to the
+  nearest pitch of the key's scale, an exact tie going up (within the 1e-4 semitones the reads resolve), with no
+  cent offset; `setParams` sets the given note parameters. These are explicit ops: the snapping modes of the UI's
+  pitch drag (the active scale, the pitch grid, the whole-note preference) do not apply, so the editing scheme
+  does not change what an op does.
+- Targets convert as OpenTune converts note pitches: the base pitch of a target is `PitchUtils::midiToFreq()`,
+  and a target read back is `PitchUtils::freqToMidi()` of `Note::getAdjustedPitch()`. `midiToFreq()` gives 0 Hz
+  for MIDI 0, so `setTargetPitch` with `targetMidi` 0 leaves the note without a base pitch: it reads as MIDI 0,
+  `shiftCents` then changes only its `offsetCents` (the adjusted pitch of a note without a base pitch stays 0, as
+  in the piano roll's pitch drag), and a later `setTargetPitch` gives it a base pitch again.
+- Each op that changes notes is one gesture of the piano roll: the frame range of the notes it changed
+  (`controlNotesFrameRange()`, as `noteDragEditRange()`), the correction rebuilt over all notes in that range with
+  the content's pitch-shift ratio (`controlNoteBasedCorrection()`), the commit of the affected range through
+  `ContentEditCommands::commitNotesAndSegments()` and a `PianoRollEditAction` with the UI's description
+  (`controlCommitCorrection()`). One call is one `ControlOriginAction`; its description is that of the first op
+  that committed. An op whose frame range is empty commits nothing, as in the piano roll.
+- The fallback parameters of `PitchCurve::applyCorrectionToRange()` are `NoteGeneratorParams{}`, never the UI's
+  knob positions; each note uses its own retune speed, vibrato and drift, so they end up only in the segments'
+  parameter snapshot.
+- `dryRun` runs the same ops on a copy of the notes and lists the same `changes` and `sideEffects` as the commit;
+  only the revision the notes are referenced at differs (section 14.3).
+
+`content.autoTune` mode `snapNotes` (`Ops/ContentTuneOps.cpp`) is SNAP, the AUTO button in the openDyne scheme,
+ported in `controlPlanAutoSnap()`: each target note's `pitchOffset` becomes the scale's quantization of its base
+pitch minus the base pitch, then the correction of the targets is rebuilt; a note without a base pitch is MIDI 0
+there (`PitchUtils::freqToMidi()` of 0 Hz), so its offset becomes the quantization of MIDI 0, as the button sets
+it. Without ranges every note is a target
+(the button without a note selection: the new segments cover the whole affected range); each range is one pass over
+the notes that overlap it (the button with those notes selected: the new segments are cut to their frames, every
+other frame keeps its segments). Every pass that changes something is one commit; the call is one undo step.
+
+`content.setPitchShift` (`Ops/ContentEditOps.cpp`) calls `ContentEditCommands::commitPitchShiftEdit()`, as the
+pitch-shift dialog does, and pushes the `PitchShiftEditAction` in a `ControlOriginAction`; the result describes the
+effect from two captures, as for an undo step, with `KEY_NOT_TRANSPOSED`.
+
+**`revision` and pitch shifts.** A pitch shift must not change `revision` (PROTOCOL.md section 10 rule 2), but
+OpenTune's `applyPitchShiftState()` scales the stored notes and segments and advances the notes and pitch counters
+the token is made of. `ControlPitchShiftLedger` (`Edit/PitchShiftLedger.*`, owned by `ControlHistory`) observes each
+content whenever the API computes its tokens (`controlContentVersions()`), counts a pitch-shift step between two
+observations (the settings changed and both counters advanced; `applyPitchShiftState()` is the only change of a
+Standalone content that changes the settings) and leaves those steps out. The API's own steps (`setPitchShift`,
+`edit.undo`, `edit.redo`) are always between two observations, since the write envelope observes every content
+before and after a write; a step of the UI (the dialog, Ctrl+Z) is counted by the next read. Two such steps between
+two reads count once, so `revision` changes once without a change of the notes; the ledger never hides a change of
+the notes. It only reads; OpenTune's counters stay as they are. A counter lower than at the last observation means
+that the content object was built anew under the same `contentId`; the ledger then starts that content over. Because
+OpenTune scales the stored notes and segments and renders the original F0 with the shift's gain, `content.getNotes`
+reports the targets and `content.getPitchCurve` the `correctedMidi` moved by the shift, at the same `revision`; the
+cursors of both are therefore bound to the pitch shift as well, so a page is never continued across a shift.
+
+The upstream functions these follow (lines of the locked upstream base). A change of these functions upstream
+needs the same change here; they are registered in `MIRRORS.md` (see "Mirrors") and `ControlMirrorDriftTests`
+fails when one changes:
+
+| Upstream function | Followed in |
+|---|---|
+| `buildNoteBasedCorrectionState()` and `commitNoteBasedCorrection()` (`Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp:189-240`) | `controlNoteBasedCorrection()` (`Edit/NoteCorrection.cpp`) |
+| `PianoRollToolHandler::noteDragEditRange()`, `dragNotePitch()`, `endNotePitchDrag()` (`PianoRollToolHandler.cpp:1912-2217`) | `controlNotesFrameRange()`; ops `setTargetPitch` and `shiftCents` (`Ops/ContentEditOps.cpp`), description |
+| `PianoRollToolHandler::handlePitchToolDoubleClick()` (`PianoRollToolHandler.cpp:2269-2359`) | op `snapToScale` (description), the drift and modulation descriptions of `setParams` |
+| `PianoRollComponent::editParameter()`, the selected-notes target (`Source/Standalone/UI/PianoRollComponent.cpp:2645-2903`) | op `setParams` (`Edit note parameter`) |
+| `PianoRollComponent::commitEditedContentNotesAndSegments()` (`PianoRollComponent.cpp:1007-1116`) | `controlCommitCorrection()` |
+| `PianoRollComponent::applyAutoSnapToAllNotes()` and `isFullyCorrectedInRange()` (`PianoRollComponent.cpp:5344-5524`, `:49-61`) | `controlPlanAutoSnap()`; `content.autoTune` mode `snapNotes` |
+| `OpenTuneAudioProcessorEditor::pitchShiftRequested()` (`Source/Standalone/PluginEditor.cpp:3532-3581`) | `content.setPitchShift`: the no-op, the undo entry, the dirty flag |
+| `OpenTuneAudioProcessor::commitPitchShiftEdit()` and `StandaloneClipContent::applyPitchShiftState()` (`Source/PluginProcessor.cpp:5328-5368`, `Source/Content/StandaloneClipContent.cpp:127-139`) | `ControlPitchShiftLedger`: the counters a pitch-shift step advances |
+
+Known OpenTune behaviours, reported as they are:
+
+- SNAP finds its targets "fully corrected" only when every one of their frames has a correction segment, and
+  unvoiced frames never get one (`PitchCurve::applyCorrectionToRange()` inserts voiced pieces only). A target note
+  with unvoiced frames is therefore never "no change": every SNAP over it commits again and pushes an undo entry,
+  also when no note moves. The result then lists no changes but is not a no-op (`revisionDiff` and
+  `reRenderQueued`).
+- A pitch shift whose total cents equal the current ones (for example −1 semitone +50 cents and 0 semitones −50
+  cents) is refused by `commitPitchShiftEdit()`; `content.setPitchShift` reports a no-op, as the dialog commits
+  nothing.
 
 ## Readiness gate
 
@@ -377,7 +487,8 @@ before each commit and waits while the UI is busy, also while an export holds th
 implements it in `Source/Standalone/ControlEditorBridge.*`, a friend adapter that reads the editor's state
 and calls the editor's own functions without adding behaviour. Its general part provides the project file
 and dirty flag (`ProjectSession`), the busy state, structure-change notifications, the editor's steps after
-an undo or redo (`afterUndoRedo()`), the view (workspace,
+an undo or redo (`afterUndoRedo()`), the refresh after a time-grid edit (`onTimeGridChanged()`: the piano roll's
+`onTimeGridRevisionChanged()`, as its own commit of a grid does, and a redraw of the arrangement), the view (workspace,
 piano roll clip, selection, visible track count), the focus of an imported clip
 (`applyPlacementSelectionContext`), revealing tracks, the note generation parameters of the piano roll,
 the project session and its worker pool, and the audio device manager. Dialogs, tracks, project flows and
@@ -461,9 +572,24 @@ clip or track and stereo for the master mix.
   uncorrected (`analysisFailed`); a failed render block: one more `requestFullContentRender()` (its
   reconcile retries a failed block of the same revision), then `RENDER_FAILED(render_chunk_failed)`;
   render work pending: wait; ready once the render cache is settled at its revision
-  (`RenderCache::isCanonicalSettled`). A content whose render was never requested gets one request. After
-  120 s: `NOT_READY(export_wait_timeout)`. A clip export whose clip is deleted meanwhile fails with
-  `REVISION_CONFLICT(changed_during_export)`.
+  (`RenderCache::isCanonicalSettled`). A content whose render was never requested gets one request. A
+  content whose time grid is not the identity is played and exported from its time-stretch output (the
+  Stage2 rebuild), which OpenTune's export reads only when it was built at the content's current content
+  and time-grid revisions (`readExportPlaybackAudio`); otherwise the content would be silent in the file. Such a
+  content is ready, or exported dry, only once that output is current (`TimeStretchCache::
+  sliceCanonicalForOutputRange`, the export's own read). OpenTune queues the rebuild when the grid changes
+  while the render is settled and when a render block settles; when the render is settled, no output is
+  current and the render worker is idle, the job queues it as `setContentTimeGrid()` does
+  (`ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled`). The worker can drop a rebuild (it gives up
+  when the published playback source changed meanwhile), so once the worker has been idle for 0.5 s with still no
+  current output, the job queues it again, at most 3 times for the same revisions
+  (`kControlExportMaxStretchRequests`), then fails with `NOT_READY` (no reason). The rebuild needs a settled render:
+  a content the job would export dry (failed or unvoiced analysis, nothing to render) whose grid is not the
+  identity and that has no settled render has no audio OpenTune could put in the file, and waiting does not change
+  that, so the job ends at once: `ANALYSIS_FAILED(f0_failed)` for a failed analysis with `allowDry` (the failure of
+  rule 6 for a failed analysis; `allowDry` cannot help), otherwise `NOT_READY` without a reason (the protocol has
+  none for it). After 120 s: `NOT_READY(export_wait_timeout)`. A clip export whose clip is deleted meanwhile fails
+  with `REVISION_CONFLICT(changed_during_export)`.
 - In the tick that finds every content ready, the job records a token of the inputs (each clip's track,
   position, length, source window, gain and fades, its track's volume, and per content the revision, time
   grid and pitch shift) and the revisions it reports, and starts the writer on a thread of its own with a
@@ -492,10 +618,117 @@ Known OpenTune behaviours, reported as they are:
 - The processor's export functions wait for every render work of the process (`drainRenderWorker`), not
   only for the exported contents.
 
+## Time grid
+
+A content's time grid (`Utils/TimeGrid.h`) maps the source audio (the `content` clock) to what plays (the
+`output` clock) through handles between ClipStart and ClipEnd; OpenTune's time tool (an experimental tool of
+the piano roll) places, drags, inserts and deletes them. The API reports the handles between the end points
+(`content.getDetails` `timeGrid`, with each handle's stable id as `handleId`) and edits them with
+`content.shiftTiming` and `content.editTimeGrid` (`Ops/TimingOps.cpp`, capability `timing.v1`). The grid has its
+own token, `gridRevision` (`expectedGridRevision`, `REVISION_CONFLICT(grid_changed)`); a grid change never
+changes the content's `revision`.
+
+- **Checks**, in order: the handle, the busy state, the readiness gate, `expectedGridRevision`, a grid with
+  handles (`NOT_READY(grid_not_seeded)`, not retryable: waiting does not seed it), then each handle named once
+  (`INVALID_ARGUMENT(duplicate_handle)`) and an inner handle of this grid (`NOT_FOUND(unknown_handle)`; the end
+  points, which the API does not report, are no handles of the API).
+- **Moves** follow the time tool's drag (`PianoRollToolHandler::handleTimeToolMouseDrag`), computed by
+  `Edit/TimeGridOps.cpp` without the piano roll, in two passes: a moved handle is limited to its neighbours plus
+  and minus 30 ms (`TimeGridSnapshot::kMinOutputSpacingSeconds`; the time tool drops the spacing only while Alt
+  is held, which the API has no equivalent of); when several handles move, every inner handle is then limited
+  from left to right to its limited left neighbour plus the spacing and its right neighbour minus the spacing,
+  as the time tool's group drag does. When a handle has no room between its neighbours (a grid the time tool
+  made tighter than 30 ms), nothing moves, as the time tool keeps the grid as it was. A limited move is applied
+  as far as allowed and reported in `clamped` and with the warning `CLAMPED`; a call that moves nothing is a
+  no-op.
+  - `content.shiftTiming` moves every handle whose output time lies in the range (a content range is mapped
+    through the current grid with `tauForward`) by `deltaSec`: a group drag whose dragged handle is the one
+    that leads in the direction of the move, so that the section stops at its neighbour and moves as a whole.
+  - `content.editTimeGrid` op `moveHandles` moves each named handle to its output time; with several moves the
+    first pass limits each one by its neighbours' targets (for one move these are the neighbours as they are,
+    exactly the time tool's drag).
+- **Commit and undo**, as the piano roll's `commitTimeGrid`: a `TimeGridEditAction` with the grid before and
+  after, `ContentEditCommands::setTimeGrid()` (the processor's `setContentTimeGrid()`, which publishes the grid
+  for playback and queues the time-stretch rebuild), and one undo entry per call, wrapped in a
+  `ControlOriginAction` (aspect time grid). The description is "拖动时间手柄" ("drag time handle"), the text the
+  time tool means for its drag (see "Known OpenTune behaviours" below). The project is marked as changed (the
+  UI does not mark it after a time-grid edit), `reRenderQueued` names the content, and the editor is told
+  through `ControlUiBridge::onTimeGridChanged()`.
+- **Seed** (`content.editTimeGrid` op `seed`) places the initial handles as OpenTune does when the time tool is
+  picked (`PianoRollComponent::setCurrentTool` calls `OpenTuneAudioProcessor::ensureTimeToolAnchorSeed()`). That
+  function seeds from the content's timing analysis (the reference feature analysis) and, while that analysis
+  is not ready, starts it and registers the content for a seeding of its own once it finishes. The API runs
+  the seed as a job of kind `timeGridSeed` instead: the job asks for the analysis with
+  `preheatReferenceAlignmentFeatures()` (which does nothing while it runs or is ready), waits, and calls
+  `ensureTimeToolAnchorSeed()` only once the analysis is ready, which then seeds at once. So a cancelled job
+  leaves no deferred seeding behind. Every step checks that the content still exists (`NOT_FOUND
+  (unknown_handle)`) and that its pitch analysis is still ready; the first step and the seeding step check
+  the busy state; an analysis that failed or found no onset ends the job with `INTERNAL`, as the time tool then
+  places no handle; after 120 s it ends with `NOT_READY`. A grid that has handles by then is left as it is
+  (a no-op). Seeding has no undo entry, as in the UI (`ui_parity`, no revert recipe, `IRREVERSIBLE`); like
+  every change without an undo entry it masks the grid in earlier entries of the API and clears the redo
+  history (PROTOCOL.md section 15.3 rule 9). The seeded handles have output equal to content, so the content
+  sounds the same and nothing is rendered again.
+- **Export**: a content whose grid is not the identity is exported only once its time-stretch output is
+  current (see "Export").
+- Inserting and deleting handles, and setting or resetting a whole grid, are not part of this build.
+
+The upstream functions it follows, registered in `mirror-map.json` (see "Mirrors"; `ControlMirrorDriftTests` fails
+when one of them changes). A change of these functions upstream needs the same change here:
+
+| Upstream function | Followed in | Mirror id |
+|---|---|---|
+| `PianoRollToolHandler::handleTimeToolMouseDrag()` (`Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp`) | `TimeGridOps::planShift()`, `planMoves()`: the limit of the dragged handle, the uniform distance of a group, the second pass | `time-tool-drag` |
+| `PianoRollToolHandler::handleTimeToolMouseUp()` (same file) | the commit of a moved grid and its description (`applyPlan` in `Ops/TimingOps.cpp`) | `time-tool-mouse-up` |
+| the piano roll's `toolCtx.commitTimeGrid` (`Source/Standalone/UI/PianoRollComponent.cpp`) | `TimeGridOps::commit()` and the undo entry of `Ops/TimingOps.cpp` | `time-grid-commit` |
+| `PianoRollComponent::setCurrentTool()` (same file) | the seed job's call of `ensureTimeToolAnchorSeed()` | `time-tool-pick` |
+| `OpenTuneAudioProcessor::ensureTimeToolAnchorSeed()` (`Source/PluginProcessor.cpp`) | the seed job's condition for seeding at once (a grid without handles, `featuresReady`) | `time-seed-anchors` |
+| `OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures()` (same file) | the seed job's reading of `AlreadyReady` as the producer and fingerprint part of `featuresReady` | `time-seed-preheat` |
+| `OpenTuneAudioProcessor::setContentTimeGrid()` (same file) | the export's request of the time-stretch rebuild (`ExportJob::stretchState` in `Ops/ExportOps.cpp`) | `time-grid-publish` |
+
+Known OpenTune behaviours, reported as they are:
+
+- The time tool's own description literal of its drag ("拖动时间手柄") is stored in
+  `PianoRollToolHandler.cpp` with a broken encoding, so the UI's entries carry garbled text; the API's entries
+  carry the intended text. The UI never shows the description.
+- The UI does not mark the project as changed after a time-grid edit or a seed; the API does (section 15.5).
+- `ensureTimeToolAnchorSeed()` replaces a grid whose handles are all of kind `UserAdded` and that is the identity;
+  the API never calls it for a grid that has handles.
+- The reference analysis service runs only one synchronous analysis (the standard producer, which the
+  time tool's seeding uses by default) per session: `ReferenceAnalysisService::workerLoop` moves its finished
+  job out of `activeJob` with `std::move`, which leaves the optional engaged, so the worker never takes the next
+  job. A later seed of another content, from the UI or the API, waits for an analysis that never finishes; the
+  seed job ends with `NOT_READY` after its wait limit, or when it is cancelled, and never seeds without the
+  analysis. `TimeGridSeed` shows it.
+
 ## Dirty flag and revision tokens
 
 The dirty flag belongs to the editor's `ProjectSession`; without an editor it is false. Revision tokens
-are described in "Request handling"; write results return them read back after the commit.
+are described in "Request handling"; write results return them read back after the commit. The `notes` and
+`pitch` components leave out the steps of pitch shifts ("Note edits and the pitch shift").
+
+## Mirrors
+
+Some of what the UI does is written in UI classes that the API must not change (the piano roll, the editor,
+the processor's export functions). The API repeats those steps in `Source/Control/**` and calls only the
+lower-level functions that exist. The repeated code is a **mirror**; the upstream function it follows is
+*mirrored*. A change of that function upstream, without the same change here, makes the API differ from the
+UI without any test noticing. So every mirror is registered:
+
+- `mirror-map.json` (the source of truth) lists, for each mirrored upstream function or constant, its file and
+  symbol, the hash of its normalised text, the Control files and symbols that follow it, the tests that cover
+  it, and a one-line note.
+- `MIRRORS.md` is the same information for people: change X upstream, bring Y in line, run Z, record the
+  new hash. Its table is generated from `mirror-map.json`.
+- `Tests/Control/ControlMirrorDriftTests.cpp` hashes the same text in the source tree and fails when a hash
+  differs, printing the function you changed, the file to bring in line, the tests to run and the command
+  that records the new hash (`--update`). It also fails when `MIRRORS.md` differs from `mirror-map.json`,
+  when a Control file, symbol or test named there does not exist, and (self-test) if a change inside a mirrored
+  function would not turn the check red. It is registered as `ControlMirrorDriftTests`, so `ctest -R Control`
+  runs it.
+
+When you add code that repeats the steps of an upstream function, register it in the same change ("Adding a
+mirror" in `MIRRORS.md`) and name the upstream function in a comment of the mirrored code.
 
 ## Adding a method
 
@@ -507,7 +740,8 @@ are described in "Request handling"; write results return them read back after t
    `ControlOpContext` on the message thread and returns `Result<JsonValue>`. Reach the processor and the
    bridge only through the context. Return errors with `controlOpError(kind, reason, detail)`; `detail`
    is printable ASCII and never contains secrets or text from files or projects. Note in a comment which
-   upstream function the operation calls and why.
+   upstream function the operation calls and why. If the operation repeats the steps of an upstream
+   function instead of calling it, register that function in `mirror-map.json` (see "Mirrors").
 3. Register it with `controlReadMethod<Params>(name, parse, run)`, `controlWriteMethod<Params>` for a
    write (see "Write results") or `controlJobMethod<Params>` for a method that works with the jobs
    registry and never waits for the message thread, in the group's `register<Group>Ops()`. A read whose
@@ -535,6 +769,18 @@ the upstream `Tests/LifecycleWatchdog.h`. Its target copies the SharedCode's com
 include directories, because `PluginProcessor.h` changes its class layout with them, and pumps messages
 with `juce::detail::dispatchNextMessageOnSystemQueue` rather than `runDispatchLoop()`, whose stop latches
 for the rest of the process in JUCE 9.0.3. Run them with `ctest -R Control`.
+
+A request of a scenario (`ApiSession::request`) waits `kReadTimeoutMs` for the line with its own id. One
+without a response in time fails the scenario with the longest single message dispatch on the message thread
+meanwhile and the open modal windows, which tell a message thread kept busy by another message from a slow
+method; its response, if it comes later, is discarded with a note on how late it was, so later requests read
+their own responses. Without the models (as on the build machines) the render that an import requests fails,
+and upstream `ProcessRenderRuntime::notifyApplicationRenderFailure()` builds a diagnostic dialog on the message
+thread; a scenario whose first requests must not race with that calls `settleBackgroundWork()` after its
+setup (render work idle, then the messages posted until then dispatched).
+
+`Tests/Control/ControlMirrorDriftTests.cpp` (standard library and the JSON reader only) compares the hashes of
+`mirror-map.json` with the source tree; see "Mirrors". `ControlMirrorDriftTests` is its ctest name.
 
 `Tests/Control/ControlDispatcherTests.cpp` holds the scenarios of the dispatcher and the read methods. Its
 contents get a pitch analysis made of synthetic F0, committed the way OpenTune commits a finished
@@ -581,8 +827,9 @@ the paused render worker while the clip's notes change), `NOT_READY` with a shor
 directory whose files' identity cannot be read is skipped, because on Windows that identity stays
 readable through the rights of the parent directories).
 
-`Tests/Control/ControlEditTests.cpp` holds the scenarios of the undo history, the key and AUTO, with a test
-bridge for the dirty flag and the selection; entries the user would make in the UI are pushed as the UI
+`Tests/Control/ControlEditTests.cpp` holds the scenarios of the undo history, the key, AUTO, the note edits and
+the pitch shift, with a test bridge for the dirty flag and the selection; entries the user would make in the UI are
+pushed as the UI
 pushes them (the upstream actions, unwrapped). `Undo` covers undo and redo of an API entry back to the exact
 states (also with OpenTune's own `UndoManager::undo()`, as the UI's Ctrl+Z), `top_mismatch` with the user's
 edit left intact, `force` and the undoIds of UI entries, the redo through the revert recipe, changes without
@@ -592,25 +839,62 @@ since; `SetKey` the key aspect only, the revert recipe round trip, `key_changed`
 and the readiness gate; `AutoTune` the hand-computed removed and dropped notes, created notes inside the
 range and in key, several ranges as one step, `dryRun` (its `sideEffects` equal those of the commit, for
 `regenerate` and `notesOnly`), the params defaults and the checks before the change (also `clipKey` on a
-content without a key); `IncompleteCapability` that `edit.v1` is not reported yet; `EditVectors` the specification's
-vectors of `edit/`, `content/set-key-*` and `content/auto-tune-*` (`given.history` is established with the
-same actions; vectors of later parts are listed as skipped, with the reason). The shared contents with
-synthetic F0 are in `ControlContentFixtures.h`, defined in `ControlDispatcherTests.cpp`.
+content without a key); `EditNotes` a table of hand-computed ops (every op, selections by index, range and all,
+several ops in one call, an exact tie of the snap, `targetMidi` 0 and the ops on a note without a base pitch), each
+checked for its prediction equal to its commit, its tokens
+equal to a fresh read, and undo and redo back to the exact states, through the API and through OpenTune's own
+`UndoManager`; then the checks before the change, the no-ops and the params; `SetPitchShift` that `revision` stays
+while the `pitchShift` component changes (also after the undo, the redo, the user's Ctrl+Z and a shift in the UI's
+dialog), `KEY_NOT_TRANSPOSED`, the no-ops, the exact state after the undo, the undo of a shift after `notesOnly`
+(the shift goes back, the generated notes stay), an undo and a redo of such a shift that have nothing to set
+(`UNDO_NO_EFFECT`), a `content.getNotes` and a `content.getPitchCurve` cursor made stale by a shift and by its
+undo (with the curve's second page two semitones up after the shift), a pitch shift and a `content.shiftTiming` of
+one content as separate aspects (each changes only its own component, each undo takes back only its own), and the
+ledger starting a content over when its counters go back; `SnapNotes` the hand-computed SNAP of every note, ranges as
+selections, one undo step for several ranges, the no-op of a second SNAP over corrected notes, `clipKey`, and a
+note without a base pitch;
+`EditCapability` that `edit.v1` is reported with its four methods; `EditVectors` the specification's vectors of
+`edit/`, `content/set-key-*`, `content/auto-tune-*`, `content/edit-notes-*` and `content/set-pitch-shift-*`
+(`given.history` is established with the same actions, a running export of `given.jobs` holds the export lock;
+vectors of later parts are listed as skipped, with the reason). The shared contents with synthetic F0 are in
+`ControlContentFixtures.h`, defined in `ControlDispatcherTests.cpp`.
+
+`Tests/Control/ControlTimingTests.cpp` holds the scenarios of the time grid, on contents with synthetic F0 whose
+grids are applied as OpenTune's content owner applies one. `Timing` runs a table of `content.shiftTiming` and
+`moveHandles` writes with hand-computed handle positions (a handle and a section moved freely, up to a
+neighbour, up to ClipStart and ClipEnd, a content range, several moves the same way and across each other), each
+checked against its result (changes, `clamped`, `CLAMPED`, one undo entry, only the grid aspect, `reRenderQueued`,
+dirty, the editor's notification, tokens equal to a fresh read, `revision` unchanged) and undone back to the exact
+grid before; OpenTune's own undo and redo; `grid_changed`, `grid_not_seeded`, `duplicate_handle`,
+`unknown_handle` (also for an end point), no-ops, `dryRun`, a handle without room, the readiness gate, busy, a stale
+handle and the params. `TimeGridSeed` seeds from a timing analysis with known onsets (hand-computed handles), from
+OpenTune's own analysis (the same handles as `ensureTimeToolAnchorSeed()` gives the UI for that analysis), leaves a
+seeded grid alone, and covers cancellation and the failures of the job's checks (content removed, a dialog opened,
+the pitch analysis running again, an analysis that failed or found no onset), which write no handle.
+`TimingVectors` runs the specification's vectors `content/shift-timing-*` and `content/edit-time-grid-*`.
+`ControlExportTests.cpp` (`ExportTimeStretch`) exports a clip with a stretched grid while its time-stretch rebuild
+is held back (the job waits and writes nothing), one whose rebuild nothing had queued (the job queues it), and one
+whose rebuild the render worker drops (the job asks again); the files hold the stretched render, not silence. It
+also covers a job whose every rebuild is dropped (`NOT_READY` after `kControlExportMaxStretchRequests` requests)
+and contents to export dry with a stretched grid and no render (a failed analysis with `allowDry`:
+`ANALYSIS_FAILED(f0_failed)`; an unvoiced one: `NOT_READY`), which end at once without a file.
 
 ## Capabilities and protocol versions
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
-`jobs.v1`, `import.v1`, `export.v1` and `history.v1`). The listener answers a method of an unreported capability itself with
+`jobs.v1`, `import.v1`, `export.v1`, `edit.v1`, `history.v1` and `timing.v1`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
 `ControlProcessorTests.Completeness` fails when a reported capability has a method that is not registered.
 
-A capability of which only some methods are registered is not reported (`controlCapabilityIsIncomplete`):
-now `edit.v1`, whose `content.setKey` and `content.autoTune` exist while `content.editNotes` and
-`content.setPitchShift` follow. Its methods are refused by the listener until then; the headless tests
-report it with the test seam `controlSetReportIncompleteCapabilitiesForTesting()` to run them.
+A capability of which only some methods are registered is not reported (`controlCapabilityIsIncomplete`); its
+methods are refused by the listener until the last one is registered, and the headless tests report it with the
+test seam `controlSetReportIncompleteCapabilitiesForTesting()` to run them. No capability is incomplete now:
+`edit.v1` is reported since all four of its methods are registered, and no test switches the seam on. The
+mechanism stays for the method groups that are still placeholder lines in `registerControlMethods()`, whose
+capabilities may be registered in more than one step.
 
 ## Method table
 
@@ -629,9 +913,13 @@ report it with the test seam `controlSetReportIncompleteCapabilitiesForTesting()
 | `job.get` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.JobShutdown`, `.JobVectors` | `methods/job.get.schema.json` |
 | `job.cancel` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.ImportCancel`, `.JobVectors` | `methods/job.cancel.schema.json` |
 | `import.start` | `import.v1` | `Ops/ImportOps.cpp` | `ControlProcessorTests.Import`, `.ImportAfterOpen`, `.ImportCancel`, `.JobVectors` | `methods/import.start.schema.json` |
-| `export.start` | `export.v1` | `Ops/ExportOps.cpp` (identity and rename in `ControlFileIdentity.cpp`) | `ControlProcessorTests.Export`, `.ExportFailures`, `.ExportVectors` | `methods/export.start.schema.json` |
+| `export.start` | `export.v1` | `Ops/ExportOps.cpp` (identity and rename in `ControlFileIdentity.cpp`) | `ControlProcessorTests.Export`, `.ExportFailures`, `.ExportVectors`, `.ExportTimeStretch` | `methods/export.start.schema.json` |
 | `edit.getHistory` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.EditVectors` | `methods/edit.getHistory.schema.json` |
 | `edit.undo` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.AutoTune`, `.EditVectors` | `methods/edit.undo.schema.json` |
 | `edit.redo` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.EditVectors` | `methods/edit.redo.schema.json` |
-| `content.setKey` | `edit.v1` (not reported yet) | `Ops/ContentTuneOps.cpp` | `ControlProcessorTests.SetKey`, `.Undo`, `.EditVectors` | `methods/content.setKey.schema.json` |
-| `content.autoTune` (modes `regenerate`, `notesOnly`) | `edit.v1` (not reported yet) | `Ops/ContentTuneOps.cpp` (undo entries in `Edit/ContentEditTransaction.cpp`) | `ControlProcessorTests.AutoTune`, `.Undo`, `.EditVectors` | `methods/content.autoTune.schema.json` |
+| `content.setKey` | `edit.v1` | `Ops/ContentTuneOps.cpp` | `ControlProcessorTests.SetKey`, `.Undo`, `.EditVectors` | `methods/content.setKey.schema.json` |
+| `content.autoTune` (modes `regenerate`, `snapNotes`, `notesOnly`) | `edit.v1` | `Ops/ContentTuneOps.cpp` (undo entries in `Edit/ContentEditTransaction.cpp`, SNAP in `Edit/NoteCorrection.cpp`) | `ControlProcessorTests.AutoTune`, `.SnapNotes`, `.Undo`, `.EditVectors` | `methods/content.autoTune.schema.json` |
+| `content.editNotes` | `edit.v1` | `Ops/ContentEditOps.cpp` (correction rebuild in `Edit/NoteCorrection.cpp`) | `ControlProcessorTests.EditNotes`, `.EditVectors` | `methods/content.editNotes.schema.json` |
+| `content.setPitchShift` | `edit.v1` | `Ops/ContentEditOps.cpp` (tokens: `Edit/PitchShiftLedger.cpp`) | `ControlProcessorTests.SetPitchShift`, `.EditVectors` | `methods/content.setPitchShift.schema.json` |
+| `content.shiftTiming` | `timing.v1` | `Ops/TimingOps.cpp` (moves in `Edit/TimeGridOps.cpp`) | `ControlProcessorTests.Timing`, `.TimingVectors` | `methods/content.shiftTiming.schema.json` |
+| `content.editTimeGrid` (ops `seed`, `moveHandles`) | `timing.v1` | `Ops/TimingOps.cpp` (moves in `Edit/TimeGridOps.cpp`) | `ControlProcessorTests.Timing`, `.TimeGridSeed`, `.TimingVectors` | `methods/content.editTimeGrid.schema.json` |

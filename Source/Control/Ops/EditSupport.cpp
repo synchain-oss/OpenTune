@@ -331,6 +331,63 @@ void controlAddReRenderQueued(ControlWriteEnvelope& envelope, const ControlWorld
     envelope.addSideEffect("reRenderQueued", std::move(effect));
 }
 
+void controlAddPredictedReRenderQueued(ControlWriteEnvelope& envelope, const std::string& contentId)
+{
+    auto ids = JsonValue::array();
+    ids.append(JsonValue::string(contentId));
+    auto effect = JsonValue::object();
+    effect.appendMember("contentIds", std::move(ids));
+    effect.appendMember("revert", JsonValue());
+    envelope.addSideEffect("reRenderQueued", std::move(effect));
+}
+
+std::size_t controlListNoteChanges(ControlWriteEnvelope& envelope, const std::string& contentId,
+                                   const std::vector<Note>& before, const std::vector<Note>& after,
+                                   const std::string& revision, std::size_t maxListed)
+{
+    jassert(before.size() == after.size());
+    const auto count = std::min(before.size(), after.size());
+    // Note indexes count in start-time order, as content.getNotes counts them (OpenTune keeps the notes in
+    // this order).
+    std::vector<std::size_t> order(count);
+    for (std::size_t i = 0; i < count; ++i)
+        order[i] = i;
+    std::stable_sort(order.begin(), order.end(),
+                     [&before](std::size_t a, std::size_t b) { return before[a].startTime < before[b].startTime; });
+    const float tuningHz = TuningConfig::currentTuningHz();
+    const auto targetMidi = [tuningHz](const Note& note) {
+        return controlJsonPitch(PitchUtils::freqToMidi(note.getAdjustedPitch(), tuningHz));
+    };
+    std::size_t listed = 0;
+    std::size_t omitted = 0;
+    for (std::size_t index = 0; index < count; ++index) {
+        const auto& was = before[order[index]];
+        const auto& now = after[order[index]];
+        auto fields = JsonValue::object();
+        addField(fields, "targetMidi", targetMidi(was), targetMidi(now), "midi");
+        addField(fields, "offsetCents", controlJsonPitch(was.pitchOffset * 100.0),
+                 controlJsonPitch(now.pitchOffset * 100.0), "cents");
+        addField(fields, "retuneSpeed", controlJsonNumber(was.retuneSpeed, 4), controlJsonNumber(now.retuneSpeed, 4),
+                 nullptr);
+        addField(fields, "vibratoDepth", controlJsonNumber(was.vibratoDepth, 4), controlJsonNumber(now.vibratoDepth, 4),
+                 nullptr);
+        addField(fields, "vibratoRateHz", controlJsonNumber(was.vibratoRate, 4), controlJsonNumber(now.vibratoRate, 4),
+                 "hz");
+        addField(fields, "pitchDriftScale", controlJsonNumber(was.pitchDriftScale, 4),
+                 controlJsonNumber(now.pitchDriftScale, 4), nullptr);
+        if (fields.size() == 0)
+            continue;
+        if (listed >= maxListed) {
+            ++omitted;
+            continue;
+        }
+        ++listed;
+        envelope.addChange("note", controlNoteRefJson(contentId, index, revision), controlNoteLabelJson(index, now),
+                           std::move(fields));
+    }
+    return omitted;
+}
+
 // ---- The effect of an undo or redo step --------------------------------------------------------------
 
 ControlEditState controlCaptureEditState(ControlOpContext& context)

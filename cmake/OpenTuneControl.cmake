@@ -102,8 +102,21 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/UndoOps.h
         Source/Control/Ops/ContentTuneOps.cpp
         Source/Control/Ops/ContentTuneOps.h
-        # Note edits: added later.
-        # Time grid: added later.
+        # Note edits and the pitch shift: the steps of OpenTune's pitch shifts that the revision tokens leave
+        # out, the correction rebuild of the piano roll and its SNAP, content.editNotes and
+        # content.setPitchShift.
+        Source/Control/Edit/PitchShiftLedger.cpp
+        Source/Control/Edit/PitchShiftLedger.h
+        Source/Control/Edit/NoteCorrection.cpp
+        Source/Control/Edit/NoteCorrection.h
+        Source/Control/Ops/ContentEditOps.cpp
+        Source/Control/Ops/ContentEditOps.h
+        # Time grid: the handle moves of OpenTune's time tool without the piano roll (TimeGridOps),
+        # content.shiftTiming and content.editTimeGrid (seed as a job, moveHandles).
+        Source/Control/Edit/TimeGridOps.cpp
+        Source/Control/Edit/TimeGridOps.h
+        Source/Control/Ops/TimingOps.cpp
+        Source/Control/Ops/TimingOps.h
     )
 
     target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_CONTROL_SOURCES})
@@ -184,6 +197,24 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         add_test(NAME ControlUnitTests COMMAND OpenTuneControlUnitTests)
         set_tests_properties(ControlUnitTests PROPERTIES TIMEOUT 300)
 
+        # Mirrored upstream functions: the hashes in Source/Control/mirror-map.json against the source tree
+        # (see Source/Control/MIRRORS.md). Standard library and the JSON reader only.
+        add_executable(OpenTuneControlMirrorDriftTests
+            Tests/Control/ControlMirrorDriftTests.cpp
+            Tests/Control/ControlMirrorHash.h
+            Source/Control/ControlJson.cpp
+            Source/Control/ControlJson.h
+        )
+        target_include_directories(OpenTuneControlMirrorDriftTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+        target_compile_definitions(OpenTuneControlMirrorDriftTests PRIVATE
+            OPENTUNE_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}"
+        )
+        if(MSVC)
+            target_compile_options(OpenTuneControlMirrorDriftTests PRIVATE /utf-8 /EHsc /W4)
+        endif()
+        add_test(NAME ControlMirrorDriftTests COMMAND OpenTuneControlMirrorDriftTests)
+        set_tests_properties(ControlMirrorDriftTests PROPERTIES TIMEOUT 120)
+
         # Processor tests without a window or an audio device: the real OpenTuneAudioProcessor of the
         # Standalone SharedCode with its control service. The executable links the SharedCode and no
         # source of the application wrapper (the test defines the createOpenTuneEditor stub). It copies
@@ -219,11 +250,13 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlJobTests.cpp)
         # export.start and the export lock.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlExportTests.cpp)
-        # Undo and redo, key and AUTO, with the contents they share with the reads.
+        # Undo and redo, key, AUTO, note edits and the pitch shift, with the contents they share with the reads.
         target_sources(OpenTuneControlProcessorTests PRIVATE
             Tests/Control/ControlEditTests.cpp
             Tests/Control/ControlContentFixtures.h
         )
+        # The time grid: shiftTiming, moveHandles and the seed job.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlTimingTests.cpp)
         if(MSVC)
             target_compile_options(OpenTuneControlProcessorTests PRIVATE /utf-8 /EHsc /bigobj)
         endif()
@@ -277,14 +310,24 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "Export|--control-api"
             "ExportFailures|--control-api"
             "ExportVectors|--control-api"
+            "ExportTimeStretch|--control-api"
         )
-        # Undo and redo, key and AUTO (Tests/Control/ControlEditTests.cpp).
+        # Undo and redo, key and AUTO, note edits and the pitch shift (Tests/Control/ControlEditTests.cpp).
         list(APPEND _opentune_control_scenarios
             "Undo|--control-api"
             "SetKey|--control-api"
             "AutoTune|--control-api"
-            "IncompleteCapability|--control-api"
+            "EditNotes|--control-api"
+            "SetPitchShift|--control-api"
+            "SnapNotes|--control-api"
+            "EditCapability|--control-api"
             "EditVectors|--control-api"
+        )
+        # The time grid (Tests/Control/ControlTimingTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "Timing|--control-api"
+            "TimeGridSeed|--control-api"
+            "TimingVectors|--control-api"
         )
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
             string(REPLACE "|" ";" _opentune_control_scenario "${_opentune_control_scenario}")
@@ -312,5 +355,6 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.JobVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ExportVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.EditVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.TimingVectors PROPERTIES TIMEOUT 300)
     endif()
 endif()

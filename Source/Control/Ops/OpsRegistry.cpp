@@ -3,6 +3,7 @@
 
 #include "AppReadOps.h"
 #include "ContentDetailsOps.h"
+#include "ContentEditOps.h"
 #include "ContentReadOps.h"
 #include "ContentTuneOps.h"
 #include "ExportOps.h"
@@ -10,6 +11,7 @@
 #include "JobOps.h"
 #include "ProjectReadOps.h"
 #include "SessionOps.h"
+#include "TimingOps.h"
 #include "UndoOps.h"
 
 #include "Control/ContentHandles.h"
@@ -59,9 +61,9 @@ void registerControlMethods(ControlMethodTable& table)
     registerExportOps(table);         // export.start
     // registerUiOps(table);           ui.getState, ui.dismiss, ui.setSelection
     registerContentTuneOps(table); // content.setKey, content.autoTune
-    // registerContentEditOps(table);  content.editNotes, content.setPitchShift
-    registerUndoOps(table); // edit.getHistory, edit.undo, edit.redo
-    // registerTimingOps(table);       content.shiftTiming, content.editTimeGrid
+    registerContentEditOps(table); // content.editNotes, content.setPitchShift
+    registerUndoOps(table);        // edit.getHistory, edit.undo, edit.redo
+    registerTimingOps(table);      // content.shiftTiming, content.editTimeGrid
     // registerTransportOps(table);    transport.control, transport.setTempo, transport.setLoop
     // registerArrangementOps(table);  arrangement.edit, arrangement.copy, content.analyzeReference
     // registerTrackOps(table);        track.set, track.add, track.duplicate, track.delete
@@ -233,7 +235,10 @@ std::vector<std::string> ControlMethodTable::capabilities() const
 
 bool controlCapabilityIsIncomplete(std::string_view capability)
 {
-    return capability == "edit.v1";
+    // No capability of this build is incomplete: edit.v1 is reported since content.editNotes and
+    // content.setPitchShift are registered.
+    juce::ignoreUnused(capability);
+    return false;
 }
 
 void controlSetReportIncompleteCapabilitiesForTesting(bool report)

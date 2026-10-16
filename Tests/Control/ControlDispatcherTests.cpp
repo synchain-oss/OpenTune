@@ -358,8 +358,9 @@ void checkSessionInfo(ApiSession& api)
     CONTROL_CHECK(memberOf(memberOf(info, "runtime"), "pid").asDouble()
                   == static_cast<double>(controlCurrentProcessId()));
     // Only the capabilities this build implements completely are reported.
-    CONTROL_CHECK(toJsonString(memberOf(info, "capabilities"))
-                  == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","history.v1"])");
+    CONTROL_CHECK(
+        toJsonString(memberOf(info, "capabilities"))
+        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","edit.v1","history.v1","timing.v1"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");
@@ -1719,6 +1720,9 @@ void scenarioDetails()
     processor->recordF0FailureReason(clips.failedEmpty.key, "f0_empty");
     CONTROL_CHECK(processor->getStandaloneArrangement()->setPlacementReferencePlacement(0, clips.sung.placementId,
                                                                                         clips.ref.placementId));
+    // The render that importing the sung clip requested, and what it posts when it fails without the models (an
+    // upstream diagnostic dialog built on this thread), are over before the first timed request.
+    CONTROL_CHECK(settleBackgroundWork(*processor));
 
     ApiSession api;
     if (!api.open(service))
@@ -1808,7 +1812,8 @@ void scenarioCompleteness()
         return;
     const auto& methods = memberOf(parsed.value, "methods");
     const auto reported = dispatcher->capabilities();
-    for (const char* capability : {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "history.v1"})
+    for (const char* capability :
+         {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "edit.v1", "history.v1", "timing.v1"})
         CONTROL_CHECK(std::find(reported.begin(), reported.end(), capability) != reported.end());
 
     // The listener answers session.hello itself, so the dispatcher's method table has no entry for it.
@@ -1837,9 +1842,9 @@ void scenarioCompleteness()
         const char* capability = controlMethodCapability(method);
         CONTROL_CHECK(capability == nullptr || std::string(capability) != "read.v1");
     }
-    // session.info, the eight reads, job.get, job.cancel, import.start, export.start and the three methods of
-    // the undo history.
-    CONTROL_CHECK(checked >= 16);
+    // session.info, the eight reads, job.get, job.cancel, import.start, export.start, the three methods of the
+    // undo history, the four of edit.v1 and the two of timing.v1.
+    CONTROL_CHECK(checked >= 22);
     if (!kUnimplementedReportedMethods.empty())
         note("exempt methods remain; the list must be empty before dev is merged");
     note(std::to_string(checked) + " methods of the reported capabilities are registered");

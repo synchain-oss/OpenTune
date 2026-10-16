@@ -1422,11 +1422,12 @@ void checkMultiNoteRender()
         source.deleteFile();
         std::unique_ptr<juce::OutputStream> stream(source.createOutputStream().release());
         juce::WavAudioFormat wav;
-        auto writer = stream != nullptr ? wav.createWriterFor(stream, juce::AudioFormatWriterOptions{}
-                                                                          .withSampleRate(rate)
-                                                                          .withNumChannels(1)
-                                                                          .withBitsPerSample(16))
-                                        : nullptr;
+        auto writer =
+            stream != nullptr
+                ? wav.createWriterFor(
+                      stream,
+                      juce::AudioFormatWriterOptions{}.withSampleRate(rate).withNumChannels(1).withBitsPerSample(16))
+                : nullptr;
         CONTROL_CHECK(writer != nullptr && writer->writeFromAudioSampleBuffer(audio, 0, samples));
     }
 
@@ -1492,9 +1493,9 @@ void checkMultiNoteRender()
                           const std::vector<double>& expected) {
         note("render of " + what);
         render->pauseRenderWorker();
-        const auto result = api.result(method, jsonOf("{\"contentId\":" + jsonQuoted(handles->contentId)
-                                                      + ",\"expectedRevision\":" + jsonQuoted(revision()) + params
-                                                      + "}"));
+        const auto result =
+            api.result(method, jsonOf("{\"contentId\":" + jsonQuoted(handles->contentId)
+                                      + ",\"expectedRevision\":" + jsonQuoted(revision()) + params + "}"));
         CONTROL_CHECK(memberOf(result, "applied").asBoolean());
         const auto pending = cache->getPendingJobs();
         for (int burst = 0; burst < kBurstCount; ++burst) {
@@ -1532,12 +1533,12 @@ void checkMultiNoteRender()
 
     // The file of an export of the clip holds the same, with no content exported dry.
     const auto out = media / "export.wav";
-    const auto start = api.result("export.start", jsonOf(R"({"kind":"clip","target":{"placementId":)"
-                                                         + jsonQuoted(handles->placementId) + R"(},"path":)"
-                                                         + jsonQuoted(out.u8string()) + "}"));
+    const auto start = api.result("export.start",
+                                  jsonOf(R"({"kind":"clip","target":{"placementId":)" + jsonQuoted(handles->placementId)
+                                         + R"(},"path":)" + jsonQuoted(out.u8string()) + "}"));
     const auto jobId = memberOf(memberOf(start, "job"), "jobId").text();
-    const auto job = memberOf(
-        api.result("job.get", jsonOf(R"({"jobId":)" + jsonQuoted(jobId) + R"(,"waitMs":30000})")), "job");
+    const auto job =
+        memberOf(api.result("job.get", jsonOf(R"({"jobId":)" + jsonQuoted(jobId) + R"(,"waitMs":30000})")), "job");
     if (!CONTROL_CHECK(memberOf(job, "state").text() == "succeeded")) {
         note("export job " + toJsonString(job));
         return;

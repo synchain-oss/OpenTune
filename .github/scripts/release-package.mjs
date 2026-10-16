@@ -17,6 +17,8 @@
 //             <inputs> is the build job's artifact (app/, licenses/, THIRD-PARTY-NOTICES.txt,
 //             build-info.json). Writes <out>/<package>.zip, <out>/<package>/ (the same files),
 //             <out>/release-body.md and <out>/manifest.json. A tag build stops on any release blocker.
+//   control-json --inputs <dir> --out <file> --commit <sha> --date <ISO 8601> --repository <owner/name>
+//             [--label <l>] [--tag <t>] [--server-url <u>]  write opentune-control.json the way build does (for the e2e run)
 //   verify    --zip <file> [--name <package>]   allow-list, forbidden content and SHA256SUMS of a zip
 //
 // exit 0 = ok, 1 = check failed, 2 = usage error
@@ -179,6 +181,54 @@ function formatCommands(commands) {
   return commands.map((c) => `# ${c.step}\n${(c.argv ?? []).map(String).map(quoteArg).join(' ')}`).join('\n\n');
 }
 
+/**
+ * The opentune-control.json bytes, from the same sources for the test build package and for the e2e
+ * workflow: protocol major from ControlProtocol.h, version from CMakeLists.txt, release.json, and the
+ * build job's build-info.json. Validated before it is returned; an invalid file throws.
+ */
+export function composeControlJson({ top, cfg, info, commit, tag, label, day, server, forkUrl }) {
+  const version = readCmakeProjectVersion(fs.readFileSync(path.join(top, 'CMakeLists.txt'), 'utf8'));
+  const protocolMajor = readProtocolMajor(fs.readFileSync(path.join(top, 'Source', 'Control', 'ControlProtocol.h'), 'utf8'));
+  const control = buildControlJson({
+    protocolMajor,
+    appVersion: version,
+    commit,
+    tag,
+    label,
+    date: day,
+    sourceUrl: `${forkUrl}/tree/${tag || commit}`,
+    officialRepositoryUrl: `${server}/${cfg.officialRepository}`,
+    d3d12: info.d3d12,
+  });
+  const controlBuf = Buffer.from(`${JSON.stringify(control, null, 2)}\n`, 'utf8');
+  const cj = validateControlJson(controlBuf);
+  if (cj.length) fail(`build: opentune-control.json: ${cj.join('; ')}`);
+  return controlBuf;
+}
+
+function cmdControlJson(o) {
+  for (const k of ['inputs', 'out', 'commit', 'date', 'repository']) if (!o[k]) fail(`control-json: --${k} is required`);
+  const top = repoTop(process.cwd());
+  const cfg = JSON.parse(fs.readFileSync(path.join(top, '.github', 'release', 'release.json'), 'utf8'));
+  const info = JSON.parse(fs.readFileSync(path.join(path.resolve(o.inputs), 'build-info.json'), 'utf8'));
+  const date = new Date(o.date);
+  if (Number.isNaN(date.getTime())) fail(`control-json: --date ${o.date} is not a date`);
+  const server = (o['server-url'] ?? 'https://github.com').replace(/\/+$/, '');
+  const buf = composeControlJson({
+    top,
+    cfg,
+    info,
+    commit: o.commit,
+    tag: o.tag ?? '',
+    label: o.label ?? `rehearsal-${o.commit.slice(0, 7)}`,
+    day: date.toISOString().slice(0, 10),
+    server,
+    forkUrl: `${server}/${o.repository}`,
+  });
+  fs.writeFileSync(path.resolve(o.out), buf);
+  out(`control-json: wrote ${path.basename(o.out)} (${buf.length} bytes, valid)`);
+}
+
 function cmdBuild(o) {
   for (const k of ['inputs', 'out', 'label', 'commit', 'date', 'repository', 'name-status', 'upstream-tag', 'upstream-commit']) if (!o[k]) fail(`build: --${k} is required`);
   const top = repoTop(process.cwd());
@@ -186,7 +236,6 @@ function cmdBuild(o) {
   const cfg = JSON.parse(fs.readFileSync(path.join(release, 'release.json'), 'utf8'));
   const lock = JSON.parse(fs.readFileSync(path.join(top, '.github', 'scripts', 'deps.lock.json'), 'utf8'));
   const version = readCmakeProjectVersion(fs.readFileSync(path.join(top, 'CMakeLists.txt'), 'utf8'));
-  const protocolMajor = readProtocolMajor(fs.readFileSync(path.join(top, 'Source', 'Control', 'ControlProtocol.h'), 'utf8'));
   const tag = o.tag ?? '';
   const mode = tag ? 'release' : 'rehearsal';
   if (tag) {
@@ -240,20 +289,17 @@ function cmdBuild(o) {
     const text = renderTemplate(fs.readFileSync(path.join(release, 'templates', t), 'utf8'), vars);
     pkg.set(t, Buffer.from(/\.(cmd|txt)$/i.test(t) ? toCrlf(text) : text, 'utf8'));
   }
-  const control = buildControlJson({
-    protocolMajor,
-    appVersion: version,
+  const controlBuf = composeControlJson({
+    top,
+    cfg,
+    info,
     commit: o.commit,
     tag,
     label: o.label,
-    date: day,
-    sourceUrl: vars.SOURCE_URL,
-    officialRepositoryUrl: vars.OFFICIAL_REPO_URL,
-    d3d12: info.d3d12,
+    day,
+    server,
+    forkUrl,
   });
-  const controlBuf = Buffer.from(`${JSON.stringify(control, null, 2)}\n`, 'utf8');
-  const cj = validateControlJson(controlBuf);
-  if (cj.length) fail(`build: opentune-control.json: ${cj.join('; ')}`);
   pkg.set('opentune-control.json', controlBuf);
   const hashes = new Map([...pkg].map(([n, b]) => [n, sha256Hex(b)]));
   pkg.set('SHA256SUMS', Buffer.from(formatSha256Sums(hashes), 'utf8'));
@@ -348,8 +394,9 @@ function main(argv) {
     if (cmd === 'validate') cmdValidate(o);
     else if (cmd === 'build') cmdBuild(o);
     else if (cmd === 'verify') cmdVerify(o);
+    else if (cmd === 'control-json') cmdControlJson(o);
     else {
-      process.stderr.write('usage: release-package.mjs validate|build|verify [options] (see the header of this file)\n');
+      process.stderr.write('usage: release-package.mjs validate|build|verify|control-json [options] (see the header of this file)\n');
       return 2;
     }
     return 0;

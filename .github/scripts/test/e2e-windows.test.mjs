@@ -16,6 +16,7 @@ import {
   countSmoke,
   countVitest,
   inspectLog,
+  loadScenarioReports,
   parseModelLoad,
   renderSummary,
   scrubLog,
@@ -243,6 +244,58 @@ describe('renderSummary', () => {
     const { markdown, failed } = renderSummary({ contract: c, smoke: okSmoke, log: okLog });
     assert.equal(failed, false);
     assert.match(markdown, /\| 契约向量 \| 1 \| 0 \| 1 \| 0 \|/);
+  });
+});
+
+describe('renderSummary: scenario reports', () => {
+  const okLog = { ok: true, backend: 'CPU', f0ModelPath: `${MODELS}\fcpe.onnx`, problems: [] };
+  const okContract = { testResults: [{ assertionResults: [{ status: 'passed', fullName: 'a' }] }] };
+  const okSmoke = { steps: [{ name: 'hello', result: 'PASS', ms: 1 }] };
+  const scenario = (name, steps, extra = {}) => ({ scenario: name, report: { schema: 'opentune-mcp-e2e-exe/1', scenario: name, steps: steps.map(([n, r, note]) => ({ name: n, result: r, note })), ...extra } });
+  const run = (scenarios) => renderSummary({ contract: okContract, smoke: okSmoke, scenarios, log: okLog });
+
+  test('each scenario gets a row and all-PASS scenarios keep the run green', () => {
+    const r = run([scenario('boundary', [['a', 'PASS'], ['b', 'PASS']]), scenario('instances', [['c', 'PASS']])]);
+    assert.equal(r.failed, false);
+    assert.match(r.markdown, /\| 场景 boundary \| 2 \| 0 \| 0 \| 0 \|/);
+    assert.match(r.markdown, /\| 场景 instances \| 1 \| 0 \| 0 \| 0 \|/);
+  });
+
+  test('a FAIL in a scenario fails the run and names the step', () => {
+    const r = run([scenario('launch-real', [['prepare', 'PASS'], ['two launches at once give one process', 'FAIL', '0 calls started OpenTune'], ['after', 'SKIP']])]);
+    assert.equal(r.failed, true);
+    assert.match(r.markdown, /\| 场景 launch-real \| 1 \| 1 \| 1 \| 0 \|.*two launches at once give one process/);
+    assert.match(r.markdown, /结果：\*\*FAIL\*\*/);
+  });
+
+  test('a SKIP or FLAKY-SKIP in a scenario fails the run', () => {
+    assert.equal(run([scenario('boundary', [['a', 'PASS'], ['b', 'SKIP']])]).failed, true);
+    assert.equal(run([scenario('effects', [['a', 'PASS'], ['b', 'FLAKY-SKIP']])]).failed, true);
+  });
+
+  test('a scenario without any step fails; manualChecks are listed under the table', () => {
+    assert.equal(run([scenario('effects', [])]).failed, true);
+    const r = run([scenario('effects', [['a', 'PASS']], { manualChecks: ['listen to the tuned vocal', { id: 'x', note: 'check the pitch curve' }] })]);
+    assert.equal(r.failed, false);
+    assert.match(r.markdown, /### 需要人工核对\n\n- effects：listen to the tuned vocal\n- effects：.*check the pitch curve/);
+    assert.doesNotMatch(run([scenario('effects', [['a', 'PASS']])]).markdown, /需要人工核对/);
+  });
+
+  test('loadScenarioReports takes only opentune-mcp-e2e-* json files and skips the excluded smoke report', () => {
+    const dir = makeTempDir('e2e-scn');
+    try {
+      const put = (n, o) => fs.writeFileSync(path.join(dir, n), typeof o === 'string' ? o : JSON.stringify(o));
+      put('smoke.json', { schema: 'opentune-mcp-e2e-exe/1', scenario: 'smoke', steps: [] });
+      put('boundary.json', { schema: 'opentune-mcp-e2e-exe/1', scenario: 'boundary', steps: [] });
+      put('launch-real.json', { schema: 'opentune-mcp-e2e-launch/2', steps: [] });
+      put('timings.json', [{ step: 'x', seconds: 1 }]);
+      put('log-report.json', { ok: true });
+      put('broken.json', '{not json');
+      const got = loadScenarioReports(dir, [path.join(dir, 'smoke.json')]).map((x) => x.scenario);
+      assert.deepEqual(got, ['boundary', 'launch-real']);
+    } finally {
+      removeDir(dir);
+    }
   });
 });
 

@@ -132,6 +132,18 @@ jobs:
           Move-Item -LiteralPath $src -Destination $env:E2E_APP
           Write-Host "our build: $(Get-ChildItem -LiteralPath $env:E2E_APP | ForEach-Object Name | Join-String -Separator ', '); no models\ and no onnx files"
 
+      # 启动合同：MCP 的 opentune_launch 要求 exe 旁边有协议主版本匹配的 opentune-control.json，否则 NO_API_BUILD 而不启动。
+      # 测试版 zip 里的这份文件由出包脚本生成；这里调用出包脚本的同一个函数（取值同 prerelease 的演练构建：CMake VERSION、
+      # 协议主版本、官方仓库与 D3D12 信息来自 release.json / build-info.json，tag 为空），写入前已校验，不合法即失败。
+      - name: Write opentune-control.json next to our OpenTune.exe (the release packaging function)
+        run: |
+          $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+          node .github/scripts/release-package.mjs control-json --inputs (Join-Path $env:E2E_WORK 'app-artifact') `
+            --out (Join-Path $env:E2E_APP 'opentune-control.json') --commit $env:GITHUB_SHA --date $date `
+            --repository $env:GITHUB_REPOSITORY --server-url $env:GITHUB_SERVER_URL
+          if ($LASTEXITCODE -ne 0) { throw "could not write a valid opentune-control.json" }
+          Copy-Item -LiteralPath (Join-Path $env:E2E_APP 'opentune-control.json') -Destination (Join-Path $env:E2E_OUT 'opentune-control.json')
+
       - name: Download the pinned official installer (sha256 verified)
         run: |
           $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -325,7 +337,7 @@ jobs:
         run: |
           Write-Host "contract: $env:CONTRACT_OUTCOME; smoke: $env:SMOKE_OUTCOME; log check: $env:LOG_OUTCOME"
           node $env:E2E_SCRIPT summary --timings $env:E2E_TIMINGS --contract "$env:E2E_OUT\contract.json" `
-            --smoke "$env:E2E_OUT\smoke.json" --log "$env:E2E_OUT\log-report.json" `
+            --smoke "$env:E2E_OUT\smoke.json" --scenarios-dir $env:E2E_OUT --log "$env:E2E_OUT\log-report.json" `
             --mcp-ref $env:MCP_REF --out $env:GITHUB_STEP_SUMMARY
           $code = $LASTEXITCODE
           Copy-Item -LiteralPath $env:GITHUB_STEP_SUMMARY -Destination "$env:E2E_OUT\summary.md" -ErrorAction SilentlyContinue

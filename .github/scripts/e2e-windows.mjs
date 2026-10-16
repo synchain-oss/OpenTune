@@ -14,8 +14,10 @@
 //                                                             F0 model was loaded from --models-dir, record the backend
 //   scrub           --dir <dir>                               redact tokens, serverProof and user names in every json/log/md/txt file there
 //   record          --file <json> --step <name> --seconds <n> append one step timing
-//   summary         --timings <json> [--contract <vitest json>] [--smoke <json>] [--log <report json>]
-//                   [--mcp-ref <ref>] [--out <md>]            PASS / FAIL / SKIP / FLAKY-SKIP table; exit 1 on any FAIL
+//   summary         --timings <json> [--contract <vitest json>] [--smoke <json>] [--scenarios-dir <dir>] [--log <report json>]
+//                   [--mcp-ref <ref>] [--out <md>]            PASS / FAIL / SKIP / FLAKY-SKIP table; exit 1 on any FAIL.
+//                   --scenarios-dir: one row per report there whose schema starts with opentune-mcp-e2e- (smoke excluded);
+//                   a SKIP or FLAKY-SKIP in any scenario fails the run; manualChecks[] are listed under the table
 //
 // Exit codes: 0 = ok, 1 = a check failed, 2 = usage error.
 import crypto from 'node:crypto';
@@ -25,6 +27,9 @@ import { isMainModule, parseArgs } from './fork-lib.mjs';
 
 /** Marker a skipped test carries in its name when it was skipped because of a known flaky environment. */
 export const FLAKY_SKIP_MARKER = 'FLAKY-SKIP';
+
+/** Schema prefix of the scenario reports the MCP repository's e2e runner writes. */
+export const SCENARIO_SCHEMA_PREFIX = 'opentune-mcp-e2e-';
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
@@ -199,7 +204,7 @@ const cell = (s) => String(s).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
  * must not look like a pass.
  * @returns {{markdown: string, failed: boolean}}
  */
-export function renderSummary({ timings = [], contract = null, smoke = null, log = null, mcpRef = '' }) {
+export function renderSummary({ timings = [], contract = null, smoke = null, scenarios = [], log = null, mcpRef = '' }) {
   const lines = ['### e2e-windows', ''];
   let failed = false;
   const rows = [];
@@ -217,14 +222,23 @@ export function renderSummary({ timings = [], contract = null, smoke = null, log
     rows.push(`| ${name} | ${c.pass} | ${c.fail} | ${c.skip} | ${c.flakySkip} | ${c.failed.length ? cell(c.failed.slice(0, 5).join('；')) : ''} |`);
   };
   add('契约向量', contract ? countVitest(contract) : null);
-  const smokeCount = smoke ? countSmoke(smoke) : null;
-  if (smokeCount && smokeCount.skip + smokeCount.flakySkip > 0) {
-    // Unlike contract vectors (vectors with a `given` do not apply to the exe), a skipped smoke step is a step that did not run.
-    if (smokeCount.fail === 0) smokeCount.fail = 1;
-    smokeCount.failed.unshift('冒烟有未运行的步骤');
+  // Unlike contract vectors (vectors with a `given` do not apply to the exe), a skipped scenario step is a step that did not run.
+  const strict = (report, label) => {
+    const c = countSmoke(report);
+    if (c.skip + c.flakySkip > 0) {
+      if (c.fail === 0) c.fail = 1;
+      c.failed.unshift(`${label}有未运行的步骤`);
+    }
+    return c;
+  };
+  add('冒烟场景', smoke ? strict(smoke, '冒烟') : null);
+  const manual = [];
+  for (const sc of scenarios) {
+    const name = String(sc.scenario ?? sc.name ?? sc.file ?? '场景');
+    add(`场景 ${name}`, strict(sc.report ?? sc, '场景'));
+    for (const m of (sc.report ?? sc).manualChecks ?? []) manual.push(`- ${name}：${typeof m === 'string' ? m : cell(JSON.stringify(m))}`);
   }
-  add('冒烟场景', smokeCount);
-  lines.push('契约向量的 SKIP 不计为失败：带 given 的向量在 exe 上不适用。冒烟场景的 SKIP / FLAKY-SKIP 计为失败。', '');
+  lines.push('契约向量的 SKIP 不计为失败：带 given 的向量在 exe 上不适用。冒烟与其他场景（边界、多实例、真实启动等）的 SKIP / FLAKY-SKIP 计为失败。', '');
   lines.push(`MCP 仓库 ref：\`${mcpRef || '(未记录)'}\``, '', '| 项目 | PASS | FAIL | SKIP | FLAKY-SKIP | 失败项（至多 5 个） |', '|---|---|---|---|---|---|', ...rows, '');
   if (log) {
     if (!log.ok) failed = true;
@@ -242,8 +256,31 @@ export function renderSummary({ timings = [], contract = null, smoke = null, log
     lines.push('', '冒烟场景分步耗时：', '', '| 步骤 | 结果 | 耗时（毫秒） |', '|---|---|---|');
     for (const s of smokeSteps) lines.push(`| ${cell(s.name)} | ${cell(s.result)} | ${s.ms ?? ''} |`);
   }
+  if (manual.length) lines.push('', '### 需要人工核对', '', ...manual);
   lines.push('', failed ? '结果：**FAIL**' : '结果：**PASS**', '');
   return { markdown: scrubPath(lines.join('\n')), failed };
+}
+
+/**
+ * Scenario reports in a directory: every top-level *.json whose `schema` starts with `opentune-mcp-e2e-`
+ * (boundary, instances, launch-real, effects, ...), except the files in `exclude` (the smoke report, which has its own row).
+ */
+export function loadScenarioReports(dir, exclude = []) {
+  if (!dir || !fs.existsSync(dir)) return [];
+  const skip = new Set(exclude.filter(Boolean).map((f) => path.resolve(f).toLowerCase()));
+  const out = [];
+  for (const n of fs.readdirSync(dir).sort()) {
+    const full = path.join(dir, n);
+    if (!n.toLowerCase().endsWith('.json') || skip.has(path.resolve(full).toLowerCase()) || !fs.statSync(full).isFile()) continue;
+    let report;
+    try {
+      report = readJson(full);
+    } catch {
+      continue; // other json files (timings, vitest report) have other shapes
+    }
+    if (report && typeof report.schema === 'string' && report.schema.startsWith(SCENARIO_SCHEMA_PREFIX)) out.push({ scenario: report.scenario ?? path.basename(n, '.json'), report });
+  }
+  return out;
 }
 
 /** *.log files directly in one directory. */
@@ -286,6 +323,7 @@ const CLI_SPEC = {
   timings: 'string',
   contract: 'string',
   smoke: 'string',
+  'scenarios-dir': 'string',
   log: 'string',
   'mcp-ref': 'string',
   out: 'string',
@@ -356,6 +394,7 @@ function main(argv) {
         timings: opt(opts.timings) ?? [],
         contract: opt(opts.contract),
         smoke: opt(opts.smoke),
+        scenarios: loadScenarioReports(opts['scenarios-dir'], [opts.smoke]),
         log: opt(opts.log),
         mcpRef: opts['mcp-ref'] ?? '',
       });

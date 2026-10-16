@@ -17,6 +17,7 @@
 #include "Control/ControlJobs.h"
 #include "Control/ControlPathPolicy.h"
 #include "Control/Ops/ExportOps.h"
+#include "Control/Ops/ImportOps.h"
 #include "Inference/RenderCache.h"
 #include "Render/ContentRenderService.h"
 #include "Utils/Note.h"
@@ -32,6 +33,8 @@
 #include <atomic>
 #include <cerrno>
 #include <cmath>
+#include <functional>
+#include <map>
 #include <set>
 #include <vector>
 
@@ -62,7 +65,9 @@ enum class Analysis {
     Ready,
     Running,
     Failed,
-    Unvoiced
+    Unvoiced,
+    /** Ready, but the analysis found no voiced frame: its F0 is zero throughout, as for a silent file. */
+    ReadySilent
 };
 
 struct TestClip
@@ -83,7 +88,7 @@ juce::File juceFileOf(const std::string& utf8Path)
 /** A new, empty directory in the test's data directory. */
 std::filesystem::path exportDirectory(const std::string& name)
 {
-    const auto directory = isolatedDataDirectory() / "export" / name;
+    const auto directory = isolatedDataDirectory() / "export" / std::filesystem::u8path(name);
     std::error_code ignored;
     std::filesystem::remove_all(directory, ignored);
     std::filesystem::create_directories(directory, ignored);
@@ -114,7 +119,7 @@ std::string writeWav(const std::filesystem::path& directory, const std::string& 
                             0.25f
                                 * static_cast<float>(
                                     std::sin(2.0 * juce::MathConstants<double>::pi * kToneHz * i / kAudioSampleRate)));
-    const auto path = (directory / (name + ".wav")).u8string();
+    const auto path = (directory / std::filesystem::u8path(name + ".wav")).u8string();
     const auto file = juceFileOf(path);
     file.deleteFile();
     std::unique_ptr<juce::OutputStream> stream(file.createOutputStream().release());
@@ -152,12 +157,12 @@ std::optional<WavInfo> wavInfo(const std::string& path)
     return info;
 }
 
-/** F0 of a test tone: A3, an unvoiced tail. */
-std::shared_ptr<PitchCurve> syntheticCurve(double durationSec)
+/** F0 of a test tone: A3, an unvoiced tail; with silent no frame is voiced. */
+std::shared_ptr<PitchCurve> syntheticCurve(double durationSec, bool silent = false)
 {
     const auto frames = static_cast<std::size_t>(std::llround(durationSec * kF0SampleRate / kF0HopSize));
     const auto tail = static_cast<std::size_t>(std::llround(kUnvoicedTailSec * kF0SampleRate / kF0HopSize));
-    std::vector<float> f0(frames, kToneHz);
+    std::vector<float> f0(frames, silent ? 0.0f : kToneHz);
     for (auto frame = frames > tail ? frames - tail : 0; frame < frames; ++frame)
         f0[frame] = 0.0f;
     auto curve = std::make_shared<PitchCurve>();
@@ -180,7 +185,8 @@ TestClip addClip(OpenTuneAudioProcessor& processor, const std::filesystem::path&
     clip.trackId = trackId;
     clip.startSec = startSec;
     clip.durationSec = durationSec;
-    clip.sourcePath = writeWav(directory, name, durationSec, analysis != Analysis::Unvoiced);
+    clip.sourcePath =
+        writeWav(directory, name, durationSec, analysis != Analysis::Unvoiced && analysis != Analysis::ReadySilent);
     juce::AudioFormatManager formats;
     formats.registerBasicFormats();
     std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(juceFileOf(clip.sourcePath)));
@@ -201,10 +207,11 @@ TestClip addClip(OpenTuneAudioProcessor& processor, const std::filesystem::path&
     clip.key = committed.contentKey;
     clip.placementId = committed.placementId;
     switch (analysis) {
-        case Analysis::Ready: {
+        case Analysis::Ready:
+        case Analysis::ReadySilent: {
             auto* owner = processor.getStandaloneContentRepository()->findClip(clip.key);
             if (CONTROL_CHECK(owner != nullptr))
-                owner->applyOriginalF0(syntheticCurve(durationSec));
+                owner->applyOriginalF0(syntheticCurve(durationSec, analysis == Analysis::ReadySilent));
             CONTROL_CHECK(processor.setContentOriginalF0State(clip.key, OriginalF0State::Ready));
             break;
         }
@@ -238,14 +245,14 @@ bool setNotes(OpenTuneAudioProcessor& processor, const ContentKey& key, const st
 
 /** Completes every pending render block of a cache as a finished render would (with a quiet constant), or
     as a failing vocoder would. OpenTune's render worker must be paused. Returns how many it completed. */
-int completePendingRender(RenderCache& cache, bool succeed)
+int completePendingRender(RenderCache& cache, bool succeed, float level = kRenderLevel)
 {
     int completed = 0;
     for (const auto& job : cache.getPendingJobs()) {
         if (!cache.claimPendingJob(job))
             continue;
         if (succeed) {
-            std::vector<float> audio(static_cast<std::size_t>(job.endSampleExclusive - job.startSample), kRenderLevel);
+            std::vector<float> audio(static_cast<std::size_t>(job.endSampleExclusive - job.startSample), level);
             if (cache.completeChunkRenderWithAudio(job.startSample, job.endSampleExclusive, std::move(audio),
                                                    job.targetRevision)
                 == RenderCache::ChunkRenderResult::Published)
@@ -262,7 +269,7 @@ int completePendingRender(RenderCache& cache, bool succeed)
  * requests the render (OpenTuneAudioProcessor::requestFullContentRender), publishes every block, and
  * resumes the worker, which skips the queued blocks it can no longer claim.
  */
-bool settleRender(OpenTuneAudioProcessor& processor, const ContentKey& key)
+bool settleRender(OpenTuneAudioProcessor& processor, const ContentKey& key, float level = kRenderLevel)
 {
     auto* service = processor.getContentRenderService();
     if (service == nullptr)
@@ -270,7 +277,7 @@ bool settleRender(OpenTuneAudioProcessor& processor, const ContentKey& key)
     service->pauseRenderWorker();
     processor.requestFullContentRender(key);
     const auto cache = service->getRenderCache(key);
-    const bool published = cache != nullptr && completePendingRender(*cache, true) > 0;
+    const bool published = cache != nullptr && completePendingRender(*cache, true, level) > 0;
     service->resumeRenderWorker();
     return published && cache->isCanonicalSettled();
 }
@@ -1380,6 +1387,565 @@ void scenarioExportTimeStretch()
         CONTROL_CHECK(!stretchOutputCurrent(*processor, stubborn.key));
         CONTROL_CHECK(!juceFileOf(path).exists());
     }
+}
+
+// ---- Boundary cases: edits right before an export, cancellation, destruction, other paths ------------------
+
+namespace {
+
+/** Levels of the synthetic render for the versions of a content: the published level of a revision tells which
+    version a file holds. */
+constexpr float kLevelPlus = 0.12f;
+constexpr float kLevelMinus = 0.2f;
+constexpr float kLevelTolerance = 0.004f;
+
+/** The smallest and the largest absolute sample of channel 0 of a WAV file between two times, without the 10% at
+    each end of that span. */
+struct LevelRange
+{
+    bool ok = false;
+    float low = 0.0f;
+    float high = 0.0f;
+};
+
+LevelRange levelRange(const std::string& path, double fromSec, double toSec)
+{
+    juce::AudioFormatManager formats;
+    formats.registerBasicFormats();
+    const std::unique_ptr<juce::AudioFormatReader> reader(formats.createReaderFor(juceFileOf(path)));
+    if (reader == nullptr)
+        return {};
+    const auto margin = (toSec - fromSec) * 0.1;
+    const auto first = static_cast<juce::int64>((fromSec + margin) * reader->sampleRate);
+    const auto last =
+        std::min<juce::int64>(static_cast<juce::int64>((toSec - margin) * reader->sampleRate), reader->lengthInSamples);
+    if (last <= first)
+        return {};
+    juce::AudioBuffer<float> audio(static_cast<int>(reader->numChannels), static_cast<int>(last - first));
+    reader->read(&audio, 0, audio.getNumSamples(), first, true, true);
+    LevelRange range;
+    range.ok = true;
+    range.low = 1e9f;
+    for (int i = 0; i < audio.getNumSamples(); ++i) {
+        const auto value = std::abs(audio.getSample(0, i));
+        range.low = std::min(range.low, value);
+        range.high = std::max(range.high, value);
+    }
+    return range;
+}
+
+/** The file holds one render, whole: a constant level within the tolerance of the expected one. A file that mixes
+    two renders, or is silent, has a range that does not fit. */
+bool holdsLevel(const std::string& path, double fromSec, double toSec, float expected)
+{
+    const auto range = levelRange(path, fromSec, toSec);
+    const bool ok = range.ok && std::abs(range.low - expected) <= kLevelTolerance
+                    && std::abs(range.high - expected) <= kLevelTolerance;
+    note(path.substr(path.find_last_of("/\\") + 1) + ": levels " + std::to_string(range.low) + " .. "
+         + std::to_string(range.high) + ", expected " + std::to_string(expected));
+    return ok;
+}
+
+/** What each version of a content renders to, by the revision the content has (the snapshot's contentRevision). */
+class VersionLevels
+{
+public:
+    void record(OpenTuneAudioProcessor& processor, const ContentKey& key, float level)
+    {
+        if (const auto snapshot = processor.getContentSnapshot(key))
+            levels_[snapshot->contentRevision] = level;
+    }
+
+    float levelNow(OpenTuneAudioProcessor& processor, const ContentKey& key) const
+    {
+        const auto snapshot = processor.getContentSnapshot(key);
+        const auto found = snapshot != nullptr ? levels_.find(snapshot->contentRevision) : levels_.end();
+        return found != levels_.end() ? found->second : kRenderLevel;
+    }
+
+    /** Publishes every pending block of the content as the render of its current version. */
+    int publish(OpenTuneAudioProcessor& processor, const ContentKey& key) const
+    {
+        const auto cache = processor.getContentRenderService()->getRenderCache(key);
+        return cache != nullptr ? completePendingRender(*cache, true, levelNow(processor, key)) : 0;
+    }
+
+private:
+    std::map<std::uint64_t, float> levels_;
+};
+
+std::string editNotesParams(const std::string& contentId, const std::string& revision, int cents)
+{
+    return "{\"contentId\":" + quoted(contentId) + ",\"expectedRevision\":" + quoted(revision)
+           + R"(,"ops":[{"op":"shiftCents","select":{"all":true},"deltaCents":)" + std::to_string(cents) + "}]}";
+}
+
+std::string autoTuneParams(const std::string& contentId, const std::string& revision)
+{
+    return "{\"contentId\":" + quoted(contentId) + ",\"mode\":\"regenerate\",\"expectedRevision\":" + quoted(revision)
+           + R"(,"key":{"root":0,"scale":"major"}})";
+}
+
+std::string trackParams(int trackId, const std::string& path)
+{
+    return R"({"kind":"track","target":{"trackId":)" + std::to_string(trackId) + R"(},"path":)" + quoted(path) + "}";
+}
+
+std::string phaseOf(ControlService& service, const std::string& jobId)
+{
+    return memberOf(memberOf(jobOf(service, jobId), "progress"), "phase").text();
+}
+
+/** The revision of a content in a job's contents[]; empty when the job does not list it. */
+std::string recordedRevision(const JsonValue& result, const std::string& contentId)
+{
+    const auto& contents = memberOf(result, "contents");
+    for (std::size_t i = 0; i < contents.size(); ++i)
+        if (memberOf(contents.at(i), "contentId").text() == contentId)
+            return memberOf(contents.at(i), "revision").text();
+    return {};
+}
+
+} // namespace
+
+void scenarioExportAfterEdit()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    TestUiBridge bridge;
+    ScopedBridge registered(service, bridge);
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    auto* renderService = processor->getContentRenderService();
+    if (!CONTROL_CHECK(renderService != nullptr))
+        return;
+    const auto media = exportDirectory("after-edit-media");
+    const auto out = exportDirectory("after-edit-out");
+    const auto outPath = [&out](const std::string& name) { return (out / name).u8string(); };
+    const auto handles = handlesOf(api, *processor);
+    VersionLevels levels;
+
+    const auto edited = addClip(*processor, media, "edited", 0, 1.0, 2.0, Analysis::Ready);
+    CONTROL_CHECK(setNotes(*processor, edited.key, {{0.2, 0.8, 60.0}, {1.0, 1.6, 64.0}}));
+    CONTROL_CHECK(settleRender(*processor, edited.key, kRenderLevel));
+    CONTROL_CHECK(settleBackgroundWork(*processor));
+    levels.record(*processor, edited.key, kRenderLevel);
+    const auto contentId = handles.content(edited.key);
+    const auto placementId = handles.placement(edited.placementId);
+
+    // 1. An edit through the API, then an export at once, while OpenTune's render worker is held back: the render of
+    //    the new revision is not there, so the job must not succeed (NOT_READY, retryable, no file) and must not
+    //    export the content as dry. Once the render of the new revision is published the export succeeds with it.
+    const auto editThenExport = [&](const std::string& label, const char* method,
+                                    const std::function<std::string(const std::string&)>& params, float level) {
+        renderService->pauseRenderWorker();
+        const auto edit = api.result(method, json(params(revisionOf(api, contentId))));
+        CONTROL_CHECK(memberOf(edit, "applied").asBoolean() && !memberOf(edit, "noOp").asBoolean());
+        levels.record(*processor, edited.key, level);
+        const auto revision = revisionOf(api, contentId);
+        const auto early = outPath(label + "-early.wav");
+        {
+            const ScopedWaitLimit limit(kShortWaitLimitMs);
+            const auto job = exportAndWait(api, clipParams(placementId, early));
+            CONTROL_CHECK(failedWith(job, "NOT_READY", "export_wait_timeout"));
+            CONTROL_CHECK(memberOf(memberOf(memberOf(job, "error"), "data"), "retryable").asBoolean());
+            CONTROL_CHECK(memberOf(job, "result").isNull() && !juceFileOf(early).exists()
+                          && !processor->isExportLockHeld());
+        }
+        CONTROL_CHECK(levels.publish(*processor, edited.key) > 0);
+        renderService->resumeRenderWorker();
+        const auto path = outPath(label + ".wav");
+        const auto job = exportAndWait(api, clipParams(placementId, path));
+        CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+        const auto& result = resultOf(job);
+        CONTROL_CHECK(toJsonString(memberOf(result, "dryContents")) == "[]");
+        CONTROL_CHECK(recordedRevision(result, contentId) == revision && revisionOf(api, contentId) == revision);
+        CONTROL_CHECK(holdsLevel(path, 0.0, 2.0, level));
+    };
+    editThenExport(
+        "notes", "content.editNotes",
+        [&](const std::string& revision) { return editNotesParams(contentId, revision, 100); }, kLevelPlus);
+    editThenExport(
+        "auto", "content.autoTune", [&](const std::string& revision) { return autoTuneParams(contentId, revision); },
+        kLevelMinus);
+
+    // 2. Two versions that can be told apart (+100 and -100 cents) race with the export: the API's edit comes before
+    //    the call, the user's edit while the job waits. The file is the whole of one version, listed with the
+    //    revision it was made from, or the job fails with REVISION_CONFLICT(changed_during_export); never a mix, a
+    //    silent file or a dry one.
+    {
+        renderService->pauseRenderWorker();
+        const auto plusParams = editNotesParams(contentId, revisionOf(api, contentId), 100);
+        CONTROL_CHECK(memberOf(api.result("content.editNotes", json(plusParams)), "applied").asBoolean());
+        levels.record(*processor, edited.key, kLevelPlus);
+        const auto plusRevision = revisionOf(api, contentId);
+        const auto path = outPath("race-waiting.wav");
+        const auto jobId = startExport(api, clipParams(placementId, path));
+        CONTROL_CHECK(pumpMessagesUntil([&] { return phaseOf(service, jobId) == "waiting"; }, kDriveTimeoutMs));
+        // The user's edit: the notes change again, and the editor asks for the render of the new version.
+        CONTROL_CHECK(setNotes(*processor, edited.key, {{0.2, 0.8, 59.0}, {1.0, 1.6, 63.0}}));
+        processor->requestFullContentRender(edited.key);
+        levels.record(*processor, edited.key, kLevelMinus);
+        const auto minusRevision = revisionOf(api, contentId);
+        CONTROL_CHECK(minusRevision != plusRevision);
+        CONTROL_CHECK(levels.publish(*processor, edited.key) > 0);
+        renderService->resumeRenderWorker();
+        const auto job = waitJob(api, jobId);
+        if (memberOf(job, "state").text() == "succeeded") {
+            const auto& result = resultOf(job);
+            const auto recorded = recordedRevision(result, contentId);
+            CONTROL_CHECK(toJsonString(memberOf(result, "dryContents")) == "[]");
+            CONTROL_CHECK(recorded == plusRevision || recorded == minusRevision);
+            CONTROL_CHECK(holdsLevel(path, 0.0, 2.0, recorded == plusRevision ? kLevelPlus : kLevelMinus));
+        } else {
+            CONTROL_CHECK(failedWith(job, "REVISION_CONFLICT", "changed_during_export"));
+            CONTROL_CHECK(!juceFileOf(path).exists());
+        }
+        CONTROL_CHECK(!processor->isExportLockHeld());
+    }
+
+    // 3. The user's edit comes while the file is written: the render of the version the job recorded is the one in
+    //    the file, but the content changed since, so the job fails and the target is not touched.
+    {
+        const auto other = addClip(*processor, media, "queued", 1, 0.0, 1.0, Analysis::Ready);
+        renderService->pauseRenderWorker();
+        processor->requestFullContentRender(other.key);
+        // The version before the user's edit: the notes as they were at the start, rendered as +100 cents.
+        CONTROL_CHECK(setNotes(*processor, edited.key, {{0.2, 0.8, 60.0}, {1.0, 1.6, 64.0}}));
+        processor->requestFullContentRender(edited.key);
+        levels.record(*processor, edited.key, kLevelPlus);
+        CONTROL_CHECK(levels.publish(*processor, edited.key) > 0);
+        const auto path = outPath("race-writing.wav");
+        CONTROL_CHECK(juceFileOf(path).replaceWithText("kept"));
+        const auto jobId = startExport(api, clipParams(placementId, path, R"(,"ifExists":"overwrite")"));
+        CONTROL_CHECK(pumpMessagesUntil([&] { return phaseOf(service, jobId) == "writing"; }, kDriveTimeoutMs));
+        CONTROL_CHECK(setNotes(*processor, edited.key, {{0.2, 0.8, 58.0}, {1.0, 1.6, 62.0}}));
+        renderService->resumeRenderWorker();
+        const auto job = waitJob(api, jobId);
+        CONTROL_CHECK(failedWith(job, "REVISION_CONFLICT", "changed_during_export"));
+        CONTROL_CHECK(juceFileOf(path).loadFileAsString() == "kept" && !processor->isExportLockHeld());
+        // Only the target is left in the directory: the temporary file was deleted.
+        for (const auto& name : filesIn(out))
+            CONTROL_CHECK(name.empty() || name[0] != '.');
+    }
+
+    // 4. The job waits for another content of the export while the user edits a settled one: the export is of the
+    //    new version of that content, with nothing listed as dry.
+    {
+        const auto settled = addClip(*processor, media, "settled", 2, 0.0, 2.0, Analysis::Ready);
+        CONTROL_CHECK(setNotes(*processor, settled.key, {{0.2, 0.8, 60.0}, {1.0, 1.6, 64.0}}));
+        CONTROL_CHECK(settleRender(*processor, settled.key, kRenderLevel));
+        const auto late = addClip(*processor, media, "late", 2, 2.5, 2.0, Analysis::Running);
+        renderService->pauseRenderWorker();
+        const auto path = outPath("race-other.wav");
+        const auto jobId = startExport(api, trackParams(2, path));
+        CONTROL_CHECK(pumpMessagesUntil([&] { return phaseOf(service, jobId) == "waiting"; }, kDriveTimeoutMs));
+        CONTROL_CHECK(setNotes(*processor, settled.key, {{0.2, 0.8, 59.0}, {1.0, 1.6, 63.0}}));
+        processor->requestFullContentRender(settled.key);
+        levels.record(*processor, settled.key, kLevelMinus);
+        // The analysis of the other content finishes.
+        auto* owner = processor->getStandaloneContentRepository()->findClip(late.key);
+        if (CONTROL_CHECK(owner != nullptr))
+            owner->applyOriginalF0(syntheticCurve(late.durationSec));
+        CONTROL_CHECK(processor->setContentOriginalF0State(late.key, OriginalF0State::Ready));
+        // The job asks for the render of the other content once its analysis is ready; the pump lets it.
+        CONTROL_CHECK(pumpMessagesUntil(
+            [&] {
+                levels.publish(*processor, late.key);
+                const auto cache = renderService->getRenderCache(late.key);
+                return cache != nullptr && cache->getChunkStats().total() > 0
+                       && !cache->getChunkStats().hasActiveWork();
+            },
+            kDriveTimeoutMs));
+        CONTROL_CHECK(levels.publish(*processor, settled.key) > 0);
+        renderService->resumeRenderWorker();
+        const auto job = waitJob(api, jobId);
+        CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+        const auto& result = resultOf(job);
+        const auto settledId = handles.content(settled.key);
+        CONTROL_CHECK(toJsonString(memberOf(result, "dryContents")) == "[]");
+        CONTROL_CHECK(recordedRevision(result, settledId) == revisionOf(api, settledId));
+        CONTROL_CHECK(holdsLevel(path, 0.0, 2.0, kLevelMinus));
+        CONTROL_CHECK(holdsLevel(path, 2.5, 4.5, kRenderLevel));
+    }
+    const auto dispatcher = service.dispatcher();
+    CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+}
+
+// ---- Cancelling an export that would overwrite -------------------------------------------------------------
+
+void scenarioExportCancelOverwrite()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    TestUiBridge bridge;
+    ScopedBridge registered(service, bridge);
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    const auto media = exportDirectory("cancel-media");
+    const auto out = exportDirectory("cancel-out");
+    const auto handles = handlesOf(api, *processor);
+    const auto pending = addClip(*processor, media, "pending", 0, 0.0, 1.0, Analysis::Running);
+    const auto steady = addClip(*processor, media, "steady", 1, 0.0, 1.0, Analysis::Ready);
+    CONTROL_CHECK(setNotes(*processor, steady.key, {{0.1, 0.5, 60.0}}));
+    CONTROL_CHECK(settleBackgroundWork(*processor));
+    const auto target = (out / "target.wav").u8string();
+    CONTROL_CHECK(juceFileOf(target).replaceWithText("original"));
+    const auto setKey = [&] {
+        return json("{\"contentId\":" + quoted(handles.content(steady.key)) + R"(,"key":{"root":0,"scale":"major"}})");
+    };
+
+    // While the export waits for the analysis, a write is refused because of the export lock ...
+    const auto jobId =
+        startExport(api, clipParams(handles.placement(pending.placementId), target, R"(,"ifExists":"overwrite")"));
+    CONTROL_CHECK(pumpMessagesUntil([&] { return phaseOf(service, jobId) == "waiting"; }, kDriveTimeoutMs));
+    CONTROL_CHECK(api.fails("content.setKey", setKey(), "BUSY", "export_in_progress"));
+    // ... and after its cancellation the target holds what it held, and nothing is busy any more.
+    CONTROL_CHECK(
+        memberOf(api.result("job.cancel", json(R"({"jobId":)" + quoted(jobId) + "}")), "cancelRequested").asBoolean());
+    const auto job = waitJob(api, jobId);
+    CONTROL_CHECK(memberOf(job, "state").text() == "cancelled");
+    CONTROL_CHECK(juceFileOf(target).loadFileAsString() == "original");
+    CONTROL_CHECK((filesIn(out) == std::vector<std::string>{"target.wav"}) && !processor->isExportLockHeld());
+    const auto set = api.result("content.setKey", setKey());
+    CONTROL_CHECK(memberOf(set, "applied").asBoolean() && !memberOf(set, "noOp").asBoolean());
+}
+
+// ---- Destroying the processor while an export job exists ---------------------------------------------------
+
+void scenarioExportDestroy()
+{
+    const auto media = exportDirectory("destroy-media");
+
+    // 1. The job waits for an analysis that never finishes: stopping the service ends it, releases the export lock
+    //    and leaves no file, within the shutdown bound; destroying the processor afterwards is quiet.
+    {
+        const auto out = exportDirectory("destroy-waiting");
+        auto processor = startedProcessor();
+        auto& service = processor->getControlService();
+        if (!service.isRunning())
+            return;
+        ApiSession api;
+        if (!api.open(service))
+            return;
+        const auto handles = handlesOf(api, *processor);
+        const auto clip = addClip(*processor, media, "never", 0, 0.0, 1.0, Analysis::Running);
+        const auto jobId =
+            startExport(api, clipParams(handles.placement(clip.placementId), (out / "never.wav").u8string()));
+        CONTROL_CHECK(pumpMessagesUntil([&] { return phaseOf(service, jobId) == "waiting"; }, kDriveTimeoutMs));
+        CONTROL_CHECK(processor->isExportLockHeld());
+        const auto started = Clock::now();
+        service.stop();
+        const auto elapsed = millisecondsSince(started);
+        note("the service stopped in " + std::to_string(elapsed) + " ms");
+        CONTROL_CHECK(elapsed <= kShutdownBoundMs);
+        CONTROL_CHECK(!processor->isExportLockHeld() && filesIn(out).empty());
+        const auto destroyedAt = Clock::now();
+        processor.reset();
+        CONTROL_CHECK(millisecondsSince(destroyedAt) <= kShutdownBoundMs);
+    }
+
+    // 2. The job is writing: the writer waits for OpenTune's render worker, which is held back by a queued render.
+    //    The export lock is released and no temporary file is left within the bound once the worker runs again; a
+    //    target that the export would have replaced is untouched.
+    {
+        const auto out = exportDirectory("destroy-writing");
+        auto processor = startedProcessor();
+        auto& service = processor->getControlService();
+        if (!service.isRunning())
+            return;
+        ApiSession api;
+        if (!api.open(service))
+            return;
+        auto* renderService = processor->getContentRenderService();
+        if (!CONTROL_CHECK(renderService != nullptr))
+            return;
+        const auto handles = handlesOf(api, *processor);
+        const auto clip = addClip(*processor, media, "writing", 0, 0.0, 1.0, Analysis::Ready);
+        CONTROL_CHECK(settleRender(*processor, clip.key));
+        const auto queued = addClip(*processor, media, "queued", 1, 0.0, 1.0, Analysis::Ready);
+        renderService->pauseRenderWorker();
+        processor->requestFullContentRender(queued.key);
+        const auto target = (out / "writing.wav").u8string();
+        CONTROL_CHECK(juceFileOf(target).replaceWithText("original"));
+        const auto jobId =
+            startExport(api, clipParams(handles.placement(clip.placementId), target, R"(,"ifExists":"overwrite")"));
+        CONTROL_CHECK(pumpMessagesUntil([&] { return phaseOf(service, jobId) == "writing"; }, kDriveTimeoutMs));
+        CONTROL_CHECK(processor->isExportLockHeld());
+        std::thread resumer([renderService] {
+            sleepMs(kQuietPumpMs);
+            renderService->resumeRenderWorker();
+        });
+        note("files before the stop: " + std::to_string(filesIn(out).size())
+             + " (the target and, while the writer has "
+               "opened it, its temporary file)");
+        const auto started = Clock::now();
+        service.stop();
+        const auto elapsed = millisecondsSince(started);
+        resumer.join();
+        note("the service stopped in " + std::to_string(elapsed) + " ms");
+        CONTROL_CHECK(elapsed <= kShutdownBoundMs);
+        CONTROL_CHECK(!processor->isExportLockHeld());
+        CONTROL_CHECK(filesIn(out) == std::vector<std::string>{"writing.wav"}
+                      && juceFileOf(target).loadFileAsString() == "original");
+        processor.reset();
+    }
+}
+
+// ---- Folders and files with spaces and Chinese names --------------------------------------------------------
+
+namespace {
+
+/** Installs a synthetic analysis as the import job's analysis request for the life of this object: the state
+    Extracting at once, the finished analysis from a later message (as OpenTune commits one), no model needed. */
+class ScopedSyntheticImportAnalysis
+{
+public:
+    ScopedSyntheticImportAnalysis()
+    {
+        auto alive = alive_;
+        controlSetImportAnalysisForTesting(
+            [alive](OpenTuneAudioProcessor& processor, const OpenTuneAudioProcessor::ContentRefreshRequest& request) {
+                if (!processor.setContentOriginalF0State(request.contentKey, OriginalF0State::Extracting))
+                    return false;
+                auto* target = &processor;
+                juce::MessageManager::callAsync([alive, target, request] {
+                    if (!alive->load())
+                        return;
+                    const auto snapshot = target->getContentSnapshot(request.contentKey);
+                    auto* owner = target->getStandaloneContentRepository()->findClip(request.contentKey);
+                    if (snapshot == nullptr || snapshot->audioBuffer == nullptr || owner == nullptr)
+                        return;
+                    owner->applyOriginalF0(syntheticCurve(snapshot->audioBuffer->getNumSamples() / kAudioSampleRate));
+                    target->setContentOriginalF0State(request.contentKey, OriginalF0State::Ready);
+                });
+                return true;
+            });
+    }
+
+    ~ScopedSyntheticImportAnalysis()
+    {
+        *alive_ = false;
+        controlSetImportAnalysisForTesting({});
+    }
+
+    ScopedSyntheticImportAnalysis(const ScopedSyntheticImportAnalysis&) = delete;
+    ScopedSyntheticImportAnalysis& operator=(const ScopedSyntheticImportAnalysis&) = delete;
+
+private:
+    std::shared_ptr<std::atomic<bool>> alive_ = std::make_shared<std::atomic<bool>>(true);
+};
+
+} // namespace
+
+void scenarioExportUnicodePath()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    TestUiBridge bridge;
+    bridge.visibleTracks = 2;
+    ScopedBridge registered(service, bridge);
+    const ScopedSyntheticImportAnalysis analysis;
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    // The folder and the file are named in Chinese with a space in each (UTF-8 escapes keep this source ASCII):
+    // <data>/export/<folderName>/<stem>.wav
+    const std::string folderName = "\xE5\xAF\xBC\xE5\x87\xBA \xE6\xB5\x8B\xE8\xAF\x95";
+    const std::string stem = "\xE4\xBA\xBA\xE5\xA3\xB0 \xE4\xB8\x80";
+    const std::string suffix = " \xE5\xAF\xBC\xE5\x87\xBA";
+    const auto directory = exportDirectory(folderName);
+    CONTROL_CHECK(directory.filename().u8string() == folderName);
+    const auto source = writeWav(directory, stem, 2.0);
+    CONTROL_CHECK(source == (directory / std::filesystem::u8path(stem + ".wav")).u8string()
+                  && juceFileOf(source).existsAsFile());
+
+    // Import: the path comes back as given, and the project shows it as the clip's source file.
+    const auto start =
+        api.result("import.start", json(R"({"items":[{"path":)" + quoted(source) + R"(}],"layout":"single"})"));
+    const auto importJob = waitJob(api, memberOf(memberOf(start, "job"), "jobId").text());
+    CONTROL_CHECK(memberOf(importJob, "state").text() == "succeeded");
+    const auto& items = memberOf(resultOf(importJob), "items");
+    if (!CONTROL_CHECK(items.size() == 1))
+        return;
+    const auto& item = items.at(0);
+    CONTROL_CHECK(memberOf(item, "imported").asBoolean() && memberOf(item, "path").text() == source
+                  && memberOf(item, "f0State").text() == "ready");
+    const auto project = api.result("project.get");
+    CONTROL_CHECK(memberOf(project, "placements").size() == 1
+                  && memberOf(memberOf(project, "placements").at(0), "sourcePath").text() == source);
+    const auto placementId = memberOf(item, "placementId").text();
+    const auto contents = processor->getStandaloneContentRepository()->getAllClips();
+    if (!CONTROL_CHECK(contents.size() == 1))
+        return;
+    CONTROL_CHECK(settleRender(*processor, contents.front()));
+
+    // Export next to the source, with the same kind of name: the path comes back as given, the file reads back.
+    const auto target = (directory / std::filesystem::u8path(stem + suffix + ".wav")).u8string();
+    const auto job = exportAndWait(api, clipParams(placementId, target));
+    CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+    CONTROL_CHECK(memberOf(resultOf(job), "path").text() == target);
+    checkFormat(resultOf(job), 1, 2.0, 0.0);
+    CONTROL_CHECK(juceFileOf(target).existsAsFile() && std::filesystem::exists(std::filesystem::u8path(target)));
+    // rename numbers the name and keeps its other parts; the source itself is never written; error refuses.
+    const auto renamed = exportAndWait(api, clipParams(placementId, target, R"(,"ifExists":"rename")"));
+    CONTROL_CHECK(memberOf(renamed, "state").text() == "succeeded"
+                  && memberOf(resultOf(renamed), "path").text()
+                         == (directory / std::filesystem::u8path(stem + suffix + " (2).wav")).u8string());
+    CONTROL_CHECK(api.fails("export.start", json(clipParams(placementId, source, R"(,"ifExists":"overwrite")")),
+                            "INVALID_ARGUMENT", "target_is_loaded_media"));
+    CONTROL_CHECK(api.fails("export.start", json(clipParams(placementId, target)), "ALREADY_EXISTS", "target_exists"));
+    CONTROL_CHECK(filesIn(directory).size() == 3);
+}
+
+// ---- Known defects of the export, written to the specification ---------------------------------------------
+
+/**
+ * A scenario that fails today because the implementation differs from the specification; it is registered as
+ * expected to fail (cmake/OpenTuneControl.cmake) until the implementation is fixed.
+ *
+ * A clip of silence whose pitch analysis ended Ready, with no voiced frame (what importing a silent file gives):
+ * PROTOCOL.md section 19 rule 6 lists a content for which "analysis found no voiced audio" as dry, and the schema of
+ * export.start names that reason unvoiced. classifyRender (ExportOps.cpp) asks only whether the F0 curve is empty
+ * (hasUsableOriginalF0), so such a content goes on to the render, whose blocks are all blank, and is listed as
+ * nothingToRender. The check of the other writes (controlCheckContentReady) already treats it as having no voiced
+ * frame.
+ */
+void scenarioExportKnownDefects()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    TestUiBridge bridge;
+    ScopedBridge registered(service, bridge);
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    const auto media = exportDirectory("dry-media");
+    const auto out = exportDirectory("dry-out");
+    const auto handles = handlesOf(api, *processor);
+
+    // A clip of silence whose pitch analysis ended Ready, with no voiced frame (what importing a silent file gives):
+    // PROTOCOL.md section 19 rule 6 lists a content for which "analysis found no voiced audio" as dry, and the
+    // schema names that reason unvoiced.
+    const auto silent = addClip(*processor, media, "silent", 0, 0.0, 2.0, Analysis::ReadySilent);
+    CONTROL_CHECK(settleBackgroundWork(*processor));
+    const ScopedWaitLimit limit(20000);
+    const auto job =
+        exportAndWait(api, clipParams(handles.placement(silent.placementId), (out / "silent.wav").u8string()));
+    CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+    note("dryContents: " + toJsonString(memberOf(resultOf(job), "dryContents")) + " (job " + toJsonString(job) + ")");
+    CONTROL_CHECK(toJsonString(memberOf(resultOf(job), "dryContents"))
+                  == dryJson(handles.content(silent.key), "unvoiced"));
 }
 
 } // namespace ControlTest

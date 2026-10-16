@@ -6,6 +6,7 @@
 // way OpenTune commits a finished analysis, so no model is needed. Registered with the other processor
 // scenarios in ControlProcessorTests.cpp.
 
+#include "ControlContentFixtures.h"
 #include "ControlProcessorSupport.h"
 #include "TestUiBridge.h"
 
@@ -71,7 +72,7 @@ std::filesystem::path mediaDirectory(const std::string& name)
 
 /** A WAV file of a voiced tone (A3, then B3) of the given length; returns its absolute path (UTF-8). */
 std::string writeTone(const std::filesystem::path& directory, const std::string& name, double durationSec,
-                      int channels = 1, double sampleRate = kAudioSampleRate)
+                      int channels = 1, double sampleRate = kAudioSampleRate, int bitsPerSample = 16)
 {
     const auto samples = static_cast<int>(std::llround(durationSec * sampleRate));
     juce::AudioBuffer<float> audio(channels, samples);
@@ -87,8 +88,10 @@ std::string writeTone(const std::filesystem::path& directory, const std::string&
     file.deleteFile();
     std::unique_ptr<juce::OutputStream> stream(file.createOutputStream().release());
     juce::WavAudioFormat wav;
-    const auto options =
-        juce::AudioFormatWriterOptions{}.withSampleRate(sampleRate).withNumChannels(channels).withBitsPerSample(16);
+    const auto options = juce::AudioFormatWriterOptions{}
+                             .withSampleRate(sampleRate)
+                             .withNumChannels(channels)
+                             .withBitsPerSample(bitsPerSample);
     auto writer = stream != nullptr ? wav.createWriterFor(stream, options) : nullptr;
     CONTROL_CHECK(writer != nullptr && writer->writeFromAudioSampleBuffer(audio, 0, samples));
     return path.u8string();
@@ -167,24 +170,32 @@ void commitSyntheticAnalysis(OpenTuneAudioProcessor& processor,
 /**
  * Installs the synthetic analysis as the import job's analysis request for the life of this object: it
  * sets the state Extracting at once, as requestContentRefresh does, and commits the analysis from a later
- * message (or never, with completes false). Posted messages do nothing once the object is gone.
+ * message (or never, with completes false). With fails the later message fails the analysis as the
+ * processor's completion of a failed extraction does: the reason f0_failed, then the state Failed. Posted
+ * messages do nothing once the object is gone.
  */
 class SyntheticAnalysis
 {
 public:
-    explicit SyntheticAnalysis(bool completes = true)
+    explicit SyntheticAnalysis(bool completes = true, bool fails = false)
     {
         auto alive = alive_;
         controlSetImportAnalysisForTesting(
-            [alive, completes](OpenTuneAudioProcessor& processor,
-                               const OpenTuneAudioProcessor::ContentRefreshRequest& request) {
+            [alive, completes, fails](OpenTuneAudioProcessor& processor,
+                                      const OpenTuneAudioProcessor::ContentRefreshRequest& request) {
                 if (!processor.setContentOriginalF0State(request.contentKey, OriginalF0State::Extracting))
                     return false;
                 if (completes) {
                     auto* target = &processor;
-                    juce::MessageManager::callAsync([alive, target, request] {
-                        if (alive->load())
+                    juce::MessageManager::callAsync([alive, target, request, fails] {
+                        if (!alive->load())
+                            return;
+                        if (fails) {
+                            target->recordF0FailureReason(request.contentKey, "f0_failed");
+                            target->setContentOriginalF0State(request.contentKey, OriginalF0State::Failed);
+                        } else {
                             commitSyntheticAnalysis(*target, request);
+                        }
                     });
                 }
                 return true;
@@ -1127,6 +1138,272 @@ void scenarioImportCancel()
     CONTROL_CHECK(warningCodes(result) == std::vector<std::string>{"IRREVERSIBLE"});
     CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 1);
     CONTROL_CHECK(bridge.dirtyMarks >= 1);
+}
+
+// ---- Every write against every busy condition ---------------------------------------------------------
+
+namespace {
+
+/** One write method with params that pass every check that comes before the busy check. */
+struct WriteCall
+{
+    const char* label;
+    const char* method;
+    std::string params;
+};
+
+/** Everything a client or the user could see of the project, the content, the undo history, the jobs and the
+    export lock, as one string: a refused write must leave it as it was. */
+std::string observableState(ApiSession& api, OpenTuneAudioProcessor& processor, TestUiBridge& bridge,
+                            ControlService& service, const std::string& contentId)
+{
+    std::string state = toJsonString(api.result("project.get"));
+    state += toJsonString(api.result("content.getNotes", json("{\"contentId\":" + quoted(contentId) + "}")));
+    state += toJsonString(api.result("content.getDetails", json("{\"contentId\":" + quoted(contentId) + "}")));
+    state += "|dirty " + std::to_string(bridge.dirtyMarks) + (bridge.project.dirty ? "y" : "n");
+    state += "|structure " + std::to_string(bridge.structureChanges) + "/"
+             + std::to_string(bridge.undoRedoNotifications) + "/" + std::to_string(bridge.timeGridNotifications);
+    state += "|undo " + std::to_string(processor.getUndoManager().size());
+    state += "|jobs " + std::to_string(service.jobs()->retainedCount());
+    state += processor.isExportLockHeld() ? "|locked" : "|free";
+    return state;
+}
+
+} // namespace
+
+void scenarioBusyMatrix()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    TestUiBridge bridge;
+    bridge.visibleTracks = 2;
+    ScopedBridge registered(service, bridge);
+    ClipSpec spec;
+    spec.name = "busy";
+    spec.trackId = 0;
+    spec.startTimelineSec = 2.0;
+    spec.durationSec = 6.0;
+    spec.notes = {{0.5, 1.5, 64.0}, {2.0, 3.0, 69.0}};
+    spec.gridHandlesContentSec = {1.0, 2.0, 3.0};
+    DetectedKey key;
+    key.root = Key::A;
+    key.scale = Scale::Minor;
+    key.origin = Origin::Manual;
+    key.confidence = 1.0f;
+    spec.key = key;
+    const auto clip = fixtureAddClip(*processor, spec);
+    CONTROL_CHECK(settleBackgroundWork(*processor));
+    ApiSession api;
+    if (!api.open(service) || !CONTROL_CHECK(clip.handleIds.size() == 3))
+        return;
+    const auto handles = fixtureHandlesOf(api.result("project.get"), 0, 2.0);
+    if (!CONTROL_CHECK(handles.has_value()))
+        return;
+    const auto& contentId = handles->contentId;
+    const auto revision = memberOf(handles->tokens, "revision").text();
+    const auto gridRevision = memberOf(handles->tokens, "gridRevision").text();
+    CONTROL_CHECK(!revision.empty() && !gridRevision.empty());
+    const auto media = mediaDirectory("busy-matrix");
+    const auto tone = writeTone(media, "take", 1.0);
+    const auto target = absentPath(media, "exported.wav");
+
+    const std::string content = "\"contentId\":" + quoted(contentId);
+    const std::string expected = ",\"expectedRevision\":" + quoted(revision);
+    const std::vector<WriteCall> calls = {
+        {"import.start", "import.start", R"({"items":[{"path":)" + quoted(tone) + R"(}],"layout":"single"})"},
+        {"export.start", "export.start", R"({"kind":"master","path":)" + quoted(target) + "}"},
+        {"content.setKey", "content.setKey", "{" + content + R"(,"key":{"root":0,"scale":"major"}})"},
+        {"content.autoTune regenerate", "content.autoTune",
+         "{" + content + expected + R"(,"mode":"regenerate","key":{"root":0,"scale":"major"}})"},
+        {"content.autoTune snapNotes", "content.autoTune",
+         "{" + content + expected + R"(,"mode":"snapNotes","key":{"root":0,"scale":"major"}})"},
+        {"content.editNotes", "content.editNotes",
+         "{" + content + expected + R"(,"ops":[{"op":"shiftCents","select":{"all":true},"deltaCents":100}]})"},
+        {"content.setPitchShift", "content.setPitchShift",
+         "{" + content + R"(,"pitchShift":{"semitones":1,"cents":0}})"},
+        {"edit.undo", "edit.undo", R"({"force":true})"},
+        {"edit.redo", "edit.redo", R"({"force":true})"},
+        {"content.shiftTiming", "content.shiftTiming",
+         "{" + content + ",\"expectedGridRevision\":" + quoted(gridRevision)
+             + R"(,"range":{"startOutputSec":1.5,"endOutputSec":2.5},"deltaSec":0.25})"},
+        {"content.editTimeGrid seed", "content.editTimeGrid", "{" + content + R"(,"op":"seed"})"},
+        {"content.editTimeGrid moveHandles", "content.editTimeGrid",
+         "{" + content + ",\"op\":\"moveHandles\",\"expectedGridRevision\":" + quoted(gridRevision)
+             + ",\"moves\":[{\"handleId\":" + quoted(clip.handleIds[0]) + ",\"outputSec\":1.1}]}"},
+    };
+    struct Condition
+    {
+        const char* name;
+        bool ControlUiBridge::BusyState::*flag;
+        const char* reason;
+    };
+    const Condition conditions[] = {
+        {"the pointer is down", &ControlUiBridge::BusyState::pointerDown, "pointer_down"},
+        {"a modal dialog is open", &ControlUiBridge::BusyState::modalOpen, "modal_open"},
+        {"the editor exports", &ControlUiBridge::BusyState::exportRunning, "export_in_progress"},
+        {"the editor imports", &ControlUiBridge::BusyState::importRunning, "import_in_progress"},
+        {"the editor saves or opens a project", &ControlUiBridge::BusyState::operationRunning, "project_operation"},
+    };
+
+    const auto before = observableState(api, *processor, bridge, service, contentId);
+    CONTROL_CHECK(before == observableState(api, *processor, bridge, service, contentId));
+    int cells = 0;
+    for (const auto& call : calls) {
+        for (const auto& condition : conditions) {
+            bridge.busy = {};
+            bridge.busy.*(condition.flag) = true;
+            if (!api.fails(call.method, json(call.params), "BUSY", condition.reason))
+                note(std::string("the cell ") + call.label + " x " + condition.name + " failed");
+            ++cells;
+        }
+        // The export lock that the UI and the API share, held by an export that is not the editor's flag.
+        bridge.busy = {};
+        CONTROL_CHECK(processor->tryAcquireExportLock());
+        if (!api.fails(call.method, json(call.params), "BUSY", "export_in_progress"))
+            note(std::string("the cell ") + call.label + " x the export lock failed");
+        processor->releaseExportLock();
+        ++cells;
+    }
+    bridge.busy = {};
+    CONTROL_CHECK(cells == static_cast<int>(calls.size()) * 6);
+    CONTROL_CHECK(observableState(api, *processor, bridge, service, contentId) == before);
+    CONTROL_CHECK(!juceFileOf(std::filesystem::u8path(target)).exists());
+
+    // Once nothing is busy any more the writes are not refused.
+    const auto set = api.result("content.setKey", json("{" + content + R"(,"key":{"root":0,"scale":"major"}})"));
+    CONTROL_CHECK(memberOf(set, "applied").asBoolean() && !memberOf(set, "noOp").asBoolean());
+    const auto dispatcher = service.dispatcher();
+    CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+}
+
+// ---- A client that goes away while its job.get waits ---------------------------------------------------
+
+void scenarioJobDisconnect()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    const auto jobs = service.jobs();
+    ApiSession api;
+    if (!service.isRunning() || !CONTROL_CHECK(jobs != nullptr) || !api.open(service))
+        return;
+    // A running job whose work owns a thread (as the work of an export does).
+    auto record = std::make_shared<ThreadedJob>();
+    const auto jobId = jobs->start("export", true, threadedWork(record)).jobId;
+    CONTROL_CHECK(pumpMessagesUntil([&record] { return record->steps.load() > 0 && record->threadRunning.load(); },
+                                    kReadTimeoutMs));
+
+    // A client of its own sends job.get and closes its connection while it waits. A request in flight when the
+    // connection closes runs to completion and its response is discarded (PROTOCOL.md section 3), so the waiter
+    // ends at its own deadline, not at the close; with a short hold that is soon, and nothing else is affected.
+    const auto goAway = [&](int waitMs) {
+        TestClient waiter;
+        CONTROL_CHECK(authenticate(waiter, service.port(), memberOf(api.discovery(), "token").text()).has_value());
+        CONTROL_CHECK(waiter.sendLine(R"({"jsonrpc":"2.0","id":7,"method":"job.get","params":{"jobId":)" + quoted(jobId)
+                                      + R"(,"waitMs":)" + std::to_string(waitMs) + "}}"));
+        CONTROL_CHECK(waitUntil([&jobs] { return jobs->waitingCount() == 1; }, kWaiterSettleMs));
+        waiter.close();
+    };
+    constexpr int kShortHoldMs = 600;
+    goAway(kShortHoldMs);
+    const auto closedAt = Clock::now();
+    CONTROL_CHECK(waitUntil([&jobs] { return jobs->waitingCount() == 0; }, kShortHoldMs + kCloseSeenMs));
+    note("the waiter was gone " + std::to_string(millisecondsSince(closedAt)) + " ms after the close");
+    CONTROL_CHECK(record->threadRunning.load() && !record->destroyed.load());
+
+    // And one with the longest hold, whose client is gone when the processor is destroyed.
+    goAway(30000);
+
+    // The job is untouched, and a new connection (the first one as well) gets it.
+    ApiSession second;
+    if (CONTROL_CHECK(second.open(service))) {
+        const auto job = memberOf(second.result("job.get", json(R"({"jobId":)" + quoted(jobId) + "}")), "job");
+        CONTROL_CHECK(memberOf(job, "state").text() == "running" && memberOf(job, "jobId").text() == jobId);
+    }
+    CONTROL_CHECK(
+        memberOf(memberOf(api.result("job.get", json(R"({"jobId":)" + quoted(jobId) + "}")), "job"), "state").text()
+        == "running");
+    CONTROL_CHECK(record->threadRunning.load() && !record->destroyed.load());
+
+    // Destroying the processor then is within the bound, and the work is destroyed with its thread joined.
+    const auto started = Clock::now();
+    processor.reset();
+    const auto elapsed = millisecondsSince(started);
+    note("processor destroyed in " + std::to_string(elapsed) + " ms");
+    CONTROL_CHECK(elapsed <= kShutdownBoundMs);
+    CONTROL_CHECK(record->destroyed.load() && !record->threadRunning.load());
+}
+
+// ---- Imports that fail -----------------------------------------------------------------------------------
+
+void scenarioImportFailures()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    TestUiBridge bridge;
+    bridge.visibleTracks = 2;
+    ScopedBridge registered(service, bridge);
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    const auto media = mediaDirectory("import-failures");
+    const auto oneItem = [](const std::string& path) {
+        return R"({"items":[{"path":)" + quoted(path) + R"(}],"layout":"single","trackId":0})";
+    };
+
+    // 1. The pitch analysis fails: the clip stays in the project, its f0State is failed, and the item says
+    //    ANALYSIS_FAILED(f0_failed); the job itself succeeded.
+    {
+        const SyntheticAnalysis failing(true, true);
+        const auto path = writeTone(media, "doomed", 2.0);
+        const auto job = importAndWait(api, oneItem(path));
+        CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+        const auto& result = memberOf(job, "result");
+        const auto& item = memberOf(result, "items").at(0);
+        note("item: " + toJsonString(item));
+        CONTROL_CHECK(memberOf(item, "imported").asBoolean() && memberOf(item, "f0State").text() == "failed");
+        CONTROL_CHECK(errorKindOf(memberOf(item, "error")).text() == "ANALYSIS_FAILED"
+                      && errorReasonOf(memberOf(item, "error")).text() == "f0_failed"
+                      && !memberOf(memberOf(memberOf(item, "error"), "data"), "executed").isNull());
+        CONTROL_CHECK(toJsonString(memberOf(result, "counts")) == R"({"requested":1,"imported":1,"failed":0})");
+        CONTROL_CHECK(memberOf(result, "applied").asBoolean() && !memberOf(result, "noOp").asBoolean());
+        const auto project = api.result("project.get");
+        const auto& placements = memberOf(project, "placements");
+        CONTROL_CHECK(placements.size() == 1 && memberOf(placements.at(0), "sourcePath").text() == path);
+        const auto details = api.result("content.getDetails",
+                                        json(R"({"contentId":)" + quoted(memberOf(item, "contentId").text()) + "}"));
+        CONTROL_CHECK(memberOf(memberOf(details, "analysis"), "f0State").text() == "failed");
+    }
+
+    // The checks of the file itself: each fails alone, nothing is imported.
+    const SyntheticAnalysis analysis;
+    const auto retained = service.jobs()->retainedCount();
+    const auto placementsBefore = memberOf(api.result("project.get"), "placements").size();
+    const auto failsWith = [&](const std::string& path, const char* kind, const char* reason) {
+        const auto job = importAndWait(api, oneItem(path));
+        CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+        const auto& result = memberOf(job, "result");
+        const auto& item = memberOf(result, "items").at(0);
+        const bool ok = !memberOf(item, "imported").asBoolean() && memberOf(item, "f0State").isNull()
+                        && errorKindOf(memberOf(item, "error")).text() == kind
+                        && errorReasonOf(memberOf(item, "error")).text() == reason;
+        if (!ok)
+            note("expected " + std::string(kind) + "(" + reason + "), got " + toJsonString(item));
+        CONTROL_CHECK(ok);
+        CONTROL_CHECK(toJsonString(memberOf(result, "counts")) == R"({"requested":1,"imported":0,"failed":1})");
+        CONTROL_CHECK(memberOf(result, "noOp").asBoolean());
+    };
+    // 2. 601 s at 8 kHz, 8 bit, mono: a small file, but longer than import.maxAnalysisSec (600 s).
+    failsWith(writeTone(media, "long", 601.0, 1, 8000.0, 8), "INVALID_ARGUMENT", "audio_too_long");
+    // 3. More than two channels.
+    failsWith(writeTone(media, "surround", 1.0, 3), "UNSUPPORTED", "too_many_channels");
+    CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == placementsBefore);
+    CONTROL_CHECK(service.jobs()->retainedCount() == retained + 2);
+    const auto info = api.result("session.info");
+    CONTROL_CHECK(memberOf(memberOf(info, "import"), "maxAnalysisSec").asDouble() == 600.0);
 }
 
 // ---- The specification's vectors -------------------------------------------------------------------

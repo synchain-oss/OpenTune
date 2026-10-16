@@ -304,6 +304,9 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ImportAfterOpen|--control-api"
             "ImportCancel|--control-api"
             "JobVectors|--control-api"
+            "BusyMatrix|--control-api"
+            "JobDisconnect|--control-api"
+            "ImportFailures|--control-api"
         )
         # export.start and the export lock (Tests/Control/ControlExportTests.cpp).
         list(APPEND _opentune_control_scenarios
@@ -311,6 +314,11 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ExportFailures|--control-api"
             "ExportVectors|--control-api"
             "ExportTimeStretch|--control-api"
+            "ExportAfterEdit|--control-api"
+            "ExportCancelOverwrite|--control-api"
+            "ExportDestroy|--control-api"
+            "ExportUnicodePath|--control-api"
+            "ExportKnownDefects|--control-api"
         )
         # Undo and redo, key and AUTO, note edits and the pitch shift (Tests/Control/ControlEditTests.cpp).
         list(APPEND _opentune_control_scenarios
@@ -320,6 +328,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "EditNotes|--control-api"
             "SetPitchShift|--control-api"
             "SnapNotes|--control-api"
+            "EditConflictRetry|--control-api"
+            "TokenAspects|--control-api"
             "EditCapability|--control-api"
             "EditVectors|--control-api"
         )
@@ -327,6 +337,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         list(APPEND _opentune_control_scenarios
             "Timing|--control-api"
             "TimeGridSeed|--control-api"
+            "TimingTokenAspects|--control-api"
             "TimingVectors|--control-api"
         )
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
@@ -350,6 +361,11 @@ if(OPENTUNE_ENABLE_CONTROL_API)
                 TIMEOUT 60
                 ENVIRONMENT "OPENTUNE_DATA_DIR=${_opentune_control_data};OPENTUNE_LIFECYCLE_TRACE_DIR=${_opentune_control_trace_dir}")
         endforeach()
+        # Fails today because the export differs from the specification (a content without a voiced frame is listed as
+        # nothingToRender, the specification says unvoiced). It is written to the specification and expected to fail
+        # until the export is fixed; the fix removes this line. WILL_FAIL rather than DISABLED because ctest reports a
+        # disabled test that is selected by name as "no tests found" (with --no-tests=error, an error).
+        set_tests_properties(ControlProcessorTests.ExportKnownDefects PROPERTIES WILL_FAIL TRUE)
         # Every vector starts a processor of its own.
         set_tests_properties(ControlProcessorTests.Vectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.JobVectors PROPERTIES TIMEOUT 300)

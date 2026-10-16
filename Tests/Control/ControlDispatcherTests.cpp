@@ -1695,6 +1695,48 @@ void scenarioDispatchTimeout()
     CONTROL_CHECK(dispatcher->executedCount() == 0);
     CONTROL_CHECK(memberOf(api.result("project.get"), "placements").isArray());
     CONTROL_CHECK(dispatcher->executedCount() == 1);
+
+    // The same for a write: content.setKey is abandoned too, never runs later, and the content keeps its key.
+    const auto clip = addClip(*processor, sungSpec());
+    CONTROL_CHECK(settleBackgroundWork(*processor));
+    const auto handles = handlesOf(api.result("project.get"), 0, 2.0);
+    if (!CONTROL_CHECK(handles.has_value()))
+        return;
+    const auto executedBefore = dispatcher->executedCount();
+    const auto keyBefore = processor->getContentSnapshot(clip.key)->detectedKey;
+    const auto tokensBefore = toJsonString(handles->tokens);
+    const std::string setKey = R"({"jsonrpc":"2.0","id":9,"method":"content.setKey","params":{"contentId":")"
+                               + handles->contentId + R"(","key":{"root":0,"scale":"major"}}})";
+    std::optional<std::string> writeResponse;
+    std::atomic<bool> writeAnswered{false};
+    std::thread writer([&] {
+        if (api.client().sendLine(setKey))
+            writeResponse = api.client().readLine(dispatchTimeoutMs + kReadTimeoutMs);
+        writeAnswered = true;
+    });
+    CONTROL_CHECK(waitUntil([&writeAnswered] { return writeAnswered.load(); },
+                            dispatchTimeoutMs + kReadTimeoutMs + kCloseSeenMs));
+    writer.join();
+    if (CONTROL_CHECK(writeResponse.has_value())) {
+        CONTROL_CHECK(isError(writeResponse, "TIMEOUT", "dispatch_timeout"));
+        const auto parsed = parseJson(*writeResponse);
+        const JsonValue* data = errorData(parsed.value);
+        CONTROL_CHECK(data != nullptr && !memberOf(*data, "executed").asBoolean());
+    }
+    // The abandoned write reaches the message loop now and never runs: no method ran, the key and its token are as
+    // they were.
+    pumpMessagesFor(kQuietPumpMs);
+    CONTROL_CHECK(dispatcher->executedCount() == executedBefore);
+    const auto keyAfter = processor->getContentSnapshot(clip.key)->detectedKey;
+    CONTROL_CHECK(keyAfter.root == keyBefore.root && keyAfter.scale == keyBefore.scale
+                  && keyAfter.origin == keyBefore.origin);
+    const auto handlesAfter = handlesOf(api.result("project.get"), 0, 2.0);
+    CONTROL_CHECK(handlesAfter.has_value() && toJsonString(handlesAfter->tokens) == tokensBefore);
+    // The next write runs.
+    const auto set = api.result(
+        "content.setKey", json("{\"contentId\":\"" + handles->contentId + R"(","key":{"root":0,"scale":"major"}})"));
+    CONTROL_CHECK(memberOf(set, "applied").asBoolean() && !memberOf(set, "noOp").asBoolean());
+    CONTROL_CHECK(processor->getContentSnapshot(clip.key)->detectedKey.root == Key::C);
 }
 
 void scenarioDetails()

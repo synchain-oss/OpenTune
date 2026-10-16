@@ -337,6 +337,8 @@ struct EditFixture
             return false;
         registered = std::make_unique<ScopedTestBridge>(service, bridge);
         clip = fixtureAddClip(*processor, spec);
+        // The render that importing the clip requested is over before the first timed request.
+        CONTROL_CHECK(settleBackgroundWork(*processor));
         if (!api.open(service))
             return false;
         instanceShort = memberOf(api.discovery(), "instanceId").text().substr(0, 8);
@@ -1998,6 +2000,7 @@ std::string runEditVector(const JsonValue& vector)
         clips[spec.name] = clip;
         specs.emplace_back(spec.name, spec);
     }
+    CONTROL_CHECK(settleBackgroundWork(*f.processor));
     // Reference bindings: StandaloneArrangement::setPlacementReferencePlacement(), as the editor's menu sets one.
     for (std::size_t i = 0; i < givenClips.size(); ++i)
         if (const JsonValue* reference = givenClips.at(i).find("referenceClip")) {
@@ -2085,7 +2088,98 @@ std::string runEditVector(const JsonValue& vector)
     return failure;
 }
 
+// ---- Scenario: refused while the pointer is down, then the user edits, then the retry ---------------------
+
+/** The sequence a client goes through when the user's gesture refused its write: BUSY(pointer_down), the pointer
+    is released, the user's edit changes the content, the retry with the old revision conflicts and changes
+    nothing, a fresh read gives the new revision, and the write with it succeeds. */
+void scenarioEditConflictRetryImpl()
+{
+    EditFixture f;
+    if (!f.open(fourNoteSpec()))
+        return;
+    const auto staleRevision = f.revision();
+    const auto before = stateOf(*f.processor, f.clip.key);
+    const std::string ops = R"([{"op":"shiftCents","select":{"all":true},"deltaCents":100}])";
+    const auto staleParams = f.editNotesParams(ops);
+
+    // 1. The pointer is down: BUSY, and nothing changed.
+    const int marks = f.bridge.dirtyMarks;
+    f.bridge.busy.pointerDown = true;
+    CONTROL_CHECK(f.api.fails("content.editNotes", staleParams, "BUSY", "pointer_down"));
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before));
+    CONTROL_CHECK(f.revision() == staleRevision && f.bridge.dirtyMarks == marks);
+
+    // 2. The pointer is released and the user's edit lands before the retry.
+    f.bridge.busy = {};
+    CONTROL_CHECK(pushUiNoteEdit(*f.processor, f.clip.key));
+    const auto userEdited = stateOf(*f.processor, f.clip.key);
+    const auto freshRevision = f.revision();
+    CONTROL_CHECK(!sameState(userEdited, before) && freshRevision != staleRevision);
+
+    // 3. The retry with the old revision: REVISION_CONFLICT, the user's edit stays.
+    CONTROL_CHECK(f.api.fails("content.editNotes", staleParams, "REVISION_CONFLICT", "content_changed"));
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), userEdited));
+    CONTROL_CHECK(f.revision() == freshRevision);
+
+    // 4. After the re-read the write succeeds on top of the user's edit.
+    const auto applied = f.editNotes(ops);
+    CONTROL_CHECK(memberOf(applied, "applied").asBoolean() && !memberOf(applied, "noOp").asBoolean());
+    const auto after = stateOf(*f.processor, f.clip.key);
+    CONTROL_CHECK(!sameState(after, userEdited) && after.notes.size() == userEdited.notes.size());
+    for (std::size_t i = 0; i < after.notes.size() && i < userEdited.notes.size(); ++i)
+        CONTROL_CHECK(after.notes[i].pitchOffset > userEdited.notes[i].pitchOffset);
+    CONTROL_CHECK(VectorMatcher::equal(resultTokens(applied, f.contentId), freshTokens(f.api, f.contentId)));
+    CONTROL_CHECK(f.revision() != freshRevision);
+}
+
+// ---- Scenario: the aspects of the tokens, for the key ---------------------------------------------------
+
+/** A key change moves keyRevision and not revision, so a write that depends on revision only (AUTO with an explicit
+    key) works with the revision read before the key change, while one that uses the content's own key
+    (clipKey) conflicts on the old key revision. */
+void scenarioTokenAspectsImpl()
+{
+    EditFixture f;
+    if (!f.open(fourNoteSpec()))
+        return;
+    const auto revision = f.revision();
+    const auto keyRevision = f.keyRevision();
+    f.api.result("content.setKey",
+                 jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + R"(,"key":{"root":0,"scale":"major"}})"));
+    CONTROL_CHECK(f.revision() == revision && f.keyRevision() != keyRevision);
+
+    // The old revision, an explicit scale: succeeds.
+    const std::string common =
+        "{\"contentId\":" + jsonQuoted(f.contentId) + ",\"expectedRevision\":" + jsonQuoted(revision);
+    const auto before = stateOf(*f.processor, f.clip.key);
+    const auto applied =
+        f.api.result("content.autoTune", jsonOf(common + R"(,"mode":"regenerate","key":{"root":7,"scale":"major"}})"));
+    CONTROL_CHECK(memberOf(applied, "applied").asBoolean() && !memberOf(applied, "noOp").asBoolean());
+    CONTROL_CHECK(!sameState(stateOf(*f.processor, f.clip.key), before));
+    CONTROL_CHECK(f.revision() != revision);
+
+    // The content's own key with the key revision from before the change: REVISION_CONFLICT(key_changed).
+    const auto fresh = f.revision();
+    const std::string clipKeyParams =
+        "{\"contentId\":" + jsonQuoted(f.contentId) + ",\"expectedRevision\":" + jsonQuoted(fresh)
+        + R"(,"mode":"snapNotes","key":"clipKey",)" + "\"expectedKeyRevision\":" + jsonQuoted(keyRevision) + "}";
+    const auto unchanged = stateOf(*f.processor, f.clip.key);
+    CONTROL_CHECK(f.api.fails("content.autoTune", jsonOf(clipKeyParams), "REVISION_CONFLICT", "key_changed"));
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), unchanged));
+}
+
 } // namespace
+
+void scenarioEditConflictRetry()
+{
+    scenarioEditConflictRetryImpl();
+}
+
+void scenarioTokenAspects()
+{
+    scenarioTokenAspectsImpl();
+}
 
 void scenarioUndo()
 {

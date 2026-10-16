@@ -31,9 +31,14 @@
 #include "Utils/AppPreferences.h"
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <memory>
+#include <mutex>
+#include <string>
 #include <thread>
 
 #if defined(_WIN32)
@@ -537,21 +542,92 @@ const Scenario kScenarios[] = {
     {"ImportAfterOpen", scenarioImportAfterOpen, false},
     {"ImportCancel", scenarioImportCancel, false},
     {"JobVectors", scenarioJobVectors, false},
+    {"BusyMatrix", scenarioBusyMatrix, false},
+    {"JobDisconnect", scenarioJobDisconnect, true},
+    {"ImportFailures", scenarioImportFailures, false},
     {"Export", scenarioExport, false},
     {"ExportFailures", scenarioExportFailures, false},
     {"ExportVectors", scenarioExportVectors, false},
     {"ExportTimeStretch", scenarioExportTimeStretch, false},
+    {"ExportAfterEdit", scenarioExportAfterEdit, false},
+    {"ExportCancelOverwrite", scenarioExportCancelOverwrite, false},
+    {"ExportDestroy", scenarioExportDestroy, true},
+    {"ExportUnicodePath", scenarioExportUnicodePath, false},
+    {"ExportDryReasons", scenarioExportDryReasons, false},
     {"Undo", scenarioUndo, false},
     {"SetKey", scenarioSetKey, false},
     {"AutoTune", scenarioAutoTune, false},
     {"EditNotes", scenarioEditNotes, false},
     {"SetPitchShift", scenarioSetPitchShift, false},
     {"SnapNotes", scenarioSnapNotes, false},
+    {"EditConflictRetry", scenarioEditConflictRetry, false},
+    {"TokenAspects", scenarioTokenAspects, false},
     {"EditCapability", scenarioEditCapability, false},
     {"EditVectors", scenarioEditVectors, false},
     {"Timing", scenarioTiming, false},
     {"TimeGridSeed", scenarioTimeGridSeed, false},
+    {"TimingTokenAspects", scenarioTimingTokenAspects, false},
     {"TimingVectors", scenarioTimingVectors, false},
+};
+
+/** How much earlier than the ctest TIMEOUT of its test the watchdog of a scenario ends it. */
+constexpr int kScenarioBoundMarginMs = 5000;
+/** The bound of a scenario whose process was started without OPENTUNE_SCENARIO_TIMEOUT_SEC (not through ctest). */
+constexpr int kDefaultScenarioBoundMs = 55000;
+
+/**
+ * The bound of the scenario of this process: kScenarioBoundMarginMs before the ctest TIMEOUT of its test, which
+ * cmake/OpenTuneControl.cmake passes as OPENTUNE_SCENARIO_TIMEOUT_SEC (whole seconds), so that a scenario with a
+ * longer TIMEOUT gets a longer bound with nothing else to change; kDefaultScenarioBoundMs without that variable.
+ */
+int scenarioBoundMs()
+{
+    const auto value = controlSystemEnvironment("OPENTUNE_SCENARIO_TIMEOUT_SEC");
+    if (!value || value->empty() || value->size() > 6 || value->find_first_not_of("0123456789") != std::string::npos)
+        return kDefaultScenarioBoundMs;
+    const long long timeoutMs = std::stoll(*value) * 1000;
+    return timeoutMs > 2LL * kScenarioBoundMarginMs ? static_cast<int>(timeoutMs - kScenarioBoundMarginMs)
+                                                    : static_cast<int>(timeoutMs / 2);
+}
+
+/**
+ * Ends the process with a failure that names the scenario when it has not finished within its bound, so that a
+ * scenario blocked in a wait without a bound (in upstream code, for example) fails with a message rather than being
+ * killed by ctest at its TIMEOUT without one. The flag is set and notified under the mutex the watchdog waits with.
+ */
+class ScenarioWatchdog
+{
+public:
+    ScenarioWatchdog(const char* name, int boundMs)
+        : thread_([this, name, boundMs] {
+            std::unique_lock<std::mutex> lock(mutex_);
+            if (cv_.wait_for(lock, std::chrono::milliseconds(boundMs), [this] { return done_; }))
+                return;
+            std::cout << "[FAILED] " << name << ": not finished within " << boundMs
+                      << " ms; a wait without a bound did not return" << std::endl;
+            std::cerr << "    FAILED " << name << " did not finish within its bound" << std::endl;
+            std::_Exit(1);
+        })
+    {}
+
+    ~ScenarioWatchdog()
+    {
+        {
+            const std::lock_guard<std::mutex> lock(mutex_);
+            done_ = true;
+        }
+        cv_.notify_all();
+        thread_.join();
+    }
+
+    ScenarioWatchdog(const ScenarioWatchdog&) = delete;
+    ScenarioWatchdog& operator=(const ScenarioWatchdog&) = delete;
+
+private:
+    std::mutex mutex_;
+    std::condition_variable cv_;
+    bool done_ = false;
+    std::thread thread_;
 };
 
 int runScenario(const Scenario& scenario)
@@ -564,6 +640,7 @@ int runScenario(const Scenario& scenario)
 
     const auto started = Clock::now();
     std::cout << "[ RUN  ] " << scenario.name << std::endl;
+    const ScenarioWatchdog watchdog(scenario.name, scenarioBoundMs());
     {
         // The message manager on this thread; no window, no audio device.
         juce::ScopedJuceInitialiser_GUI juceInitialiser;

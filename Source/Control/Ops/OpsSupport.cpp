@@ -2,6 +2,7 @@
 #include "OpsSupport.h"
 
 #include "Control/ControlUiBridge.h"
+#include "Control/Edit/ControlOriginAction.h"
 #include "Content/EditableContentSnapshot.h"
 #include "Content/StandaloneContentRepository.h"
 #include "PluginProcessor.h"
@@ -394,12 +395,17 @@ JsonValue ControlContentVersions::tokensJson() const
     return json;
 }
 
-ControlContentVersions controlContentVersions(const std::string& contentId, const EditableContentSnapshot& snapshot)
+ControlContentVersions controlContentVersions(ControlOpContext& context, const std::string& contentId,
+                                              const EditableContentSnapshot& snapshot)
 {
     ControlContentVersions versions;
     versions.contentId = contentId;
-    versions.notes = ControlTokenHasher('n').add(snapshot.notesRevision).token();
-    versions.pitch = ControlTokenHasher('p').add(snapshot.pitchRevision).token();
+    // The counters without the steps of OpenTune's pitch shifts, which advance both (applyPitchShiftState()).
+    ControlPitchShiftLedger::Counters counters{snapshot.notesRevision, snapshot.pitchRevision};
+    if (const auto history = context.history())
+        counters = history->pitchShiftLedger().observe(contentId, controlContentEpoch(context), snapshot);
+    versions.notes = ControlTokenHasher('n').add(counters.notes).token();
+    versions.pitch = ControlTokenHasher('p').add(counters.pitch).token();
     const auto& curve = snapshot.pitchCurve;
     versions.content = ControlTokenHasher('c')
                            .add(snapshot.audioRevision)
@@ -488,7 +494,7 @@ ControlWorldVersions controlCaptureWorldVersions(ControlOpContext& context)
     world.trackState = controlTrackStateVersion(context);
     for (const auto& key : controlLiveContents(context))
         if (const auto snapshot = controlLiveSnapshot(context, key))
-            world.contents.push_back(controlContentVersions(controlContentId(context, key), *snapshot));
+            world.contents.push_back(controlContentVersions(context, controlContentId(context, key), *snapshot));
     return world;
 }
 

@@ -162,7 +162,12 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
         bridge->onUndoRedoApplied();
     const auto after = controlCaptureEditState(context);
     controlDescribeEffect(context, before, after, envelope);
-    if (isEmptyDiff(before.versions, after.versions))
+    // Rule 5: a step that changed nothing. An entry of the API also knows it from its own step (every inner
+    // action masked, or a pitch shift that commitPitchShiftEdit() did not apply); then nothing changed.
+    const auto* origin = dynamic_cast<const ControlOriginAction*>(top);
+    const bool emptyDiff = isEmptyDiff(before.versions, after.versions);
+    jassert(origin == nullptr || origin->lastStepTookEffect() || emptyDiff);
+    if (emptyDiff || (origin != nullptr && !origin->lastStepTookEffect()))
         envelope.addWarning("UNDO_NO_EFFECT");
     auto revertParams = JsonValue::object();
     revertParams.appendMember("expectedUndoId", JsonValue::string(undoId));

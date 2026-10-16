@@ -35,6 +35,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 
@@ -78,6 +79,17 @@ inline void publishCommandLineToJuce([[maybe_unused]] int argc, [[maybe_unused]]
 constexpr int kPumpIdleMs = 2;
 
 /**
+ * The longest time one message took to dispatch in pumpMessagesUntil() since the last reset, in milliseconds.
+ * Message thread only. A request that gets no response in time reports it, which tells a message thread kept
+ * busy by another message (for example an upstream dialog built from a callback) from a slow method.
+ */
+inline long long& longestMessageDispatchMs()
+{
+    static long long longest = 0;
+    return longest;
+}
+
+/**
  * Dispatches the messages of the calling thread, which must be the message thread, until condition()
  * holds or timeoutMs passes. Returns whether the condition holds. Re-entrant, and usable any number of
  * times per process.
@@ -90,6 +102,7 @@ inline bool pumpMessagesUntil(const std::function<bool()>& condition, int timeou
             return true;
         if (Clock::now() >= deadline)
             return false;
+        const auto dispatchStart = Clock::now();
 #if JUCE_MAC
         // Handles at most one source and returns; waits up to kPumpIdleMs while idle, so no extra
         // sleep is needed.
@@ -98,7 +111,38 @@ inline bool pumpMessagesUntil(const std::function<bool()>& condition, int timeou
         if (!juce::detail::dispatchNextMessageOnSystemQueue(true))
             sleepMs(kPumpIdleMs);
 #endif
+        const auto dispatchMs =
+            std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - dispatchStart).count();
+        longestMessageDispatchMs() = std::max<long long>(longestMessageDispatchMs(), dispatchMs);
     }
+}
+
+/**
+ * Dispatches every message posted to the calling (message) thread before this call, then the messages that are
+ * pending once those ran (for example the paint of a window one of them opened), until the queue is empty or
+ * timeoutMs passes. Returns whether the queue was emptied. Used after background work is over, so that the
+ * callbacks it posted run before a scenario's timed requests. JUCE's timers keep posting messages, so the queue
+ * is never quiet for long; a marker posted behind the earlier messages tells when those ran.
+ */
+inline bool drainPostedMessages(int timeoutMs)
+{
+    const auto deadline = Clock::now() + std::chrono::milliseconds(timeoutMs);
+    // Shared with the marker, which may still run after a timeout.
+    auto reached = std::make_shared<bool>(false);
+    if (!juce::MessageManager::callAsync([reached] { *reached = true; }))
+        return false;
+    if (!pumpMessagesUntil([reached] { return *reached; }, timeoutMs))
+        return false;
+    while (Clock::now() < deadline) {
+#if JUCE_MAC
+        if (CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.0, true) != kCFRunLoopRunHandledSource)
+            return true;
+#else
+        if (!juce::detail::dispatchNextMessageOnSystemQueue(true))
+            return true;
+#endif
+    }
+    return false;
 }
 
 /** Dispatches the messages of the calling (message) thread for the given time. */

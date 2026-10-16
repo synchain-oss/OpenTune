@@ -1392,7 +1392,7 @@ bool centsNear(const std::vector<double>& measured, const std::vector<double>& e
  * takes what is left of it.
  */
 constexpr int kMultiNoteRenderBudgetMs = 270000;
-/** One wait of the export job, shorter than the 5 s the client reads a response: the loop asks again while the job still runs, until the budget is spent. */
+/** One wait of the export job, shorter than the 5 s a client reads a response; the loop asks again while it runs. */
 constexpr int kExportJobPollMs = 3000;
 
 /**

@@ -15,8 +15,8 @@ OpenTune {{APP_VERSION}}（含本机控制接口）非官方测试版 {{BUILD_LA
 - 从 {{OFFICIAL_RELEASES_URL}}
   安装官方 OpenTune {{MIN_OFFICIAL_VERSION}} 或更新版本，选择为本机所有用户安装，
   使用默认位置（C:\Program Files\OpenTune）。
-- 本压缩包不含任何模型权重。本测试版使用该官方安装中的模型
-  （C:\Program Files\OpenTune\models）。没有官方安装时，音高检测、音符生成与渲染都无法使用。
+- 本压缩包不含任何模型权重。本测试版使用官方安装程序放在共享文件夹
+  C:\ProgramData\OpenTune\Models 里的模型。没有这些模型时，音高检测、音符生成与渲染都无法使用。
 
 
 2. 校验下载的文件
@@ -59,6 +59,7 @@ OpenTune {{APP_VERSION}}（含本机控制接口）非官方测试版 {{BUILD_LA
   {{D3D12CORE_SHA256}}
   （DirectX 12 Agility SDK {{D3D12_AGILITY_VERSION}}，即构建本测试版时使用的版本）。
   如果不一致，请把 <文件夹>\D3D12 文件夹删掉，本测试版会改用 CPU 运行。
+- 如果官方 OpenTune 装在别的文件夹，把第二条命令里的 $env:ProgramFiles\OpenTune 换成那个文件夹。
 - 只复制 D3D12Core.dll，不要复制 D3D12SDKLayers.dll（调试层）。
 - 如果你使用 OpenTune MCP Server，它的 doctor 命令会检查这份复制及其哈希。
 

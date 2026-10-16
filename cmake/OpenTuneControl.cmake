@@ -189,6 +189,24 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         add_test(NAME ControlUnitTests COMMAND OpenTuneControlUnitTests)
         set_tests_properties(ControlUnitTests PROPERTIES TIMEOUT 300)
 
+        # Mirrored upstream functions: the hashes in Source/Control/mirror-map.json against the source tree
+        # (see Source/Control/MIRRORS.md). Standard library and the JSON reader only.
+        add_executable(OpenTuneControlMirrorDriftTests
+            Tests/Control/ControlMirrorDriftTests.cpp
+            Tests/Control/ControlMirrorHash.h
+            Source/Control/ControlJson.cpp
+            Source/Control/ControlJson.h
+        )
+        target_include_directories(OpenTuneControlMirrorDriftTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/Source)
+        target_compile_definitions(OpenTuneControlMirrorDriftTests PRIVATE
+            OPENTUNE_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}"
+        )
+        if(MSVC)
+            target_compile_options(OpenTuneControlMirrorDriftTests PRIVATE /utf-8 /EHsc /W4)
+        endif()
+        add_test(NAME ControlMirrorDriftTests COMMAND OpenTuneControlMirrorDriftTests)
+        set_tests_properties(ControlMirrorDriftTests PROPERTIES TIMEOUT 120)
+
         # Processor tests without a window or an audio device: the real OpenTuneAudioProcessor of the
         # Standalone SharedCode with its control service. The executable links the SharedCode and no
         # source of the application wrapper (the test defines the createOpenTuneEditor stub). It copies

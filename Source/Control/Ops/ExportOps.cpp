@@ -43,10 +43,6 @@ constexpr int kWaitLimitMs = 120000;
 /** How long the render worker must be seen idle, with the render settled and no current time-stretch output, before
     the job asks for the time-stretch rebuild of a content again (the rebuild it asked for was dropped). */
 constexpr int kStretchRetryIdleMs = 500;
-/** How long the pending render blocks of a content must be seen out of reach of the render worker before the job takes
-    them for blocks that will not be rendered (pendingBlocksStuck); a block between two states is never seen so this
-    long. */
-constexpr int kStuckBlocksMs = 500;
 /** Samples per slice of the probe of a published render for rendered audio (publishedRenderHasAudio). */
 constexpr int kPublishedAudioProbeSamples = 1 << 16;
 /** Section 19 rule 3: the last name that ifExists rename tries is "<stem> (999).wav". */
@@ -823,7 +819,7 @@ private:
     /**
      * Whether the pending render blocks of a content are out of reach of OpenTune's render worker: blocks are pending,
      * none is running and none is in the cache's set of blocks to claim (RenderCache::getPendingJobs, the set that
-     * RenderCache::claimPendingJob takes from), seen so for kStuckBlocksMs. Upstream
+     * RenderCache::claimPendingJob takes from), seen so for kControlExportStuckBlocksMs. Upstream
      * RenderCache::reconcileFullPlanAndRequest leaves blocks so when a render is asked for again at a revision for
      * which they are still pending: it keeps them pending but out of that set, and the worker's queue drops them
      * (RenderWorker::syncStage1QueueLocked); only a new revision of the content queues them again. The set is read
@@ -841,7 +837,7 @@ private:
         const auto now = std::chrono::steady_clock::now();
         if (!progress.stuckSince)
             progress.stuckSince = now;
-        return now - *progress.stuckSince >= std::chrono::milliseconds(kStuckBlocksMs);
+        return now - *progress.stuckSince >= std::chrono::milliseconds(kControlExportStuckBlocksMs);
     }
 
     /**

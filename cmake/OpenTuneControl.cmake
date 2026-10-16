@@ -83,6 +83,11 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/JobOps.h
         Source/Control/Ops/ImportOps.cpp
         Source/Control/Ops/ImportOps.h
+        # export.start: file identity and the final rename (operating system only), and the export job.
+        Source/Control/ControlFileIdentity.cpp
+        Source/Control/ControlFileIdentity.h
+        Source/Control/Ops/ExportOps.cpp
+        Source/Control/Ops/ExportOps.h
         # Note edits, undo and redo: added later.
         # Time grid: added later.
     )
@@ -198,6 +203,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         endif()
         # Jobs, import and the write envelope.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlJobTests.cpp)
+        # export.start and the export lock.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlExportTests.cpp)
         if(MSVC)
             target_compile_options(OpenTuneControlProcessorTests PRIVATE /utf-8 /EHsc /bigobj)
         endif()
@@ -246,6 +253,12 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ImportCancel|--control-api"
             "JobVectors|--control-api"
         )
+        # export.start and the export lock (Tests/Control/ControlExportTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "Export|--control-api"
+            "ExportFailures|--control-api"
+            "ExportVectors|--control-api"
+        )
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
             string(REPLACE "|" ";" _opentune_control_scenario "${_opentune_control_scenario}")
             list(GET _opentune_control_scenario 0 _opentune_control_name)
@@ -270,5 +283,6 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # Every vector starts a processor of its own.
         set_tests_properties(ControlProcessorTests.Vectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.JobVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.ExportVectors PROPERTIES TIMEOUT 300)
     endif()
 endif()

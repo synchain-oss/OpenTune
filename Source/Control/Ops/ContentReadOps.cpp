@@ -45,12 +45,24 @@ struct ContentReadState
     std::string tokensHash;
 };
 
+/**
+ * The asOf of a read of one content, and the hash its cursors carry: the tokens of asOf and the content's pitch
+ * shift. A pitch shift does not change `revision`, but it changes what both paged reads return: OpenTune scales
+ * the stored notes and correction segments with it (commitPitchShiftEdit()), which moves every target of
+ * content.getNotes, and renders the original F0 with its gain (EditableContentSnapshot::forEachEffectiveF0Span()),
+ * which moves every correctedMidi of content.getPitchCurve. So a page read after a shift (or after its undo) must
+ * not continue one read before it (PROTOCOL.md section 10 rule 6).
+ */
 ContentReadState readState(ControlOpContext& context, const std::string& contentId,
                            const EditableContentSnapshot& snapshot)
 {
     ContentReadState state;
-    state.asOf = controlAsOf(controlArrangementRevision(context), {controlContentVersions(contentId, snapshot)});
-    state.tokensHash = controlHashJson('t', state.asOf);
+    const auto versions = controlContentVersions(context, contentId, snapshot);
+    state.asOf = controlAsOf(controlArrangementRevision(context), {versions});
+    auto bound = JsonValue::array();
+    bound.append(state.asOf);
+    bound.append(JsonValue::string(versions.pitchShift));
+    state.tokensHash = controlHashJson('t', bound);
     return state;
 }
 

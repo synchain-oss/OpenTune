@@ -27,8 +27,10 @@ name: E2E Windows
 # 数据目录且未被改写。「程序确实读到了」由契约与冒烟里没有 BUSY(modal_open) 体现，不由这一步断言。
 # 效果场景（随冒烟一起运行）要验证「接口说改了什么，声音里就改了什么」，所以它在另一个模板（OTCP_E2E_EFFECTS_DATA_TEMPLATE）
 # 启动的实例上运行：该模板另外写入 shared.rendering.lightPitchCorrection=0（关闭混合模式）。原因：混合模式（真实用户默认开启）下，
-# 修正量小于 75 音分的渲染块走轻量变调路径，真实人声与谐波音上的小修正基本不被应用——这是 OpenTune 自身行为（界面同样），
-# 用户可在首选项里关闭。契约与其他冒烟场景仍用默认（混合模式开启）的模板，与真实用户一致。
+# 修正量小于 75 音分的渲染块走 DSP 移调路径而不是声码器（阈值 kPitchShiftThresholdCents = 75 音分，见 Source/Inference/ChunkRenderStrategy.h，
+# 上游原注释：DSP 移调在 75 音分内质量优于声码器）；实测在真实人声与谐波音上这类小修正几乎听不出。这是 OpenTune 自身行为（界面同样），
+# 用户可在首选项里关闭混合模式。契约与其他冒烟场景仍用默认（混合模式开启）的模板，与真实用户一致。
+# 对混合模式模板的核对只在效果场景确实运行过时才做（见模板断言一步）。
 # 任何 workflow 一律不用 pull_request 的 target 变体（CLAUDE.md §0 第 4 条）。
 on:
   # 加标签触发：在 PR 上加上 `e2e-windows` 标签即运行（加别的标签不运行）；之后每次推送（synchronize）在标签仍在时重跑；
@@ -331,22 +333,31 @@ jobs:
           Get-ChildItem -LiteralPath $dst -Recurse -File | ForEach-Object { Write-Host "kept: $($_.FullName.Substring($dst.Length)) $($_.Length)" }
 
       # 断言模板已复制进每次启动的数据目录且未被改写：app-preferences.settings 的 shared.onboardingShown 必须为 1（程序是否读到它，看契约与冒烟里有无 BUSY(modal_open)）。
-      # 另外至少有一个保留目录含 shared.rendering.lightPitchCorrection 且为 0（效果场景的实例）。局限：无法区分哪个保留目录属于
-      # 效果场景，所以只核对「至少一个」。
-      - name: Assert the onboarding template was copied into every kept data directory unmodified
+      # 效果场景实际运行过（$env:E2E_OUT 下有 schema 以 opentune-mcp-e2e-effects 开头的报告，或 effects.json）时，另外要求至少有一个保留目录
+      # 含 shared.rendering.lightPitchCorrection 且为 0（效果场景的实例）；局限：无法区分哪个保留目录属于效果场景，所以只核对「至少一个」。
+      # 没有效果场景报告（MCP 侧尚无该场景）时跳过这项核对，不让 job 失败，Summary 里写明未核对。
+      # 失败原因写进步骤输出 reason：onboarding（有数据目录的 onboardingShown 不为 1）或 hybrid（效果场景的数据目录没有关闭混合模式）；
+      # 核对跳过时写 effects=skipped，Summary 据此输出准确的文字。
+      - name: Assert the preferences templates were applied (onboarding in every kept data directory; hybrid mode off for the effects scenario)
         id: template
         if: ${{ !cancelled() }}
         continue-on-error: true
         run: |
           $files = @(Get-ChildItem -LiteralPath $env:E2E_KEEP -Recurse -File -Force -Filter 'app-preferences.settings' |
             Where-Object { $_.FullName -notmatch '[\\/]control[\\/]' })
-          if ($files.Count -eq 0) { throw "onboarding template not applied: no app-preferences.settings in any kept data directory" }
+          if ($files.Count -eq 0) { "reason=onboarding" >> $env:GITHUB_OUTPUT; throw "onboarding template not applied: no app-preferences.settings in any kept data directory" }
           $bad = @($files | Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -notmatch '<VALUE\s+name="shared\.onboardingShown"\s+val="1"' })
           foreach ($f in $files) { Write-Host "preferences: $($f.FullName.Substring($env:E2E_KEEP.Length)) onboardingShown=$(if ($bad.FullName -contains $f.FullName) { 'missing or 0' } else { '1' })" }
-          if ($bad.Count) { throw "onboarding template was not copied unmodified: shared.onboardingShown is not 1 in $($bad.Count) kept data directories" }
-          $hybridOff = @($files | Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -match '<VALUE\s+name="shared\.rendering\.lightPitchCorrection"\s+val="0"' })
-          Write-Host "kept data directories with lightPitchCorrection=0 (effects scenario): $($hybridOff.Count)"
-          if ($hybridOff.Count -eq 0) { throw "effects template not applied: no kept data directory has shared.rendering.lightPitchCorrection=0" }
+          if ($bad.Count) { "reason=onboarding" >> $env:GITHUB_OUTPUT; throw "onboarding template was not copied unmodified: shared.onboardingShown is not 1 in $($bad.Count) kept data directories" }
+          $effectsRan = (node $env:E2E_SCRIPT has-scenario --dir $env:E2E_OUT --scenario effects) -eq 'present'
+          if (-not $effectsRan) {
+            Write-Host "::warning::effects scenario did not run (no effects report in the output directory); hybrid-mode template not checked"
+            "effects=skipped" >> $env:GITHUB_OUTPUT
+          } else {
+            $hybridOff = @($files | Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -match '<VALUE\s+name="shared\.rendering\.lightPitchCorrection"\s+val="0"' })
+            Write-Host "kept data directories with lightPitchCorrection=0 (effects scenario): $($hybridOff.Count)"
+            if ($hybridOff.Count -eq 0) { "reason=hybrid" >> $env:GITHUB_OUTPUT; throw "effects scenario data directory did not turn hybrid mode off: no kept data directory has shared.rendering.lightPitchCorrection=0" }
+          }
 
       - name: Summary (PASS / FAIL / SKIP / FLAKY-SKIP, backend, timings)
         id: summary
@@ -356,15 +367,21 @@ jobs:
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
           LOG_OUTCOME: ${{ steps.logcheck.outcome }}
           TEMPLATE_OUTCOME: ${{ steps.template.outcome }}
+          TEMPLATE_REASON: ${{ steps.template.outputs.reason }}
+          TEMPLATE_EFFECTS: ${{ steps.template.outputs.effects }}
         run: |
           Write-Host "contract: $env:CONTRACT_OUTCOME; smoke: $env:SMOKE_OUTCOME; log check: $env:LOG_OUTCOME"
           node $env:E2E_SCRIPT summary --timings $env:E2E_TIMINGS --contract "$env:E2E_OUT\contract.json" `
             --smoke "$env:E2E_OUT\smoke.json" --scenarios-dir $env:E2E_OUT --log "$env:E2E_OUT\log-report.json" `
             --mcp-ref $env:MCP_REF --out $env:GITHUB_STEP_SUMMARY
           $code = $LASTEXITCODE
+          if ($env:TEMPLATE_EFFECTS -eq 'skipped') { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "`n效果场景未运行，未核对混合模式模板。`n" }
           Copy-Item -LiteralPath $env:GITHUB_STEP_SUMMARY -Destination "$env:E2E_OUT\summary.md" -ErrorAction SilentlyContinue
           if ($code -ne 0) { throw "e2e-windows has failing or missing results" }
-          if ($env:TEMPLATE_OUTCOME -ne 'success') { throw "onboarding template was not copied unmodified (shared.onboardingShown is not 1 in a kept data directory)" }
+          if ($env:TEMPLATE_OUTCOME -ne 'success') {
+            if ($env:TEMPLATE_REASON -eq 'hybrid') { throw "effects scenario data directory did not turn hybrid mode off (no kept data directory has shared.rendering.lightPitchCorrection=0); see the template step log" }
+            throw "onboarding template was not copied unmodified (shared.onboardingShown is not 1 in a kept data directory, or no preferences file was kept); see the template step log"
+          }
           if ($env:CONTRACT_OUTCOME -ne 'success' -or $env:SMOKE_OUTCOME -ne 'success') { throw "contract or smoke step did not succeed" }
 
       # 上传前对整个输出目录（契约报告、冒烟报告、日志、摘要）再脱敏一遍：vitest 的失败信息可能带请求或响应体。

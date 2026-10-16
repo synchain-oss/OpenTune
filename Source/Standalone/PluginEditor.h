@@ -362,6 +362,8 @@ private:
     // OpenTune Control API hook: editor bridge, see Source/Control/README.md#hooks
     friend class ControlEditorBridge;
     std::unique_ptr<class ControlEditorBridge> controlEditorBridge_;
+    // OpenTune Control API hook: the steps after an undo or redo (performUndoRedoAction), see Source/Control/README.md#hooks
+    void afterUndoRedo();
 #endif
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(OpenTuneAudioProcessorEditor)

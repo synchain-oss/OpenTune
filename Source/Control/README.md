@@ -2,7 +2,7 @@
 
 # OpenTune control API (OTCP v1)
 
-> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、忙碌检查、编辑器 bridge、导入、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
+> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、忙碌检查、编辑器 bridge、导入、导出（界面与接口共用的导出锁、逐内容的就绪判定、临时文件与最终改名）、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
 
 This directory holds the local control API of OpenTune Standalone: a JSON-RPC protocol over a loopback
 TCP connection (OTCP v1, specified in `Tests/Control/spec/otcp/v1/PROTOCOL.md`), with which another
@@ -33,7 +33,8 @@ without this directory.
 | `Ops/OpsSupport.*` | What the operations share: parameter reader, handle resolution, the world revision vector and `asOf`, number and text output. |
 | `ControlJobs.*` | The jobs of the instance: registry, the tick that advances running jobs on the message thread, the long poll of `job.get`, cancellation, retention. |
 | `Ops/WriteEnvelope.*` | What every write shares: the busy checks, the dirty flag, revert recipes, the UI snapshot, `revisionDiff` and the write envelope builder. |
-| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*` | The methods, one file per group (see "Method table"). |
+| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*`, `Ops/ExportOps.*` | The methods, one file per group (see "Method table"). |
+| `ControlFileIdentity.*` | File identity (volume and file id, `st_dev` and `st_ino`), "same file" by identity, and the final rename that never replaces (PROTOCOL.md sections 20.3 and 20.4); standard library and operating system only. |
 | `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme, the processing object of `session.info` and `prefs.get`). |
 | `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
 | `../Standalone/ControlEditorBridge.*` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor; compiled into the application wrapper only. |
@@ -71,8 +72,9 @@ later part use JUCE and the processor. `cmake/OpenTuneControl.cmake` lists all f
   on the registry's waiter thread, so the connection keeps serving the session's other requests (for
   example a `job.cancel`).
 - The work of a job runs only on the message thread, one short step per tick. Long work (decoding a
-  file) runs on a thread that the work owns and joins in its destructor; `ControlJobs::stop()` destroys
-  every work on the message thread, so no such thread outlives the processor.
+  file, writing an export) runs on a thread that the work owns and joins in its destructor;
+  `ControlJobs::stop()` destroys every work on the message thread, so no such thread outlives the
+  processor. OpenTune's export cannot be interrupted, so a stop during an export waits for the write.
 - The listener runs one accepting thread and one thread per connection; every network wait is a poll of
   at most 250 ms that also checks the stop flag.
 - Logging goes through `AppLogger` only and never contains the token, the server proof or request
@@ -130,6 +132,8 @@ option, so a build with the option OFF compiles exactly the upstream code.
 | `Source/Standalone/PluginEditor.cpp` (includes) | `#include "ControlEditorBridge.h"` | Complete type for the constructor and destructor. | Does not compile with the option ON. |
 | `Source/Standalone/PluginEditor.cpp` (end of the constructor) | Create the bridge, which registers itself with `ControlService::setUiBridge()` | The API reaches the editor only once it is complete. | No bridge is registered. |
 | `Source/Standalone/PluginEditor.cpp` (first statement of the destructor) | `controlEditorBridge_.reset()`, which unregisters it | The API never reaches an editor that is being torn down. | Requests could reach a half-destroyed editor. |
+| `Source/PluginProcessor.h` (the control block at the end of the class; 5 lines: one marker comment, `tryAcquireExportLock()`, `releaseExportLock()`, `isExportLockHeld()`, member `exportLockHeld_`) | The export lock that the editor's export and `export.start` share (an atomic flag; any thread) | One export at a time, whoever starts it: `export.start` and every other write answer `BUSY(export_in_progress)` while it is held, also without an editor. | The API could export while the UI exports (both write through `OpenTuneAudioProcessor::export*Audio` and its `lastExportError_`), and writes would not see an export of the other side. |
+| `Source/Standalone/PluginEditor.cpp` (`exportAudioRequested`: 11 lines before `exportInProgress_` is set, 4 lines in the export thread before the result is posted) | The editor takes the lock when it starts its export thread, with its own "An export task is already in progress" message when the lock is taken, and releases it once the file is written | The UI and the API share the lock; the UI shows what it always shows when an export runs. | As above. |
 
 ## Request handling
 
@@ -278,9 +282,11 @@ selectedPlacementIds, visibleTrackCount}`, or null with `nullReasons.ui` `no_edi
 `controlCheckBusy(context)` refuses a write with `BUSY` while the user is in the middle of something
 (section 13.2), in this order: a mouse or pen gesture (`pointer_down`), a modal dialog (`modal_open`;
 not for `ui.dismiss`), an import of the UI (`import_in_progress`), an export (`export_in_progress`), a
-project save or open (`project_operation`). The bridge reports these from the editor's own flags. Without
-an editor nothing is busy. Reads, `session.*` and `job.*` never call it. A job that commits in several
-steps (`import.start`) checks again before each commit and waits while the UI is busy.
+project save or open (`project_operation`). The bridge reports these from the editor's own flags. An
+export is also busy while the processor's export lock is held (`isExportLockHeld()`: an export of the
+editor or of `export.start`), with or without an editor; without an editor nothing else is busy. Reads,
+`session.*` and `job.*` never call it. A job that commits in several steps (`import.start`) checks again
+before each commit and waits while the UI is busy, also while an export holds the lock.
 
 ## Editor bridge
 
@@ -342,6 +348,65 @@ Known OpenTune behaviours, reported as they are:
   (`activeTrackId`, `selectedPlacementIds`) shows it. `focus` decides only whether the editor shows the
   last clip, and with it whether the openDyne scheme generates its notes.
 - The editor does not mark the project as changed after its own import; the job does (section 15.5).
+
+## Export
+
+`export.start` (`Ops/ExportOps.cpp`, PROTOCOL.md section 19) writes a WAV file of a clip, a track or the
+master mix with the processor functions of the editor's export (`exportAudioRequested` in
+`Source/Standalone/PluginEditor.cpp`): `exportPlacementAudio`, `exportTrackAudio` and
+`exportMasterMixAudio`, which wait for the render worker and write 44.1 kHz 32-bit float WAV, mono for a
+clip or track and stereo for the master mix.
+
+- Before the job, in this order: an export job that still runs with the same params (after defaults) is
+  returned; handles; the busy state, with the export lock; the path's text (section 20.1) and its `.wav`
+  extension; that the export holds a clip with audio (`INVALID_ARGUMENT` without a reason otherwise: the
+  protocol has no reason for it, and OpenTune exports nothing then); the loaded media (below); that the
+  target's directory exists (`IO_ERROR(write_failed)`); with `ifExists` `error`, that no file exists at the
+  target (`ALREADY_EXISTS(target_exists)`). Then the job takes the export lock until it ends.
+- Loaded media are the source files of every source OpenTune holds (`SourceStore`, active or retired,
+  since an undo step can bring a retired one back). The target is compared with each by file identity
+  (`ControlFileIdentity`, section 20.3), not by its spelling: the same file with other letter case, a
+  hard link or a link is refused with `INVALID_ARGUMENT(target_is_loaded_media)`; an identity that cannot
+  be determined is `IO_ERROR(read_failed)`. The job checks every name again right before its rename.
+- While it waits, each tick of the job builds again what the file is made of (the clips whose content has
+  a playback source with audio, as the processor's export functions choose them: for the master mix only
+  the soloed tracks while one is soloed, otherwise the tracks that are not muted) and decides per content
+  (section 19 rule 6): analysis not finished: wait; analysis failed with no voiced frame (`f0_empty`), no
+  usable pitch, or no render block: export it uncorrected and list it in `dryContents` (`unvoiced`,
+  `nothingToRender`); another failure of the analysis: `ANALYSIS_FAILED(f0_failed)`, or with `allowDry`
+  uncorrected (`analysisFailed`); a failed render block: one more `requestFullContentRender()` (its
+  reconcile retries a failed block of the same revision), then `RENDER_FAILED(render_chunk_failed)`;
+  render work pending: wait; ready once the render cache is settled at its revision
+  (`RenderCache::isCanonicalSettled`). A content whose render was never requested gets one request. After
+  120 s: `NOT_READY(export_wait_timeout)`. A clip export whose clip is deleted meanwhile fails with
+  `REVISION_CONFLICT(changed_during_export)`.
+- In the tick that finds every content ready, the job records a token of the inputs (each clip's track,
+  position, length, source window, gain and fades, its track's volume, and per content the revision, time
+  grid and pitch shift) and the revisions it reports, and starts the writer on a thread of its own with a
+  temporary file in the target directory. Once the file is written: a changed input token is
+  `REVISION_CONFLICT(changed_during_export)`; then cancellability ends, loaded media are checked again,
+  and the file is moved into place with one rename (`ifExists` `error` and `rename` with a rename that
+  never replaces, trying `<stem> (2).wav` to `<stem> (999).wav` for `rename`; `overwrite` with one that
+  replaces).
+- Every failure and every cancellation deletes the temporary file, leaves the target untouched
+  (`executed` false) and releases the lock. A cancellation while the file is written waits for the write.
+- The result reports what the file holds: path, sample rate, channel count and sample format read back
+  from the file's header, its duration, the timeline start (the clip's start, 0 for a track or the master
+  mix), the recorded revisions (`contents`), `dryContents`, and `processing` (vocoder weight, hybrid
+  mode, inference backend and `tuningHz`, as `session.info` reports them).
+
+Hooks: the processor's export lock (`tryAcquireExportLock`, `releaseExportLock`, `isExportLockHeld`) and
+the editor's use of it (see "Hooks"). The clip of a clip export is found by its placement id with
+`StandaloneArrangement::findPlacementIndexById()` right before `exportPlacementAudio()`, so no hook is
+needed for it; the input token catches a change of the clips while the file is written.
+
+Known OpenTune behaviours, reported as they are:
+
+- `exportMasterMixAudio()` sets no error text (`getLastExportError()` keeps the text of an earlier export),
+  and every failure of the processor's export functions is reported as `IO_ERROR(write_failed)` with a
+  fixed detail: the API never forwards OpenTune's texts.
+- The processor's export functions wait for every render work of the process (`drainRenderWorker`), not
+  only for the exported contents.
 
 ## Dirty flag and revision tokens
 
@@ -417,11 +482,26 @@ of the audio; `ImportAfterOpen` the import after a project was opened and when i
 audio; `ImportCancel` a cancellation after the first of three commits while the UI is busy;
 `JobVectors` the specification's vectors of `job/` and `import/`.
 
+`Tests/Control/ControlExportTests.cpp` holds the scenarios of `export.start`. Without a vocoder model
+OpenTune cannot render, so the scenarios drive the render cache of a content themselves while OpenTune's
+render worker is paused (`pauseRenderWorker`): they publish its blocks as a finished render would, or
+fail them as a failing vocoder would, through the cache's public functions. `Export` covers a clip, a
+track and the master mix (format, duration, timeline start, revisions, dry contents), `ifExists`, the
+checks before the job (paths, loaded media by identity: other letter case, a hard link), the name that
+`rename` uses being loaded media, the export lock held by the UI, the busy checks of other writes and a
+second export while one waits, and cancellation; `ExportFailures` `ANALYSIS_FAILED` (and `allowDry`),
+`RENDER_FAILED` after the retry, `REVISION_CONFLICT` while OpenTune writes the file (the writer waits for
+the paused render worker while the clip's notes change), `NOT_READY` with a short wait limit
+(`controlSetExportWaitLimitForTesting`), a deleted clip, and the identity and rename functions;
+`ExportVectors` the specification's vectors of `export/` (an explicit list must pass; the vector of a
+directory whose files' identity cannot be read is skipped, because on Windows that identity stays
+readable through the rights of the parent directories).
+
 ## Capabilities and protocol versions
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
-`jobs.v1` and `import.v1`). The listener answers a method of an unreported capability itself with
+`jobs.v1`, `import.v1` and `export.v1`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
@@ -444,3 +524,4 @@ method of a capability it reports: `read.v1` is complete (all eight reads are re
 | `job.get` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.JobShutdown`, `.JobVectors` | `methods/job.get.schema.json` |
 | `job.cancel` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.ImportCancel`, `.JobVectors` | `methods/job.cancel.schema.json` |
 | `import.start` | `import.v1` | `Ops/ImportOps.cpp` | `ControlProcessorTests.Import`, `.ImportAfterOpen`, `.ImportCancel`, `.JobVectors` | `methods/import.start.schema.json` |
+| `export.start` | `export.v1` | `Ops/ExportOps.cpp` (identity and rename in `ControlFileIdentity.cpp`) | `ControlProcessorTests.Export`, `.ExportFailures`, `.ExportVectors` | `methods/export.start.schema.json` |

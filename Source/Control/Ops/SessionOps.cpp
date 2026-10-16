@@ -186,6 +186,11 @@ Result<JsonValue> runSessionInfo(ControlOpContext& context, const ControlNoParam
 
 } // namespace
 
+ControlProcessingRuntime controlProcessingRuntime()
+{
+    return processingRuntime();
+}
+
 void registerSessionOps(ControlMethodTable& table)
 {
     table.add(controlReadMethod<ControlNoParams>("session.info", controlParseNoParams, runSessionInfo));

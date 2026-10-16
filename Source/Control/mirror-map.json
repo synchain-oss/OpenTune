@@ -1,0 +1,562 @@
+{
+  "schema": 1,
+  "normalizations": {
+    "fn-v1": "The text of one function, from the line with its qualified name followed by \"(\" to the line of the \"}\" that closes its body.",
+    "stmt-v1": "The text of one declaration, from the line that holds the given text to the first \";\" outside brackets.",
+    "common": "The file is read as UTF-8 without BOM and with LF line endings. Braces and quotes inside comments and literals are skipped. Then every line loses its leading and trailing white space, empty lines are dropped, runs of blanks and tabs become one space, lines are joined with LF, and the sha256 of the bytes is written in lower-case hexadecimal. Comments are kept."
+  },
+  "mirrors": [
+    {
+      "id": "piano-roll-projection",
+      "group": "timeline",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "makePianoRollProjection",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "808f9ba6ee68e6a696094c49cbfe1a75f62fd59453aa1c63d3570fe936585126"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/OpsSupport.cpp",
+          "symbols": [
+            "controlContentToTimeline",
+            "controlTimelineToContent"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Reads",
+        "ControlProcessorTests.Vectors"
+      ],
+      "note": "Content time to timeline time through a placement: the window starts at tauForward(clipIn) of the time grid.",
+      "noteZh": "经放置把内容时间换算成时间线时间：窗口从时间网格的 tauForward(clipIn) 开始。"
+    },
+    {
+      "id": "import-append-start",
+      "group": "import",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::computeTrackAppendStartSeconds",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "22325f69ac145f820bb9031d901b599f6bad14e36bf1659c8dd629eb498144ae"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ImportOps.cpp",
+          "symbols": [
+            "ImportJob::appendStart"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Import",
+        "ControlProcessorTests.ImportAfterOpen",
+        "ControlProcessorTests.JobVectors"
+      ],
+      "note": "Where an import without startTimelineSec starts: the end of the last clip with audio on the track.",
+      "noteZh": "未给 startTimelineSec 的导入从哪里开始：轨道上最后一个有音频的片段的结尾。"
+    },
+    {
+      "id": "import-start-pending",
+      "group": "import",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::startPendingImport",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "00601c6aa02eaecbe2ab7237ac5fa70b8051f1c2031857a8a4cb2cc85c82de85"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ImportOps.cpp",
+          "symbols": [
+            "ImportJob::stepImport",
+            "ImportJob::commit",
+            "ImportJob::enterAnalysis"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Import",
+        "ControlProcessorTests.ImportAfterOpen",
+        "ControlProcessorTests.ImportCancel"
+      ],
+      "note": "The editor steps of one import: commit at the start position, hidden tracks, focus, analysis request.",
+      "noteZh": "编辑器导入一个文件的步骤：在起点提交、显示隐藏轨道、聚焦、请求分析。"
+    },
+    {
+      "id": "import-next-in-queue",
+      "group": "import",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::processNextImportInQueue",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "042d6de2ccffb8d9be9eeca57da4d7e0c38595108466a2baeeba12369a238826"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ImportOps.cpp",
+          "symbols": [
+            "ImportJob::stepImport"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Import",
+        "ControlProcessorTests.ImportCancel"
+      ],
+      "note": "The import queue goes on with the next file after one finished.",
+      "noteZh": "一个文件完成后，导入队列接着处理下一个。"
+    },
+    {
+      "id": "import-channel-limit",
+      "group": "import",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::prepareImport",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "3bef90e530e4ca53a0cb19d840ab2f65fc61d5409ccc4240709c1706ec86537e"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ImportOps.cpp",
+          "symbols": [
+            "kMaxChannels",
+            "PreparedFile::run"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/SessionOps.cpp",
+          "symbols": [
+            "kImportMaxChannels"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Import",
+        "ControlProcessorTests.Reads"
+      ],
+      "note": "The import accepts at most 2 channels (reported by session.info and checked before the commit).",
+      "noteZh": "导入最多接受 2 个声道（session.info 报告，提交前检查）。"
+    },
+    {
+      "id": "fcpe-max-duration",
+      "group": "import",
+      "upstream": {
+        "file": "Source/Inference/FCPEExtractor.h",
+        "symbol": "static constexpr double kMaxAudioDurationSec",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "ca8a541a8bddc2ef074ee5c3a24f2c3d9b3fafb91f9ffb5a33d78b0ecc287a1e"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ImportOps.cpp",
+          "symbols": [
+            "kMaxAnalysisSec",
+            "PreparedFile::run"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/SessionOps.cpp",
+          "symbols": [
+            "kImportMaxAnalysisSec"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Import",
+        "ControlProcessorTests.Reads"
+      ],
+      "note": "The pitch analysis accepts audio up to 600 s; longer files are rejected by the import and reported by session.info.",
+      "noteZh": "音高分析最长接受 600 秒；更长的文件会被导入拒绝，并由 session.info 报告。"
+    },
+    {
+      "id": "export-placement",
+      "group": "export",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::exportPlacementAudio",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "7c7908f928fc73ae82fe50abdb285a55b971dc4ca6d05b8366382d5642901e86"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ExportOps.cpp",
+          "symbols": [
+            "buildPlan",
+            "hasPlaybackAudio"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Export",
+        "ControlProcessorTests.ExportFailures",
+        "ControlProcessorTests.ExportVectors"
+      ],
+      "note": "Clip export: the content that is mixed, and the hasAudio() filter.",
+      "noteZh": "片段导出：哪些内容被混入，以及 hasAudio() 过滤。"
+    },
+    {
+      "id": "export-track",
+      "group": "export",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::exportTrackAudio",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b9345f926645385c5eaf9d82653a81b9e6c8466c84e15d80f57a98b9dd529cf5"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ExportOps.cpp",
+          "symbols": [
+            "buildPlan",
+            "hasPlaybackAudio"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Export",
+        "ControlProcessorTests.ExportFailures",
+        "ControlProcessorTests.ExportVectors"
+      ],
+      "note": "Track export: the clips of one track with audio.",
+      "noteZh": "轨道导出：该轨道上有音频的片段。"
+    },
+    {
+      "id": "export-master-mix",
+      "group": "export",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::exportMasterMixAudio",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b0a39a60a1331ceb7d77dfac623193e9358c9f22fc973057896854c6ca8b38bb"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ExportOps.cpp",
+          "symbols": [
+            "buildPlan",
+            "hasPlaybackAudio"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Export",
+        "ControlProcessorTests.ExportFailures",
+        "ControlProcessorTests.ExportVectors"
+      ],
+      "note": "Master mix export: solo and mute rules over the tracks of the playback snapshot, and the hasAudio() filter.",
+      "noteZh": "总混导出：对播放快照中的轨道应用独奏与静音规则，以及 hasAudio() 过滤。"
+    },
+    {
+      "id": "undo-capture-before",
+      "group": "undo",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::captureBeforeUndoSnapshot",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "8375780fad24b0704ce7670abbf0adc5c034c06b492d5b5debbf01283cd1ef5c"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/ContentEditTransaction.cpp",
+          "symbols": [
+            "ContentEditTransaction::captureBefore"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Undo",
+        "ControlProcessorTests.AutoTune",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "What is captured before an edit: the committed notes and the correction segments of the curve.",
+      "noteZh": "编辑前捕获什么：已提交的音符与曲线的修正段。"
+    },
+    {
+      "id": "undo-record-range",
+      "group": "undo",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::recordUndoAction",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b6c8b0e08bdf49e683a803673ef1bc9e99a4c0eda1b5155f1d849d61f9ffb8a5"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/ContentEditTransaction.cpp",
+          "symbols": [
+            "ContentEditTransaction::recordRange",
+            "ContentEditTransaction::notesInRange",
+            "ContentEditTransaction::segmentsInRange"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Undo",
+        "ControlProcessorTests.AutoTune",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "How an edit over a frame range becomes a PianoRollEditAction: notes and segments cut to the range.",
+      "noteZh": "帧范围内的编辑如何成为 PianoRollEditAction：音符与修正段按范围裁剪。"
+    },
+    {
+      "id": "auto-apply-selection",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::applyAutoTuneToSelection",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "d03fe6acc149df0d617c70f46310af6020a22dc8d5830a83133d63396edbd8fd"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentTuneOps.cpp",
+          "symbols": [
+            "frameRanges",
+            "runRegenerate"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AutoTune",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "AUTO over a selection (openTune scheme): range resolution, capture, commit, undo range.",
+      "noteZh": "对选区执行 AUTO（openTune 方案）：范围解析、捕获、提交、撤销范围。"
+    },
+    {
+      "id": "auto-expand-range",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/Utils/PitchCurve.cpp",
+        "symbol": "PitchCurve::expandNoteBasedCorrectionRange",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "4527890747fbf3d3378ddecbda02b797d330be55f37f0d3eb4f09f247c249e66"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentTuneOps.cpp",
+          "symbols": [
+            "runRegenerate"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AutoTune",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "The frame range that a note-based correction recomputes, used as the undo range.",
+      "noteZh": "基于音符的修正会重算的帧范围，用作撤销范围。"
+    },
+    {
+      "id": "auto-commit-generated-notes",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "3d65b2b11862fae75ad24942e76b15d4bab56431b8e07e53dbeb622df686ff6e"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentTuneOps.cpp",
+          "symbols": [
+            "predictRegenerate",
+            "runRegenerate"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AutoTune",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "Which notes the commit removes, drops and creates (merge rules); the dryRun prediction and the result follow it.",
+      "noteZh": "提交会移除、丢弃、创建哪些音符（合并规则）；dryRun 预测与结果据此给出。"
+    },
+    {
+      "id": "auto-range-by-content-key",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::autoTuneContentRangeByContentKey",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b114bedd8e81d5aeea752aa654836e40b22687e68cf970dd2f38bec4b8d97e11"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentTuneOps.cpp",
+          "symbols": [
+            "predictRegenerate"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AutoTune"
+      ],
+      "note": "The AUTO command over a frame range: generation from the original pitch, then the commit.",
+      "noteZh": "对帧范围执行 AUTO 命令：由原始音高生成，再提交。"
+    },
+    {
+      "id": "auto-notes-only",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::generateNotesOnlyByContentKey",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "3a889b38094b27280dbc2bbbd1ed2b53234816366b4edde74f91b0fbc95b559f"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentTuneOps.cpp",
+          "symbols": [
+            "predictNotesOnly",
+            "runNotesOnly"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AutoTune"
+      ],
+      "note": "Note generation without the pitch correction (notesOnly), and its dryRun prediction.",
+      "noteZh": "只生成音符而不修音（notesOnly），及其 dryRun 预测。"
+    },
+    {
+      "id": "key-scale-changed",
+      "group": "key",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::scaleChanged",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "cbb148243601f384628e28f72ec0613b2090705abbdfbdefd912932314f3157d"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentTuneOps.cpp",
+          "symbols": [
+            "runSetKey"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.SetKey",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "Setting the key by hand: the manual key, the no-op case and the dirty flag.",
+      "noteZh": "手动设置调式：手动调式、无变化的情形与脏标记。"
+    },
+    {
+      "id": "auto-button-mode",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::evaluateAutoRefUiState",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "06401d8eda665637d5a6c654bddea208dd80eaed53ae5249cd54545e8367ca6b"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentDetailsOps.cpp",
+          "symbols": [
+            "runGetDetails"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Details"
+      ],
+      "note": "Which mode the AUTO button runs (autoModes.uiButtonRuns).",
+      "noteZh": "AUTO 按钮运行哪种模式（autoModes.uiButtonRuns）。"
+    },
+    {
+      "id": "undo-add-action",
+      "group": "undo",
+      "upstream": {
+        "file": "Source/Utils/UndoManager.cpp",
+        "symbol": "UndoManager::addAction",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "0a228a34b8121f67becac58618136faf749c9f44fe6f931857a9344a98d0425b"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/ControlOriginAction.cpp",
+          "symbols": [
+            "ControlHistory::prune",
+            "ControlHistory::onChangeWithoutEntry"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Undo"
+      ],
+      "note": "A new action discards the redo entries and, when the history is full, the oldest entry (every position moves).",
+      "noteZh": "新动作会丢弃重做条目；历史已满时再丢弃最旧的条目（所有位置前移）。"
+    },
+    {
+      "id": "undo-max-size",
+      "group": "undo",
+      "upstream": {
+        "file": "Source/Utils/UndoManager.h",
+        "symbol": "static constexpr int maxSize_",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "8d1f7717b8f534ec84e71f396eabe39c8b6c292e20ea20ecf8ea1103ac54106a"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/ControlOriginAction.h",
+          "symbols": [
+            "ControlHistory::kUndoHistoryCapacity"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Undo"
+      ],
+      "note": "The number of undo entries OpenTune keeps (500).",
+      "noteZh": "OpenTune 保留的撤销条目数（500）。"
+    },
+    {
+      "id": "recent-projects",
+      "group": "project",
+      "upstream": {
+        "file": "Source/Utils/ProjectSession.cpp",
+        "symbol": "ProjectSession::getRecentProjects",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "50a8852a690ecf6acf066f41a464ea6fb0aa067e9cb687b5fb88c9f220d6f7e9"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AppReadOps.cpp",
+          "symbols": [
+            "runPrefsGet"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Details"
+      ],
+      "note": "The recent projects menu drops the files that no longer exist; prefs.get lists them with an exists flag instead.",
+      "noteZh": "最近工程菜单会去掉已不存在的文件；prefs.get 改为带 exists 标志列出。"
+    }
+  ]
+}

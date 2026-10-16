@@ -12,7 +12,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numeric>
 
 namespace OpenTune {
 
@@ -132,7 +131,7 @@ JsonValue noteJson(std::size_t index, const Note& note, const EditableContentSna
                    const std::optional<ControlPlacementRef>& placement, float tuningHz)
 {
     auto json = JsonValue::object();
-    const double targetMidi = midiOf(note.getAdjustedPitch(), tuningHz);
+    const double targetMidi = controlNoteTargetMidi(note, tuningHz);
     const bool hasDetected = note.isVoiced && note.originalPitch > 0.0f;
     json.appendMember("index", JsonValue::integer(static_cast<std::int64_t>(index)));
     json.appendMember("label", JsonValue::string(controlNoteLabel(
@@ -156,8 +155,8 @@ JsonValue noteJson(std::size_t index, const Note& note, const EditableContentSna
     json.appendMember("detectedMidi",
                       hasDetected ? controlJsonPitch(midiOf(note.originalPitch, tuningHz)) : JsonValue());
     // The target includes pitchOffset, the part that comes from cent shifts (Note::getAdjustedPitch()).
-    json.appendMember("targetMidi", controlJsonPitch(targetMidi));
-    json.appendMember("offsetCents", controlJsonPitch(static_cast<double>(note.pitchOffset) * 100.0));
+    json.appendMember("targetMidi", controlNoteTargetMidiJson(note, tuningHz));
+    json.appendMember("offsetCents", controlNoteOffsetCentsJson(note));
     json.appendMember("retuneSpeed", controlJsonNumber(note.retuneSpeed, 4));
     json.appendMember("vibratoDepth", controlJsonNumber(note.vibratoDepth, 4));
     json.appendMember("vibratoRateHz", controlJsonNumber(note.vibratoRate, 4));
@@ -201,12 +200,8 @@ Result<JsonValue> runGetNotes(ControlOpContext& context, const NotesParams& para
     if (params.cursor && params.cursor->tokensHash != state.tokensHash)
         return cursorStale();
 
-    // Index order: the notes ordered by start time (OpenTune stores them normalised in this order).
-    std::vector<std::size_t> order(snapshot.notes.size());
-    std::iota(order.begin(), order.end(), std::size_t{0});
-    std::stable_sort(order.begin(), order.end(), [&snapshot](std::size_t a, std::size_t b) {
-        return snapshot.notes[a].startTime < snapshot.notes[b].startTime;
-    });
+    // Index order: the notes ordered by start time, as write results reference them (controlNoteIndexOrder).
+    const auto order = controlNoteIndexOrder(snapshot.notes);
     std::vector<std::size_t> selected; // positions in order
     for (std::size_t position = 0; position < order.size(); ++position) {
         const auto& note = snapshot.notes[order[position]];

@@ -72,14 +72,36 @@ void controlAddPredictedReRenderQueued(ControlWriteEnvelope& envelope, const std
 
 /**
  * The changes of notes whose times stay (content.editNotes, content.autoTune mode snapNotes): one entry of entity
- * note per note whose reported values differ between before and after (the same notes in the same order), with
- * the fields targetMidi (midi), offsetCents (cents), retuneSpeed, vibratoDepth, vibratoRateHz (hz) and
- * pitchDriftScale as content.getNotes reports them, referenced at revision (PROTOCOL.md section 14.3). At most
- * maxListed entries; returns how many changed notes were left out.
+ * note per note index whose reported values differ between before and after, with the fields targetMidi (midi),
+ * offsetCents (cents), retuneSpeed, vibratoDepth, vibratoRateHz (hz) and pitchDriftScale as content.getNotes
+ * reports them, referenced at revision (PROTOCOL.md section 14.3). before and after hold the same notes, as many
+ * and with their times; each list is counted in its own content.getNotes order (controlNoteIndexOrder), as the
+ * stored order of after can differ from that of before (OpenTune's commit sorts the notes it stores). For a commit,
+ * after is what controlReadCommittedNotes() read back, so that each "after" is what content.getNotes reads at
+ * revision. At most maxListed entries; returns how many changed notes were left out.
  */
 std::size_t controlListNoteChanges(ControlWriteEnvelope& envelope, const std::string& contentId,
                                    const std::vector<Note>& before, const std::vector<Note>& after,
                                    const std::string& revision, std::size_t maxListed);
+
+/** The notes of a content as a write committed them, and the content's revision then. */
+struct ControlCommittedNotes
+{
+    std::vector<Note> notes;
+    std::string revision;
+};
+
+/**
+ * Reads the notes of a content back from the live content after a write committed to it: what the write result
+ * reports, never the notes the write predicted, so that every "after" of its changes is what a read that follows
+ * returns (PROTOCOL.md section 14.3), whatever OpenTune's commit did with the notes it was given (its range commit
+ * stores them through normalizeStoredNotes(), which sorts them, trims overlaps and drops notes without duration).
+ * Fails after the change (INTERNAL, `executed` true, so that the client reads the content again) when the content
+ * cannot be read back, and when expectedCount is given and the content now holds another number of notes: the
+ * changes of the write can then not be described note by note. Message thread.
+ */
+Result<ControlCommittedNotes> controlReadCommittedNotes(ControlOpContext& context, const ControlContentRef& content,
+                                                        std::optional<std::size_t> expectedCount);
 
 // ---- The effect of an undo or redo step --------------------------------------------------------------
 

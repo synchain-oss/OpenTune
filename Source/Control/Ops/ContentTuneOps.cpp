@@ -573,9 +573,16 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
         }
         committed.push_back({range.startFrame * secondsPerFrame, range.endFrameExclusive * secondsPerFrame});
     }
-    if (!params.dryRun)
-        if (const auto now = controlLiveSnapshot(context, ref.key))
-            afterNotes = now->notes;
+    // A commit reports the notes as OpenTune stored them, read back; one that cannot be read back fails once its
+    // undo entry is pushed below.
+    std::optional<Error> unreadable;
+    if (!params.dryRun && !committed.empty()) {
+        auto read = controlReadCommittedNotes(context, ref, std::nullopt);
+        if (read.ok())
+            afterNotes = std::move(read).value().notes;
+        else
+            unreadable = read.error();
+    }
 
     std::vector<std::size_t> removed;
     std::vector<std::size_t> created;
@@ -614,6 +621,8 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
         if (const auto now = controlLiveSnapshot(context, ref.key))
             revisionAfter = controlContentVersions(context, ref.contentId, *now).revision();
     }
+    if (unreadable)
+        return *unreadable;
     const auto omitted = listNotes(envelope, ref.contentId, beforeNotes, versions.revision(), afterNotes, revisionAfter,
                                    removed, created);
     if (dropped.size() != 0) {
@@ -661,10 +670,12 @@ Result<JsonValue> runNotesOnly(ControlOpContext& context, const AutoTuneParams& 
             return controlOpError("INTERNAL", "", "OpenTune's note generator returned no valid result");
         controlMarkDirty(context);
         history.value()->onChangeWithoutEntry(processor.getUndoManager(), ref.key, ControlContentAspect::NotesAndPitch);
-        if (const auto now = controlLiveSnapshot(context, ref.key)) {
-            afterNotes = now->notes;
-            revisionAfter = controlContentVersions(context, ref.contentId, *now).revision();
-        }
+        auto committed = controlReadCommittedNotes(context, ref, std::nullopt);
+        if (!committed.ok())
+            return committed.error();
+        auto read = std::move(committed).value();
+        afterNotes = std::move(read.notes);
+        revisionAfter = std::move(read.revision);
     }
     // generateNotesOnlyByContentKey() replaces the notes of a range that covers the whole content: every note
     // before is removed, every note after is new.
@@ -775,12 +786,15 @@ Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& 
     }
     if (failure)
         return *failure;
-    if (!params.dryRun)
-        if (const auto now = controlLiveSnapshot(context, ref.key)) {
-            if (now->notes.size() == beforeNotes.size())
-                afterNotes = now->notes;
-            revisionAfter = controlContentVersions(context, ref.contentId, *now).revision();
-        }
+    if (!params.dryRun && commits != 0) {
+        // The result reports the notes as OpenTune stored them, read back, not the plan of the last pass.
+        auto committed = controlReadCommittedNotes(context, ref, beforeNotes.size());
+        if (!committed.ok())
+            return committed.error();
+        auto read = std::move(committed).value();
+        afterNotes = std::move(read.notes);
+        revisionAfter = std::move(read.revision);
+    }
     const auto omittedChanges =
         controlListNoteChanges(envelope, ref.contentId, beforeNotes, afterNotes, revisionAfter, kMaxListedEntries);
     JsonValue result;

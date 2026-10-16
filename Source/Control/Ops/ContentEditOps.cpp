@@ -20,7 +20,6 @@
 #include <array>
 #include <cmath>
 #include <limits>
-#include <numeric>
 
 namespace OpenTune {
 
@@ -413,12 +412,9 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
         return controlOpError("INVALID_ARGUMENT", "",
                               "key clipKey names the content's own key, but the content has no key; give the key "
                               "explicitly");
-    // Note indexes count in start-time order (content.getNotes); OpenTune keeps the notes in this order.
+    // Note indexes count in start-time order, as content.getNotes counts them (controlNoteIndexOrder).
     const auto& before = snapshot.notes;
-    std::vector<std::size_t> order(before.size());
-    std::iota(order.begin(), order.end(), std::size_t{0});
-    std::stable_sort(order.begin(), order.end(),
-                     [&before](std::size_t a, std::size_t b) { return before[a].startTime < before[b].startTime; });
+    const auto order = controlNoteIndexOrder(before);
     std::vector<std::vector<std::size_t>> selections;
     for (const auto& op : params.ops) {
         auto positions = resolveSelection(op.select, before, order);
@@ -489,14 +485,18 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
         envelope.setUndoable(undoId, description.toStdString(), names);
         // As the editor after an edit of the piano roll (pitchCurveEdited(), contentEdited()).
         controlMarkDirty(context);
-        if (const auto now = controlLiveSnapshot(context, ref.key)) {
-            if (now->notes.size() == before.size())
-                after = now->notes;
-            revisionAfter = controlContentVersions(context, ref.contentId, *now).revision();
-        }
     }
     if (failure)
         return *failure;
+    if (!params.dryRun && committedOps != 0) {
+        // The result reports the notes as OpenTune stored them, read back, not the prediction in working.
+        auto committed = controlReadCommittedNotes(context, ref, before.size());
+        if (!committed.ok())
+            return committed.error();
+        auto read = std::move(committed).value();
+        after = std::move(read.notes);
+        revisionAfter = std::move(read.revision);
+    }
     const auto omitted = controlListNoteChanges(envelope, ref.contentId, before, after, revisionAfter, kMaxListedNotes);
     JsonValue result;
     if (params.dryRun) {

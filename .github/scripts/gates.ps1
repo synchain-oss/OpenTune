@@ -29,7 +29,7 @@
   6. fork-checks.mjs: identity, attribution and every other delta check (same code as the fork-gate
      workflow); layer from -Layer, PR range from -Base.
   6b. drift-pins.mjs --check: .github/drift-pins/, Source/Control/mirror-map.json and MIRRORS.md agree
-      (needs no build; same rule as fork-gate, from the files changed against -Base: a mismatch is FAIL when this
+      (needs no build; same rule as fork-gate, from the files changed against -Base plus uncommitted and untracked files: a mismatch is FAIL when this
       branch touches the pin files or drift-pins.mjs, otherwise WARN because the manager L0 follow-up regenerates the pins)
   7. gitleaks on the delta (commits and files); gitleaks 8.30.1 is fetched and sha256-verified by
      fetch-tool.mjs into -ToolsDir.
@@ -550,9 +550,21 @@ try {
     $dpErr = [System.IO.Path]::GetTempFileName()
     try {
         # Same rule as fork-gate: decideEnforcement of drift-pins.mjs, as a pull request into the base branch.
+        # The changed-file list is the committed range plus uncommitted work (tracked changes and untracked files),
+        # so a pin file edited but not yet committed counts. A failing git command is FAIL, never "nothing changed".
+        $dpFiles = New-Object System.Collections.Generic.List[string]
+        foreach ($dpGit in @(
+            @('diff', '--no-renames', '--name-only', "$Base...HEAD"),
+            @('diff', '--no-renames', '--name-only', 'HEAD'),
+            @('ls-files', '--others', '--exclude-standard'),
+            # The upstream .gitignore ignores .github/ wholesale (.*/), so the line above never lists untracked pin files.
+            @('ls-files', '--others', '--', '.github/drift-pins', '.github/scripts/drift-pins.mjs'))) {
+            $dpLines = @(& git @dpGit 2> $null)
+            if ($LASTEXITCODE -ne 0) { throw "git $($dpGit -join ' ') 失败（exit $LASTEXITCODE），无法确定改动文件列表" }
+            foreach ($dpLine in $dpLines) { if ($dpLine -and -not $dpFiles.Contains([string]$dpLine)) { $dpFiles.Add([string]$dpLine) } }
+        }
         $dpChanged = [System.IO.Path]::GetTempFileName()
-        $dpFiles = @(& git diff --no-renames --name-only "$Base...HEAD" 2> $null)
-        Set-Content -LiteralPath $dpChanged -Value $dpFiles
+        Set-Content -LiteralPath $dpChanged -Value $dpFiles.ToArray()
         $dpBase = $Base -replace '^(refs/remotes/)?origin/', ''
         $dpArgs = @('--check', '--json', '--event', 'pull_request', '--base', $dpBase, '--changed-files', $dpChanged)
         $dpOut = (& node (Join-Path $scripts 'drift-pins.mjs') @dpArgs 2> $dpErr | Out-String).Trim()

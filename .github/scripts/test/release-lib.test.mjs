@@ -200,7 +200,8 @@ describe('templates', () => {
   });
 
   it('OpenTune-AI.cmd: only comments are non-ASCII, each ends in ASCII; packaged with CRLF', () => {
-    const text = fs.readFileSync(path.join(REPO_ROOT, '.github', 'release', 'templates', 'OpenTune-AI.cmd'), 'utf8');
+    // A Windows checkout with core.autocrlf=true has CRLF in the working tree; compare the normalised text.
+    const text = fs.readFileSync(path.join(REPO_ROOT, '.github', 'release', 'templates', 'OpenTune-AI.cmd'), 'utf8').replace(/\r\n/g, '\n');
     for (const line of text.split('\n')) {
       // cmd.exe parses batch files in the console code page: keep non-ASCII text in rem lines and end
       // them in ASCII, so that a multi-byte character can never swallow the line end.

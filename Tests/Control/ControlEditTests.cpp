@@ -1388,12 +1388,22 @@ bool centsNear(const std::vector<double>& measured, const std::vector<double>& e
 }
 
 /**
- * Total time the multi-note render scenario may wait for renders and for the export job. A ThreadSanitizer build runs
- * the real render work up to about 15 times slower than the 12 s of a Windows developer machine (180 s), and it is
- * kept below the 300 s of the ctest timeout (cmake/OpenTuneControl.cmake). The waits share this budget, each one
- * takes what is left of it.
+ * Total time the multi-note render scenario may wait for renders and for the export job: 30 s before the ctest
+ * timeout of the test, which the scenario reads from OPENTUNE_SCENARIO_TIMEOUT_SEC (cmake/OpenTuneControl.cmake sets
+ * 300 s, and a longer one for a sanitizer build, where the real render work runs several times slower: a ThreadSanitizer
+ * run took 248 to 260 s on a macOS runner). 270 s without that variable. The waits share this budget, each one takes
+ * what is left of it.
  */
-constexpr int kMultiNoteRenderBudgetMs = 270000;
+int multiNoteRenderBudgetMs()
+{
+    constexpr int kDefaultBudgetMs = 270000;
+    constexpr long long kMarginMs = 30000;
+    const auto value = controlSystemEnvironment("OPENTUNE_SCENARIO_TIMEOUT_SEC");
+    if (!value || value->empty() || value->size() > 6 || value->find_first_not_of("0123456789") != std::string::npos)
+        return kDefaultBudgetMs;
+    const long long budgetMs = std::stoll(*value) * 1000 - kMarginMs;
+    return budgetMs > 0 ? static_cast<int>(budgetMs) : kDefaultBudgetMs;
+}
 /** One wait of the export job, shorter than the 5 s a client reads a response; the loop asks again while it runs. */
 constexpr int kExportJobPollMs = 3000;
 
@@ -1416,8 +1426,9 @@ void checkMultiNoteRender()
     if (!service.isRunning())
         return;
     const auto budgetStart = Clock::now();
-    const auto budgetLeftMs = [budgetStart] {
-        return static_cast<int>(std::max<long long>(1000, kMultiNoteRenderBudgetMs - millisecondsSince(budgetStart)));
+    const int budgetMs = multiNoteRenderBudgetMs();
+    const auto budgetLeftMs = [budgetStart, budgetMs] {
+        return static_cast<int>(std::max<long long>(1000, budgetMs - millisecondsSince(budgetStart)));
     };
     constexpr double rate = 44100.0;
     const int samples = static_cast<int>(std::llround(burstDurationSec() * rate));
@@ -1565,7 +1576,7 @@ void checkMultiNoteRender()
             jsonOf(R"({"jobId":)" + jsonQuoted(jobId) + R"(,"waitMs":)" + std::to_string(waitMs) + "}");
         job = memberOf(api.result("job.get", request), "job");
         const auto state = memberOf(job, "state").text();
-        if ((state != "running" && state != "queued") || millisecondsSince(budgetStart) >= kMultiNoteRenderBudgetMs)
+        if ((state != "running" && state != "queued") || millisecondsSince(budgetStart) >= budgetMs)
             break;
     }
     if (!CONTROL_CHECK(memberOf(job, "state").text() == "succeeded")) {
@@ -1771,6 +1782,89 @@ void checkAfterIsTheCommittedNote(EditFixture& f)
     CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
 }
 
+/**
+ * Notes stored out of start-time order (a project opens with its notes as the file holds them) are numbered in
+ * content.getNotes order by every write, and a commit that trims an overlapping note says so.
+ * - snapNotes with two ranges: the first commit stores the notes sorted, so the second pass must pick its targets
+ *   by time on the notes it finds then, not by the position it found them at before the first commit;
+ * - regenerate: removed[] and the index of DROPPED_BOUNDARY_NOTES count in content.getNotes order;
+ * - a note that overlaps its successor is trimmed by the commit: the count stays, and changes lists its end.
+ */
+void checkNoteNumberingOnUnsortedNotes(EditFixture& f)
+{
+    const auto initial = stateOf(*f.processor, f.clip.key);
+    if (!CONTROL_CHECK(initial.notes.size() == 4))
+        return;
+    // Stored as [note 1, note 2, note 3, note 0].
+    auto rotated = initial.notes;
+    std::rotate(rotated.begin(), rotated.begin() + 1, rotated.end());
+
+    if (storeNotesAsGiven(f, rotated)) {
+        const std::string chromatic = R"({"root":0,"scale":"chromatic"})";
+        const std::string ranges =
+            R"(,"ranges":[{"startContentSec":3.4,"endContentSec":4.6},{"startContentSec":4.8,"endContentSec":5.9}])";
+        const auto predicted = f.snapNotes(chromatic, ranges + R"(,"dryRun":true)");
+        const auto applied = f.snapNotes(chromatic, ranges);
+        if (CONTROL_CHECK(memberOf(applied, "applied").asBoolean())) {
+            // Note 2 (69.3) goes to 69 and note 3 (66.2) to 66: both are inside a range.
+            CONTROL_CHECK(noteIndexes(memberOf(applied, "changes")) == (std::vector<int>{2, 3}));
+            CONTROL_CHECK(std::abs(targetNow(f, 2) - 69.0) < 1e-3 && std::abs(targetNow(f, 3) - 66.0) < 1e-3);
+            CONTROL_CHECK(std::abs(targetNow(f, 0) - 64.0) < 1e-3 && std::abs(targetNow(f, 1) - 69.0) < 1e-3);
+            CONTROL_CHECK(changesWithoutRevision(memberOf(predicted, "changes"))
+                          == changesWithoutRevision(memberOf(applied, "changes")));
+            checkChangesMatchReadback(f, applied, "snapNotes with two ranges on notes stored out of order");
+            CONTROL_CHECK(
+                memberOf(f.undo(memberOf(memberOf(applied, "undo"), "undoId").text()), "applied").asBoolean());
+        }
+    }
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
+
+    if (storeNotesAsGiven(f, rotated)) {
+        const auto applied = f.regenerate(R"([{"startContentSec":1,"endContentSec":4}])");
+        if (CONTROL_CHECK(memberOf(applied, "applied").asBoolean())) {
+            // Notes 0 to 2 overlap the range, in content.getNotes order whatever the stored order.
+            CONTROL_CHECK(noteIndexes(memberOf(applied, "removed")) == (std::vector<int>{0, 1, 2}));
+            const auto& warnings = memberOf(applied, "warnings");
+            if (CONTROL_CHECK(warnings.size() == 1)) {
+                const auto& dropped = memberOf(memberOf(warnings.at(0), "data"), "notes");
+                CONTROL_CHECK(dropped.size() == 2 && memberOf(memberOf(dropped.at(0), "note"), "index").asDouble() == 0
+                              && memberOf(memberOf(dropped.at(1), "note"), "index").asDouble() == 2);
+            }
+            checkCreatedNotes(f, applied, {{1.0, 4.0}});
+            CONTROL_CHECK(
+                memberOf(f.undo(memberOf(memberOf(applied, "undo"), "undoId").text()), "applied").asBoolean());
+        }
+    }
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
+
+    // Note 1 starts inside note 0: the commit trims the end of note 0 to 1.2 s.
+    auto overlapping = initial.notes;
+    overlapping[1].startTime = 1.2;
+    if (storeNotesAsGiven(f, overlapping)) {
+        const auto applied = f.editNotes(R"([{"op":"shiftCents","select":{"indices":[3]},"deltaCents":100}])");
+        if (CONTROL_CHECK(memberOf(applied, "applied").asBoolean())) {
+            const auto& changes = memberOf(applied, "changes");
+            CONTROL_CHECK(noteIndexes(changes) == (std::vector<int>{0, 3}));
+            if (changes.size() == 2) {
+                const auto& fields = memberOf(changes.at(0), "fields");
+                const auto* end = fields.find("endContentSec");
+                if (CONTROL_CHECK(end != nullptr && fields.find("startContentSec") == nullptr)) {
+                    CONTROL_CHECK(std::abs(memberOf(*end, "before").asDouble() - 1.5) < 1e-6);
+                    CONTROL_CHECK(std::abs(memberOf(*end, "after").asDouble() - 1.2) < 1e-6);
+                    CONTROL_CHECK(memberOf(*end, "unit").text() == "sec");
+                }
+                CONTROL_CHECK(fields.find("targetMidi") == nullptr);
+            }
+            const auto notes = notesNow(f);
+            CONTROL_CHECK(notes.size() == 4
+                          && std::abs(memberOf(notes.at(0), "endContentSec").asDouble() - 1.2) < 1e-6);
+            memberOf(f.undo(memberOf(memberOf(applied, "undo"), "undoId").text()), "applied");
+        }
+    }
+    storeNotesAsGiven(f, initial.notes);
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
+}
+
 void scenarioEditNotesImpl()
 {
     EditFixture f;
@@ -1783,6 +1877,7 @@ void scenarioEditNotesImpl()
     checkNoteEditErrors(f);
     checkEditRoundingMatchesReadback(f);
     checkAfterIsTheCommittedNote(f);
+    checkNoteNumberingOnUnsortedNotes(f);
     CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 

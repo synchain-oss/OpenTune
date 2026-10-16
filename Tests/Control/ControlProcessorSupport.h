@@ -283,6 +283,9 @@ void scenarioExport();
 void scenarioExportFailures();
 /** The specification's vectors of export.start, against the real dispatcher. */
 void scenarioExportVectors();
+/** An export of a clip whose time grid is not the identity waits until OpenTune rebuilt its time-stretch output
+    at the current revisions, also when the job has to queue that rebuild itself, and never writes the clip silent. */
+void scenarioExportTimeStretch();
 
 // Scenarios of the undo history, the key and AUTO (ControlEditTests.cpp).
 
@@ -300,6 +303,20 @@ void scenarioAutoTune();
 void scenarioIncompleteCapability();
 /** The specification's vectors of edit.*, content.setKey and content.autoTune, against the real dispatcher. */
 void scenarioEditVectors();
+
+// Scenarios of the time grid (ControlTimingTests.cpp).
+
+/** content.shiftTiming and content.editTimeGrid op moveHandles: hand-computed handle positions, the two passes of the
+    time tool's limits, undo back to the grid before (also with OpenTune's own undo), tokens equal to a fresh read,
+    grid_changed, grid_not_seeded, the handle checks, dryRun, no-ops, the readiness gate, busy and the editor's
+    notification. */
+void scenarioTiming();
+/** content.editTimeGrid op seed as a job: handles where OpenTune's timing analysis puts them, a grid with handles
+    left as it is, cancellation, and the failures of the checks the job makes again (content removed, busy, analysis
+    not ready, analysis failed); a failed or cancelled job writes no handle. */
+void scenarioTimeGridSeed();
+/** The specification's vectors of content.shiftTiming and content.editTimeGrid, against the real dispatcher. */
+void scenarioTimingVectors();
 
 } // namespace ControlTest
 } // namespace OpenTune

@@ -15,6 +15,10 @@ class ControlMethodTable;
  */
 void registerExportOps(ControlMethodTable& table);
 
+/** How many times an export job asks for the time-stretch rebuild of one content at the same content and time-grid
+    revisions before it gives up with NOT_READY (a rebuild that OpenTune's render worker dropped is asked for again). */
+inline constexpr int kControlExportMaxStretchRequests = 3;
+
 /** Test seam for the headless tests: the longest time an export job waits for analysis and rendering
     (section 19 rule 7, 120 s), for the jobs started later; 0 restores it. Never used by OpenTune itself.
     Message thread. */

@@ -124,7 +124,9 @@ Result<ControlContentRef> checkGridEdit(ControlOpContext& context, const Control
 /**
  * The result of a handle edit, for both methods: the changed handles, clamped and CLAMPED for each limited move,
  * and for a commit the undo entry (a TimeGridEditAction in a ControlOriginAction, as the piano roll pushes it), the
- * dirty flag, reRenderQueued and the editor's notification. A plan without a grid after it is a no-op.
+ * dirty flag, reRenderQueued and the editor's notification. A plan without a grid after it is a no-op, as
+ * PianoRollToolHandler::handleTimeToolMouseUp commits a drag only when it changed the grid, once, with the drag's
+ * description.
  */
 Result<JsonValue> applyPlan(ControlOpContext& context, const ControlContentRef& ref, const TimeGridOps::Plan& plan,
                             bool dryRun)

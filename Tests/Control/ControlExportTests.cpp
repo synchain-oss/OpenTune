@@ -1218,6 +1218,26 @@ bool stretchOutputCurrent(OpenTuneAudioProcessor& processor, const ContentKey& k
                   > 0;
 }
 
+/** Publishes the playback source of a content again with a copy of its audio: the same samples and revisions in
+    another buffer. A time-stretch rebuild queued before no longer matches the published source, and OpenTune's
+    render worker drops it (Stage2TimeStretchRebuilder::rebuild compares the buffer). */
+bool republishWithCopiedAudio(ContentRenderService& service, const ContentKey& key)
+{
+    PlaybackReadSource source;
+    if (!service.getPlaybackReadSource(key, source) || source.audioBuffer == nullptr)
+        return false;
+    auto copy = std::make_shared<const juce::AudioBuffer<float>>(*source.audioBuffer);
+    service.publishPlaybackSource(key, makePlaybackReadSource(key, source.contentSnapshot, copy, source.audioSampleRate,
+                                                              source.renderCache, service.getTimeStretchCache()));
+    PlaybackReadSource now;
+    return service.getPlaybackReadSource(key, now) && now.audioBuffer == copy;
+}
+
+bool renderWorkerIdle(ContentRenderService& service)
+{
+    return service.renderQueueDepth() == 0 && service.renderInFlight() == 0;
+}
+
 } // namespace
 
 void scenarioExportTimeStretch()
@@ -1282,6 +1302,84 @@ void scenarioExportTimeStretch()
     const auto plainJob =
         exportAndWait(api, clipParams(handles.placement(plain.placementId), (out / "plain.wav").u8string()));
     CONTROL_CHECK(memberOf(plainJob, "state").text() == "succeeded");
+
+    // The cases below would wait for the wait limit if the job did not end or ask again; a short limit turns that
+    // into NOT_READY(export_wait_timeout) instead of a stalled test.
+    const ScopedWaitLimit waitLimit(20000);
+
+    // 4. A content to export dry with a stretched grid has no render to stretch, so OpenTune has no audio of it for
+    // the file: the job ends at once, without a file. A failed analysis with allowDry: ANALYSIS_FAILED(f0_failed); an
+    // analysis without voiced audio: NOT_READY without a reason.
+    {
+        const auto failed = addClip(*processor, media, "failed", 3, 0.0, 2.0, Analysis::Failed);
+        CONTROL_CHECK(processor->setContentTimeGrid(failed.key, stretchedGrid(failed.durationSec)));
+        const auto path = (out / "failed.wav").u8string();
+        const auto job =
+            exportAndWait(api, clipParams(handles.placement(failed.placementId), path, R"(,"allowDry":true)"));
+        CONTROL_CHECK(failedWith(job, "ANALYSIS_FAILED", "f0_failed"));
+        CONTROL_CHECK(!juceFileOf(path).exists());
+        const auto unvoiced = addClip(*processor, media, "unvoiced", 4, 0.0, 2.0, Analysis::Unvoiced);
+        CONTROL_CHECK(processor->setContentTimeGrid(unvoiced.key, stretchedGrid(unvoiced.durationSec)));
+        const auto unvoicedPath = (out / "unvoiced.wav").u8string();
+        const auto unvoicedJob = exportAndWait(api, clipParams(handles.placement(unvoiced.placementId), unvoicedPath));
+        CONTROL_CHECK(failedWith(unvoicedJob, "NOT_READY", ""));
+        CONTROL_CHECK(!juceFileOf(unvoicedPath).exists());
+    }
+
+    // 5. The render worker drops the rebuild the job asked for (the published playback source changed meanwhile,
+    // without a new revision): once the worker is idle and the output still not current, the job asks again, and
+    // the file holds the stretched render.
+    {
+        const auto dropped = addClip(*processor, media, "dropped", 5, 0.0, 2.0, Analysis::Ready);
+        CONTROL_CHECK(processor->setContentTimeGrid(dropped.key, stretchedGrid(dropped.durationSec)));
+        CONTROL_CHECK(settleRender(*processor, dropped.key));
+        CONTROL_CHECK(pumpMessagesUntil([renderService] { return renderWorkerIdle(*renderService); }, kDriveTimeoutMs));
+        renderService->pauseRenderWorker();
+        const auto path = (out / "dropped.wav").u8string();
+        const auto jobId = startExport(api, clipParams(handles.placement(dropped.placementId), path));
+        // The job's request waits in the paused worker's queue; the copied audio makes it stale.
+        CONTROL_CHECK(
+            pumpMessagesUntil([renderService] { return renderService->renderQueueDepth() == 1; }, kDriveTimeoutMs));
+        CONTROL_CHECK(republishWithCopiedAudio(*renderService, dropped.key));
+        renderService->resumeRenderWorker();
+        const auto job = waitJob(api, jobId);
+        CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+        CONTROL_CHECK(stretchOutputCurrent(*processor, dropped.key));
+        CONTROL_CHECK(peakOf(path) > kRenderLevel / 2);
+    }
+
+    // 6. Every rebuild the job asks for is dropped: after kControlExportMaxStretchRequests requests for the same
+    // revisions the job gives up with NOT_READY (no reason), without a file.
+    {
+        const auto stubborn = addClip(*processor, media, "stubborn", 6, 0.0, 2.0, Analysis::Ready);
+        CONTROL_CHECK(processor->setContentTimeGrid(stubborn.key, stretchedGrid(stubborn.durationSec)));
+        CONTROL_CHECK(settleRender(*processor, stubborn.key));
+        CONTROL_CHECK(pumpMessagesUntil([renderService] { return renderWorkerIdle(*renderService); }, kDriveTimeoutMs));
+        renderService->pauseRenderWorker();
+        const auto path = (out / "stubborn.wav").u8string();
+        const auto jobId = startExport(api, clipParams(handles.placement(stubborn.placementId), path));
+        int requests = 0;
+        while (requests <= kControlExportMaxStretchRequests) {
+            // A request of the job waits in the paused worker's queue, or the job ended.
+            if (!CONTROL_CHECK(pumpMessagesUntil(
+                    [&] { return renderService->renderQueueDepth() == 1 || isTerminal(jobOf(service, jobId)); },
+                    kDriveTimeoutMs)))
+                break;
+            if (renderService->renderQueueDepth() != 1)
+                break;
+            ++requests;
+            CONTROL_CHECK(republishWithCopiedAudio(*renderService, stubborn.key));
+            renderService->resumeRenderWorker();
+            CONTROL_CHECK(
+                pumpMessagesUntil([renderService] { return renderWorkerIdle(*renderService); }, kDriveTimeoutMs));
+            renderService->pauseRenderWorker();
+        }
+        renderService->resumeRenderWorker();
+        CONTROL_CHECK(requests == kControlExportMaxStretchRequests);
+        CONTROL_CHECK(failedWith(waitJob(api, jobId), "NOT_READY", ""));
+        CONTROL_CHECK(!stretchOutputCurrent(*processor, stubborn.key));
+        CONTROL_CHECK(!juceFileOf(path).exists());
+    }
 }
 
 } // namespace ControlTest

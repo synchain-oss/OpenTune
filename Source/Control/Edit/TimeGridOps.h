@@ -34,7 +34,8 @@ class OpenTuneAudioProcessor;
  * A move that was limited is applied as far as it was allowed. The new grid is validated by
  * TimeGridSnapshot::makeFromHandles(), like every grid the time tool makes; a grid it rejects is not applied.
  *
- * The mirrored upstream functions are listed in Source/Control/README.md (Time grid).
+ * The mirrored upstream functions are registered in Source/Control/mirror-map.json (see MIRRORS.md) and listed in
+ * Source/Control/README.md (Time grid).
  *
  * Threading: the planning functions are pure; commit() runs on the message thread.
  */

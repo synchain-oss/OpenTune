@@ -483,10 +483,17 @@ clip or track and stereo for the master mix.
   content is ready, or exported dry, only once that output is current (`TimeStretchCache::
   sliceCanonicalForOutputRange`, the export's own read). OpenTune queues the rebuild when the grid changes
   while the render is settled and when a render block settles; when the render is settled, no output is
-  current and the render worker is idle, the job queues it once for these revisions, as `setContentTimeGrid()`
-  does (`ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled`). After 120 s:
-  `NOT_READY(export_wait_timeout)`. A clip export whose clip is deleted meanwhile fails with
-  `REVISION_CONFLICT(changed_during_export)`.
+  current and the render worker is idle, the job queues it as `setContentTimeGrid()` does
+  (`ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled`). The worker can drop a rebuild (it gives up
+  when the published playback source changed meanwhile), so once the worker has been idle for 0.5 s with still no
+  current output, the job queues it again, at most 3 times for the same revisions
+  (`kControlExportMaxStretchRequests`), then fails with `NOT_READY` (no reason). The rebuild needs a settled render:
+  a content the job would export dry (failed or unvoiced analysis, nothing to render) whose grid is not the
+  identity and that has no settled render has no audio OpenTune could put in the file, and waiting does not change
+  that, so the job ends at once: `ANALYSIS_FAILED(f0_failed)` for a failed analysis with `allowDry` (the failure of
+  rule 6 for a failed analysis; `allowDry` cannot help), otherwise `NOT_READY` without a reason (the protocol has
+  none for it). After 120 s: `NOT_READY(export_wait_timeout)`. A clip export whose clip is deleted meanwhile fails
+  with `REVISION_CONFLICT(changed_during_export)`.
 - In the tick that finds every content ready, the job records a token of the inputs (each clip's track,
   position, length, source window, gain and fades, its track's volume, and per content the revision, time
   grid and pitch shift) and the revisions it reports, and starts the writer on a thread of its own with a
@@ -570,16 +577,18 @@ changes the content's `revision`.
   current (see "Export").
 - Inserting and deleting handles, and setting or resetting a whole grid, are not part of this build.
 
-The upstream functions it follows (lines of the locked upstream base). A change of these functions upstream
-needs the same change here:
+The upstream functions it follows, registered in `mirror-map.json` (see "Mirrors"; `ControlMirrorDriftTests` fails
+when one of them changes). A change of these functions upstream needs the same change here:
 
-| Upstream function | Followed in |
-|---|---|
-| `PianoRollToolHandler::handleTimeToolMouseDrag()` (`Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp:3462-3565`) | `TimeGridOps::planShift()`, `planMoves()`: the limit of the dragged handle, the uniform distance of a group, the second pass |
-| `PianoRollToolHandler::handleTimeToolMouseUp()` (`PianoRollToolHandler.cpp:3567-3597`) | the commit of a moved grid and its description |
-| the piano roll's `commitTimeGrid` (`Source/Standalone/UI/PianoRollComponent.cpp:293-315`) | `TimeGridOps::commit()` and the undo entry of `Ops/TimingOps.cpp` |
-| `PianoRollComponent::setCurrentTool()` (`PianoRollComponent.cpp:3902-3915`) | the seed job's call of `ensureTimeToolAnchorSeed()` |
-| `OpenTuneAudioProcessor::setContentTimeGrid()` (`Source/PluginProcessor.cpp:5130-5186`) | the export's request of the time-stretch rebuild |
+| Upstream function | Followed in | Mirror id |
+|---|---|---|
+| `PianoRollToolHandler::handleTimeToolMouseDrag()` (`Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp`) | `TimeGridOps::planShift()`, `planMoves()`: the limit of the dragged handle, the uniform distance of a group, the second pass | `time-tool-drag` |
+| `PianoRollToolHandler::handleTimeToolMouseUp()` (same file) | the commit of a moved grid and its description (`applyPlan` in `Ops/TimingOps.cpp`) | `time-tool-mouse-up` |
+| the piano roll's `toolCtx.commitTimeGrid` (`Source/Standalone/UI/PianoRollComponent.cpp`) | `TimeGridOps::commit()` and the undo entry of `Ops/TimingOps.cpp` | `time-grid-commit` |
+| `PianoRollComponent::setCurrentTool()` (same file) | the seed job's call of `ensureTimeToolAnchorSeed()` | `time-tool-pick` |
+| `OpenTuneAudioProcessor::ensureTimeToolAnchorSeed()` (`Source/PluginProcessor.cpp`) | the seed job's condition for seeding at once (a grid without handles, `featuresReady`) | `time-seed-anchors` |
+| `OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures()` (same file) | the seed job's reading of `AlreadyReady` as the producer and fingerprint part of `featuresReady` | `time-seed-preheat` |
+| `OpenTuneAudioProcessor::setContentTimeGrid()` (same file) | the export's request of the time-stretch rebuild (`ExportJob::stretchState` in `Ops/ExportOps.cpp`) | `time-grid-publish` |
 
 Known OpenTune behaviours, reported as they are:
 
@@ -742,8 +751,11 @@ seeded grid alone, and covers cancellation and the failures of the job's checks 
 the pitch analysis running again, an analysis that failed or found no onset), which write no handle.
 `TimingVectors` runs the specification's vectors `content/shift-timing-*` and `content/edit-time-grid-*`.
 `ControlExportTests.cpp` (`ExportTimeStretch`) exports a clip with a stretched grid while its time-stretch rebuild
-is held back (the job waits and writes nothing), and one whose rebuild nothing had queued (the job queues it); both
-files hold the stretched render, not silence.
+is held back (the job waits and writes nothing), one whose rebuild nothing had queued (the job queues it), and one
+whose rebuild the render worker drops (the job asks again); the files hold the stretched render, not silence. It
+also covers a job whose every rebuild is dropped (`NOT_READY` after `kControlExportMaxStretchRequests` requests)
+and contents to export dry with a stretched grid and no render (a failed analysis with `allowDry`:
+`ANALYSIS_FAILED(f0_failed)`; an unvoiced one: `NOT_READY`), which end at once without a file.
 
 ## Capabilities and protocol versions
 

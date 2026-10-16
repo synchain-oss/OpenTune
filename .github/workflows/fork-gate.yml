@@ -37,6 +37,10 @@ jobs:
     name: self-test
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # pull-requests: read 只用来列出 PR 改了哪些文件（drift-pins 是否阻塞的判定）。
+    permissions:
+      contents: read
+      pull-requests: read
     steps:
       # lfs: false —— 绝不下载模型权重（CLAUDE.md §11）。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -62,6 +66,32 @@ jobs:
           GITLEAKS: ${{ steps.tools.outputs.gitleaks }}
           CLANG_FORMAT: ${{ steps.tools.outputs.clang_format }}
         run: node --test ".github/scripts/test/*.test.mjs"
+      # 镜像锁清单（.github/drift-pins/）、mirror-map.json 与 MIRRORS.md 三处一致。只读工作区文件，不需要 git 历史。
+      # 不一致时输出写明改了哪里、该跑什么（OpenTuneControlMirrorDriftTests --update，再 drift-pins.mjs --write）。
+      # 是否阻塞由 drift-pins.mjs 的 decideEnforcement 判定（workflow 只传事件信息）：
+      #   阻塞：push（dev、feature/control-api）；base 为 dev、review-base/**、sync/**；改了 .github/drift-pins/** 或 drift-pins.mjs 的 PR。
+      #   push 的范围是触发条件里的 dev 与 feature/**：可上游的镜像 PR 合入主支线后，主支线上这一步会一直红到 L0 跟进合入——有意为之，
+      #   作为提醒 manager 跟进的信号，不是故障。
+      #   后续：本步骤现在运行 PR 自带的 drift-pins.mjs（含 decideEnforcement），base 上还没有 --check 时只能这样自举；本 PR 合入后，
+      #   另开 L0 PR 把它挪进 delta-checks，改用 "$GATE/drift-pins.mjs"（并加入入口脚本检查列表），由 base 上的脚本判 PR。
+      #   不阻塞：base 为 feature/** 且没改这些路径的子 PR——可上游的子 PR 不能改 .github/**，改了镜像也没法自己补清单；
+      #   这时照样运行，不一致写进 job summary 并发 warning，由 manager 的 L0 跟进用 --write 补齐，step 结论为成功。
+      - name: Mirror pins agree with mirror-map.json and MIRRORS.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          args=(--check)
+          if [ "$EVENT" = "pull_request" ]; then
+            gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" --jq '.[] | .filename, (.previous_filename // empty)' > "$RUNNER_TEMP/changed-files.txt"
+            args+=(--event "$EVENT" --base "$BASE_REF" --changed-files "$RUNNER_TEMP/changed-files.txt")
+          else
+            args+=(--event "$EVENT")
+          fi
+          node .github/scripts/drift-pins.mjs "${args[@]}"
 
   delta-checks:
     name: delta-checks

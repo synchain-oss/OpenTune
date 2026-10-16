@@ -413,12 +413,12 @@ std::vector<std::string> loadedMediaPaths(ControlOpContext& context)
     identity that the check needs cannot be determined; nullopt otherwise. */
 std::optional<ControlJobError> loadedMediaError(const std::vector<std::string>& media, const std::string& target)
 {
-    // The identity of the target is read once. A media file on a volume that is not available (a removed
-    // card, a disconnected share) cannot be the target, so it does not stop the export; only an identity
-    // that is unreadable for another reason does.
+    // The identity of the target is read once. A loaded media file whose identity cannot be read for any
+    // reason but "does not exist" (including an unavailable volume) rejects the export (rule 4): the same
+    // file may still be reachable through the target path, and overwrite would replace it.
     ControlSameFileProbe probe(target);
     for (const auto& path : media) {
-        const auto same = probe.sameAs(path, true);
+        const auto same = probe.sameAs(path);
         if (!same)
             return ControlJobError{"IO_ERROR", "read_failed",
                                    "the identity of the target or of a loaded media file cannot be determined", false};

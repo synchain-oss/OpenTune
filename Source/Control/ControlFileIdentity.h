@@ -84,12 +84,11 @@ public:
 
     /**
      * Whether `utf8Other` names the same file as the target. nullopt when an identity that the decision
-     * needs cannot be determined (rule 4), and always when the identity of the target cannot. With
-     * `unavailableIsDifferent`, a path on a volume that is not available (ControlFileIdStatus::Unavailable)
-     * is a different file than the target instead; this is for the paths of loaded media, which cannot be
-     * the target when their volume is gone.
+     * needs cannot be determined (rule 4), and always when the identity of the target cannot. A path whose
+     * volume is not available (ControlFileIdStatus::Unavailable) is such a case too: the same share can be
+     * reachable through another name, so it is never taken as a different file.
      */
-    std::optional<bool> sameAs(const std::string& utf8Other, bool unavailableIsDifferent);
+    std::optional<bool> sameAs(const std::string& utf8Other);
 
 private:
     std::string target_;

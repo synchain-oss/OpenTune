@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "ControlFileIdentity.h"
 
+#include <cerrno>
 #include <utility>
 
 #if defined(_WIN32)
@@ -12,7 +13,6 @@
 #endif
 #include <windows.h>
 #else
-#include <cerrno>
 #include <cstdio>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -167,18 +167,15 @@ ControlFileIdStatus controlFileIdentity(const std::string& utf8Path, ControlFile
 ControlSameFileProbe::ControlSameFileProbe(std::string utf8Target)
     : target_(std::move(utf8Target))
     , targetStatus_(controlFileIdentity(target_, targetId_))
-{
-}
+{}
 
-std::optional<bool> ControlSameFileProbe::sameAs(const std::string& utf8Other, bool unavailableIsDifferent)
+std::optional<bool> ControlSameFileProbe::sameAs(const std::string& utf8Other)
 {
     // The target must be readable whatever the other path is (rule 4).
     if (targetStatus_ == ControlFileIdStatus::Failed || targetStatus_ == ControlFileIdStatus::Unavailable)
         return std::nullopt;
     ControlFileId otherId;
     const auto otherStatus = controlFileIdentity(utf8Other, otherId);
-    if (otherStatus == ControlFileIdStatus::Unavailable && unavailableIsDifferent)
-        return false;
     if (otherStatus == ControlFileIdStatus::Failed || otherStatus == ControlFileIdStatus::Unavailable)
         return std::nullopt;
     if (targetStatus_ == ControlFileIdStatus::Found && otherStatus == ControlFileIdStatus::Found)
@@ -201,8 +198,6 @@ std::optional<bool> ControlSameFileProbe::sameAs(const std::string& utf8Other, b
         return std::nullopt;
     ControlFileId parentIdOther;
     const auto parentStatusOther = controlFileIdentity(parentOther, parentIdOther);
-    if (parentStatusOther == ControlFileIdStatus::Unavailable && unavailableIsDifferent)
-        return false;
     if (parentStatusOther == ControlFileIdStatus::Failed || parentStatusOther == ControlFileIdStatus::Unavailable)
         return std::nullopt;
     if (parentStatus_ != ControlFileIdStatus::Found || parentStatusOther != ControlFileIdStatus::Found)
@@ -213,7 +208,7 @@ std::optional<bool> ControlSameFileProbe::sameAs(const std::string& utf8Other, b
 std::optional<bool> controlSameFile(const std::string& utf8PathA, const std::string& utf8PathB)
 {
     // Both paths must be readable here: the first is the target of the probe, the second is checked by it.
-    return ControlSameFileProbe(utf8PathA).sameAs(utf8PathB, false);
+    return ControlSameFileProbe(utf8PathA).sameAs(utf8PathB);
 }
 
 ControlRenameResult controlRenameFile(const std::string& utf8From, const std::string& utf8To, bool replace)
@@ -246,9 +241,8 @@ ControlRenameResult controlRenameFile(const std::string& utf8From, const std::st
 
 ControlRenameResult controlRenameAfterLink(int unlinkReturn, int unlinkErrno) noexcept
 {
-    constexpr int kAlreadyGone = 2; // ENOENT on every system that has hard links
-    return unlinkReturn == 0 || unlinkErrno == kAlreadyGone ? ControlRenameResult::Done
-                                                            : ControlRenameResult::DoneSourceRemains;
+    return unlinkReturn == 0 || unlinkErrno == ENOENT ? ControlRenameResult::Done
+                                                      : ControlRenameResult::DoneSourceRemains;
 }
 
 } // namespace OpenTune

@@ -807,25 +807,25 @@ void scenarioExportFailures()
         // One probe compares the target with many paths and reads the target's identity once.
         {
             ControlSameFileProbe probe(b);
-            CONTROL_CHECK(probe.sameAs(b, true) == std::optional<bool>(true));
-            CONTROL_CHECK(probe.sameAs(missing, true) == std::optional<bool>(false));
-            CONTROL_CHECK(probe.sameAs(a, false) == std::optional<bool>(false));
+            CONTROL_CHECK(probe.sameAs(b) == std::optional<bool>(true));
+            CONTROL_CHECK(probe.sameAs(missing) == std::optional<bool>(false));
+            CONTROL_CHECK(probe.sameAs(a) == std::optional<bool>(false));
             ControlSameFileProbe missingProbe(missing);
-            CONTROL_CHECK(missingProbe.sameAs(missing, true) == std::optional<bool>(true));
-            CONTROL_CHECK(missingProbe.sameAs((out / "identity-other.wav").u8string(), true)
-                          == std::optional<bool>(false));
+            CONTROL_CHECK(missingProbe.sameAs(missing) == std::optional<bool>(true));
+            CONTROL_CHECK(missingProbe.sameAs((out / "identity-other.wav").u8string()) == std::optional<bool>(false));
         }
 
-        // The error codes of a volume that is not there are "unavailable", not "failed" (section 20.3 rule 4
-        // is for identities that cannot be determined for any other reason).
+        // The error codes of a volume that is not there are classified as "unavailable" (for the error detail);
+        // like "failed" they make an identity undeterminable, so an export is refused (section 20.3 rule 4).
+        // The test fixes this by status only: whether a classification is acted on is in loadedMediaError.
 #if defined(_WIN32)
-        CONTROL_CHECK(controlClassifyOsError(2) == ControlFileIdStatus::Missing);   // ERROR_FILE_NOT_FOUND
-        CONTROL_CHECK(controlClassifyOsError(3) == ControlFileIdStatus::Missing);   // ERROR_PATH_NOT_FOUND
+        CONTROL_CHECK(controlClassifyOsError(2) == ControlFileIdStatus::Missing);      // ERROR_FILE_NOT_FOUND
+        CONTROL_CHECK(controlClassifyOsError(3) == ControlFileIdStatus::Missing);      // ERROR_PATH_NOT_FOUND
         CONTROL_CHECK(controlClassifyOsError(21) == ControlFileIdStatus::Unavailable); // ERROR_NOT_READY
         CONTROL_CHECK(controlClassifyOsError(53) == ControlFileIdStatus::Unavailable); // ERROR_BAD_NETPATH
         CONTROL_CHECK(controlClassifyOsError(67) == ControlFileIdStatus::Unavailable); // ERROR_BAD_NET_NAME
         CONTROL_CHECK(controlClassifyOsError(15) == ControlFileIdStatus::Unavailable); // ERROR_INVALID_DRIVE
-        CONTROL_CHECK(controlClassifyOsError(5) == ControlFileIdStatus::Failed);    // ERROR_ACCESS_DENIED
+        CONTROL_CHECK(controlClassifyOsError(5) == ControlFileIdStatus::Failed);       // ERROR_ACCESS_DENIED
 #else
         CONTROL_CHECK(controlClassifyOsError(ENOENT) == ControlFileIdStatus::Missing);
         CONTROL_CHECK(controlClassifyOsError(ENODEV) == ControlFileIdStatus::Unavailable);
@@ -836,7 +836,7 @@ void scenarioExportFailures()
         // After the link of a rename that never replaces, a source that cannot be unlinked is reported, not
         // hidden; one that is gone already is not a problem.
         CONTROL_CHECK(controlRenameAfterLink(0, 0) == ControlRenameResult::Done);
-        CONTROL_CHECK(controlRenameAfterLink(-1, 2) == ControlRenameResult::Done);
+        CONTROL_CHECK(controlRenameAfterLink(-1, ENOENT) == ControlRenameResult::Done);
         CONTROL_CHECK(controlRenameAfterLink(-1, 13) == ControlRenameResult::DoneSourceRemains);
     }
 }

@@ -78,7 +78,9 @@ public:
     /** Tracks or placements were added, removed or moved. Default: nothing. */
     virtual void onStructureChanged() {}
 
-    /** An undo or redo was applied. Default: nothing. */
+    /** An undo or redo step was applied through the control API: the editor does what it does after its own
+        undo or redo (marks the project as changed, redraws the arrangement, refreshes derived state).
+        Default: nothing. */
     virtual void onUndoRedoApplied() {}
 
     /** A project was opened or the project was reloaded. Default: nothing. */

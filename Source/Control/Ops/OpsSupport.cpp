@@ -115,6 +115,25 @@ const char* controlF0StateName(OriginalF0State state)
     return "notRequested";
 }
 
+std::string controlNoteLabel(std::size_t index, std::optional<double> targetMidi, double startSec, double endSec)
+{
+    static const char* const pitchClassNames[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
+    // Fixed two decimals, independent of the C locale.
+    const auto fixed2 = [](double value) {
+        const auto hundredths = static_cast<long long>(std::llround(std::max(0.0, value) * 100.0));
+        std::string fraction = std::to_string(hundredths % 100);
+        if (fraction.size() < 2)
+            fraction.insert(0, 1, '0');
+        return std::to_string(hundredths / 100) + "." + fraction;
+    };
+    std::string name = "rest";
+    if (targetMidi && *targetMidi > 0.0) {
+        const int midi = static_cast<int>(std::lround(*targetMidi));
+        name = std::string(pitchClassNames[((midi % 12) + 12) % 12]) + std::to_string(midi / 12 - 1);
+    }
+    return "#" + std::to_string(index) + " " + name + " " + fixed2(startSec) + "-" + fixed2(endSec) + "s";
+}
+
 // ---- Checking params ------------------------------------------------------------------------------
 
 bool ControlParamReader::fail(std::string why)

@@ -17,6 +17,7 @@
 
 namespace OpenTune {
 
+class ControlHistory;
 class ControlJobs;
 class ControlUiBridge;
 class OpenTuneAudioProcessor;
@@ -75,6 +76,7 @@ struct ControlOpEnvironment
     ControlInstanceFacts facts;
     ControlThreadProbe* probe = nullptr;
     ControlJobs* jobs = nullptr;
+    std::shared_ptr<ControlHistory> history;
 };
 
 /**
@@ -87,10 +89,12 @@ struct ControlOpEnvironment
 class ControlOpContext
 {
 public:
-    /** jobs and bridgeAccessor may be empty: such a context cannot start jobs. */
+    /** jobs and bridgeAccessor may be empty: such a context cannot start jobs. history may be null: such a
+        context cannot run the methods that read or record undo entries. */
     ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiBridge* bridge, const ControlInstanceFacts& facts,
                      ControlThreadProbe& probe, ControlJobs* jobs = nullptr,
-                     std::function<ControlUiBridge*()> bridgeAccessor = {});
+                     std::function<ControlUiBridge*()> bridgeAccessor = {},
+                     std::shared_ptr<ControlHistory> history = nullptr);
     /** A context for one step of a job, from the environment that the operation which started it kept;
         the environment must outlive the context. */
     explicit ControlOpContext(const ControlOpEnvironment& environment);
@@ -109,6 +113,9 @@ public:
     /** What a job started by this operation needs for its later steps. Throws ControlThreadViolation off
         the message thread. */
     ControlOpEnvironment environment();
+    /** What the instance knows about OpenTune's undo history (Edit/ControlOriginAction.h), or nullptr.
+        Throws ControlThreadViolation off the message thread. */
+    std::shared_ptr<ControlHistory> history();
 
 private:
     void requireMessageThread();
@@ -119,6 +126,7 @@ private:
     ControlThreadProbe& probe_;
     ControlJobs* jobs_;
     std::function<ControlUiBridge*()> bridgeAccessor_;
+    std::shared_ptr<ControlHistory> history_;
     std::string instanceShort_;
 };
 
@@ -279,12 +287,26 @@ public:
     void add(ControlMethod method);
     /** The method, or nullptr when this build does not implement it. Thread-safe once filled. */
     const ControlMethod* find(std::string_view name) const;
-    /** session.v1 and the capabilities of the methods added, in the order they were first added. */
+    /** session.v1 and the capabilities of the methods added, in the order they were first added, without the
+        incomplete ones (controlCapabilityIsIncomplete). */
     std::vector<std::string> capabilities() const;
 
 private:
     std::vector<ControlMethod> methods_;
 };
+
+/**
+ * True for a capability of which this build registers some methods but not all yet. The instance does not
+ * report it, because an instance implements every method of a capability it reports (PROTOCOL.md section 3.3
+ * rule 5 case 10); the listener therefore answers its methods with UNSUPPORTED(capability_missing). Now
+ * edit.v1: content.setKey and content.autoTune are registered, content.editNotes and content.setPitchShift
+ * follow.
+ */
+bool controlCapabilityIsIncomplete(std::string_view capability);
+
+/** Test seam: dispatchers created from now on report the incomplete capabilities as well, so that the
+    headless tests can call their methods. Never used by OpenTune itself. Any thread. */
+void controlSetReportIncompleteCapabilitiesForTesting(bool report);
 
 /**
  * Registers every method this build implements, one group per line (Ops/OpsRegistry.cpp). Groups that

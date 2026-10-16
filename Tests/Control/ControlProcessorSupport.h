@@ -271,5 +271,18 @@ void scenarioImportCancel();
 /** The specification's vectors of job.get, job.cancel and import.start, against the real dispatcher. */
 void scenarioJobVectors();
 
+// Scenarios of export.start and the export lock (ControlExportTests.cpp).
+
+/** export.start of a clip, a track and the master mix: the result, dry contents, ifExists, the path
+    checks before the job (also loaded media by file identity), repeated calls, the export lock that the
+    UI shares and the busy checks of other writes while an export runs. */
+void scenarioExport();
+/** The failures of an export job: ANALYSIS_FAILED, RENDER_FAILED after one retry, REVISION_CONFLICT while
+    the file is written, NOT_READY after the wait limit, and cancellation while it waits; the target is
+    never touched and the export lock is released. */
+void scenarioExportFailures();
+/** The specification's vectors of export.start, against the real dispatcher. */
+void scenarioExportVectors();
+
 } // namespace ControlTest
 } // namespace OpenTune

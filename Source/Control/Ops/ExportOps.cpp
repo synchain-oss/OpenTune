@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <limits>
 #include <map>
 #include <memory>
@@ -42,6 +43,12 @@ constexpr int kWaitLimitMs = 120000;
 /** How long the render worker must be seen idle, with the render settled and no current time-stretch output, before
     the job asks for the time-stretch rebuild of a content again (the rebuild it asked for was dropped). */
 constexpr int kStretchRetryIdleMs = 500;
+/** How long the pending render blocks of a content must be seen out of reach of the render worker before the job takes
+    them for blocks that will not be rendered (pendingBlocksStuck); a block between two states is never seen so this
+    long. */
+constexpr int kStuckBlocksMs = 500;
+/** Samples per slice of the probe of a published render for rendered audio (publishedRenderHasAudio). */
+constexpr int kPublishedAudioProbeSamples = 1 << 16;
 /** Section 19 rule 3: the last name that ifExists rename tries is "<stem> (999).wav". */
 constexpr int kLastRenameNumber = 999;
 /** The extension an export writes (section 20.1), compared without regard to case. */
@@ -576,13 +583,16 @@ struct Readiness
  * - While it waits, each tick builds the plan again (the user may change the project meanwhile) and
  *   decides for every content: analysis not finished: wait; no voiced audio or nothing to render: export it
  *   uncorrected and list it in dryContents; analysis failed otherwise: ANALYSIS_FAILED(f0_failed), or dry
- *   with allowDry; a render block failed: request the render once more
- *   (OpenTuneAudioProcessor::requestFullContentRender, whose reconcile retries a failed block of the same
- *   revision), then RENDER_FAILED(render_chunk_failed); render work pending: wait; else ready once the
- *   render cache is settled at its current revision (RenderCache::isCanonicalSettled). A content whose
- *   render was never requested gets one request. A content whose time grid is not the identity is exported
- *   from its time-stretch output, so it is ready (or exported dry) only once that output was rebuilt at its
- *   current revisions (stretchState); a content to export dry without a render to stretch fails at once.
+ *   with allowDry; render work pending: wait (a content with nothing to render does not wait for blocks out
+ *   of the render worker's reach, pendingBlocksStuck); then a render block failed: request the render once
+ *   more (OpenTuneAudioProcessor::requestFullContentRender, whose reconcile retries a failed block of the
+ *   same revision), then RENDER_FAILED(render_chunk_failed); else ready once the render cache is settled at
+ *   its current revision (RenderCache::isCanonicalSettled). A content without
+ *   render blocks is dry at once when it has nothing to render (no correction, identity pitch shift, no
+ *   active note EQ) and an identity time grid; otherwise it gets one render request. A content whose time
+ *   grid is not the identity is exported from its time-stretch output, so it is ready (or exported dry) only
+ *   once that output was rebuilt at its current revisions (stretchState); a content to export dry without a
+ *   render to stretch fails at once.
  *   NOT_READY(export_wait_timeout) after the wait limit.
  * - In the tick that finds every content ready it records the inputs and the revisions and starts the
  *   writer on a temporary file in the target directory.
@@ -633,6 +643,13 @@ private:
         std::optional<std::pair<std::uint64_t, std::uint64_t>> stretchRequestedFor;
         int stretchRequests = 0;
         std::optional<std::chrono::steady_clock::time_point> stretchIdleSince;
+        /** Since when the pending render blocks of the content have been seen out of reach of the render worker
+            (pendingBlocksStuck), and whether the log said so. */
+        std::optional<std::chrono::steady_clock::time_point> stuckSince;
+        /** Whether rendered audio of the content was found while its blocks have been out of reach (once per such
+            time; publishedRenderHasAudio). */
+        std::optional<bool> stuckRenderedAudio;
+        bool stuckLogged = false;
     };
 
     /** Where the time-stretch output of a content stands (stretchState). */
@@ -774,6 +791,87 @@ private:
         return Stretch::Pending;
     }
 
+    /**
+     * Section 19 rule 6, "analysis found no voiced audio": the analysis has F0 frames and at least one of them is
+     * above 0 Hz. An analysis that ended Ready without any (what a silent file gives) has none. The same test as the
+     * readiness gate of the other writes (controlCheckContentReady, NOT_READY(f0_empty)).
+     */
+    static bool hasVoicedFrame(const EditableContentSnapshot& snapshot)
+    {
+        if (!snapshot.hasUsableOriginalF0())
+            return false;
+        const auto& f0 = snapshot.pitchCurve->getOriginalF0();
+        return std::any_of(f0.begin(), f0.end(), [](float hz) { return hz > 0.0f; });
+    }
+
+    /**
+     * Whether the current version of a content has anything to render. OpenTune's render marks a block blank, and
+     * plays the content's own audio for it, when the global pitch shift is the identity, no correction segment covers
+     * the block and no note with an active EQ intersects it (ProcessRenderRuntime::processChunkRenderJob). Without a
+     * correction segment, with the identity pitch shift and no active note EQ, every block of the content is blank.
+     */
+    static bool needsRender(const EditableContentSnapshot& snapshot)
+    {
+        if (!snapshot.pitchShiftSettings.isIdentity())
+            return true;
+        if (snapshot.pitchCurve != nullptr && snapshot.pitchCurve->hasCorrectionLayer())
+            return true;
+        return std::any_of(snapshot.notes.begin(), snapshot.notes.end(),
+                           [](const Note& note) { return note.eq.has_value() && note.eq->active; });
+    }
+
+    /**
+     * Whether the pending render blocks of a content are out of reach of OpenTune's render worker: blocks are pending,
+     * none is running and none is in the cache's set of blocks to claim (RenderCache::getPendingJobs, the set that
+     * RenderCache::claimPendingJob takes from), seen so for kStuckBlocksMs. Upstream
+     * RenderCache::reconcileFullPlanAndRequest leaves blocks so when a render is asked for again at a revision for
+     * which they are still pending: it keeps them pending but out of that set, and the worker's queue drops them
+     * (RenderWorker::syncStage1QueueLocked); only a new revision of the content queues them again. The set is read
+     * before the counts, so a block the worker claims meanwhile is never taken for one out of reach.
+     */
+    bool pendingBlocksStuck(ContentProgress& progress, const RenderCache& cache)
+    {
+        const bool noneToClaim = cache.getPendingJobs().empty();
+        const auto stats = cache.getChunkStats();
+        if (!noneToClaim || stats.pending == 0 || stats.running != 0) {
+            progress.stuckSince.reset();
+            progress.stuckRenderedAudio.reset();
+            return false;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (!progress.stuckSince)
+            progress.stuckSince = now;
+        return now - *progress.stuckSince >= std::chrono::milliseconds(kStuckBlocksMs);
+    }
+
+    /**
+     * Whether the published render of a content holds rendered audio: the audio that the export lays over the
+     * content's own when its time grid is the identity (readExportPlaybackAudio, through
+     * RenderCache::overlayCanonicalAudio). The blocks in the cache do not tell that on their own: a failed block, or
+     * a block whose span changed, no longer holds its audio, while the published render, which changes only once every
+     * block has settled, still does. Probes the whole content in slices with a value no render produces (NaN); without
+     * the playback source of the content it answers true, so that the content keeps waiting.
+     */
+    static bool publishedRenderHasAudio(const ContentRenderService& service, const ContentKey& key,
+                                        const RenderCache& cache)
+    {
+        PlaybackReadSource source;
+        if (!service.getPlaybackReadSource(key, source) || source.audioBuffer == nullptr)
+            return true;
+        const std::int64_t sampleCount = source.audioBuffer->getNumSamples();
+        juce::AudioBuffer<float> probe(1, kPublishedAudioProbeSamples);
+        for (std::int64_t start = 0; start < sampleCount; start += kPublishedAudioProbeSamples) {
+            const int count =
+                static_cast<int>(std::min<std::int64_t>(kPublishedAudioProbeSamples, sampleCount - start));
+            juce::FloatVectorOperations::fill(probe.getWritePointer(0), std::numeric_limits<float>::quiet_NaN(), count);
+            cache.overlayCanonicalAudio(probe, 0, count, start);
+            const float* samples = probe.getReadPointer(0);
+            if (std::any_of(samples, samples + count, [](float value) { return !std::isnan(value); }))
+                return true;
+        }
+        return false;
+    }
+
     Readiness classifyRender(ControlOpContext& context, const ContentKey& key)
     {
         auto& processor = context.processor();
@@ -807,7 +905,9 @@ private:
             case OriginalF0State::Ready:
                 break;
         }
-        if (!snapshot->hasUsableOriginalF0()) {
+        // "Analysis found no voiced audio": decided before anything about the render, whose blocks would all end
+        // blank for such a content and list it as nothingToRender.
+        if (!hasVoicedFrame(*snapshot)) {
             readiness.state = Readiness::State::Dry;
             readiness.dryReason = "unvoiced";
             return readiness;
@@ -816,9 +916,16 @@ private:
         const auto* service = processor.getContentRenderService();
         const auto cache = service != nullptr ? service->getRenderCache(key) : nullptr;
         const auto stats = cache != nullptr ? cache->getChunkStats() : RenderCache::ChunkStats{};
+        // A content with nothing to render whose export reads its own audio: every block of its render would end
+        // blank, so the job does not ask for that render or wait for it.
+        const bool identityGrid = snapshot->timeGrid == nullptr || snapshot->timeGrid->isIdentity();
+        const bool dryWithoutRender = !needsRender(*snapshot) && identityGrid;
         if (stats.total() == 0) {
-            // No render was requested yet; once it was, a content without blocks has nothing to render.
-            if (!progress.renderRequested) {
+            // No render block: no render was requested for the content (or its render cache was cleared), so the
+            // export reads the content's own audio; such a content with nothing to render is dry at once. Otherwise
+            // the job asks for the render once (a stretched grid needs a settled render for its time-stretch output,
+            // stretchState); a content that still has no block after that has nothing to render either.
+            if (!progress.renderRequested && !dryWithoutRender) {
                 progress.renderRequested = true;
                 processor.requestFullContentRender(key);
                 return readiness;
@@ -827,6 +934,36 @@ private:
             readiness.dryReason = "nothingToRender";
             return readiness;
         }
+        // Render work pending or running: wait, also before asking again for a block that failed. A request at a
+        // revision for which blocks are still pending leaves them pending without queueing them (upstream
+        // RenderCache::reconcileFullPlanAndRequest; pendingBlocksStuck), so asking while they are pending would
+        // keep them from ever being rendered. Pending blocks that will not be rendered do not hold back a content
+        // with nothing to render, as long as no failed block waits and the export would read the content's own
+        // audio: neither a block nor the published render holds rendered audio of an earlier version
+        // (publishedRenderHasAudio, probed once while the blocks stay out of reach; the published render cannot
+        // change before they settle). Any other content waits for them until the wait limit.
+        if (stats.hasActiveWork()) {
+            if (pendingBlocksStuck(progress, *cache)) {
+                if (dryWithoutRender && stats.failed == 0) {
+                    if (!progress.stuckRenderedAudio)
+                        progress.stuckRenderedAudio = cache->getStateSnapshot().hasPublishedAudio
+                                                      || publishedRenderHasAudio(*service, key, *cache);
+                    if (!*progress.stuckRenderedAudio) {
+                        readiness.state = Readiness::State::Dry;
+                        readiness.dryReason = "nothingToRender";
+                        return readiness;
+                    }
+                }
+                if (!progress.stuckLogged) {
+                    progress.stuckLogged = true;
+                    AppLogger::logNoThrow("control API: export.start: render blocks of a content of the export are "
+                                          "pending but not queued; they are rendered only after the content changes");
+                }
+            }
+            return readiness;
+        }
+        progress.stuckSince.reset();
+        progress.stuckRenderedAudio.reset();
         if (stats.failed > 0) {
             if (progress.renderRetried) {
                 readiness.state = Readiness::State::Fail;
@@ -839,8 +976,6 @@ private:
             processor.requestFullContentRender(key);
             return readiness;
         }
-        if (stats.hasActiveWork())
-            return readiness;
         if (stats.blank == stats.total()) {
             readiness.state = Readiness::State::Dry;
             readiness.dryReason = "nothingToRender";

@@ -71,7 +71,8 @@ jobs:
     env:
       MCP_REPOSITORY: synchain-oss/opentune-mcp-server
       # 没有输入参数时（pull_request 触发）的默认值。
-      MCP_REF: ${{ inputs.mcp-ref || 'feature/v1' }}
+      # 临时：MCP 侧保留数据目录的分支合入 feature/v1 前用它调试，合入后改回 feature/v1。
+      MCP_REF: ${{ inputs.mcp-ref || 'feat/X01m2-keep-data-dir' }}
       CONTRACT_SCRIPT: ${{ inputs.contract-script || 'test:contract' }}
       SMOKE_SCRIPT: ${{ inputs.smoke-script || 'e2e:exe' }}
       # 契约向量里针对 exe 的那一组。
@@ -95,13 +96,16 @@ jobs:
             "E2E_APP=$work\app"
             "E2E_OFFICIAL=$work\official"
             "E2E_DATA=$work\data"
+            "E2E_KEEP=$work\kept"
+            "E2E_DIAG=$work\out\diag"
+            "E2E_DIAG_SCRIPT=$env:GITHUB_WORKSPACE\.github\scripts\e2e-diag.ps1"
             "E2E_OUT=$work\out"
             "E2E_TIMINGS=$work\out\timings.json"
             "E2E_PIN=$env:GITHUB_WORKSPACE\.github\e2e\official-install.json"
             "E2E_SCRIPT=$env:GITHUB_WORKSPACE\.github\scripts\e2e-windows.mjs"
             "E2E_MODELS=$env:ProgramData\OpenTune\Models"
           ) >> $env:GITHUB_ENV
-          New-Item -ItemType Directory -Force -Path "$work\out\logs", "$work\data" | Out-Null
+          New-Item -ItemType Directory -Force -Path "$work\out\logs", "$work\data", "$work\kept", "$work\out\diag" | Out-Null
 
       - name: Download our Standalone build
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -190,6 +194,11 @@ jobs:
             node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'npm ci' --seconds $sw.Elapsed.TotalSeconds
           }
 
+      # 诊断（不绕过任何对话框）：契约与冒烟运行期间，每 15 秒记录一次桌面截图与 OpenTune 顶层窗口标题与类名。
+      - name: Diagnostics sampler (screenshots and top-level windows) in the background
+        run: |
+          Start-Process -FilePath pwsh -ArgumentList @('-NoProfile', '-File', $env:E2E_DIAG_SCRIPT, '-OutDir', $env:E2E_DIAG, '-Tag', 'during', '-Loop', '-IntervalSeconds', '15', '-StopFile', "$env:E2E_DIAG\stop") -WindowStyle Hidden
+
       # 契约与冒烟各自 continue-on-error：两者都跑完、日志都检查完之后，由最后一步统一判定。
       # 数据目录是临时的（OPENTUNE_DATA_DIR），不会碰 runner 上的任何真实用户目录。
       - name: Contract vectors against our Standalone
@@ -200,6 +209,7 @@ jobs:
         env:
           OTCP_TARGET_EXE: ${{ env.E2E_APP }}\OpenTune.exe
           OPENTUNE_DATA_DIR: ${{ env.E2E_DATA }}
+          OTCP_TARGET_DATA_DIR: ${{ env.E2E_KEEP }}
         run: |
           $sw = [Diagnostics.Stopwatch]::StartNew()
           try {
@@ -216,6 +226,7 @@ jobs:
         env:
           OTCP_TARGET_EXE: ${{ env.E2E_APP }}\OpenTune.exe
           OPENTUNE_DATA_DIR: ${{ env.E2E_DATA }}
+          OTCP_TARGET_DATA_DIR: ${{ env.E2E_KEEP }}
           OTCP_E2E_REPORT: ${{ env.E2E_OUT }}\smoke.json
         run: |
           $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -226,6 +237,16 @@ jobs:
             node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'smoke scenario' --seconds $sw.Elapsed.TotalSeconds
           }
 
+      - name: Diagnostics after the runs (screenshot and windows)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          New-Item -ItemType File -Force -Path "$env:E2E_DIAG\stop" | Out-Null
+          Start-Sleep -Seconds 2
+          & $env:E2E_DIAG_SCRIPT -OutDir $env:E2E_DIAG -Tag 'after'
+          Get-ChildItem -LiteralPath $env:E2E_DIAG | ForEach-Object { Write-Host "diag: $($_.Name) $($_.Length)" }
+          Get-ChildItem -LiteralPath $env:E2E_DIAG -Filter '*.windows.txt' | Select-Object -Last 2 | ForEach-Object { Write-Host "== $($_.Name)"; Get-Content -LiteralPath $_.FullName }
+
       # F0 模型必须来自官方模型目录（日志里的 "Loaded F0 model (<后端>): <路径>"）；日志脱敏后才上传。
       - name: Check the OpenTune log (models directory, backend) and scrub it
         id: logcheck
@@ -233,7 +254,7 @@ jobs:
         continue-on-error: true
         run: |
           Get-Process -Name OpenTune -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
-          node $env:E2E_SCRIPT check-log --log-dir "$env:E2E_DATA\Logs" --models-dir $env:E2E_MODELS `
+          node $env:E2E_SCRIPT check-log --data-root $env:E2E_KEEP --models-dir $env:E2E_MODELS `
             --out-dir "$env:E2E_OUT\logs" --report "$env:E2E_OUT\log-report.json"
           if ($LASTEXITCODE -ne 0) { throw "log check failed" }
 

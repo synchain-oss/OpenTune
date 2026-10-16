@@ -258,6 +258,19 @@ describe('pin checks (temp files)', () => {
     assert.ok(!fs.readFileSync(path.join(out, 'OpenTune_1.log'), 'utf8').includes(secret));
     assert.equal(JSON.parse(fs.readFileSync(report, 'utf8')).backend, 'CPU');
   });
+
+  test('CLI: check-log --data-root finds logs in every per-launch sub-directory', () => {
+    const root = path.join(tmp, 'kept');
+    for (const sub of ['run-a', 'run-b']) fs.mkdirSync(path.join(root, sub, 'Logs'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'run-a', 'Logs', 'OpenTune_1.log'), 'session start\n');
+    fs.writeFileSync(path.join(root, 'run-b', 'Logs', 'OpenTune_2.log'), `[ModelFactory] Loaded F0 model (DirectML): ${MODELS}\\fcpe.onnx\n`);
+    const out = path.join(tmp, 'kept-out');
+    const report = path.join(tmp, 'kept-report.json');
+    const r = spawnSync(process.execPath, [path.join(SCRIPTS, 'e2e-windows.mjs'), 'check-log', '--data-root', root, '--models-dir', MODELS, '--out-dir', out, '--report', report], { encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.deepEqual(fs.readdirSync(out).sort(), ['run-a__Logs__OpenTune_1.log', 'run-b__Logs__OpenTune_2.log']);
+    assert.equal(JSON.parse(fs.readFileSync(report, 'utf8')).backend, 'DirectML');
+  });
 });
 
 describe('official-install.json', () => {

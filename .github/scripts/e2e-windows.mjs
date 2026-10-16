@@ -7,7 +7,8 @@
 //
 //   check-installer --pin <json> --file <Setup.exe>          sha256 and size of the downloaded installer
 //   check-models    --pin <json> --dir <models dir>           every pinned model exists with the pinned sha256
-//   check-log       --log-dir <dir> --models-dir <dir> --out-dir <dir> --report <json>
+//   check-log       (--log-dir <dir> | --data-root <dir>) --models-dir <dir> --out-dir <dir> --report <json>
+//                                                             --data-root: every *.log below it (one sub-directory per launch)
 //                                                             scrub the OpenTune logs (tokens, serverProof,
 //                                                             user names), copy them to --out-dir, assert that the
 //                                                             F0 model was loaded from --models-dir, record the backend
@@ -232,6 +233,27 @@ export function renderSummary({ timings = [], contract = null, smoke = null, log
   return { markdown: scrubPath(lines.join('\n')), failed };
 }
 
+/** *.log files directly in one directory. */
+function listLogs(dir) {
+  if (!dir || !fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir).filter((n) => n.toLowerCase().endsWith('.log')).map((n) => ({ full: path.join(dir, n), rel: n }));
+}
+
+/** Every *.log below root (a per-launch data directory holds them in Logs/), sorted by relative path. */
+export function findLogs(root) {
+  const out = [];
+  const walk = (dir, rel) => {
+    if (!fs.existsSync(dir)) return;
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const r = rel ? `${rel}/${e.name}` : e.name;
+      if (e.isDirectory()) walk(path.join(dir, e.name), r);
+      else if (e.name.toLowerCase().endsWith('.log')) out.push({ full: path.join(dir, e.name), rel: r });
+    }
+  };
+  walk(root, '');
+  return out.sort((a, b) => (a.rel < b.rel ? -1 : 1));
+}
+
 function usage(msg) {
   process.stderr.write(`e2e-windows: ${msg}\n`);
   process.exit(2);
@@ -242,6 +264,7 @@ const CLI_SPEC = {
   file: 'string',
   dir: 'string',
   'log-dir': 'string',
+  'data-root': 'string',
   'models-dir': 'string',
   'out-dir': 'string',
   report: 'string',
@@ -283,14 +306,16 @@ function main(argv) {
       break;
     }
     case 'check-log': {
-      need('log-dir', 'models-dir', 'out-dir', 'report');
-      const names = fs.existsSync(opts['log-dir']) ? fs.readdirSync(opts['log-dir']).filter((n) => n.toLowerCase().endsWith('.log')) : [];
+      need('models-dir', 'out-dir', 'report');
+      if (!opts['log-dir'] && !opts['data-root']) usage('--log-dir or --data-root is required for check-log');
+      const files = opts['data-root'] ? findLogs(opts['data-root']) : listLogs(opts['log-dir']);
+      const names = files.map((f) => f.rel);
       fs.mkdirSync(opts['out-dir'], { recursive: true });
       let all = '';
-      for (const n of names) {
-        const raw = fs.readFileSync(path.join(opts['log-dir'], n), 'utf8');
+      for (const f of files) {
+        const raw = fs.readFileSync(f.full, 'utf8');
         all += `${raw}\n`;
-        fs.writeFileSync(path.join(opts['out-dir'], n), scrubLog(raw));
+        fs.writeFileSync(path.join(opts['out-dir'], f.rel.replace(/[\\/]+/g, '__')), scrubLog(raw));
       }
       const res = names.length ? inspectLog(all, opts['models-dir']) : { ok: false, backend: 'unknown', f0ModelPath: null, problems: ['no OpenTune log files found'] };
       res.problems = res.problems.map(scrubPath);

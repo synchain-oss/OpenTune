@@ -2,7 +2,7 @@
 
 # OpenTune control API (OTCP v1)
 
-> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、撤销历史（撤销识别、ControlOriginAction、没有撤销条目的写入）、ContentEditTransaction 与它镜像的上游函数、音符编辑与移调（content.editNotes、content.setPitchShift、AUTO 的 SNAP，修正段按钢琴卷帘的步骤重建，令牌扣除移调步骤）、内容写入的就绪门、忙碌检查、编辑器 bridge、导入、导出（界面与接口共用的导出锁、逐内容的就绪判定、临时文件与最终改名）、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
+> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、撤销历史（撤销识别、ControlOriginAction、没有撤销条目的写入）、ContentEditTransaction 与它镜像的上游函数、音符编辑与移调（content.editNotes、content.setPitchShift、AUTO 的 SNAP，修正段按钢琴卷帘的步骤重建，令牌扣除移调步骤）、内容写入的就绪门、忙碌检查、编辑器 bridge、导入、导出（界面与接口共用的导出锁、逐内容的就绪判定、临时文件与最终改名）、镜像登记（MIRRORS.md、mirror-map.json、ControlMirrorDriftTests）、AI agent 快速规则、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
 
 This directory holds the local control API of OpenTune Standalone: a JSON-RPC protocol over a loopback
 TCP connection (OTCP v1, specified in `Tests/Control/spec/otcp/v1/PROTOCOL.md`), with which another
@@ -10,6 +10,16 @@ program on the same machine, for example an assistant, can read and edit the ope
 UI does. It is compiled only with the CMake option `OPENTUNE_ENABLE_CONTROL_API` (default OFF) and runs
 only when enabled at run time. With the option OFF, or ON but not enabled, OpenTune behaves exactly as
 without this directory.
+
+## Quick rules for AI agents / AI agent 快速规则
+
+Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant to keep the control API intact.
+如果希望你的 AI agent 不破坏控制接口，可以原样粘进你自己的 `CLAUDE.md` 或 `AGENTS.md`。
+
+1. If you change an upstream function that is listed in `MIRRORS.md`, you must run `ControlMirrorDriftTests` and bring the mirrored code in `Source/Control` in line as `MIRRORS.md` says before you update the hash. The test exists only in a build configured with `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` (both are OFF by default), for example `cmake -S . -B build-control -G Ninja -DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON`, then build it and run `ctest --test-dir build-control -C RelWithDebInfo -R ControlMirrorDrift --no-tests=error`; in a default build `ctest -R Control` finds no test, and without `--no-tests=error` that still exits 0. / 改了 `MIRRORS.md` 里列出的上游函数，必须运行 `ControlMirrorDriftTests`，并按 `MIRRORS.md` 同步 `Source/Control` 里的镜像代码，然后才能更新哈希。这个测试只存在于用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` configure 的构建里（两者默认都是 OFF），例如 `cmake -S . -B build-control -G Ninja -DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON`，构建后运行 `ctest --test-dir build-control -C RelWithDebInfo -R ControlMirrorDrift --no-tests=error`；默认构建里 `ctest -R Control` 找不到任何测试，不加 `--no-tests=error` 时退出码仍是 0。
+2. Do not delete or move code marked `// OpenTune Control API hook`; the list is in "Hooks". / 不要删除或挪动标有 `// OpenTune Control API hook` 的代码，清单见「Hooks」。
+3. With `OPENTUNE_ENABLE_CONTROL_API` OFF, or ON but not enabled at run time, OpenTune must behave as before. / 选项关闭，或开启但运行时未启用时，OpenTune 的行为必须与原来一致。
+4. The control API reads and writes content only on the message thread, through `ControlDispatcher::runOnMessageThread`; never from the network thread. / 控制接口只在消息线程、经 `ControlDispatcher::runOnMessageThread` 读写内容，绝不在网络线程。
 
 ## File map
 
@@ -39,6 +49,7 @@ without this directory.
 | `Edit/ContentEditTransaction.*` | Undo entries built from snapshots around a commit of the content commands, as the piano roll builds them (see "ContentEditTransaction"). |
 | `Edit/NoteCorrection.*` | The correction segments the piano roll rebuilds after an edit of notes, and SNAP (AUTO in the openDyne scheme), computed as the piano roll computes them and committed into a ContentEditTransaction (see "Note edits and the pitch shift"). |
 | `Edit/PitchShiftLedger.*` | The steps of OpenTune's pitch shifts that the `revision` token leaves out (see "Note edits and the pitch shift"). |
+| `mirror-map.json`, `MIRRORS.md` | The upstream functions that the API mirrors, with a hash of each (machine-readable source of truth and the table generated from it); checked by `Tests/Control/ControlMirrorDriftTests.cpp` (see "Mirrors"). |
 | `ControlFileIdentity.*` | File identity (volume and file id, `st_dev` and `st_ino`), "same file" by identity, and the final rename that never replaces (PROTOCOL.md sections 20.3 and 20.4); standard library and operating system only. |
 | `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme, the processing object of `session.info` and `prefs.get`). |
 | `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
@@ -344,17 +355,18 @@ description. Several commits of one call (the ranges of `content.autoTune`) are 
 so one call is one undo step. The actions use the processor's own `ContentEditCommands`, the instance the
 piano roll uses.
 
-The upstream functions it and the AUTO method follow (lines of the locked upstream base). A change of these
-functions upstream needs the same change here; the drift guard over them is registered in a later part:
+The upstream functions it and the AUTO method follow. A change of these functions upstream needs the same
+change here; they are registered in `MIRRORS.md` (see "Mirrors") and `ControlMirrorDriftTests` fails when one
+changes:
 
 | Upstream function | Followed in |
 |---|---|
-| `PianoRollComponent::captureBeforeUndoSnapshot()` (`Source/Standalone/UI/PianoRollComponent.cpp:1182-1187`) | `ContentEditTransaction::captureBefore()` |
-| `PianoRollComponent::recordUndoAction()` (`PianoRollComponent.cpp:1189-1267`) | `ContentEditTransaction::recordRange()`, `notesInRange()`, `segmentsInRange()` |
-| `PianoRollComponent::applyAutoTuneToSelection()`, the openTune scheme (`PianoRollComponent.cpp:5288-5341`) | `content.autoTune` mode `regenerate` (`Ops/ContentTuneOps.cpp`): range resolution, capture, commit, undo range |
-| `OpenTuneAudioProcessor::autoTuneContentRangeByContentKey()` and `commitAutoTuneGeneratedNotesByContentKey()` (`Source/PluginProcessor.cpp:5375-5493`) | the `dryRun` prediction of `regenerate` and the removed / dropped notes of its result |
-| `OpenTuneAudioProcessor::generateNotesOnlyByContentKey()` (`PluginProcessor.cpp:5334-5373`) | the `dryRun` prediction of `notesOnly` |
-| `OpenTuneAudioProcessorEditor::scaleChanged()` (`Source/Standalone/PluginEditor.cpp:3040-3078`) | `content.setKey`: the manual key, the no-op, the dirty flag |
+| `PianoRollComponent::captureBeforeUndoSnapshot()` | `ContentEditTransaction::captureBefore()` |
+| `PianoRollComponent::recordUndoAction()` | `ContentEditTransaction::recordRange()`, `notesInRange()`, `segmentsInRange()` |
+| `PianoRollComponent::applyAutoTuneToSelection()`, the openTune scheme | `content.autoTune` mode `regenerate` (`Ops/ContentTuneOps.cpp`): range resolution, capture, commit, undo range |
+| `OpenTuneAudioProcessor::autoTuneContentRangeByContentKey()` and `commitAutoTuneGeneratedNotesByContentKey()` | the `dryRun` prediction of `regenerate` and the removed / dropped notes of its result |
+| `OpenTuneAudioProcessor::generateNotesOnlyByContentKey()` | the `dryRun` prediction of `notesOnly` |
+| `OpenTuneAudioProcessorEditor::scaleChanged()` | `content.setKey`: the manual key, the no-op, the dirty flag |
 
 ## Note edits and the pitch shift
 
@@ -577,6 +589,29 @@ The dirty flag belongs to the editor's `ProjectSession`; without an editor it is
 are described in "Request handling"; write results return them read back after the commit. The `notes` and
 `pitch` components leave out the steps of pitch shifts ("Note edits and the pitch shift").
 
+## Mirrors
+
+Some of what the UI does is written in UI classes that the API must not change (the piano roll, the editor,
+the processor's export functions). The API repeats those steps in `Source/Control/**` and calls only the
+lower-level functions that exist. The repeated code is a **mirror**; the upstream function it follows is
+*mirrored*. A change of that function upstream, without the same change here, makes the API differ from the
+UI without any test noticing. So every mirror is registered:
+
+- `mirror-map.json` (the source of truth) lists, for each mirrored upstream function or constant, its file and
+  symbol, the hash of its normalised text, the Control files and symbols that follow it, the tests that cover
+  it, and a one-line note.
+- `MIRRORS.md` is the same information for people: change X upstream, bring Y in line, run Z, record the
+  new hash. Its table is generated from `mirror-map.json`.
+- `Tests/Control/ControlMirrorDriftTests.cpp` hashes the same text in the source tree and fails when a hash
+  differs, printing the function you changed, the file to bring in line, the tests to run and the command
+  that records the new hash (`--update`). It also fails when `MIRRORS.md` differs from `mirror-map.json`,
+  when a Control file, symbol or test named there does not exist, and (self-test) if a change inside a mirrored
+  function would not turn the check red. It is registered as `ControlMirrorDriftTests`, so `ctest -R Control`
+  runs it.
+
+When you add code that repeats the steps of an upstream function, register it in the same change ("Adding a
+mirror" in `MIRRORS.md`) and name the upstream function in a comment of the mirrored code.
+
 ## Adding a method
 
 1. Find the method's schema in `Tests/Control/spec/otcp/v1/methods/<method>.schema.json`: params,
@@ -587,7 +622,8 @@ are described in "Request handling"; write results return them read back after t
    `ControlOpContext` on the message thread and returns `Result<JsonValue>`. Reach the processor and the
    bridge only through the context. Return errors with `controlOpError(kind, reason, detail)`; `detail`
    is printable ASCII and never contains secrets or text from files or projects. Note in a comment which
-   upstream function the operation calls and why.
+   upstream function the operation calls and why. If the operation repeats the steps of an upstream
+   function instead of calling it, register that function in `mirror-map.json` (see "Mirrors").
 3. Register it with `controlReadMethod<Params>(name, parse, run)`, `controlWriteMethod<Params>` for a
    write (see "Write results") or `controlJobMethod<Params>` for a method that works with the jobs
    registry and never waits for the message thread, in the group's `register<Group>Ops()`. A read whose
@@ -615,6 +651,9 @@ the upstream `Tests/LifecycleWatchdog.h`. Its target copies the SharedCode's com
 include directories, because `PluginProcessor.h` changes its class layout with them, and pumps messages
 with `juce::detail::dispatchNextMessageOnSystemQueue` rather than `runDispatchLoop()`, whose stop latches
 for the rest of the process in JUCE 9.0.3. Run them with `ctest -R Control`.
+
+`Tests/Control/ControlMirrorDriftTests.cpp` (standard library and the JSON reader only) compares the hashes of
+`mirror-map.json` with the source tree; see "Mirrors". `ControlMirrorDriftTests` is its ctest name.
 
 `Tests/Control/ControlDispatcherTests.cpp` holds the scenarios of the dispatcher and the read methods. Its
 contents get a pitch analysis made of synthetic F0, committed the way OpenTune commits a finished

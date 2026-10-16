@@ -1,0 +1,215 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: Prerelease
+
+# 非官方 Windows x64 测试版（zip）的出包流水线。说明见 .github/release/README.md。
+#   push tag synchain-test/*   正式出包：校验 tag → 构建 → 打包与校验 → side-car 冒烟（占位）→ 创建「草稿」预发布。
+#                              草稿只有维护者手动发布；本 workflow 从不发布、从不推 tag。
+#   workflow_dispatch          演练：构建 + 打包 + 白名单与 SHA256SUMS 校验 + 短保留期 artifact，不建 release。
+#   pull_request（改到打包相关路径）  同上，演练。
+# 校验 tag（只在 tag 触发时）：名字是 synchain-test/v<x.y.z>-ctl.<n>、x.y.z 等于 CMakeLists.txt 的 VERSION、
+# 提交是 dev 的祖先、该提交上由 GitHub Actions 创建的 fork-gate 为绿（其他 App 建的同名 check run 不算）。
+# 构建经 workflow_call 调 build-windows.yml 的出包模式：Standalone、Release（LTCG）、控制接口 ON，
+# 删除 POST_BUILD 生成的 models\ 并断言不存在，按产物实际内容生成 THIRD-PARTY-NOTICES.txt。
+# 打包（release-package.mjs）：严格白名单，多一个文件、或出现 *.onnx、models/、LFS 指针、D3D12*、d3dconfig.exe、
+# STATEMENTS.txt（递归、大小写不敏感）即失败；生成 SHA256SUMS 并在 zip 里复核；发布正文过署名检查。
+# 任何 workflow 一律不用 pull_request 的 target 变体（CLAUDE.md §0 第 4 条）；默认只读权限，只有创建草稿的 job
+# 有 contents: write。
+on:
+  push:
+    tags: ['synchain-test/*']
+  workflow_dispatch:
+  pull_request:
+    branches: [dev, 'feature/**']
+    # 打包脚本及其 import / 读取的文件，加上出包模式构建用到的脚本：只改其中任何一个也要演练。
+    paths:
+      - '.github/workflows/prerelease.yml'
+      - '.github/workflows/build-windows.yml'
+      - '.github/release/**'
+      - '.github/scripts/release-*.mjs'
+      - '.github/scripts/test/release-lib.test.mjs'
+      - '.github/scripts/fork-lib.mjs'
+      - '.github/scripts/check-attribution.mjs'
+      - '.github/scripts/attribution-patterns.txt'
+      - '.github/scripts/detect-native.mjs'
+      - '.github/scripts/fork-delta.mjs'
+      - '.github/scripts/with-build-slot.ps1'
+      - '.github/scripts/bootstrap-deps.ps1'
+      - '.github/scripts/deps.lock.json'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prerelease-${{ github.event.pull_request.number || github.ref }}
+  # tag 触发的正式出包不被后来的运行取消。
+  cancel-in-progress: ${{ github.event_name != 'push' }}
+
+jobs:
+  validate:
+    name: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      mode: ${{ steps.v.outputs.mode }}
+      version: ${{ steps.v.outputs.version }}
+      label: ${{ steps.v.outputs.label }}
+      tag: ${{ steps.v.outputs.tag }}
+      name: ${{ steps.v.outputs.name }}
+    steps:
+      # lfs: false —— 绝不下载模型权重（CLAUDE.md §11）。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: false
+          persist-credentials: false
+      - name: Fetch dev
+        run: git fetch --no-tags --force origin '+refs/heads/dev:refs/remotes/origin/dev'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - name: fork-gate check runs of the tagged commit (tag builds only)
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: gh api "repos/$REPO/commits/$SHA/check-runs?check_name=fork-gate&per_page=100" > "$RUNNER_TEMP/fork-gate-checks.json"
+      # tag 名是不可信文本：只经 env 传给脚本，脚本只拿它与固定规则比对。
+      - name: Validate (tag rules, version, on dev, fork-gate)
+        id: v
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          TAG: ${{ github.event_name == 'push' && github.ref_name || '' }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          args=(validate --event "$EVENT_NAME" --sha "$SHA" --dev-ref origin/dev --github-output "$GITHUB_OUTPUT")
+          if [ "$EVENT_NAME" = push ]; then
+            args+=(--tag "$TAG" --checks "$RUNNER_TEMP/fork-gate-checks.json")
+          fi
+          node .github/scripts/release-package.mjs "${args[@]}"
+
+  build:
+    name: build
+    needs: validate
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      release-package: true
+
+  package:
+    name: package
+    needs: [validate, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: false
+          persist-credentials: false
+      # MODIFICATIONS.md 列出相对锁定上游快照的改动：显式取 upstream-mirror 与 upstream/* tag。
+      - name: Fetch the upstream mirror and snapshot tags
+        run: >-
+          git fetch --no-tags --force origin
+          '+refs/heads/upstream-mirror:refs/remotes/origin/upstream-mirror'
+          '+refs/tags/upstream/*:refs/tags/upstream/*'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: opentune-windows-release-inputs
+          path: ${{ runner.temp }}/ot-inputs
+      - name: Package (allow-list, SHA256SUMS, zip, release body)
+        env:
+          LABEL: ${{ needs.validate.outputs.label }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          NAME: ${{ needs.validate.outputs.name }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse HEAD)
+          up_tag=$(git describe --tags --match 'upstream/*' --abbrev=0 HEAD)
+          up_commit=$(git rev-parse "$up_tag^{commit}")
+          git diff --no-renames --name-status "$up_commit" HEAD > "$RUNNER_TEMP/ot-name-status.txt"
+          args=(build --inputs "$RUNNER_TEMP/ot-inputs" --out "$RUNNER_TEMP/ot-out" --label "$LABEL"
+            --commit "$head" --date "$(git show -s --format=%cI HEAD)" --repository "$REPO" --server-url "$SERVER"
+            --name-status "$RUNNER_TEMP/ot-name-status.txt" --upstream-tag "$up_tag" --upstream-commit "$up_commit"
+            --run-url "$RUN_URL" --smoke 'not run yet (the automated side-car smoke test is not in place yet)')
+          if [ -n "$TAG" ]; then args+=(--tag "$TAG"); fi
+          node .github/scripts/release-package.mjs "${args[@]}"
+          node .github/scripts/release-package.mjs verify --zip "$RUNNER_TEMP/ot-out/$NAME.zip" --name "$NAME"
+      - name: Upload the package (rehearsal 3 days, tag build 14 days)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: opentune-unofficial-${{ needs.validate.outputs.label }}
+          path: |
+            ${{ runner.temp }}/ot-out/*.zip
+            ${{ runner.temp }}/ot-out/release-body.md
+            ${{ runner.temp }}/ot-out/manifest.json
+          if-no-files-found: error
+          retention-days: ${{ needs.validate.outputs.mode == 'release' && 14 || 3 }}
+
+  # side-car 冒烟的接口位置（尚未实现）：将来在 windows runner 上静默安装锁定版本的官方安装包（默认目录与
+  # 自定义目录各一次），解压本次产物，运行 OpenTune MCP Server 的 doctor、以控制接口启动并跑契约与导入→导出，
+  # 并检查 D3D12（不复制时 CPU 运行、复制后哈希一致）。失败即挡住草稿。实现之前这里只报告「未运行」。
+  sidecar-smoke:
+    name: sidecar-smoke
+    needs: [validate, package]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Side-car smoke test (not in place yet)
+        run: |
+          echo "side-car smoke test: not run (not in place yet)"
+          printf '### side-car 冒烟\n\n未运行：自动化的 side-car 冒烟尚未接入。发布正文写明「not run yet」。\n' >> "$GITHUB_STEP_SUMMARY"
+
+  # 只有 push synchain-test/* tag 才创建草稿预发布；草稿的发布（转正）由维护者手动进行。
+  draft-release:
+    name: draft-release
+    needs: [validate, package, sidecar-smoke]
+    if: needs.validate.outputs.mode == 'release' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/synchain-test/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: opentune-unofficial-${{ needs.validate.outputs.label }}
+          path: ${{ runner.temp }}/ot-out
+      - name: Re-check the zip and the release body
+        env:
+          NAME: ${{ needs.validate.outputs.name }}
+        run: |
+          set -euo pipefail
+          node .github/scripts/release-package.mjs verify --zip "$RUNNER_TEMP/ot-out/$NAME.zip" --name "$NAME"
+          node .github/scripts/check-attribution.mjs "$RUNNER_TEMP/ot-out/release-body.md"
+      - name: Create the draft pre-release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: OpenTune ${{ needs.validate.outputs.version }} ${{ needs.validate.outputs.label }} - unofficial test build / 非官方测试版
+          body_path: ${{ runner.temp }}/ot-out/release-body.md
+          draft: true
+          prerelease: true
+          make_latest: 'false'
+          files: ${{ runner.temp }}/ot-out/${{ needs.validate.outputs.name }}.zip
+          fail_on_unmatched_files: true
+          overwrite_files: false

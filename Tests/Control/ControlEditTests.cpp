@@ -1056,6 +1056,27 @@ std::vector<NoteEditCase> noteEditCases()
          {{0, {{"targetMidi", 60.1}, {"offsetCents", 10}}}, {2, {{"targetMidi", 69.4}, {"offsetCents", 10}}}},
          move,
          2},
+        // MIDI 0 is 0 Hz (PitchUtils::midiToFreq()): the note has no base pitch, reads as MIDI 0, and a cent
+        // shift moves only its offset, as the piano roll's pitch drag does (Note::getAdjustedPitch() stays 0).
+        {"setTargetPitch to MIDI 0 leaves the note without a base pitch",
+         R"([{"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":0},)"
+         R"({"op":"shiftCents","select":{"indices":[0]},"deltaCents":30}])",
+         {{0, {{"targetMidi", 0}, {"offsetCents", 30}}}},
+         move,
+         2},
+        {"snapToScale of a note without a base pitch: MIDI 0 is in C major, the offset goes",
+         R"([{"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":0},)"
+         R"({"op":"shiftCents","select":{"indices":[0]},"deltaCents":30},)"
+         R"({"op":"snapToScale","select":{"indices":[0]},"key":{"root":0,"scale":"major"}}])",
+         {{0, {{"targetMidi", 0}}}},
+         move,
+         3},
+        {"setTargetPitch gives a note without a base pitch one again",
+         R"([{"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":0},)"
+         R"({"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":62}])",
+         {{0, {{"targetMidi", 62}}}},
+         move,
+         2},
         {"setParams of the knobs",
          R"([{"op":"setParams","select":{"indices":[0,1]},"retuneSpeed":0.8,"vibratoDepth":20}])",
          {{0, {{"retuneSpeed", 0.8}, {"vibratoDepth", 20}}}, {1, {{"retuneSpeed", 0.8}, {"vibratoDepth", 20}}}},
@@ -1175,6 +1196,15 @@ void checkNoteEditErrors(EditFixture& f)
     // no-ops add none.
     CONTROL_CHECK(memberOf(f.history(), "undoCount").asDouble() == undoCount);
     CONTROL_CHECK(!memberOf(f.history(), "canRedo").asBoolean());
+    // targetMidi 0 again on a note that has no base pitch and no offset changes nothing (both read as MIDI 0).
+    const std::string toZero = R"([{"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":0}])";
+    const auto unpitched = f.editNotes(toZero);
+    CONTROL_CHECK(!memberOf(unpitched, "noOp").asBoolean()
+                  && memberOf(notesNow(f).at(0), "targetMidi").asDouble() == 0.0);
+    const auto zeroAgain = f.editNotes(toZero);
+    CONTROL_CHECK(memberOf(zeroAgain, "applied").asBoolean() && memberOf(zeroAgain, "noOp").asBoolean());
+    f.undo(memberOf(memberOf(unpitched, "undo"), "undoId").text());
+    CONTROL_CHECK(sameNotes(stateOf(*f.processor, f.clip.key).notes, before.notes));
 
     // The readiness gate, and clipKey on a content without a key.
     {
@@ -1410,11 +1440,125 @@ void checkPitchShift()
     CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 
+/** Rules 5 and 9: after notesOnly the API's pitch shift puts back the settings only, through
+    commitPitchShiftEdit(). When the content already has the shift the step would set, that call applies nothing:
+    the step is used up, changes nothing and reports noOp with UNDO_NO_EFFECT, for the undo and the redo; with
+    something to set, the step takes effect again. */
+void checkPitchShiftStepWithoutEffect()
+{
+    EditFixture f;
+    if (!f.open(fourNoteSpec()))
+        return;
+    const auto shift = f.setPitchShift(2, 0);
+    const auto shiftId = memberOf(memberOf(shift, "undo"), "undoId").text();
+    f.api.result("content.autoTune",
+                 jsonOf("{\"contentId\":" + jsonQuoted(f.contentId)
+                        + ",\"mode\":\"notesOnly\",\"expectedRevision\":" + jsonQuoted(f.revision()) + "}"));
+    const std::string noEffect = R"([{"code":"UNDO_NO_EFFECT","subject":null,"data":null}])";
+    // The shift goes back to 0 through the content commands without an undo entry, so the undo of the API's
+    // shift finds the settings it would set already there.
+    CONTROL_CHECK(f.processor->getContentCommands()->commitPitchShiftEdit(f.clip.key, PitchShiftSettings{}) != nullptr);
+    const auto unshifted = stateOf(*f.processor, f.clip.key);
+    const auto undone = f.undo(shiftId);
+    CONTROL_CHECK(memberOf(undone, "applied").asBoolean() && memberOf(undone, "noOp").asBoolean());
+    CONTROL_CHECK(toJsonString(memberOf(undone, "warnings")) == noEffect);
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), unshifted));
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":0,"cents":0})");
+    CONTROL_CHECK(memberOf(memberOf(f.history(), "redoTop"), "undoId").text() == shiftId);
+    // Likewise the redo, when the shift it would set is already there.
+    CONTROL_CHECK(f.processor->getContentCommands()->commitPitchShiftEdit(f.clip.key, PitchShiftSettings{2, 0})
+                  != nullptr);
+    const auto shifted = stateOf(*f.processor, f.clip.key);
+    const auto redone = f.undo(shiftId, "edit.redo");
+    CONTROL_CHECK(memberOf(redone, "applied").asBoolean() && memberOf(redone, "noOp").asBoolean());
+    CONTROL_CHECK(toJsonString(memberOf(redone, "warnings")) == noEffect);
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), shifted));
+    CONTROL_CHECK(memberOf(memberOf(f.history(), "undoTop"), "undoId").text() == shiftId);
+    // With a shift to set, the undo takes effect and has no warning.
+    const auto again = f.undo(shiftId);
+    CONTROL_CHECK(memberOf(again, "applied").asBoolean() && !memberOf(again, "noOp").asBoolean());
+    CONTROL_CHECK(memberOf(again, "warnings").size() == 0);
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":0,"cents":0})");
+}
+
+/** PROTOCOL.md section 10 rule 6 for content.getNotes, whose targets include the pitch shift: a cursor read
+    before a shift is stale after it (REVISION_CONFLICT(cursor_stale)) although `revision` stays, also after the
+    undo of the shift; a fresh read pages through the shifted notes. */
+void checkNotesCursorAcrossPitchShift()
+{
+    EditFixture f;
+    if (!f.open(fourNoteSpec()))
+        return;
+    const std::string byContent = "{\"contentId\":" + jsonQuoted(f.contentId) + ",\"limit\":2";
+    const auto withCursor = [&byContent](const JsonValue& page) {
+        return jsonOf(byContent + ",\"cursor\":" + jsonQuoted(memberOf(page, "nextCursor").text()) + "}");
+    };
+    const auto first = f.api.result("content.getNotes", jsonOf(byContent + "}"));
+    if (!CONTROL_CHECK(memberOf(first, "nextCursor").isString()))
+        return;
+    // Without a change the cursor pages on.
+    CONTROL_CHECK(memberOf(f.api.result("content.getNotes", withCursor(first)), "notes").size() == 2);
+    const auto revision = f.revision();
+    const auto shift = f.setPitchShift(2, 0);
+    CONTROL_CHECK(f.revision() == revision);
+    CONTROL_CHECK(
+        isErrorOf(f.api.request("content.getNotes", withCursor(first)), "REVISION_CONFLICT", "cursor_stale", false));
+    // A fresh read pages through the shifted notes: the second page's targets are two semitones up.
+    const auto shiftedFirst = f.api.result("content.getNotes", jsonOf(byContent + "}"));
+    const auto second = f.api.result("content.getNotes", withCursor(shiftedFirst));
+    const auto& notes = memberOf(second, "notes");
+    if (CONTROL_CHECK(notes.size() == 2)) {
+        CONTROL_CHECK(std::abs(memberOf(notes.at(0), "targetMidi").asDouble() - 71.3) < 1e-3);
+        CONTROL_CHECK(std::abs(memberOf(notes.at(1), "targetMidi").asDouble() - 68.2) < 1e-3);
+    }
+    // The undo of the shift makes that cursor stale in turn.
+    f.undo(memberOf(memberOf(shift, "undo"), "undoId").text());
+    CONTROL_CHECK(f.revision() == revision);
+    CONTROL_CHECK(isErrorOf(f.api.request("content.getNotes", withCursor(shiftedFirst)), "REVISION_CONFLICT",
+                            "cursor_stale", false));
+}
+
+/** ControlPitchShiftLedger on its own: a pitch-shift step is left out of the counters. When the counters of the
+    same contentId go back (the content object was built anew), the content starts over: its counters are
+    returned as they are, and the next pitch-shift step is left out again rather than counted only once the
+    counters pass the old ones. */
+void checkPitchShiftLedgerRebuilt()
+{
+    constexpr std::uint64_t epoch = 1;
+    const std::string id = "c:01234567:1:1";
+    ControlPitchShiftLedger ledger;
+    EditableContentSnapshot snapshot;
+    const auto observed = [&](std::uint64_t notes, std::uint64_t pitch, int semitones) {
+        snapshot.notesRevision = notes;
+        snapshot.pitchRevision = pitch;
+        snapshot.pitchShiftSettings.semitone = semitones;
+        const auto counters = ledger.observe(id, epoch, snapshot);
+        return std::make_pair(counters.notes, counters.pitch);
+    };
+    using Pair = std::pair<std::uint64_t, std::uint64_t>;
+    CONTROL_CHECK(observed(5, 7, 0) == Pair(5, 7));
+    // A pitch shift: the settings change and both counters advance; the step is left out.
+    CONTROL_CHECK(observed(6, 8, 2) == Pair(5, 7));
+    // A note edit after it counts.
+    CONTROL_CHECK(observed(7, 9, 2) == Pair(6, 8));
+    // The content object is built anew under the same contentId: its counters start again.
+    CONTROL_CHECK(observed(1, 1, 2) == Pair(1, 1));
+    // A pitch shift of the new object is left out, a note edit counts.
+    CONTROL_CHECK(observed(2, 2, 0) == Pair(1, 1));
+    CONTROL_CHECK(observed(3, 3, 0) == Pair(2, 2));
+    // Only one counter going back is a rebuilt object as well.
+    CONTROL_CHECK(observed(4, 1, 0) == Pair(4, 1));
+    CONTROL_CHECK(observed(5, 2, 2) == Pair(4, 1));
+}
+
 void scenarioSetPitchShiftImpl()
 {
     // One processor at a time: each fixture's processor is destroyed before the next one starts.
     checkPitchShift();
     checkPitchShiftAfterNotesOnly();
+    checkPitchShiftStepWithoutEffect();
+    checkNotesCursorAcrossPitchShift();
+    checkPitchShiftLedgerRebuilt();
 }
 
 // ---- Scenario: content.autoTune mode snapNotes ------------------------------------------------------
@@ -1488,6 +1632,20 @@ void scenarioSnapNotesImpl()
     CONTROL_CHECK(toJsonString(memberOf(withClipKey, "keyUsed")) == R"({"root":9,"scale":"minor"})");
     CONTROL_CHECK(noteIndexes(memberOf(withClipKey, "changes")) == (std::vector<int>{2, 3}));
     f.undo(memberOf(memberOf(withClipKey, "undo"), "undoId").text());
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before));
+    // A note without a base pitch (targetMidi 0, then a cent offset) is a target as well, as the button snaps it:
+    // its base is MIDI 0 (PitchUtils::freqToMidi() of 0 Hz), which chromatic quantization keeps, so the offset
+    // goes back to 0 and the note is committed.
+    const auto unpitched = f.editNotes(R"([{"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":0},)"
+                                       R"({"op":"shiftCents","select":{"indices":[0]},"deltaCents":30}])");
+    const auto notesUnpitched = notesNow(f);
+    const auto snappedZero =
+        f.snapNotes(R"({"root":0,"scale":"chromatic"})", R"(,"ranges":[{"startContentSec":0.2,"endContentSec":1.8}])");
+    CONTROL_CHECK(memberOf(snappedZero, "applied").asBoolean() && !memberOf(snappedZero, "noOp").asBoolean());
+    CONTROL_CHECK(noteIndexes(memberOf(snappedZero, "changes")) == (std::vector<int>{0}));
+    checkNotesAfter(notesUnpitched, notesNow(f), {{0, {{"targetMidi", 0}, {"offsetCents", 0}}}});
+    f.undo(memberOf(memberOf(snappedZero, "undo"), "undoId").text());
+    f.undo(memberOf(memberOf(unpitched, "undo"), "undoId").text());
     CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before));
     // snapNotes takes no params.
     CONTROL_CHECK(f.api.fails("content.autoTune",

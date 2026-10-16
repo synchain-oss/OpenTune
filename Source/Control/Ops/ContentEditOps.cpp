@@ -12,6 +12,7 @@
 #include "Control/Edit/NoteCorrection.h"
 #include "PluginProcessor.h"
 #include "Utils/PitchShiftEditAction.h"
+#include "Utils/PitchUtils.h"
 #include "Utils/ScaleUiMapping.h"
 #include "Utils/TuningConfig.h"
 
@@ -276,20 +277,25 @@ std::array<bool, 12> pitchClassesOf(const DetectedKey& key)
     return buildPitchClassMask(snap.mode, snap.root);
 }
 
-/** The target as content.getNotes reports it (PitchUtils::freqToMidi(), here in double precision). */
+/** The target as content.getNotes reports it: PitchUtils::freqToMidi() of Note::getAdjustedPitch(), which is MIDI 0
+    for a note without a base pitch (0 Hz). */
 double targetMidiOf(const Note& note, float tuningHz)
 {
-    const double hz = note.getAdjustedPitch();
-    return hz > 0.0 ? 69.0 + 12.0 * std::log2(hz / static_cast<double>(tuningHz)) : 0.0;
+    return PitchUtils::freqToMidi(note.getAdjustedPitch(), tuningHz);
 }
 
-/** Sets the note's target to midi with no cent offset, unless it is there already. The frequency at the
-    instance's tuning, as PitchUtils::midiToFreq() computes it (which gives 0 Hz for MIDI 0 and below). */
+/** Sets the note's target to midi with no cent offset, unless it is there already. The base pitch is
+    PitchUtils::midiToFreq() of midi at the instance's tuning, the conversion OpenTune uses for note pitches; it
+    gives 0 Hz for MIDI 0 (and below), so targetMidi 0 leaves the note without a base pitch: its target reads as
+    MIDI 0, a cent shift changes only its offset (Note::getAdjustedPitch() stays 0), and a later setTargetPitch
+    gives it a base pitch again. */
 bool setTarget(Note& note, double midi, float tuningHz)
 {
-    if (std::abs(targetMidiOf(note, tuningHz) - midi) < kPitchTolerance && note.pitchOffset == 0.0f)
+    const float pitch = PitchUtils::midiToFreq(static_cast<float>(midi), tuningHz);
+    if (note.pitchOffset == 0.0f
+        && std::abs(targetMidiOf(note, tuningHz) - PitchUtils::freqToMidi(pitch, tuningHz)) < kPitchTolerance)
         return false;
-    note.pitch = static_cast<float>(static_cast<double>(tuningHz) * std::pow(2.0, (midi - 69.0) / 12.0));
+    note.pitch = pitch;
     note.pitchOffset = 0.0f;
     return true;
 }
@@ -302,25 +308,25 @@ bool setParameter(float& field, const std::optional<double>& value)
     return true;
 }
 
-/** Applies one op to one note; true when it changed the note. A note without a base pitch has no target to
-    move. */
+/** Applies one op to one note; true when it changed the note. A note without a base pitch is edited like any
+    other, as the piano roll's pitch drag and snap edit it (see setTarget()). */
 bool applyOp(const NoteOp& op, Note& note, const std::array<bool, 12>* scale, float tuningHz)
 {
     bool changed = false;
     switch (op.kind) {
         case NoteOpKind::SetTargetPitch:
-            changed = note.pitch > 0.0f && setTarget(note, op.targetMidi, tuningHz);
+            changed = setTarget(note, op.targetMidi, tuningHz);
             break;
         case NoteOpKind::ShiftCents:
             // pitchOffset is in semitones; the target moves with it (Note::getAdjustedPitch()).
-            if (note.pitch > 0.0f && std::abs(op.deltaCents) > kParameterTolerance) {
+            if (std::abs(op.deltaCents) > kParameterTolerance) {
                 note.pitchOffset += static_cast<float>(op.deltaCents / 100.0);
                 changed = true;
             }
             break;
         case NoteOpKind::SnapToScale:
-            changed = note.pitch > 0.0f && scale != nullptr
-                      && setTarget(note, nearestScalePitch(targetMidiOf(note, tuningHz), *scale), tuningHz);
+            changed =
+                scale != nullptr && setTarget(note, nearestScalePitch(targetMidiOf(note, tuningHz), *scale), tuningHz);
             break;
         case NoteOpKind::SetParams: {
             // Every given parameter, as the knobs and the modulation and drift tools set them.

@@ -215,7 +215,9 @@ Reads share these conventions (section 16):
   says why (section 11);
 - cursors are `<letter>1.<offset>.<paramsHash>.<tokensHash>`: bound to the selection params of the
   method (other params give `INVALID_ARGUMENT(invalid_params)`) and to the tokens of the read that issued
-  them (changed tokens give `REVISION_CONFLICT(cursor_stale)`).
+  them (changed tokens give `REVISION_CONFLICT(cursor_stale)`). A cursor of `content.getNotes` is bound to
+  the content's pitch shift as well, because a pitch shift moves every target without changing `revision`
+  ("Note edits and the pitch shift"): after a shift the old cursor is stale and the client reads again.
 
 Handles are `c:<instanceIdShort>:<contentEpoch>:<objectId>` and
 `p:<instanceIdShort>:<contentEpoch>:<placementId>`. A handle of another instance or another content epoch
@@ -341,7 +343,10 @@ API reads it through the hook `peekUndo` / `peekRedo` / `size` / `cursor` and ap
   API is the exception: OpenTune's `PitchShiftEditAction` puts back the notes it saved together with the
   settings, so once `notesOnly` replaced the notes of its content, the entry puts back the settings only,
   through `ContentEditCommands::commitPitchShiftEdit()` (which scales the notes the content has now, as the
-  pitch-shift dialog does; the action that call returns is discarded).
+  pitch-shift dialog does; the action that call returns is discarded). That call applies nothing when the
+  content has no pitch curve or already has a shift of the same total cents: the step is used up, changes
+  nothing and gives `noOp` and `UNDO_NO_EFFECT` (`ControlOriginAction::lastStepTookEffect()`), and the log
+  records it.
 - Track deletion barriers (`possiblyStale`, `UNDO_CONFLICT(stale_entry)`, `UNDO_ENTRY_POSSIBLY_STALE`)
   come with the track methods; until then no entry is possibly stale.
 
@@ -381,6 +386,11 @@ the piano roll:
   cent offset; `setParams` sets the given note parameters. These are explicit ops: the snapping modes of the UI's
   pitch drag (the active scale, the pitch grid, the whole-note preference) do not apply, so the editing scheme
   does not change what an op does.
+- Targets convert as OpenTune converts note pitches: the base pitch of a target is `PitchUtils::midiToFreq()`,
+  and a target read back is `PitchUtils::freqToMidi()` of `Note::getAdjustedPitch()`. `midiToFreq()` gives 0 Hz
+  for MIDI 0, so `setTargetPitch` with `targetMidi` 0 leaves the note without a base pitch: it reads as MIDI 0,
+  `shiftCents` then changes only its `offsetCents` (the adjusted pitch of a note without a base pitch stays 0, as
+  in the piano roll's pitch drag), and a later `setTargetPitch` gives it a base pitch again.
 - Each op that changes notes is one gesture of the piano roll: the frame range of the notes it changed
   (`controlNotesFrameRange()`, as `noteDragEditRange()`), the correction rebuilt over all notes in that range with
   the content's pitch-shift ratio (`controlNoteBasedCorrection()`), the commit of the affected range through
@@ -395,7 +405,9 @@ the piano roll:
 
 `content.autoTune` mode `snapNotes` (`Ops/ContentTuneOps.cpp`) is SNAP, the AUTO button in the openDyne scheme,
 ported in `controlPlanAutoSnap()`: each target note's `pitchOffset` becomes the scale's quantization of its base
-pitch minus the base pitch, then the correction of the targets is rebuilt. Without ranges every note is a target
+pitch minus the base pitch, then the correction of the targets is rebuilt; a note without a base pitch is MIDI 0
+there (`PitchUtils::freqToMidi()` of 0 Hz), so its offset becomes the quantization of MIDI 0, as the button sets
+it. Without ranges every note is a target
 (the button without a note selection: the new segments cover the whole affected range); each range is one pass over
 the notes that overlap it (the button with those notes selected: the new segments are cut to their frames, every
 other frame keeps its segments). Every pass that changes something is one commit; the call is one undo step.
@@ -413,11 +425,14 @@ Standalone content that changes the settings) and leaves those steps out. The AP
 `edit.undo`, `edit.redo`) are always between two observations, since the write envelope observes every content
 before and after a write; a step of the UI (the dialog, Ctrl+Z) is counted by the next read. Two such steps between
 two reads count once, so `revision` changes once without a change of the notes; the ledger never hides a change of
-the notes. It only reads; OpenTune's counters stay as they are. Because OpenTune scales the stored notes,
-`content.getNotes` reports the targets moved by the shift, at the same `revision`.
+the notes. It only reads; OpenTune's counters stay as they are. A counter lower than at the last observation means
+that the content object was built anew under the same `contentId`; the ledger then starts that content over. Because
+OpenTune scales the stored notes, `content.getNotes` reports the targets moved by the shift, at the same `revision`;
+its cursors are therefore bound to the pitch shift as well, so a page is never continued across a shift.
 
 The upstream functions these follow (lines of the locked upstream base). A change of these functions upstream
-needs the same change here; the drift guard over them is registered in a later part:
+needs the same change here; they are registered in `MIRRORS.md` (see "Mirrors") and `ControlMirrorDriftTests`
+fails when one changes:
 
 | Upstream function | Followed in |
 |---|---|
@@ -713,13 +728,17 @@ and the readiness gate; `AutoTune` the hand-computed removed and dropped notes, 
 range and in key, several ranges as one step, `dryRun` (its `sideEffects` equal those of the commit, for
 `regenerate` and `notesOnly`), the params defaults and the checks before the change (also `clipKey` on a
 content without a key); `EditNotes` a table of hand-computed ops (every op, selections by index, range and all,
-several ops in one call, an exact tie of the snap), each checked for its prediction equal to its commit, its tokens
+several ops in one call, an exact tie of the snap, `targetMidi` 0 and the ops on a note without a base pitch), each
+checked for its prediction equal to its commit, its tokens
 equal to a fresh read, and undo and redo back to the exact states, through the API and through OpenTune's own
 `UndoManager`; then the checks before the change, the no-ops and the params; `SetPitchShift` that `revision` stays
 while the `pitchShift` component changes (also after the undo, the redo, the user's Ctrl+Z and a shift in the UI's
-dialog), `KEY_NOT_TRANSPOSED`, the no-ops, the exact state after the undo, and the undo of a shift after `notesOnly`
-(the shift goes back, the generated notes stay); `SnapNotes` the hand-computed SNAP of every note, ranges as
-selections, one undo step for several ranges, the no-op of a second SNAP over corrected notes, and `clipKey`;
+dialog), `KEY_NOT_TRANSPOSED`, the no-ops, the exact state after the undo, the undo of a shift after `notesOnly`
+(the shift goes back, the generated notes stay), an undo and a redo of such a shift that have nothing to set
+(`UNDO_NO_EFFECT`), a `content.getNotes` cursor made stale by a shift and by its undo, and the ledger starting a
+content over when its counters go back; `SnapNotes` the hand-computed SNAP of every note, ranges as
+selections, one undo step for several ranges, the no-op of a second SNAP over corrected notes, `clipKey`, and a
+note without a base pitch;
 `EditCapability` that `edit.v1` is reported with its four methods; `EditVectors` the specification's vectors of
 `edit/`, `content/set-key-*`, `content/auto-tune-*`, `content/edit-notes-*` and `content/set-pitch-shift-*`
 (`given.history` is established with the same actions, a running export of `given.jobs` holds the export lock;

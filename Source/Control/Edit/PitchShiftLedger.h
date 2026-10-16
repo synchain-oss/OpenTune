@@ -49,8 +49,9 @@ public:
     /**
      * Observes the content's snapshot and returns its counters without the pitch-shift steps counted up to
      * it. contentId names the content in the content epoch epoch; a new epoch forgets every content (opening
-     * a project discards all contents). A snapshot older than the last one observed (lower counters) is not
-     * observed again, only reduced by the steps counted up to its counters.
+     * a project discards all contents). A counter lower than at the last observation means that the content
+     * object was built anew under the same contentId (its counters start again): the content's entry starts
+     * over from this snapshot, without the steps counted before, and its counters are returned as they are.
      */
     Counters observe(const std::string& contentId, std::uint64_t epoch, const EditableContentSnapshot& snapshot);
 

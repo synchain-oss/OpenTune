@@ -129,15 +129,14 @@ ControlAutoSnapPlan controlPlanAutoSnap(const EditableContentSnapshot& snapshot,
     if (targetIndices.empty())
         return plan;
 
-    // The snap: the target's pitchOffset, from its base pitch only (the offset is not quantized).
+    // The snap: the target's pitchOffset, from its base pitch only (the offset is not quantized). A note without
+    // a base pitch is snapped as well: PitchUtils::freqToMidi() gives MIDI 0 for 0 Hz, so its offset becomes the
+    // scale's quantization of MIDI 0, as the button sets it.
     double dirtyStartTime = 1e30;
     double dirtyEndTime = -1e30;
     bool anyPitchChanged = false;
     for (const auto index : targetIndices) {
         auto& note = notes[index];
-        // A note without a base pitch has nothing to snap to (its MIDI pitch would not be finite).
-        if (!(note.pitch > 0.0f))
-            continue;
         const float baseMidi = PitchUtils::freqToMidi(note.pitch);
         const float snappedOffset = scaleSnap.quantizeMidiToActiveScale(baseMidi) - baseMidi;
         if (std::abs(snappedOffset - note.pitchOffset) < 0.001f)

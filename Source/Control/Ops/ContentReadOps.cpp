@@ -45,13 +45,29 @@ struct ContentReadState
     std::string tokensHash;
 };
 
+/** What a cursor of the read is bound to besides the tokens of asOf. */
+enum class CursorBinding {
+    Tokens,
+    /** The tokens and the content's pitch shift: OpenTune scales the stored notes with a pitch shift
+        (commitPitchShiftEdit()), which moves every target without changing `revision`, so a page read after a
+        shift must not continue one read before it. */
+    TokensAndPitchShift
+};
+
 ContentReadState readState(ControlOpContext& context, const std::string& contentId,
-                           const EditableContentSnapshot& snapshot)
+                           const EditableContentSnapshot& snapshot, CursorBinding binding = CursorBinding::Tokens)
 {
     ContentReadState state;
-    state.asOf =
-        controlAsOf(controlArrangementRevision(context), {controlContentVersions(context, contentId, snapshot)});
-    state.tokensHash = controlHashJson('t', state.asOf);
+    const auto versions = controlContentVersions(context, contentId, snapshot);
+    state.asOf = controlAsOf(controlArrangementRevision(context), {versions});
+    if (binding == CursorBinding::TokensAndPitchShift) {
+        auto bound = JsonValue::array();
+        bound.append(state.asOf);
+        bound.append(JsonValue::string(versions.pitchShift));
+        state.tokensHash = controlHashJson('t', bound);
+    } else {
+        state.tokensHash = controlHashJson('t', state.asOf);
+    }
     return state;
 }
 
@@ -186,7 +202,8 @@ Result<JsonValue> runGetNotes(ControlOpContext& context, const NotesParams& para
         content = std::move(resolved).value();
     }
     const auto& snapshot = *content.snapshot;
-    const auto state = readState(context, content.contentId, snapshot);
+    // The targets include the pitch shift, so the cursor is bound to it as well (a stale cursor after a shift).
+    const auto state = readState(context, content.contentId, snapshot, CursorBinding::TokensAndPitchShift);
     if (params.cursor && params.cursor->tokensHash != state.tokensHash)
         return cursorStale();
 

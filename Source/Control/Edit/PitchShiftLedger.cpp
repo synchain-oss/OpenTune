@@ -15,10 +15,14 @@ ControlPitchShiftLedger::Counters ControlPitchShiftLedger::observe(const std::st
     const Counters raw{snapshot.notesRevision, snapshot.pitchRevision};
     const auto [it, inserted] = entries_.try_emplace(contentId);
     auto& entry = it->second;
-    if (inserted) {
+    // A counter that went back: the content object was built anew under the same contentId, with counters that
+    // start again. The steps counted for the old object say nothing about the new one, so its entry starts over.
+    const bool rebuilt = !inserted && (raw.notes < entry.last.notes || raw.pitch < entry.last.pitch);
+    if (inserted || rebuilt) {
+        entry = Entry{};
         entry.last = raw;
         entry.shift = snapshot.pitchShiftSettings;
-    } else if (raw.notes >= entry.last.notes && raw.pitch >= entry.last.pitch) {
+    } else {
         // applyPitchShiftState() since the last observation: the settings changed, and the notes and pitch
         // counters advanced with it (StandaloneClipContent::applyPitchShiftState()).
         if (snapshot.pitchShiftSettings != entry.shift && raw.notes > entry.last.notes && raw.pitch > entry.last.pitch)

@@ -557,6 +557,347 @@
       ],
       "note": "The recent projects menu drops the files that no longer exist; prefs.get lists them with an exists flag instead.",
       "noteZh": "最近工程菜单会去掉已不存在的文件；prefs.get 改为带 exists 标志列出。"
+    },
+    {
+      "id": "notes-correction-state",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "buildNoteBasedCorrectionState",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "beb351d2d4a7b1b38930b0b77ceba84e89e5e0578330007f270c276abc688e1f"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/NoteCorrection.cpp",
+          "symbols": [
+            "controlNoteBasedCorrection"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "The correction of edited notes: a scratch copy of the curve, baked by applyCorrectionToRange() over the edit range with the clip's pitch-shift ratio (NoteGeneratorParams{} where the UI passes its knobs).",
+      "noteZh": "编辑后音符的修正：曲线的临时副本，按片段的移调比例在编辑范围内经 applyCorrectionToRange() 烘焙（界面传旋钮值的地方接口传 NoteGeneratorParams{}）。"
+    },
+    {
+      "id": "notes-correction-commit",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "commitNoteBasedCorrection",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "e48f2d28b94f54fc6c1e6c428fe17d329ff7bfe0e18735dcd50dd645d89a56ca"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/NoteCorrection.cpp",
+          "symbols": [
+            "controlNoteBasedCorrection",
+            "controlCommitCorrection"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "What a note gesture commits: the affected range of expandNoteBasedCorrectionRange() and the corrected segments that overlap it.",
+      "noteZh": "一次音符手势提交什么：expandNoteBasedCorrectionRange() 得到的受影响范围，以及与它重叠的修正段。"
+    },
+    {
+      "id": "notes-drag-edit-range",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "PianoRollToolHandler::noteDragEditRange",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "c5b2a78ef2c6500d8486555bd257585a065e2865e0bf86515069c0dcb5ea698a"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/NoteCorrection.cpp",
+          "symbols": [
+            "controlNotesFrameRange"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes"
+      ],
+      "note": "The frame range of an edit of notes: from the earliest start to the latest end of the notes that changed.",
+      "noteZh": "音符编辑的帧范围：从改动音符最早的开始到最晚的结束。"
+    },
+    {
+      "id": "notes-drag-pitch",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "PianoRollToolHandler::dragNotePitch",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "ea8d450d86c56f6c176b0834a798ee8f9dc31728543c4b13697054bb880dc9be"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentEditOps.cpp",
+          "symbols": [
+            "applyOp"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "The pitch move changes the cent offset (pitchOffset) of each note and keeps its base pitch; shiftCents adds to it without the UI's snapping modes.",
+      "noteZh": "音高移动改变每个音符的音分偏移（pitchOffset），基准音高不变；shiftCents 只做加法，不用界面的吸附模式。"
+    },
+    {
+      "id": "notes-end-pitch-drag",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "PianoRollToolHandler::endNotePitchDrag",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b95c1478a2d72ffd4920fa5b86b80e84a45e07195ebf939763459000810a1189"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentEditOps.cpp",
+          "symbols": [
+            "runEditNotes",
+            "descriptionOf"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes"
+      ],
+      "note": "The end of a pitch move: one commit of the notes that changed, and its undo description.",
+      "noteZh": "音高移动结束：对改动的音符提交一次，以及它的撤销描述。"
+    },
+    {
+      "id": "notes-double-click-snap",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "PianoRollToolHandler::handlePitchToolDoubleClick",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "e92dab4e48bf3aa59d2e28dd485d25924c2abecb24d9342350d51809fb529b01"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentEditOps.cpp",
+          "symbols": [
+            "descriptionOf"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes"
+      ],
+      "note": "The double click of the pitch, modulation and drift tools: the undo descriptions of the snap and of the drift edit.",
+      "noteZh": "音高、调制与漂移工具的双击：吸附与漂移编辑的撤销描述。"
+    },
+    {
+      "id": "notes-edit-parameter",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::editParameter",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "5d6ce786448ba93a5d6964a97f022f863b0a4033f693b4765bb58f68fdb5732b"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentEditOps.cpp",
+          "symbols": [
+            "applyOp",
+            "descriptionOf"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "The parameter knobs on selected notes: the note fields they set and the undo description Edit note parameter.",
+      "noteZh": "选中音符上的参数旋钮：设置哪些音符字段，以及撤销描述 Edit note parameter。"
+    },
+    {
+      "id": "notes-commit-range",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::commitEditedContentNotesAndSegments(const EditableContentSnapshot&, const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&, F0FrameRange)",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "d36905e2ce2a215252e967053a84a82f57d9ce22adbc753f030f27af85fb9eaf"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/NoteCorrection.cpp",
+          "symbols": [
+            "controlCommitCorrection"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes",
+        "ControlProcessorTests.SnapNotes"
+      ],
+      "note": "The range commit of the piano roll: the notes and segments cut to the affected range, then commitNotesAndSegments().",
+      "noteZh": "钢琴卷帘的范围提交：音符与修正段按受影响范围裁剪，再调用 commitNotesAndSegments()。"
+    },
+    {
+      "id": "auto-snap-notes",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::applyAutoSnapToAllNotes",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b68a587562a6b975739fdda01ecf1020dab2309a204ae60c522e301c2aca4b17"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/NoteCorrection.cpp",
+          "symbols": [
+            "controlPlanAutoSnap"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/ContentTuneOps.cpp",
+          "symbols": [
+            "runSnapNotes"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.SnapNotes",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "SNAP, the AUTO button of the openDyne scheme: each target's offset from its base pitch quantized to the scale, the no-change rule, the dirty range and the segments with and without a selection.",
+      "noteZh": "SNAP（openDyne 方案的 AUTO 按钮）：每个目标的偏移由基准音高按音阶量化得到；无变化判据、脏范围，以及有无选中时的修正段。"
+    },
+    {
+      "id": "auto-snap-fully-corrected",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "isFullyCorrectedInRange",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "33f0a8aa4a04cd8b94353797ad6c47ea7f13db05d99b8aa9160bbc5b587773bc"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/NoteCorrection.cpp",
+          "symbols": [
+            "fullyCorrectedInRange"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.SnapNotes"
+      ],
+      "note": "When SNAP has nothing to do: every frame of the targets is covered by a correction segment.",
+      "noteZh": "SNAP 何时无事可做：目标音符的每一帧都被修正段覆盖。"
+    },
+    {
+      "id": "pitch-shift-dialog",
+      "group": "pitch-shift",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::pitchShiftRequested",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "45978577677ef625442d9158614d1766864696fc6a7987efde859ef616915d3d"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentEditOps.cpp",
+          "symbols": [
+            "runSetPitchShift"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.SetPitchShift",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "The pitch-shift dialog: only a shift other than the current one is committed, its PitchShiftEditAction is pushed and the project is marked as changed.",
+      "noteZh": "移调对话框：只提交与当前不同的移调，推入它的 PitchShiftEditAction，并把工程标为已修改。"
+    },
+    {
+      "id": "pitch-shift-commit",
+      "group": "pitch-shift",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::commitPitchShiftEdit",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "850ca4359099e1e4ab10486260cf4bcb783e588dff3404cacc626a25bda85d04"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentEditOps.cpp",
+          "symbols": [
+            "runSetPitchShift"
+          ]
+        },
+        {
+          "file": "Source/Control/Edit/ControlOriginAction.cpp",
+          "symbols": [
+            "ControlOriginAction::apply"
+          ]
+        },
+        {
+          "file": "Source/Control/Edit/PitchShiftLedger.cpp",
+          "symbols": [
+            "ControlPitchShiftLedger::observe"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.SetPitchShift",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "The commit of a pitch shift: nothing without a pitch curve or for the same total cents; otherwise the notes and segments scaled and applied through applyContentPitchShiftState().",
+      "noteZh": "移调提交：没有音高曲线或总音分相同时什么都不做；否则缩放音符与修正段，经 applyContentPitchShiftState() 应用。"
+    },
+    {
+      "id": "pitch-shift-apply-state",
+      "group": "pitch-shift",
+      "upstream": {
+        "file": "Source/Content/StandaloneClipContent.cpp",
+        "symbol": "StandaloneClipContent::applyPitchShiftState",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "3596954e736e6121ad0b286f3938d843dfc47a14c7e82007b09e068e5db2d485"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/PitchShiftLedger.cpp",
+          "symbols": [
+            "ControlPitchShiftLedger::observe"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.SetPitchShift"
+      ],
+      "note": "A pitch shift sets the settings and advances the notes and pitch counters by one each, which the revision token leaves out.",
+      "noteZh": "移调设置参数，并把音符与音高计数器各加 1，revision 令牌扣除这一部分。"
     }
   ]
 }

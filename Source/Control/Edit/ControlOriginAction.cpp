@@ -2,6 +2,7 @@
 #include "ControlOriginAction.h"
 
 #include "Content/ContentEditCommands.h"
+#include "Utils/AppLogger.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/PianoRollNotePatchAction.h"
 #include "Utils/PitchShiftEditAction.h"
@@ -35,32 +36,45 @@ ControlOriginAction::~ControlOriginAction()
 
 void ControlOriginAction::undo()
 {
+    bool tookEffect = false;
     for (auto it = inner_.rbegin(); it != inner_.rend(); ++it)
-        apply(*it, true);
+        tookEffect = apply(*it, true) || tookEffect;
+    lastStepTookEffect_ = tookEffect;
 }
 
 void ControlOriginAction::redo()
 {
+    bool tookEffect = false;
     for (auto& inner : inner_)
-        apply(inner, false);
+        tookEffect = apply(inner, false) || tookEffect;
+    lastStepTookEffect_ = tookEffect;
 }
 
-void ControlOriginAction::apply(Inner& inner, bool undo)
+bool ControlOriginAction::apply(Inner& inner, bool undo)
 {
     if (inner.action == nullptr || masked(inner.content, inner.aspect))
-        return;
+        return false;
     if (inner.aspect == ControlContentAspect::PitchShift && inner.pitchShift && inner.commands != nullptr
         && masked(inner.content, ControlContentAspect::NotesAndPitch)) {
         // PitchShiftEditAction would put back the notes it saved; the notes of the content were replaced
         // since by a change without an undo entry. ContentEditCommands::commitPitchShiftEdit() sets the
         // settings and scales the current notes, as the pitch-shift dialog does; its new action is not kept.
-        inner.commands->commitPitchShiftEdit(inner.content, undo ? inner.pitchShift->first : inner.pitchShift->second);
-        return;
+        // It applies nothing and returns null when the content has no pitch curve or already has a shift of
+        // the same total cents; this step then changes nothing.
+        const auto applied = inner.commands->commitPitchShiftEdit(inner.content, undo ? inner.pitchShift->first
+                                                                                      : inner.pitchShift->second);
+        if (applied == nullptr) {
+            AppLogger::logNoThrow(juce::String("control API: the ") + (undo ? "undo" : "redo")
+                                  + " of a pitch shift changed nothing (no pitch curve, or the shift is already set)");
+            return false;
+        }
+        return true;
     }
     if (undo)
         inner.action->undo();
     else
         inner.action->redo();
+    return true;
 }
 
 std::vector<std::string> ControlOriginAction::innerActionNames() const

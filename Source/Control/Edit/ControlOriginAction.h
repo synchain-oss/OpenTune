@@ -45,7 +45,9 @@ enum class ControlContentAspect {
  * it saved together with the settings. Once a change without an undo entry replaced the notes of its content,
  * the entry puts back the settings only, as content.setPitchShift sets them: through
  * ContentEditCommands::commitPitchShiftEdit(), which scales the notes the content has now (the action that
- * call returns is discarded, this entry is already on the history).
+ * call returns is discarded, this entry is already on the history). That call applies nothing when the content
+ * has no pitch curve or already has a shift of the same total cents; the step then has no effect, which
+ * lastStepTookEffect() tells and AppLogger records.
  *
  * The entry registers itself with the instance's ControlHistory for as long as it exists. OpenTune's
  * UndoManager owns it and destroys it when it leaves the history; the entry keeps the history alive through
@@ -86,20 +88,27 @@ public:
     std::vector<std::string> innerActionNames() const;
     /** True when an inner action is a clip split, merge or delete (section 15.4 rule 1). */
     bool unsafe() const;
+    /** False when the last undo() or redo() applied none of the inner actions: every one was masked, or the
+        pitch shift it puts back through commitPitchShiftEdit() applied nothing (see the class comment). The step
+        then changed nothing, and edit.undo / edit.redo report UNDO_NO_EFFECT (section 15.3 rules 5 and 9).
+        True before the first step. */
+    bool lastStepTookEffect() const noexcept { return lastStepTookEffect_; }
     /** A change without an undo entry changed this aspect of the content: from now on the entry no longer
         puts it back. Called by ControlHistory. */
     void mask(const ContentKey& content, ControlContentAspect aspect);
 
 private:
     bool masked(const ContentKey& content, ControlContentAspect aspect) const;
-    /** Undoes (undo true) or redoes one inner action, as the masks of its content allow. */
-    void apply(Inner& inner, bool undo);
+    /** Undoes (undo true) or redoes one inner action, as the masks of its content allow; false when it applied
+        nothing. */
+    bool apply(Inner& inner, bool undo);
 
     std::shared_ptr<ControlHistory> history_;
     std::string undoId_;
     juce::String description_;
     std::vector<Inner> inner_;
     std::vector<std::pair<ContentKey, ControlContentAspect>> masked_;
+    bool lastStepTookEffect_ = true;
 };
 
 /**

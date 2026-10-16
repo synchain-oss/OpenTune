@@ -2,6 +2,7 @@
 #include "EditSupport.h"
 
 #include "OpsJson.h"
+#include "OpsSupport.h"
 
 #include "Content/EditableContentSnapshot.h"
 #include "PluginProcessor.h"
@@ -312,7 +313,7 @@ JsonValue controlNoteLabelJson(std::size_t index, const Note& note)
 {
     std::optional<double> targetMidi;
     if (note.isVoiced && note.getAdjustedPitch() > 0.0f)
-        targetMidi = PitchUtils::freqToMidi(note.getAdjustedPitch(), TuningConfig::currentTuningHz());
+        targetMidi = controlNoteTargetMidi(note, TuningConfig::currentTuningHz());
     return JsonValue::string(controlNoteLabel(index, targetMidi, note.startTime, note.endTime));
 }
 
@@ -347,26 +348,20 @@ std::size_t controlListNoteChanges(ControlWriteEnvelope& envelope, const std::st
 {
     jassert(before.size() == after.size());
     const auto count = std::min(before.size(), after.size());
-    // Note indexes count in start-time order, as content.getNotes counts them (OpenTune keeps the notes in
-    // this order).
-    std::vector<std::size_t> order(count);
-    for (std::size_t i = 0; i < count; ++i)
-        order[i] = i;
-    std::stable_sort(order.begin(), order.end(),
-                     [&before](std::size_t a, std::size_t b) { return before[a].startTime < before[b].startTime; });
+    // Note indexes count in start-time order, as content.getNotes counts them, each list in its own: the commit
+    // stores the notes sorted, also when they were stored in another order before.
+    const auto beforeOrder = controlNoteIndexOrder(before);
+    const auto afterOrder = controlNoteIndexOrder(after);
     const float tuningHz = TuningConfig::currentTuningHz();
-    const auto targetMidi = [tuningHz](const Note& note) {
-        return controlJsonPitch(PitchUtils::freqToMidi(note.getAdjustedPitch(), tuningHz));
-    };
     std::size_t listed = 0;
     std::size_t omitted = 0;
     for (std::size_t index = 0; index < count; ++index) {
-        const auto& was = before[order[index]];
-        const auto& now = after[order[index]];
+        const auto& was = before[beforeOrder[index]];
+        const auto& now = after[afterOrder[index]];
         auto fields = JsonValue::object();
-        addField(fields, "targetMidi", targetMidi(was), targetMidi(now), "midi");
-        addField(fields, "offsetCents", controlJsonPitch(was.pitchOffset * 100.0),
-                 controlJsonPitch(now.pitchOffset * 100.0), "cents");
+        addField(fields, "targetMidi", controlNoteTargetMidiJson(was, tuningHz),
+                 controlNoteTargetMidiJson(now, tuningHz), "midi");
+        addField(fields, "offsetCents", controlNoteOffsetCentsJson(was), controlNoteOffsetCentsJson(now), "cents");
         addField(fields, "retuneSpeed", controlJsonNumber(was.retuneSpeed, 4), controlJsonNumber(now.retuneSpeed, 4),
                  nullptr);
         addField(fields, "vibratoDepth", controlJsonNumber(was.vibratoDepth, 4), controlJsonNumber(now.vibratoDepth, 4),
@@ -386,6 +381,23 @@ std::size_t controlListNoteChanges(ControlWriteEnvelope& envelope, const std::st
                            std::move(fields));
     }
     return omitted;
+}
+
+Result<ControlCommittedNotes> controlReadCommittedNotes(ControlOpContext& context, const ControlContentRef& content,
+                                                        std::optional<std::size_t> expectedCount)
+{
+    const auto now = controlLiveSnapshot(context, content.key);
+    if (now == nullptr)
+        return controlOpErrorAfterChange("INTERNAL", "",
+                                         "the content cannot be read back after the commit; read it again");
+    if (expectedCount && now->notes.size() != *expectedCount)
+        return controlOpErrorAfterChange("INTERNAL", "",
+                                         "OpenTune stored another number of notes than the edit gave it; read the "
+                                         "notes again");
+    ControlCommittedNotes committed;
+    committed.notes = now->notes;
+    committed.revision = controlContentVersions(context, content.contentId, *now).revision();
+    return committed;
 }
 
 // ---- The effect of an undo or redo step --------------------------------------------------------------

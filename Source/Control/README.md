@@ -405,6 +405,14 @@ the piano roll:
   parameter snapshot.
 - `dryRun` runs the same ops on a copy of the notes and lists the same `changes` and `sideEffects` as the commit;
   only the revision the notes are referenced at differs (section 14.3).
+- The `changes` of a commit come from the notes read back after it (`controlReadCommittedNotes()`), never from the
+  prediction, and before and after are each counted in `content.getNotes` order (`controlNoteIndexOrder()`), so that
+  every `after` is what a read that follows returns. The range commit stores the notes through
+  `normalizeStoredNotes()`, which sorts them and drops notes without duration; a project can bring them otherwise,
+  as opening it applies them as the file holds them (`StandaloneClipContent::applyNotes()`). When the content then
+  holds another number of notes, the changes cannot be described note by note: the call fails after the change
+  (`INTERNAL`, `executed` true) and its undo entry stays. The SNAP of `content.autoTune` reports its changes the
+  same way.
 
 `content.autoTune` mode `snapNotes` (`Ops/ContentTuneOps.cpp`) is SNAP, the AUTO button in the openDyne scheme,
 ported in `controlPlanAutoSnap()`: each target note's `pitchOffset` becomes the scale's quantization of its base
@@ -885,7 +893,10 @@ content without a key); `EditNotes` a table of hand-computed ops (every op, sele
 several ops in one call, an exact tie of the snap, `targetMidi` 0 and the ops on a note without a base pitch), each
 checked for its prediction equal to its commit, its tokens
 equal to a fresh read, and undo and redo back to the exact states, through the API and through OpenTune's own
-`UndoManager`; then the checks before the change, the no-ops and the params; `EditMultiNoteRender`, a scenario of its own for its render
+`UndoManager`; then the checks before the change, the no-ops and the params, values on a rounding boundary whose
+`after` equals the value read back byte for byte, and commits that store other notes than the prediction (notes
+stored out of start-time order, for the ops and for SNAP; a note without duration, which the commit drops, answered
+with `INTERNAL` and `executed` true); `EditMultiNoteRender`, a scenario of its own for its render
 time, on a clip of sine bursts with one render block per note, that edits of several notes (one op over all, one op per note, AUTO regenerate, a shift
 after it, SNAP) leave every block of an edited note pending right after the commit and that the render and an
 export of the clip hold every burst at its new target (through the light pitch path, so without models); the undo

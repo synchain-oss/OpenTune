@@ -1,0 +1,20 @@
+{
+  "comment": "Pinned official OpenTune Windows installer used by the e2e-windows workflow (installed on the CI runner only, never on a developer machine). The installer sha256 equals the GitHub release asset digest. Model hashes are the git-lfs object ids of the same files in the source tree; the first green run confirms they match what the installer ships. The installer is an Inno Setup program and puts the models in the shared folder below, not in the chosen install directory.",
+  "installer": {
+    "version": "1.8.1",
+    "release": "https://github.com/YuFeng926/OpenTune/releases/tag/OPTV1.8.1",
+    "url": "https://github.com/YuFeng926/OpenTune/releases/download/OPTV1.8.1/OpenTune-1.8.1-Windows-x64-Setup.exe",
+    "sha256": "f04f542c49fb69dd91e2946c83afacb8171b086e656b3ce701b8c8503397b28d",
+    "size": 238521094,
+    "silentArgs": ["/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-"]
+  },
+  "modelsDir": "%ProgramData%\\OpenTune\\Models",
+  "models": [
+    { "path": "fcpe.onnx", "sha256": "013b507acd406de122b61ee497300ac6be082511101bc2136b886e48d9737e5d", "size": 43340548 },
+    { "path": "GAME/bd2dur.onnx", "sha256": "6672d56b00f27a20e9bfaa92801c15e394bb520e49031d3ed2515b0a6cf27402", "size": 4569 },
+    { "path": "GAME/dur2bd.onnx", "sha256": "49d10d1ea186e43c51fd2c51cedb01a3852d363f1c7056ae77df50f7e8dd0996", "size": 2632 },
+    { "path": "GAME/encoder.onnx", "sha256": "a6868a702d9c88ccc06b19e54f49d88b7f8cba4a68517f20806bd81ef6f94e06", "size": 10805372 },
+    { "path": "GAME/estimator.onnx", "sha256": "a84738b2504472a1f22773cc6b0eccad1353a8f36229ad490b8fea85388bb5e1", "size": 19335163 },
+    { "path": "GAME/segmenter.onnx", "sha256": "7724db4ba59a388fff5aba2f08f0ac025d4ca59caef80e7f474053a1455c88e5", "size": 20906659 }
+  ]
+}

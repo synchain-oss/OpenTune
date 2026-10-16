@@ -331,6 +331,15 @@ std::string ControlJobs::findByKey(const std::string& kind, const std::string& i
     return {};
 }
 
+std::string ControlJobs::findActiveByDigest(const std::string& kind, const std::string& paramsDigest) const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    for (const auto& [seq, job] : jobs_)
+        if (!job->terminal() && job->kind == kind && !paramsDigest.empty() && job->paramsDigest == paramsDigest)
+            return job->jobId;
+    return {};
+}
+
 void ControlJobs::evictLocked(std::int64_t steadyNowMs)
 {
     // Terminal jobs older than the retention time first, then, while the registry is full, the

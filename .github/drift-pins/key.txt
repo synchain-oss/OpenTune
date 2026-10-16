@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# group: key
+# pinned-at: upstream/20261008-addb4f4
+# ported-to: Source/Control/Ops/ContentTuneOps.cpp
+#
+# Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::scaleChanged	L3040-L3078	fn-v1	cbb148243601f384628e28f72ec0613b2090705abbdfbdefd912932314f3157d

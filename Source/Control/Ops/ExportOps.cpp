@@ -23,6 +23,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <limits>
 #include <map>
 #include <memory>
@@ -46,6 +47,8 @@ constexpr int kStretchRetryIdleMs = 500;
     them for blocks that will not be rendered (pendingBlocksStuck); a block between two states is never seen so this
     long. */
 constexpr int kStuckBlocksMs = 500;
+/** Samples per slice of the probe of a published render for rendered audio (publishedRenderHasAudio). */
+constexpr int kPublishedAudioProbeSamples = 1 << 16;
 /** Section 19 rule 3: the last name that ifExists rename tries is "<stem> (999).wav". */
 constexpr int kLastRenameNumber = 999;
 /** The extension an export writes (section 20.1), compared without regard to case. */
@@ -643,6 +646,9 @@ private:
         /** Since when the pending render blocks of the content have been seen out of reach of the render worker
             (pendingBlocksStuck), and whether the log said so. */
         std::optional<std::chrono::steady_clock::time_point> stuckSince;
+        /** Whether rendered audio of the content was found while its blocks have been out of reach (once per such
+            time; publishedRenderHasAudio). */
+        std::optional<bool> stuckRenderedAudio;
         bool stuckLogged = false;
     };
 
@@ -829,12 +835,41 @@ private:
         const auto stats = cache.getChunkStats();
         if (!noneToClaim || stats.pending == 0 || stats.running != 0) {
             progress.stuckSince.reset();
+            progress.stuckRenderedAudio.reset();
             return false;
         }
         const auto now = std::chrono::steady_clock::now();
         if (!progress.stuckSince)
             progress.stuckSince = now;
         return now - *progress.stuckSince >= std::chrono::milliseconds(kStuckBlocksMs);
+    }
+
+    /**
+     * Whether the published render of a content holds rendered audio: the audio that the export lays over the
+     * content's own when its time grid is the identity (readExportPlaybackAudio, through
+     * RenderCache::overlayCanonicalAudio). The blocks in the cache do not tell that on their own: a failed block, or
+     * a block whose span changed, no longer holds its audio, while the published render, which changes only once every
+     * block has settled, still does. Probes the whole content in slices with a value no render produces (NaN); without
+     * the playback source of the content it answers true, so that the content keeps waiting.
+     */
+    static bool publishedRenderHasAudio(const ContentRenderService& service, const ContentKey& key,
+                                        const RenderCache& cache)
+    {
+        PlaybackReadSource source;
+        if (!service.getPlaybackReadSource(key, source) || source.audioBuffer == nullptr)
+            return true;
+        const std::int64_t sampleCount = source.audioBuffer->getNumSamples();
+        juce::AudioBuffer<float> probe(1, kPublishedAudioProbeSamples);
+        for (std::int64_t start = 0; start < sampleCount; start += kPublishedAudioProbeSamples) {
+            const int count =
+                static_cast<int>(std::min<std::int64_t>(kPublishedAudioProbeSamples, sampleCount - start));
+            juce::FloatVectorOperations::fill(probe.getWritePointer(0), std::numeric_limits<float>::quiet_NaN(), count);
+            cache.overlayCanonicalAudio(probe, 0, count, start);
+            const float* samples = probe.getReadPointer(0);
+            if (std::any_of(samples, samples + count, [](float value) { return !std::isnan(value); }))
+                return true;
+        }
+        return false;
     }
 
     Readiness classifyRender(ControlOpContext& context, const ContentKey& key)
@@ -903,16 +938,21 @@ private:
         // revision for which blocks are still pending leaves them pending without queueing them (upstream
         // RenderCache::reconcileFullPlanAndRequest; pendingBlocksStuck), so asking while they are pending would
         // keep them from ever being rendered. Pending blocks that will not be rendered do not hold back a content
-        // with nothing to render, as long as no block holds the rendered audio of an earlier version that the
-        // export would read instead of the content's own (with a failed block that audio is no longer visible in
-        // the blocks, so a failed block keeps the content waiting); any other content waits for them until the
-        // wait limit.
+        // with nothing to render, as long as no failed block waits and the export would read the content's own
+        // audio: neither a block nor the published render holds rendered audio of an earlier version
+        // (publishedRenderHasAudio, probed once while the blocks stay out of reach; the published render cannot
+        // change before they settle). Any other content waits for them until the wait limit.
         if (stats.hasActiveWork()) {
             if (pendingBlocksStuck(progress, *cache)) {
-                if (dryWithoutRender && stats.failed == 0 && !cache->getStateSnapshot().hasPublishedAudio) {
-                    readiness.state = Readiness::State::Dry;
-                    readiness.dryReason = "nothingToRender";
-                    return readiness;
+                if (dryWithoutRender && stats.failed == 0) {
+                    if (!progress.stuckRenderedAudio)
+                        progress.stuckRenderedAudio = cache->getStateSnapshot().hasPublishedAudio
+                                                      || publishedRenderHasAudio(*service, key, *cache);
+                    if (!*progress.stuckRenderedAudio) {
+                        readiness.state = Readiness::State::Dry;
+                        readiness.dryReason = "nothingToRender";
+                        return readiness;
+                    }
                 }
                 if (!progress.stuckLogged) {
                     progress.stuckLogged = true;
@@ -923,6 +963,7 @@ private:
             return readiness;
         }
         progress.stuckSince.reset();
+        progress.stuckRenderedAudio.reset();
         if (stats.failed > 0) {
             if (progress.renderRetried) {
                 readiness.state = Readiness::State::Fail;

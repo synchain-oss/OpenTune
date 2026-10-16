@@ -1999,7 +1999,9 @@ void scenarioExportUnicodePath()
  *    finished analysis asked for the render, as OpenTune's own does, its blocks end blank. When no render was ever
  *    requested for the content, the export neither asks for one nor waits for OpenTune's render worker, so it
  *    succeeds at once even while that worker is held back. Render blocks that are pending are still waited for,
- *    unless they will never be rendered (a second request at the same revision left them out of reach of the worker).
+ *    unless they will never be rendered (a second request at the same revision left them out of reach of the worker)
+ *    and the export would read the content's own audio; when the blocks or the published render still hold the
+ *    rendered audio of an earlier version with a correction, the export waits and fails at the wait limit instead.
  */
 void scenarioExportDryReasons()
 {
@@ -2157,9 +2159,75 @@ void scenarioExportDryReasons()
             note("imported-stuck: " + std::to_string(cache->getChunkStats().pending) + " blocks pending, "
                  + std::to_string(cache->getPendingJobs().size()) + " of them to claim, render queue "
                  + std::to_string(renderService->renderQueueDepth()));
+            // The case under test: blocks pending, none running, none to claim. Should upstream render them again,
+            // this fails first, so that the need for pendingBlocksStuck is looked at again.
+            const auto stats = cache->getChunkStats();
+            CONTROL_CHECK(stats.pending > 0 && stats.running == 0 && cache->getPendingJobs().empty());
             exportsDry("imported-stuck", clip->first, clip->second);
         } else {
             renderService->resumeRenderWorker();
+        }
+    }
+    // 2e. The same blocks out of reach of the worker, but the content had a correction that was rendered and published,
+    //     and the correction is gone since: the content has nothing to render now, yet its blocks still hold the
+    //     rendered audio of the earlier version, which the export would read. The export never lists that as dry: it
+    //     waits, and fails at the wait limit with NOT_READY(export_wait_timeout), without a file.
+    {
+        const auto clip = addClip(*processor, media, "was-corrected", 6, 0.0, 2.0, Analysis::Ready);
+        auto* owner = processor->getStandaloneContentRepository()->findClip(clip.key);
+        const auto cache = renderService->getOrCreateRenderCache(clip.key);
+        if (CONTROL_CHECK(owner != nullptr && cache != nullptr)) {
+            owner->applyOriginalF0(correctedCurve(clip.durationSec));
+            renderService->pauseRenderWorker();
+            processor->requestFullContentRender(clip.key);
+            CONTROL_CHECK(completePendingRender(*cache, true) > 0 && cache->isCanonicalSettled());
+            // The user takes the correction back: a new revision without any correction segment.
+            owner->applyOriginalF0(syntheticCurve(clip.durationSec));
+            processor->requestFullContentRender(clip.key);
+            processor->requestFullContentRender(clip.key);
+            renderService->resumeRenderWorker();
+            pumpMessagesFor(kQuietPumpMs);
+            const auto stats = cache->getChunkStats();
+            CONTROL_CHECK(stats.pending > 0 && stats.running == 0 && stats.failed == 0
+                          && cache->getPendingJobs().empty() && cache->getStateSnapshot().hasPublishedAudio);
+            const auto path = outPath("was-corrected.wav");
+            // Longer than kStuckBlocksMs of the export job, so that the job does take the blocks for stuck ones.
+            const auto job = exportWithin(clipParams(handles.placement(clip.placementId), path));
+            note("was-corrected: " + toJsonString(memberOf(job, "state")) + ", error "
+                 + toJsonString(memberOf(memberOf(memberOf(job, "error"), "data"), "kind")));
+            CONTROL_CHECK(failedWith(job, "NOT_READY", "export_wait_timeout"));
+            CONTROL_CHECK(memberOf(job, "result").isNull() && !juceFileOf(path).exists());
+            CONTROL_CHECK(!processor->isExportLockHeld());
+        }
+    }
+    // 2f. As 2e, but the blocks no longer hold that audio: the render of the version without the correction failed in
+    //     every block (a failed block gives up its audio), was asked for again, and is out of reach of the worker after
+    //     one more request at the same revision. Only the published render still holds the corrected audio, which the
+    //     export would read; the export waits as well.
+    {
+        const auto clip = addClip(*processor, media, "was-corrected-failed", 7, 0.0, 2.0, Analysis::Ready);
+        auto* owner = processor->getStandaloneContentRepository()->findClip(clip.key);
+        const auto cache = renderService->getOrCreateRenderCache(clip.key);
+        if (CONTROL_CHECK(owner != nullptr && cache != nullptr)) {
+            owner->applyOriginalF0(correctedCurve(clip.durationSec));
+            renderService->pauseRenderWorker();
+            processor->requestFullContentRender(clip.key);
+            CONTROL_CHECK(completePendingRender(*cache, true) > 0 && cache->isCanonicalSettled());
+            owner->applyOriginalF0(syntheticCurve(clip.durationSec));
+            processor->requestFullContentRender(clip.key);
+            CONTROL_CHECK(completePendingRender(*cache, false) > 0);
+            processor->requestFullContentRender(clip.key);
+            processor->requestFullContentRender(clip.key);
+            renderService->resumeRenderWorker();
+            pumpMessagesFor(kQuietPumpMs);
+            const auto stats = cache->getChunkStats();
+            CONTROL_CHECK(stats.pending > 0 && stats.running == 0 && stats.failed == 0
+                          && cache->getPendingJobs().empty() && !cache->getStateSnapshot().hasPublishedAudio);
+            const auto path = outPath("was-corrected-failed.wav");
+            const auto job = exportWithin(clipParams(handles.placement(clip.placementId), path));
+            CONTROL_CHECK(failedWith(job, "NOT_READY", "export_wait_timeout"));
+            CONTROL_CHECK(memberOf(job, "result").isNull() && !juceFileOf(path).exists());
+            CONTROL_CHECK(!processor->isExportLockHeld());
         }
     }
     const auto dispatcher = service.dispatcher();

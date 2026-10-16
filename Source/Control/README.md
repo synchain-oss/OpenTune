@@ -789,6 +789,21 @@ and upstream `ProcessRenderRuntime::notifyApplicationRenderFailure()` builds a d
 thread; a scenario whose first requests must not race with that calls `settleBackgroundWork()` after its
 setup (render work idle, then the messages posted until then dispatched).
 
+Every scenario process has a watchdog that ends it with a failure naming the scenario a margin before its own
+ctest `TIMEOUT`, so that a scenario blocked in a wait without a bound fails with a message instead of being
+killed by ctest without one. The rule: `cmake/OpenTuneControl.cmake` passes each scenario test's `TIMEOUT` to
+its process as `OPENTUNE_SCENARIO_TIMEOUT_SEC` (one loop after every `TIMEOUT` of the scenarios is set, so a
+scenario given a longer `TIMEOUT` gets a longer watchdog without anything else to change), and the watchdog
+fires `kScenarioBoundMarginMs` (5 s) before it; a process started without the variable uses 55 s.
+
+`startedProcessor()` takes one owner of the process-wide `ProcessRenderRuntime` for the rest of the process
+before it constructs the first processor. The runtime would otherwise shut down at every processor's
+destruction and start again with the next one, and that shutdown can miss the control worker's notification
+(it is sent without the waiter's mutex) and never return. As a consequence, the destruction times that the
+lifecycle scenarios measure no longer include the runtime's shutdown. The scenarios that construct a processor
+without the API (`Disabled` and the others in `ControlProcessorTests.cpp`) do not take that owner: starting the
+runtime initialises the logger, and they check that nothing was initialised.
+
 `Tests/Control/ControlMirrorDriftTests.cpp` (standard library and the JSON reader only) compares the hashes of
 `mirror-map.json` with the source tree; see "Mirrors". `ControlMirrorDriftTests` is its ctest name.
 

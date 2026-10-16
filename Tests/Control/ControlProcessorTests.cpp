@@ -38,7 +38,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
-#include <string_view>
+#include <string>
 #include <thread>
 
 #if defined(_WIN32)
@@ -570,17 +570,24 @@ const Scenario kScenarios[] = {
     {"TimingVectors", scenarioTimingVectors, false},
 };
 
-/** Bound of one scenario, below the ctest TIMEOUT that cmake/OpenTuneControl.cmake gives it: 60 s, and 300 s for the
-    scenarios of the specification's vectors, whose names end in "Vectors". */
-constexpr int kScenarioBoundMs = 55000;
-constexpr int kVectorScenarioBoundMs = 290000;
+/** How much earlier than the ctest TIMEOUT of its test the watchdog of a scenario ends it. */
+constexpr int kScenarioBoundMarginMs = 5000;
+/** The bound of a scenario whose process was started without OPENTUNE_SCENARIO_TIMEOUT_SEC (not through ctest). */
+constexpr int kDefaultScenarioBoundMs = 55000;
 
-int scenarioBoundMs(const Scenario& scenario)
+/**
+ * The bound of the scenario of this process: kScenarioBoundMarginMs before the ctest TIMEOUT of its test, which
+ * cmake/OpenTuneControl.cmake passes as OPENTUNE_SCENARIO_TIMEOUT_SEC (whole seconds), so that a scenario with a
+ * longer TIMEOUT gets a longer bound with nothing else to change; kDefaultScenarioBoundMs without that variable.
+ */
+int scenarioBoundMs()
 {
-    const std::string_view name(scenario.name);
-    const std::string_view suffix("Vectors");
-    const bool vectors = name.size() >= suffix.size() && name.substr(name.size() - suffix.size()) == suffix;
-    return vectors ? kVectorScenarioBoundMs : kScenarioBoundMs;
+    const auto value = controlSystemEnvironment("OPENTUNE_SCENARIO_TIMEOUT_SEC");
+    if (!value || value->empty() || value->size() > 6 || value->find_first_not_of("0123456789") != std::string::npos)
+        return kDefaultScenarioBoundMs;
+    const long long timeoutMs = std::stoll(*value) * 1000;
+    return timeoutMs > 2LL * kScenarioBoundMarginMs ? static_cast<int>(timeoutMs - kScenarioBoundMarginMs)
+                                                    : static_cast<int>(timeoutMs / 2);
 }
 
 /**
@@ -633,7 +640,7 @@ int runScenario(const Scenario& scenario)
 
     const auto started = Clock::now();
     std::cout << "[ RUN  ] " << scenario.name << std::endl;
-    const ScenarioWatchdog watchdog(scenario.name, scenarioBoundMs(scenario));
+    const ScenarioWatchdog watchdog(scenario.name, scenarioBoundMs());
     {
         // The message manager on this thread; no window, no audio device.
         juce::ScopedJuceInitialiser_GUI juceInitialiser;

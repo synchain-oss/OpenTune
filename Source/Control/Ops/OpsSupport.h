@@ -40,11 +40,18 @@ inline JsonValue controlJsonPitch(double value)
     Note::getAdjustedPitch() at tuningHz (MIDI 0 for a note without a base pitch). */
 double controlNoteTargetMidi(const Note& note, float tuningHz);
 /** The one place that rounds a note's target for the wire: content.getNotes and the targetMidi change of a write
-    result both call it, so the "after" of a write result equals the value read back, byte for byte. */
+    result both call it, so the two never round the same note differently. (That the "after" of a write result
+    equals the value read back also needs the same note: controlListNoteChanges() takes it from the notes read back
+    after the commit, at the index content.getNotes gives it.) */
 JsonValue controlNoteTargetMidiJson(const Note& note, float tuningHz);
 /** A note's cent offset (Note::pitchOffset in semitones, times 100), rounded as controlJsonPitch(); the one place
     for content.getNotes and write results. */
 JsonValue controlNoteOffsetCentsJson(const Note& note);
+/** The order in which content.getNotes counts the notes of a content and write results reference them: the
+    positions in notes sorted by start time, notes that start together in stored order. OpenTune's own edits store
+    the notes in this order (normalizeStoredNotes()), but not every store sorts them: a project is opened with its
+    notes applied as the file holds them (StandaloneClipContent::applyNotes()). Pure. */
+std::vector<std::size_t> controlNoteIndexOrder(const std::vector<Note>& notes);
 /** A JSON string from UTF-8 text, at most maxCodePoints code points (text from projects is untrusted
     data: it is returned as a string value only, PROTOCOL.md section 20.2). */
 JsonValue controlJsonText(const std::string& utf8, std::size_t maxCodePoints);

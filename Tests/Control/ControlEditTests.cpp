@@ -1629,7 +1629,11 @@ void checkWriteRoundsLikeTheRead(EditFixture& f, const std::string& what, const 
     f.undo(memberOf(memberOf(applied, "undo"), "undoId").text());
 }
 
-/** Values that sit on a rounding boundary of four decimals (x.xxxx5) in cents, semitones and the knob members. */
+/** Values that sit on a rounding boundary of four decimals (x.xxxx5) in cents, semitones and the knob members.
+    These cases lock one invariant: the write result and the read round a note's values through one function each
+    (controlNoteTargetMidiJson(), controlNoteOffsetCentsJson(), controlJsonNumber()). They do not reproduce a
+    mismatch: here the commit stores the predicted notes unchanged, and both sides computed the same expression even
+    before they shared the function. checkAfterIsTheCommittedNote() covers commits that store other notes. */
 void checkEditRoundingMatchesReadback(EditFixture& f)
 {
     const auto initial = stateOf(*f.processor, f.clip.key);
@@ -1669,6 +1673,104 @@ void checkEditRoundingMatchesReadback(EditFixture& f)
     CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
 }
 
+/** Stores notes in the fixture's content as given, without an undo entry: StandaloneClipContent::applyNotes(), the
+    store through which opening a project applies the notes as the file holds them (also out of start-time order, or
+    with a note without duration). OpenTune's own edits store notes through normalizeStoredNotes() instead. */
+bool storeNotesAsGiven(EditFixture& f, std::vector<Note> notes)
+{
+    auto* owner = f.processor->getStandaloneContentRepository()->findClip(f.clip.key);
+    if (!CONTROL_CHECK(owner != nullptr))
+        return false;
+    owner->applyNotes(std::move(notes));
+    return true;
+}
+
+/** The target of the note that content.getNotes reads at index now. */
+double targetNow(EditFixture& f, std::size_t index)
+{
+    const auto notes = notesNow(f);
+    return index < notes.size() ? memberOf(notes.at(index), "targetMidi").asDouble() : -1.0;
+}
+
+/**
+ * The "after" of a write is the note that OpenTune committed, read back at the index content.getNotes gives it, and
+ * never the note the write predicted. The rounding cases above cannot tell the two apart; here the commit stores
+ * other notes than the prediction holds, because the content's notes were stored as a project file can hold them:
+ * - out of start-time order: the range commit stores them sorted (normalizeStoredNotes()), so the committed notes
+ *   are in another order than the prediction, whose order is the stored one;
+ * - with a note without duration: the commit drops it, so the content holds one note less than the edit gave it.
+ *   The changes can then not be described note by note, and the write fails after the change (INTERNAL, executed
+ *   true) instead of listing the prediction; its undo entry takes the edit back.
+ */
+void checkAfterIsTheCommittedNote(EditFixture& f)
+{
+    const auto initial = stateOf(*f.processor, f.clip.key);
+    if (!CONTROL_CHECK(initial.notes.size() == 4))
+        return;
+    // The first note (index 0, MIDI 64) stored last.
+    auto rotated = initial.notes;
+    std::rotate(rotated.begin(), rotated.begin() + 1, rotated.end());
+    const std::string shiftFirst = R"([{"op":"shiftCents","select":{"indices":[0]},"deltaCents":100}])";
+    if (storeNotesAsGiven(f, rotated)) {
+        CONTROL_CHECK(std::abs(targetNow(f, 0) - 64.0) < 1e-3);
+        const auto predicted = f.editNotes(shiftFirst, ",\"dryRun\":true");
+        const auto applied = f.editNotes(shiftFirst);
+        if (CONTROL_CHECK(memberOf(applied, "applied").asBoolean() && !memberOf(applied, "noOp").asBoolean())) {
+            checkChangesMatchReadback(f, applied, "shiftCents on notes stored out of order");
+            const auto& changes = memberOf(applied, "changes");
+            CONTROL_CHECK(noteIndexes(changes) == std::vector<int>{0});
+            if (changes.size() == 1) {
+                const auto& fields = memberOf(changes.at(0), "fields");
+                CONTROL_CHECK(std::abs(memberOf(memberOf(fields, "targetMidi"), "after").asDouble() - 65.0) < 1e-3);
+                CONTROL_CHECK(toJsonString(memberOf(memberOf(fields, "offsetCents"), "after")) == "100");
+            }
+            CONTROL_CHECK(changesWithoutRevision(memberOf(predicted, "changes")) == changesWithoutRevision(changes));
+            CONTROL_CHECK(
+                memberOf(f.undo(memberOf(memberOf(applied, "undo"), "undoId").text()), "applied").asBoolean());
+        }
+    }
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
+
+    // The snap of content.autoTune lists its changes the same way.
+    if (storeNotesAsGiven(f, rotated)) {
+        const std::string key = R"({"root":0,"scale":"major"})";
+        const auto predicted = f.snapNotes(key, ",\"dryRun\":true");
+        const auto applied = f.snapNotes(key);
+        if (CONTROL_CHECK(memberOf(applied, "applied").asBoolean() && !memberOf(applied, "noOp").asBoolean())) {
+            checkChangesMatchReadback(f, applied, "snapNotes on notes stored out of order");
+            CONTROL_CHECK(changesWithoutRevision(memberOf(predicted, "changes"))
+                          == changesWithoutRevision(memberOf(applied, "changes")));
+            CONTROL_CHECK(
+                memberOf(f.undo(memberOf(memberOf(applied, "undo"), "undoId").text()), "applied").asBoolean());
+        }
+    }
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
+
+    // A note without duration before the first one; the edit shifts the note at 64 (index 1 now).
+    auto withEmpty = initial.notes;
+    auto empty = initial.notes.front();
+    empty.startTime = 0.2;
+    empty.endTime = 0.2;
+    withEmpty.insert(withEmpty.begin(), empty);
+    if (storeNotesAsGiven(f, withEmpty)) {
+        if (CONTROL_CHECK(notesNow(f).size() == 5))
+            CONTROL_CHECK(std::abs(targetNow(f, 1) - 64.0) < 1e-3);
+        const auto response =
+            f.api.request("content.editNotes",
+                          f.editNotesParams(R"([{"op":"shiftCents","select":{"indices":[1]},"deltaCents":100}])"));
+        const auto data = errorOf(response);
+        if (!CONTROL_CHECK(memberOf(data, "kind").text() == "INTERNAL" && memberOf(data, "executed").isBoolean()
+                           && memberOf(data, "executed").asBoolean()))
+            note("a commit that dropped a note answered " + toJsonString(response));
+        // The edit is committed: four notes, the shifted one first.
+        if (CONTROL_CHECK(notesNow(f).size() == 4))
+            CONTROL_CHECK(std::abs(targetNow(f, 0) - 65.0) < 1e-3);
+        const auto top = memberOf(memberOf(f.history(), "undoTop"), "undoId").text();
+        CONTROL_CHECK(memberOf(f.undo(top), "applied").asBoolean());
+    }
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
+}
+
 void scenarioEditNotesImpl()
 {
     EditFixture f;
@@ -1680,6 +1782,7 @@ void scenarioEditNotesImpl()
     CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
     checkNoteEditErrors(f);
     checkEditRoundingMatchesReadback(f);
+    checkAfterIsTheCommittedNote(f);
     CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 

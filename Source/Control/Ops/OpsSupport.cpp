@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <numeric>
 
 namespace OpenTune {
 
@@ -96,6 +97,15 @@ JsonValue controlNoteTargetMidiJson(const Note& note, float tuningHz)
 JsonValue controlNoteOffsetCentsJson(const Note& note)
 {
     return controlJsonPitch(static_cast<double>(note.pitchOffset) * 100.0);
+}
+
+std::vector<std::size_t> controlNoteIndexOrder(const std::vector<Note>& notes)
+{
+    std::vector<std::size_t> order(notes.size());
+    std::iota(order.begin(), order.end(), std::size_t{0});
+    std::stable_sort(order.begin(), order.end(),
+                     [&notes](std::size_t a, std::size_t b) { return notes[a].startTime < notes[b].startTime; });
+    return order;
 }
 
 JsonValue controlJsonText(const std::string& utf8, std::size_t maxCodePoints)

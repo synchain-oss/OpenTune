@@ -12,7 +12,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <numeric>
 
 namespace OpenTune {
 
@@ -201,12 +200,8 @@ Result<JsonValue> runGetNotes(ControlOpContext& context, const NotesParams& para
     if (params.cursor && params.cursor->tokensHash != state.tokensHash)
         return cursorStale();
 
-    // Index order: the notes ordered by start time (OpenTune stores them normalised in this order).
-    std::vector<std::size_t> order(snapshot.notes.size());
-    std::iota(order.begin(), order.end(), std::size_t{0});
-    std::stable_sort(order.begin(), order.end(), [&snapshot](std::size_t a, std::size_t b) {
-        return snapshot.notes[a].startTime < snapshot.notes[b].startTime;
-    });
+    // Index order: the notes ordered by start time, as write results reference them (controlNoteIndexOrder).
+    const auto order = controlNoteIndexOrder(snapshot.notes);
     std::vector<std::size_t> selected; // positions in order
     for (std::size_t position = 0; position < order.size(); ++position) {
         const auto& note = snapshot.notes[order[position]];

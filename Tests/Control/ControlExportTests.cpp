@@ -57,14 +57,17 @@ constexpr double kSecTolerance = 0.01;
 constexpr int kJobExchangeMs = 60000;
 /** The wait limit of the export jobs of the NOT_READY case. */
 constexpr int kShortWaitLimitMs = 300;
-/** The wait limit of the export of contents with render blocks pending: twice the export job's kStuckBlocksMs (500 ms,
-    the time the job sees blocks no worker will claim before it takes them for stuck ones), so that the wait goes past
-    the moment of that judgement and still ends at the limit when the blocks are claimable. */
-constexpr int kPendingBlocksWaitLimitMs = 1000;
+/** The wait limit of the export of contents with render blocks pending: twice kControlExportStuckBlocksMs (the time
+    the job sees blocks no worker will claim before it takes them for stuck ones), so that the wait goes past the
+    moment of that judgement and still ends at the limit when the blocks are claimable. */
+constexpr int kPendingBlocksWaitLimitMs = 2 * kControlExportStuckBlocksMs;
 /** The wait limit of exports whose contents are ready within a few ticks of the job, or once the scenario published
     their render: one that waits for a render that never comes fails with NOT_READY at this limit instead of at 120 s.
     Shorter than kReadTimeoutMs, so that the job.get that waits for the job is answered either way. */
 constexpr int kPromptWaitLimitMs = 4000;
+static_assert(kPromptWaitLimitMs > kControlExportStuckBlocksMs,
+              "the was-corrected case waits with kPromptWaitLimitMs for the job to take the pending blocks for stuck "
+              "ones");
 /** How long a scenario waits for a job it drives to reach a state. */
 constexpr int kDriveTimeoutMs = 20000;
 /** Level of the synthetic render, which differs from the tone so that a file shows which one it holds. */
@@ -2196,7 +2199,7 @@ void scenarioExportDryReasons()
             CONTROL_CHECK(stats.pending > 0 && stats.running == 0 && stats.failed == 0
                           && cache->getPendingJobs().empty() && cache->getStateSnapshot().hasPublishedAudio);
             const auto path = outPath("was-corrected.wav");
-            // Longer than kStuckBlocksMs of the export job, so that the job does take the blocks for stuck ones.
+            // Longer than kControlExportStuckBlocksMs, so that the job does take the blocks for stuck ones.
             const auto job = exportWithin(clipParams(handles.placement(clip.placementId), path));
             note("was-corrected: " + toJsonString(memberOf(job, "state")) + ", error "
                  + toJsonString(memberOf(memberOf(memberOf(job, "error"), "data"), "kind")));

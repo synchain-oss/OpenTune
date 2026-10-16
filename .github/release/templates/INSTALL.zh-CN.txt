@@ -18,6 +18,8 @@ OpenTune {{APP_VERSION}}（含本机控制接口）非官方测试版 {{BUILD_LA
 - 本压缩包不含任何模型权重。本测试版使用该官方安装中的模型。官方安装程序把模型放在共享文件夹
   C:\ProgramData\OpenTune\Models（OpenTune 1.8.1），或 C:\Program Files\OpenTune\models
   （OpenTune 1.7.9）。没有这些模型时，音高检测、音符生成与渲染都无法使用。
+  OpenTune 1.7.9 必须装在默认目录：它的模型在安装目录下，装在别处时本测试版找不到模型。
+  OpenTune 1.8.1 可以装在别处，此时只有第 4 步 D3D12 复制命令里的目录需要相应修改。
 
 
 2. 校验下载的文件

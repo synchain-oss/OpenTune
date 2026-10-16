@@ -22,6 +22,10 @@ you extract the package to.
   C:\ProgramData\OpenTune\Models (OpenTune 1.8.1) or in
   C:\Program Files\OpenTune\models (OpenTune 1.7.9). Without them, pitch
   detection, note generation and rendering do not work.
+  OpenTune 1.7.9 must be installed in the default location: its models are
+  inside the installation folder, and this build cannot find them if you
+  install it elsewhere. OpenTune 1.8.1 may be installed elsewhere; then only
+  the folder in the D3D12 copy command in step 4 changes.
 
 
 2. Check the download

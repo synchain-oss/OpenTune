@@ -189,6 +189,13 @@ describe('parseLaunchLog and evaluateLaunch', () => {
     assert.equal(evalLog('no-d3d12', [load('DirectML')])[4].result, 'FAIL');
   });
 
+  test('READY without a reported pid fails the launch row and says so', () => {
+    const noPid = { ...facts, launch: { ...facts.launch, pid: 0 }, aliveAfter: null, status: null, problems: ['opentune_launch: READY but no pid reported'] };
+    const row0 = evalLog('no-d3d12', [load('CPU')], noPid)[0];
+    assert.equal(row0.result, 'FAIL');
+    assert.match(row0.note, /no pid reported/);
+  });
+
   test('D3D12 copied: DirectML passes, CPU on a runner without a GPU is FLAKY-SKIP, CPU with a GPU fails', () => {
     const side = ort(`${SIDECAR}\\OpenTuneOnnxRuntime_1_24_4.dll`);
     assert.equal(evalLog('d3d12', [side, load('DirectML')])[4].result, 'PASS');
@@ -246,6 +253,16 @@ describe('resultRows', () => {
     assert.equal(resultRows({ contract, smoke: skipped, log })[1].result, 'FAIL');
     assert.equal(resultRows({ contract: { testResults: [] }, smoke, log })[0].result, 'FAIL');
     assert.deepEqual(results(resultRows({})), ['FAIL', 'FAIL', 'FAIL']);
+  });
+
+  test('a step outcome that is not success fails even when the reports look fine (fail-closed)', () => {
+    for (const outcome of ['failure', 'cancelled', 'skipped', '']) {
+      const rows = resultRows({ contract, smoke, log, contractOutcome: outcome, smokeOutcome: 'success' });
+      assert.equal(rows.filter((r) => r.result === 'FAIL').length, 1, outcome);
+      assert.match(rows.find((r) => r.result === 'FAIL').note, /退出码非 0/);
+      assert.equal(resultRows({ contract, smoke, log, contractOutcome: 'success', smokeOutcome: outcome }).filter((r) => r.result === 'FAIL').length, 1);
+    }
+    assert.deepEqual(results(resultRows({ contract, smoke, log, contractOutcome: 'success', smokeOutcome: 'success' })), ['PASS', 'PASS', 'PASS', 'PASS', 'PASS']);
   });
 });
 
@@ -340,6 +357,14 @@ describe('MCP stdio client (stand-in server)', () => {
     assert.equal(logText, '');
     assert.ok(fs.existsSync(path.join(data, 'app-preferences.settings')), 'template copied');
     assert.equal(fs.readFileSync(path.join(data, 'sidecar-tone.wav')).toString('ascii', 0, 4), 'RIFF');
+  });
+
+  test('runMcpLaunch: READY without a pid fails the launch row instead of looking like an exit', async () => {
+    const data = path.join(tmp, 'nopid-data');
+    const { facts } = await runMcpLaunch({ mcp: server({ opentune_launch: { state: 'READY', launched: true, workingDirectory: 'official_install' } }), exe: 'C:\\x\\OpenTune.exe', dataDir: data, template: null, timeoutMs: 1000 });
+    assert.match(facts.problems.join(' '), /no pid reported/);
+    assert.equal(facts.open, null);
+    assert.equal(facts.aliveAfter, null);
   });
 });
 

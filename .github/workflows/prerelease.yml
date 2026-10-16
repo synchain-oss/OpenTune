@@ -407,6 +407,7 @@ jobs:
 
       # 契约与冒烟各自 continue-on-error，结果由最后的汇总统一判定（同 e2e-windows）。
       - name: Contract vectors against the side-car
+        id: contract
         continue-on-error: true
         timeout-minutes: 20
         working-directory: ot-mcp
@@ -424,6 +425,7 @@ jobs:
             "SC_CONTRACT_SECONDS=$($sw.Elapsed.TotalSeconds)" >> $env:GITHUB_ENV
           }
       - name: Smoke scenario against the side-car (hello, import, F0 ready, AUTO, export)
+        id: smoke
         continue-on-error: true
         timeout-minutes: 20
         working-directory: ot-mcp
@@ -452,9 +454,13 @@ jobs:
 
       - name: Summary (PASS / FAIL / SKIP / FLAKY-SKIP and time of every step)
         if: ${{ !cancelled() }}
+        env:
+          # The two runner steps are continue-on-error: their outcome, not only their JSON report, decides the result.
+          CONTRACT_OUTCOME: ${{ steps.contract.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
         run: |
           node $env:SC_SCRIPT results --steps $env:SC_STEPS --contract "$env:SC_OUT\contract.json" --smoke "$env:SC_OUT\smoke.json" `
-            --log "$env:SC_OUT\log-report.json" "--contract-seconds=$env:SC_CONTRACT_SECONDS" "--smoke-seconds=$env:SC_SMOKE_SECONDS"
+            --log "$env:SC_OUT\log-report.json" "--contract-outcome=$env:CONTRACT_OUTCOME" "--smoke-outcome=$env:SMOKE_OUTCOME" "--contract-seconds=$env:SC_CONTRACT_SECONDS" "--smoke-seconds=$env:SC_SMOKE_SECONDS"
           $where = if ($env:OT_LOCATION -eq 'custom') { '自定义安装目录' } else { '默认安装目录' }
           node $env:SC_SCRIPT summary --steps $env:SC_STEPS --title "side-car 冒烟：官方 OpenTune $env:OT_VERSION，$where" `
             --package "$env:PACKAGE_NAME.zip" --mcp-ref $env:MCP_REF --out $env:GITHUB_STEP_SUMMARY --json "$env:SC_OUT\sidecar-report.json"

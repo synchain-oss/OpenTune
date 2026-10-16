@@ -517,3 +517,36 @@ describe('release-package.mjs build and verify (end to end on synthetic inputs)'
     }
   });
 });
+
+describe('release-package.mjs control-json (used by the e2e workflow)', () => {
+  const run = (args) => spawnSync(process.execPath, [path.join(SCRIPTS, 'release-package.mjs'), ...args], { cwd: REPO_ROOT, encoding: 'utf8' });
+  it('writes the same valid opentune-control.json the package carries, and fails on an invalid d3d12 block', () => {
+    const dir = makeTempDir('ot-control-json-');
+    try {
+      const info = { schema: 1, controlApi: true, d3d12: { agilityVersion: '1.619.5', sdkVersion: 619, files: [{ name: 'D3D12Core.dll', sha256: 'c'.repeat(64) }] } };
+      fs.writeFileSync(path.join(dir, 'build-info.json'), JSON.stringify(info));
+      const out = path.join(dir, 'opentune-control.json');
+      const args = ['control-json', '--inputs', dir, '--out', out, '--commit', SHA, '--date', '2026-10-16T08:00:00Z', '--repository', 'example/OpenTune', '--server-url', 'https://github.invalid'];
+      const r = run(args);
+      assert.equal(r.status, 0, r.stderr + r.stdout);
+      const buf = fs.readFileSync(out);
+      assert.deepEqual(validateControlJson(buf), []);
+      const o = JSON.parse(buf.toString('utf8'));
+      assert.deepEqual(o.protocolMajors, [1]);
+      assert.equal(o.build.commit, SHA);
+      assert.equal(o.build.tag, null);
+      assert.equal(o.build.label, `rehearsal-${SHA.slice(0, 7)}`);
+      assert.equal(o.sourceUrl, `https://github.invalid/example/OpenTune/tree/${SHA}`);
+      assert.equal(o.officialRepository, 'https://github.invalid/YuFeng926/OpenTune');
+      // Missing build-info d3d12 data: refused, nothing written.
+      fs.writeFileSync(path.join(dir, 'build-info.json'), JSON.stringify({ ...info, d3d12: { agilityVersion: '', sdkVersion: 0, files: [] } }));
+      fs.rmSync(out);
+      const bad = run(args);
+      assert.notEqual(bad.status, 0);
+      assert.equal(fs.existsSync(out), false);
+      assert.equal(run(args.slice(0, 3)).status, 1); // missing options
+    } finally {
+      removeDir(dir);
+    }
+  });
+});

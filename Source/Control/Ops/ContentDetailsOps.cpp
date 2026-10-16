@@ -168,7 +168,7 @@ Result<JsonValue> runGetDetails(ControlOpContext& context, const DetailsParams& 
     const ControlPlacementRef via = named ? *named : showing.front();
 
     auto& processor = context.processor();
-    const auto versions = controlContentVersions(content.contentId, snapshot);
+    const auto versions = controlContentVersions(context, content.contentId, snapshot);
     const auto preferences = processor.getAppPreferences().getState().shared;
     std::vector<std::string> derived{"durationSec",
                                      "timeGrid.seeded",

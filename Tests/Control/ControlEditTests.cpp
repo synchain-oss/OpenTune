@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Scenarios of the undo history, the key and AUTO (edit.getHistory, edit.undo, edit.redo, content.setKey,
-// content.autoTune) against the real processor without a window or an audio device, with a test bridge for
-// the dirty flag and the selection. Contents get synthetic F0 (ControlContentFixtures.h). Entries the user
-// would make in the UI are pushed the way the UI pushes them: the same upstream undo actions, unwrapped.
-// Registered with the other processor scenarios in ControlProcessorTests.cpp.
+// Scenarios of the undo history, the key, AUTO, the note edits and the pitch shift (edit.getHistory, edit.undo,
+// edit.redo, content.setKey, content.autoTune, content.editNotes, content.setPitchShift) against the real
+// processor without a window or an audio device, with a test bridge for the dirty flag and the selection.
+// Contents get synthetic F0 (ControlContentFixtures.h). Entries the user would make in the UI are pushed the
+// way the UI pushes them: the same upstream undo actions, unwrapped. Registered with the other processor
+// scenarios in ControlProcessorTests.cpp.
 
 #include "ControlContentFixtures.h"
 #include "ControlProcessorSupport.h"
@@ -12,6 +13,7 @@
 
 #include "Content/EditableContentSnapshot.h"
 #include "Control/ControlDispatcher.h"
+#include "Control/ControlJobs.h"
 #include "Control/Edit/ContentEditTransaction.h"
 #include "Control/Edit/ControlOriginAction.h"
 #include "Control/Ops/OpsRegistry.h"
@@ -365,6 +367,31 @@ struct EditFixture
     }
 
     JsonValue history() { return memberOf(api.result("edit.getHistory"), "history"); }
+
+    /** The params of content.editNotes at the current revision. */
+    JsonValue editNotesParams(const std::string& ops, const std::string& extra = {})
+    {
+        return jsonOf("{\"contentId\":" + jsonQuoted(contentId) + ",\"expectedRevision\":" + jsonQuoted(revision())
+                      + ",\"ops\":" + ops + extra + "}");
+    }
+    JsonValue editNotes(const std::string& ops, const std::string& extra = {})
+    {
+        return api.result("content.editNotes", editNotesParams(ops, extra));
+    }
+
+    JsonValue snapNotes(const std::string& key, const std::string& extra = {})
+    {
+        return api.result("content.autoTune", jsonOf("{\"contentId\":" + jsonQuoted(contentId)
+                                                     + ",\"mode\":\"snapNotes\",\"expectedRevision\":"
+                                                     + jsonQuoted(revision()) + ",\"key\":" + key + extra + "}"));
+    }
+
+    JsonValue setPitchShift(int semitones, int cents)
+    {
+        return api.result("content.setPitchShift",
+                          jsonOf("{\"contentId\":" + jsonQuoted(contentId) + ",\"pitchShift\":{\"semitones\":"
+                                 + std::to_string(semitones) + ",\"cents\":" + std::to_string(cents) + "}}"));
+    }
 };
 
 // ---- Scenario: edit.getHistory, edit.undo, edit.redo -------------------------------------------------
@@ -866,14 +893,12 @@ void scenarioAutoTuneImpl()
             CONTROL_CHECK(toJsonString(memberOf(explicitKey, "keyUsed")) == R"({"root":0,"scale":"major"})");
         }
     }
-    for (const char* mode : {"snapNotes", "reference"}) {
-        const std::string extra = std::string(mode) == "reference" ? ",\"placementId\":" + jsonQuoted(f.placementId)
-                                                                   : R"(,"key":{"root":0,"scale":"major"})";
-        CONTROL_CHECK(f.api.fails("content.autoTune",
-                                  jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + ",\"mode\":\"" + mode
-                                         + "\",\"expectedRevision\":" + jsonQuoted(f.revision()) + extra + "}"),
-                                  "UNSUPPORTED", "capability_missing"));
-    }
+    // Mode reference needs reference.v1, which this build does not report.
+    CONTROL_CHECK(
+        f.api.fails("content.autoTune",
+                    jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + ",\"mode\":\"reference\",\"expectedRevision\":"
+                           + jsonQuoted(f.revision()) + ",\"placementId\":" + jsonQuoted(f.placementId) + "}"),
+                    "UNSUPPORTED", "capability_missing"));
     const std::string base = "{\"contentId\":" + jsonQuoted(f.contentId) + ",\"expectedRevision\":\"r1\",";
     for (const std::string params :
          {base + R"("mode":"regenerate"})", base + R"("mode":"notesOnly","key":{"root":0,"scale":"major"}})",
@@ -884,25 +909,898 @@ void scenarioAutoTuneImpl()
         CONTROL_CHECK(f.api.fails("content.autoTune", jsonOf(params), "INVALID_ARGUMENT", "invalid_params"));
 }
 
+// ---- Scenario: content.editNotes ----------------------------------------------------------------------
+
+/** The members of a note of content.getNotes that the note edits change. */
+const char* const kEditedNoteMembers[] = {"targetMidi",   "offsetCents",   "retuneSpeed",
+                                          "vibratoDepth", "vibratoRateHz", "pitchDriftScale"};
+
+JsonValue notesNow(EditFixture& f)
+{
+    return memberOf(f.api.result("content.getNotes", jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + "}")),
+                    "notes");
+}
+
+/** The reRenderQueued side effect of a write to the fixture's content. */
+std::string reRenderOf(const EditFixture& f)
+{
+    return R"({"reRenderQueued":{"contentIds":[)" + jsonQuoted(f.contentId) + R"(],"revert":null}})";
+}
+
+/** The changes of a write result as comparable texts without the revision the notes are referenced at: a
+    prediction references them at the current revision, the commit at the revision after it (PROTOCOL.md section
+    14.3). */
+std::vector<std::string> changesWithoutRevision(const JsonValue& changes)
+{
+    std::vector<std::string> out;
+    for (std::size_t i = 0; i < changes.size(); ++i) {
+        const auto& change = changes.at(i);
+        const auto& ref = memberOf(change, "ref");
+        out.push_back(memberOf(change, "entity").text() + "|" + memberOf(ref, "contentId").text() + "|"
+                      + toJsonString(memberOf(memberOf(ref, "note"), "index")) + "|"
+                      + toJsonString(memberOf(change, "label")) + "|" + toJsonString(memberOf(change, "fields")));
+    }
+    return out;
+}
+
+bool notesReferencedAt(const JsonValue& changes, const std::string& revision)
+{
+    for (std::size_t i = 0; i < changes.size(); ++i)
+        if (memberOf(memberOf(memberOf(changes.at(i), "ref"), "note"), "atRevision").text() != revision)
+            return false;
+    return true;
+}
+
+/** The notes after an edit: the hand-computed members of the expected notes, and every other member of every
+    note as before; start, end and detected pitch never change. */
+void checkNotesAfter(const JsonValue& before, const JsonValue& after,
+                     const std::map<int, std::map<std::string, double>>& expected)
+{
+    if (!CONTROL_CHECK(after.size() == before.size()))
+        return;
+    for (std::size_t i = 0; i < after.size(); ++i) {
+        const auto found = expected.find(static_cast<int>(i));
+        for (const char* member : kEditedNoteMembers) {
+            const double now = memberOf(after.at(i), member).asDouble();
+            const bool listed = found != expected.end() && found->second.count(member) != 0;
+            const double want = listed ? found->second.at(member) : memberOf(before.at(i), member).asDouble();
+            if (!CONTROL_CHECK(std::abs(now - want) < (listed ? 1e-3 : 1e-9)))
+                note("note " + std::to_string(i) + " " + member + ": " + std::to_string(now) + ", expected "
+                     + std::to_string(want));
+        }
+        for (const char* member : {"startContentSec", "endContentSec", "detectedMidi"})
+            CONTROL_CHECK(VectorMatcher::equal(memberOf(after.at(i), member), memberOf(before.at(i), member)));
+    }
+}
+
+/** G3: the undo restores exactly the state before, the redo the state after, through the API and through
+    OpenTune's own UndoManager (the UI's Ctrl+Z and Ctrl+Y); the content ends in the state before. */
+void checkUndoSymmetry(EditFixture& f, const std::string& undoId, const ContentState& before, const ContentState& after)
+{
+    auto& manager = f.processor->getUndoManager();
+    CONTROL_CHECK(memberOf(f.undo(undoId), "applied").asBoolean());
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before));
+    CONTROL_CHECK(memberOf(f.undo(undoId, "edit.redo"), "applied").asBoolean());
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), after));
+    CONTROL_CHECK(manager.undo() != nullptr);
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before));
+    CONTROL_CHECK(manager.redo() != nullptr);
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), after));
+    const auto undone = f.undo(undoId);
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before));
+    CONTROL_CHECK(VectorMatcher::equal(resultTokens(undone, f.contentId), freshTokens(f.api, f.contentId)));
+}
+
+/** One row of the table: the ops, the hand-computed values of the notes that change (index, then member and
+    value; every other member stays), the undo description and the number of commits (one per op that changes
+    something). */
+struct NoteEditCase
+{
+    const char* name;
+    std::string ops;
+    std::map<int, std::map<std::string, double>> expected;
+    std::string description;
+    std::size_t commits = 1;
+    bool clipKey = false;
+};
+
+std::vector<NoteEditCase> noteEditCases()
+{
+    const std::string move = juce::String::fromUTF8(u8"移动音符").toStdString();
+    const std::string snap = juce::String::fromUTF8(u8"音高吸附").toStdString();
+    const std::string knob = TRANS("Edit note parameter").toStdString();
+    const std::string drift = juce::String::fromUTF8(u8"漂移修正").toStdString();
+    // The four notes target 64, 69, 69.3 and 66.2 with no cent offset; the key is A minor.
+    return {
+        {"setTargetPitch",
+         R"([{"op":"setTargetPitch","select":{"indices":[1]},"targetMidi":70.5}])",
+         {{1, {{"targetMidi", 70.5}}}},
+         move},
+        {"setTargetPitch clears the cent offset",
+         R"([{"op":"shiftCents","select":{"indices":[2]},"deltaCents":40},)"
+         R"({"op":"setTargetPitch","select":{"indices":[2]},"targetMidi":69.3}])",
+         {},
+         move,
+         2},
+        {"shiftCents by range",
+         R"([{"op":"shiftCents","select":{"range":{"startContentSec":0,"endContentSec":1}},)"
+         R"("deltaCents":30}])",
+         {{0, {{"targetMidi", 64.3}, {"offsetCents", 30}}}},
+         move},
+        {"shiftCents on all",
+         R"([{"op":"shiftCents","select":{"all":true},"deltaCents":-25}])",
+         {{0, {{"targetMidi", 63.75}, {"offsetCents", -25}}},
+          {1, {{"targetMidi", 68.75}, {"offsetCents", -25}}},
+          {2, {{"targetMidi", 69.05}, {"offsetCents", -25}}},
+          {3, {{"targetMidi", 65.95}, {"offsetCents", -25}}}},
+         move},
+        {"snapToScale C major",
+         R"([{"op":"snapToScale","select":{"all":true},"key":{"root":0,"scale":"major"}}])",
+         {{2, {{"targetMidi", 69}}}, {3, {{"targetMidi", 67}}}},
+         snap},
+        {"snapToScale clipKey (A minor)",
+         R"([{"op":"snapToScale","select":{"all":true},"key":"clipKey"}])",
+         {{2, {{"targetMidi", 69}}}, {3, {{"targetMidi", 67}}}},
+         snap,
+         1,
+         true},
+        {"snapToScale: an exact tie goes up",
+         R"([{"op":"shiftCents","select":{"indices":[1]},"deltaCents":50},)"
+         R"({"op":"snapToScale","select":{"indices":[1]},"key":{"root":0,"scale":"chromatic"}}])",
+         {{1, {{"targetMidi", 70}}}},
+         move,
+         2},
+        {"ops apply in order",
+         R"([{"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":60},)"
+         R"({"op":"shiftCents","select":{"indices":[0,2]},"deltaCents":10}])",
+         {{0, {{"targetMidi", 60.1}, {"offsetCents", 10}}}, {2, {{"targetMidi", 69.4}, {"offsetCents", 10}}}},
+         move,
+         2},
+        // MIDI 0 is 0 Hz (PitchUtils::midiToFreq()): the note has no base pitch, reads as MIDI 0, and a cent
+        // shift moves only its offset, as the piano roll's pitch drag does (Note::getAdjustedPitch() stays 0).
+        {"setTargetPitch to MIDI 0 leaves the note without a base pitch",
+         R"([{"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":0},)"
+         R"({"op":"shiftCents","select":{"indices":[0]},"deltaCents":30}])",
+         {{0, {{"targetMidi", 0}, {"offsetCents", 30}}}},
+         move,
+         2},
+        {"snapToScale of a note without a base pitch: MIDI 0 is in C major, the offset goes",
+         R"([{"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":0},)"
+         R"({"op":"shiftCents","select":{"indices":[0]},"deltaCents":30},)"
+         R"({"op":"snapToScale","select":{"indices":[0]},"key":{"root":0,"scale":"major"}}])",
+         {{0, {{"targetMidi", 0}}}},
+         move,
+         3},
+        {"setTargetPitch gives a note without a base pitch one again",
+         R"([{"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":0},)"
+         R"({"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":62}])",
+         {{0, {{"targetMidi", 62}}}},
+         move,
+         2},
+        {"setParams of the knobs",
+         R"([{"op":"setParams","select":{"indices":[0,1]},"retuneSpeed":0.8,"vibratoDepth":20}])",
+         {{0, {{"retuneSpeed", 0.8}, {"vibratoDepth", 20}}}, {1, {{"retuneSpeed", 0.8}, {"vibratoDepth", 20}}}},
+         knob},
+        {"setParams vibrato rate",
+         R"([{"op":"setParams","select":{"indices":[3]},"vibratoRateHz":9}])",
+         {{3, {{"vibratoRateHz", 9}}}},
+         knob},
+        {"setParams drift",
+         R"([{"op":"setParams","select":{"all":true},"pitchDriftScale":0.5}])",
+         {{0, {{"pitchDriftScale", 0.5}}},
+          {1, {{"pitchDriftScale", 0.5}}},
+          {2, {{"pitchDriftScale", 0.5}}},
+          {3, {{"pitchDriftScale", 0.5}}}},
+         drift},
+    };
+}
+
+void checkNoteEditCase(EditFixture& f, const NoteEditCase& c)
+{
+    note(std::string("case: ") + c.name);
+    const auto before = stateOf(*f.processor, f.clip.key);
+    const auto notesBefore = notesNow(f);
+    const auto tokensBefore = freshTokens(f.api, f.contentId);
+    const auto revisionBefore = memberOf(tokensBefore, "revision").text();
+    const std::string extra = c.clipKey ? ",\"expectedKeyRevision\":" + jsonQuoted(f.keyRevision()) : std::string();
+
+    // dryRun predicts and changes nothing.
+    const auto predicted = f.editNotes(c.ops, extra + ",\"dryRun\":true");
+    CONTROL_CHECK(memberOf(predicted, "dryRun").asBoolean() && !memberOf(predicted, "applied").asBoolean()
+                  && memberOf(predicted, "undo").isNull());
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before));
+    CONTROL_CHECK(VectorMatcher::equal(freshTokens(f.api, f.contentId), tokensBefore));
+    CONTROL_CHECK(notesReferencedAt(memberOf(predicted, "changes"), revisionBefore));
+
+    const int marks = f.bridge.dirtyMarks;
+    const auto applied = f.editNotes(c.ops, extra);
+    CONTROL_CHECK(memberOf(applied, "applied").asBoolean() && !memberOf(applied, "noOp").asBoolean());
+    // The changed notes are the hand-computed ones, and the prediction lists the same changes and side
+    // effects, member for member (PROTOCOL.md section 14.2 rule 2).
+    std::vector<int> expectedIndexes;
+    for (const auto& entry : c.expected)
+        expectedIndexes.push_back(entry.first);
+    if (!CONTROL_CHECK(noteIndexes(memberOf(applied, "changes")) == expectedIndexes))
+        note("changes " + toJsonString(memberOf(applied, "changes")));
+    CONTROL_CHECK(changesWithoutRevision(memberOf(predicted, "changes"))
+                  == changesWithoutRevision(memberOf(applied, "changes")));
+    CONTROL_CHECK(toJsonString(memberOf(applied, "sideEffects")) == reRenderOf(f));
+    CONTROL_CHECK(toJsonString(memberOf(predicted, "sideEffects")) == reRenderOf(f));
+    CONTROL_CHECK(memberOf(applied, "created").size() == 0 && memberOf(applied, "removed").size() == 0
+                  && memberOf(applied, "warnings").size() == 0);
+    CONTROL_CHECK(memberOf(applied, "omittedChangeCount").asDouble() == 0
+                  && memberOf(predicted, "omittedChangeCount").asDouble() == 0);
+    // The tokens are read back and equal a fresh read: revision changed, the grid and the key did not; the
+    // notes are referenced at the new revision.
+    const auto tokens = resultTokens(applied, f.contentId);
+    CONTROL_CHECK(VectorMatcher::equal(tokens, freshTokens(f.api, f.contentId)));
+    CONTROL_CHECK(memberOf(tokens, "revision").text() != revisionBefore);
+    CONTROL_CHECK(memberOf(tokens, "gridRevision").text() == memberOf(tokensBefore, "gridRevision").text()
+                  && memberOf(tokens, "keyRevision").text() == memberOf(tokensBefore, "keyRevision").text());
+    CONTROL_CHECK(notesReferencedAt(memberOf(applied, "changes"), memberOf(tokens, "revision").text()));
+    // One undo step with the UI's description, one PianoRollEditAction per op that changed notes.
+    const auto& undo = memberOf(applied, "undo");
+    CONTROL_CHECK(memberOf(undo, "undoable").asBoolean() && memberOf(undo, "description").text() == c.description);
+    const auto& inner = memberOf(undo, "innerActions");
+    CONTROL_CHECK(inner.size() == c.commits);
+    for (std::size_t i = 0; i < inner.size(); ++i)
+        CONTROL_CHECK(inner.at(i).text() == "PianoRollEditAction");
+    CONTROL_CHECK(f.bridge.dirtyMarks > marks && memberOf(memberOf(applied, "dirty"), "after").asBoolean());
+    checkNotesAfter(notesBefore, notesNow(f), c.expected);
+    checkUndoSymmetry(f, memberOf(undo, "undoId").text(), before, stateOf(*f.processor, f.clip.key));
+}
+
+/** The checks before the change and the calls that change nothing. */
+void checkNoteEditErrors(EditFixture& f)
+{
+    const auto before = stateOf(*f.processor, f.clip.key);
+    const auto undoCount = memberOf(f.history(), "undoCount").asDouble();
+    const std::string shiftAll = R"([{"op":"shiftCents","select":{"all":true},"deltaCents":10}])";
+    // An index beyond the notes at expectedRevision.
+    CONTROL_CHECK(isErrorOf(
+        f.api.request("content.editNotes", f.editNotesParams(R"([{"op":"shiftCents","select":{"indices":[0,4]},)"
+                                                             R"("deltaCents":10}])")),
+        "NOT_FOUND", "unknown_handle", false));
+    // An old revision, an old key revision with clipKey.
+    const auto oldRevision = f.revision();
+    const auto oldKeyRevision = f.keyRevision();
+    const auto first = f.editNotes(shiftAll);
+    CONTROL_CHECK(isErrorOf(
+        f.api.request("content.editNotes", jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + ",\"expectedRevision\":"
+                                                  + jsonQuoted(oldRevision) + ",\"ops\":" + shiftAll + "}")),
+        "REVISION_CONFLICT", "content_changed", false));
+    f.undo(memberOf(memberOf(first, "undo"), "undoId").text());
+    f.api.result("content.setKey",
+                 jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + R"(,"key":{"root":9,"scale":"dorian"}})"));
+    CONTROL_CHECK(
+        isErrorOf(f.api.request("content.editNotes",
+                                f.editNotesParams(R"([{"op":"snapToScale","select":{"all":true},"key":"clipKey"}])",
+                                                  ",\"expectedKeyRevision\":" + jsonQuoted(oldKeyRevision))),
+                  "REVISION_CONFLICT", "key_changed", false));
+    // The UI is in the middle of a gesture.
+    f.bridge.busy.pointerDown = true;
+    CONTROL_CHECK(
+        isErrorOf(f.api.request("content.editNotes", f.editNotesParams(shiftAll)), "BUSY", "pointer_down", true));
+    f.bridge.busy.pointerDown = false;
+    // Edits that change nothing: the target where it is, a range without notes, a parameter as it is.
+    for (const char* ops :
+         {R"([{"op":"setTargetPitch","select":{"indices":[1]},"targetMidi":69}])",
+          R"([{"op":"shiftCents","select":{"range":{"startContentSec":1.6,"endContentSec":1.9}},"deltaCents":10}])",
+          R"([{"op":"shiftCents","select":{"all":true},"deltaCents":0}])"}) {
+        const auto same = f.editNotes(ops);
+        CONTROL_CHECK(memberOf(same, "applied").asBoolean() && memberOf(same, "noOp").asBoolean());
+        CONTROL_CHECK(toJsonString(memberOf(same, "undo")) == R"({"undoable":false,"reason":"no_op","revert":null})");
+    }
+    CONTROL_CHECK(sameNotes(stateOf(*f.processor, f.clip.key).notes, before.notes));
+    // No entry is left: the key change (which has none) cleared the undone shift from the redo history, and the
+    // no-ops add none.
+    CONTROL_CHECK(memberOf(f.history(), "undoCount").asDouble() == undoCount);
+    CONTROL_CHECK(!memberOf(f.history(), "canRedo").asBoolean());
+    // targetMidi 0 again on a note that has no base pitch and no offset changes nothing (both read as MIDI 0).
+    const std::string toZero = R"([{"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":0}])";
+    const auto unpitched = f.editNotes(toZero);
+    CONTROL_CHECK(!memberOf(unpitched, "noOp").asBoolean()
+                  && memberOf(notesNow(f).at(0), "targetMidi").asDouble() == 0.0);
+    const auto zeroAgain = f.editNotes(toZero);
+    CONTROL_CHECK(memberOf(zeroAgain, "applied").asBoolean() && memberOf(zeroAgain, "noOp").asBoolean());
+    f.undo(memberOf(memberOf(unpitched, "undo"), "undoId").text());
+    CONTROL_CHECK(sameNotes(stateOf(*f.processor, f.clip.key).notes, before.notes));
+
+    // The readiness gate, and clipKey on a content without a key.
+    {
+        ClipSpec spec;
+        spec.name = "running";
+        spec.trackId = 1;
+        spec.durationSec = 2.0;
+        spec.analysis = Analysis::Running;
+        fixtureAddClip(*f.processor, spec);
+        ClipSpec keyless;
+        keyless.name = "keyless";
+        keyless.trackId = 2;
+        keyless.notes = {{0.5, 1.5, 64.0}};
+        fixtureAddClip(*f.processor, keyless);
+        const auto project = f.api.result("project.get");
+        const auto running = fixtureHandlesOf(project, 1, 0.0);
+        const auto noKey = fixtureHandlesOf(project, 2, 0.0);
+        if (CONTROL_CHECK(running.has_value() && noKey.has_value())) {
+            CONTROL_CHECK(isErrorOf(
+                f.api.request("content.editNotes", jsonOf("{\"contentId\":" + jsonQuoted(running->contentId)
+                                                          + R"(,"expectedRevision":"r1","ops":)" + shiftAll + "}")),
+                "NOT_READY", "f0_not_ready", true));
+            const auto tokens = freshTokens(f.api, noKey->contentId);
+            CONTROL_CHECK(
+                f.api.fails("content.editNotes",
+                            jsonOf("{\"contentId\":" + jsonQuoted(noKey->contentId)
+                                   + ",\"expectedRevision\":" + jsonQuoted(memberOf(tokens, "revision").text())
+                                   + ",\"expectedKeyRevision\":" + jsonQuoted(memberOf(tokens, "keyRevision").text())
+                                   + R"(,"ops":[{"op":"snapToScale","select":{"all":true},"key":"clipKey"}]})"),
+                            "INVALID_ARGUMENT", ""));
+            CONTROL_CHECK(VectorMatcher::equal(freshTokens(f.api, noKey->contentId), tokens));
+        }
+    }
+
+    // Params: closed objects, the forms of select and of every op, the ranges, clipKey with its key revision.
+    const std::string head = "{\"contentId\":" + jsonQuoted(f.contentId) + ",\"expectedRevision\":\"r1\"";
+    const std::string select = R"("select":{"all":true})";
+    for (const std::string& params : {
+             head + "}",
+             head + R"(,"ops":[]})",
+             head + R"(,"ops":[{"op":"other",)" + select + "}]}",
+             head + R"(,"ops":[{"op":"shiftCents",)" + select + "}]}",
+             head + R"(,"ops":[{"op":"shiftCents",)" + select + R"(,"deltaCents":1201}]})",
+             head + R"(,"ops":[{"op":"shiftCents",)" + select + R"(,"deltaCents":10,"x":1}]})",
+             head + R"(,"ops":[{"op":"setTargetPitch",)" + select + R"(,"targetMidi":128}]})",
+             head + R"(,"ops":[{"op":"setTargetPitch","targetMidi":60}]})",
+             head + R"(,"ops":[{"op":"setParams",)" + select + "}]}",
+             head + R"(,"ops":[{"op":"setParams",)" + select + R"(,"vibratoRateHz":2}]})",
+             head + R"(,"ops":[{"op":"setParams",)" + select + R"(,"pitchDriftScale":4}]})",
+             head + R"(,"ops":[{"op":"snapToScale",)" + select + R"(,"key":{"root":0,"scale":"lydian"}}]})",
+             head + R"(,"ops":[{"op":"snapToScale",)" + select + R"(,"key":"clipKey"}]})",
+             head + R"(,"ops":[{"op":"shiftCents","select":{"indices":[0,0]},"deltaCents":10}]})",
+             head + R"(,"ops":[{"op":"shiftCents","select":{"indices":[-1]},"deltaCents":10}]})",
+             head + R"(,"ops":[{"op":"shiftCents","select":{"indices":[1.5]},"deltaCents":10}]})",
+             head + R"(,"ops":[{"op":"shiftCents","select":{"indices":[]},"deltaCents":10}]})",
+             head + R"(,"ops":[{"op":"shiftCents","select":{"all":false},"deltaCents":10}]})",
+             head + R"(,"ops":[{"op":"shiftCents","select":{"all":true,"indices":[0]},"deltaCents":10}]})",
+             head
+                 + R"(,"ops":[{"op":"shiftCents","select":{"range":{"startTimelineSec":0,"endTimelineSec":1}},)"
+                   R"("deltaCents":10}]})",
+             head + R"(,"ops":[{"op":"shiftCents",)" + select + R"(,"deltaCents":10}],"dryRun":"yes"})",
+             head + R"(,"ops":[{"op":"shiftCents",)" + select + R"(,"deltaCents":10}],"extra":1})",
+         })
+        CONTROL_CHECK(f.api.fails("content.editNotes", jsonOf(params), "INVALID_ARGUMENT", "invalid_params"));
+    CONTROL_CHECK(sameNotes(stateOf(*f.processor, f.clip.key).notes, before.notes));
+}
+
+void scenarioEditNotesImpl()
+{
+    EditFixture f;
+    if (!f.open(fourNoteSpec()))
+        return;
+    const auto initial = stateOf(*f.processor, f.clip.key);
+    for (const auto& c : noteEditCases())
+        checkNoteEditCase(f, c);
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
+    checkNoteEditErrors(f);
+    CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
+}
+
+// ---- Scenario: content.setPitchShift -----------------------------------------------------------------
+
+JsonValue pitchShiftNow(EditFixture& f)
+{
+    return memberOf(f.api.result("content.getDetails", jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + "}")),
+                    "pitchShift");
+}
+
+/** The components of the revision vector that a write changed, of the fixture's content. */
+std::vector<std::string> changedComponents(const JsonValue& result, const std::string& contentId)
+{
+    std::vector<std::string> names;
+    const auto& contents = memberOf(memberOf(result, "revisionDiff"), "contents");
+    for (std::size_t i = 0; i < contents.size(); ++i) {
+        if (memberOf(contents.at(i), "contentId").text() != contentId)
+            continue;
+        const auto& changed = memberOf(contents.at(i), "changed");
+        for (std::size_t c = 0; c < changed.size(); ++c)
+            names.push_back(changed.keyAt(c));
+    }
+    return names;
+}
+
+/** Rule 9 with a pitch shift: notesOnly after the API's pitch shift replaced the notes, so undoing the shift puts
+    back the settings only and keeps the generated notes, scaled back by the shift as the dialog scales notes. */
+void checkPitchShiftAfterNotesOnly()
+{
+    EditFixture f;
+    if (!f.open(fourNoteSpec()))
+        return;
+    const auto shift = f.setPitchShift(2, 0);
+    const auto shiftId = memberOf(memberOf(shift, "undo"), "undoId").text();
+    f.api.result("content.autoTune",
+                 jsonOf("{\"contentId\":" + jsonQuoted(f.contentId)
+                        + ",\"mode\":\"notesOnly\",\"expectedRevision\":" + jsonQuoted(f.revision()) + "}"));
+    const auto generated = notesNow(f);
+    const auto undone = f.undo(shiftId);
+    CONTROL_CHECK(memberOf(undone, "applied").asBoolean() && !memberOf(undone, "noOp").asBoolean());
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":0,"cents":0})");
+    const auto restored = notesNow(f);
+    if (CONTROL_CHECK(restored.size() == generated.size() && restored.size() > 0))
+        for (std::size_t i = 0; i < restored.size(); ++i) {
+            CONTROL_CHECK(std::abs(memberOf(restored.at(i), "targetMidi").asDouble()
+                                   - (memberOf(generated.at(i), "targetMidi").asDouble() - 2.0))
+                          < 1e-3);
+            CONTROL_CHECK(memberOf(restored.at(i), "startContentSec").asDouble()
+                          == memberOf(generated.at(i), "startContentSec").asDouble());
+        }
+    // The redo sets the shift again on the same notes.
+    f.undo(shiftId, "edit.redo");
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":2,"cents":0})");
+    const auto again = notesNow(f);
+    if (CONTROL_CHECK(again.size() == generated.size()))
+        for (std::size_t i = 0; i < again.size(); ++i)
+            CONTROL_CHECK(std::abs(memberOf(again.at(i), "targetMidi").asDouble()
+                                   - memberOf(generated.at(i), "targetMidi").asDouble())
+                          < 1e-3);
+}
+
+void checkPitchShift()
+{
+    EditFixture f;
+    if (!f.open(fourNoteSpec()))
+        return;
+    auto& manager = f.processor->getUndoManager();
+    const auto before = stateOf(*f.processor, f.clip.key);
+    const auto tokensBefore = freshTokens(f.api, f.contentId);
+    const auto revision = memberOf(tokensBefore, "revision").text();
+    const auto notesBefore = notesNow(f);
+
+    // +2 semitones: one undo step; only the pitchShift component changes, revision stays (PROTOCOL.md section 10
+    // rule 2), the key is not transposed.
+    const int marks = f.bridge.dirtyMarks;
+    const auto shifted = f.setPitchShift(2, 0);
+    CONTROL_CHECK(memberOf(shifted, "applied").asBoolean() && !memberOf(shifted, "noOp").asBoolean());
+    CONTROL_CHECK(toJsonString(memberOf(shifted, "changes"))
+                  == R"([{"entity":"pitchShift","ref":{"contentId":)" + jsonQuoted(f.contentId)
+                         + R"(},"label":null,"fields":{"semitones":{"before":0,"after":2,"unit":"semitones"}}}])");
+    CONTROL_CHECK(changedComponents(shifted, f.contentId) == std::vector<std::string>{"pitchShift"});
+    CONTROL_CHECK(toJsonString(memberOf(shifted, "warnings"))
+                  == R"([{"code":"KEY_NOT_TRANSPOSED","subject":{"contentId":)" + jsonQuoted(f.contentId)
+                         + R"(},"data":null}])");
+    CONTROL_CHECK(toJsonString(memberOf(shifted, "sideEffects")) == reRenderOf(f));
+    const auto tokens = resultTokens(shifted, f.contentId);
+    CONTROL_CHECK(VectorMatcher::equal(tokens, freshTokens(f.api, f.contentId)));
+    CONTROL_CHECK(VectorMatcher::equal(tokens, tokensBefore));
+    const auto& undo = memberOf(shifted, "undo");
+    CONTROL_CHECK(memberOf(undo, "undoable").asBoolean()
+                  && toJsonString(memberOf(undo, "innerActions")) == R"(["PitchShiftEditAction"])");
+    CONTROL_CHECK(memberOf(undo, "description").text() == "Pitch Shift +2st");
+    CONTROL_CHECK(f.bridge.dirtyMarks > marks);
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":2,"cents":0})");
+    // OpenTune scales the stored notes with the shift (commitPitchShiftEdit()), so the targets read two
+    // semitones higher while revision stays.
+    const auto notesShifted = notesNow(f);
+    if (CONTROL_CHECK(notesShifted.size() == notesBefore.size()))
+        for (std::size_t i = 0; i < notesShifted.size(); ++i)
+            CONTROL_CHECK(std::abs(memberOf(notesShifted.at(i), "targetMidi").asDouble()
+                                   - memberOf(notesBefore.at(i), "targetMidi").asDouble() - 2.0)
+                          < 1e-3);
+    const auto after = stateOf(*f.processor, f.clip.key);
+    const auto undoId = memberOf(undo, "undoId").text();
+
+    // The current shift is a no-op.
+    const auto same = f.setPitchShift(2, 0);
+    CONTROL_CHECK(memberOf(same, "noOp").asBoolean()
+                  && toJsonString(memberOf(same, "undo")) == R"({"undoable":false,"reason":"no_op","revert":null})");
+    CONTROL_CHECK(memberOf(memberOf(f.history(), "undoTop"), "undoId").text() == undoId);
+
+    // G3: the undo puts back the exact state, the redo the shifted one; revision never changes.
+    const auto undone = f.undo(undoId);
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before));
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":0,"cents":0})");
+    CONTROL_CHECK(changedComponents(undone, f.contentId) == std::vector<std::string>{"pitchShift"});
+    CONTROL_CHECK(memberOf(resultTokens(undone, f.contentId), "revision").text() == revision);
+    const auto redone = f.undo(undoId, "edit.redo");
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), after));
+    CONTROL_CHECK(memberOf(resultTokens(redone, f.contentId), "revision").text() == revision);
+    // The user's Ctrl+Z and Ctrl+Y of the API's entry (OpenTune's UndoManager): the next read sees the step, and
+    // revision stays as well.
+    CONTROL_CHECK(manager.undo() != nullptr);
+    CONTROL_CHECK(memberOf(freshTokens(f.api, f.contentId), "revision").text() == revision);
+    CONTROL_CHECK(manager.redo() != nullptr);
+    CONTROL_CHECK(memberOf(freshTokens(f.api, f.contentId), "revision").text() == revision);
+
+    // A pitch shift in the UI's dialog (commitPitchShiftEdit(), then the action on the history): revision stays.
+    auto dialog = f.processor->getContentCommands()->commitPitchShiftEdit(f.clip.key, PitchShiftSettings{-1, 50});
+    if (CONTROL_CHECK(dialog != nullptr))
+        manager.addAction(std::move(dialog));
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":-1,"cents":50})");
+    CONTROL_CHECK(memberOf(freshTokens(f.api, f.contentId), "revision").text() == revision);
+    // A shift of the same total cents is one OpenTune does not apply: a no-op.
+    const auto equalTotal = f.setPitchShift(0, -50);
+    CONTROL_CHECK(memberOf(equalTotal, "noOp").asBoolean());
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":-1,"cents":50})");
+    // A note edit after the shifts changes revision, as always.
+    const auto edited = f.editNotes(R"([{"op":"shiftCents","select":{"all":true},"deltaCents":10}])");
+    CONTROL_CHECK(memberOf(resultTokens(edited, f.contentId), "revision").text() != revision);
+
+    // Errors: handles first, then the readiness gate; params.
+    CONTROL_CHECK(f.api.fails("content.setPitchShift",
+                              jsonOf("{\"contentId\":" + jsonQuoted("c:" + f.instanceShort + ":0:4294967295")
+                                     + R"(,"pitchShift":{"semitones":1,"cents":0}})"),
+                              "NOT_FOUND", "unknown_handle"));
+    for (const char* params : {R"({"contentId":"c:00000000:0:1"})", R"({"pitchShift":{"semitones":1,"cents":0}})",
+                               R"({"contentId":"c:00000000:0:1","pitchShift":{"semitones":25,"cents":0}})",
+                               R"({"contentId":"c:00000000:0:1","pitchShift":{"semitones":1,"cents":100}})",
+                               R"({"contentId":"c:00000000:0:1","pitchShift":{"semitones":1.5,"cents":0}})",
+                               R"({"contentId":"c:00000000:0:1","pitchShift":{"semitones":1}})",
+                               R"({"contentId":"c:00000000:0:1","pitchShift":{"semitones":1,"cents":0,"x":0}})",
+                               R"({"contentId":"c:00000000:0:1","pitchShift":{"semitones":1,"cents":0},"x":1})"})
+        CONTROL_CHECK(f.api.fails("content.setPitchShift", jsonOf(params), "INVALID_ARGUMENT", "invalid_params"));
+    CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
+}
+
+/** Rules 5 and 9: after notesOnly the API's pitch shift puts back the settings only, through
+    commitPitchShiftEdit(). When the content already has the shift the step would set, that call applies nothing:
+    the step is used up, changes nothing and reports noOp with UNDO_NO_EFFECT, for the undo and the redo; with
+    something to set, the step takes effect again. */
+void checkPitchShiftStepWithoutEffect()
+{
+    EditFixture f;
+    if (!f.open(fourNoteSpec()))
+        return;
+    const auto shift = f.setPitchShift(2, 0);
+    const auto shiftId = memberOf(memberOf(shift, "undo"), "undoId").text();
+    f.api.result("content.autoTune",
+                 jsonOf("{\"contentId\":" + jsonQuoted(f.contentId)
+                        + ",\"mode\":\"notesOnly\",\"expectedRevision\":" + jsonQuoted(f.revision()) + "}"));
+    const std::string noEffect = R"([{"code":"UNDO_NO_EFFECT","subject":null,"data":null}])";
+    // The shift goes back to 0 through the content commands without an undo entry, so the undo of the API's
+    // shift finds the settings it would set already there.
+    CONTROL_CHECK(f.processor->getContentCommands()->commitPitchShiftEdit(f.clip.key, PitchShiftSettings{}) != nullptr);
+    const auto unshifted = stateOf(*f.processor, f.clip.key);
+    const auto undone = f.undo(shiftId);
+    CONTROL_CHECK(memberOf(undone, "applied").asBoolean() && memberOf(undone, "noOp").asBoolean());
+    CONTROL_CHECK(toJsonString(memberOf(undone, "warnings")) == noEffect);
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), unshifted));
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":0,"cents":0})");
+    CONTROL_CHECK(memberOf(memberOf(f.history(), "redoTop"), "undoId").text() == shiftId);
+    // Likewise the redo, when the shift it would set is already there.
+    CONTROL_CHECK(f.processor->getContentCommands()->commitPitchShiftEdit(f.clip.key, PitchShiftSettings{2, 0})
+                  != nullptr);
+    const auto shifted = stateOf(*f.processor, f.clip.key);
+    const auto redone = f.undo(shiftId, "edit.redo");
+    CONTROL_CHECK(memberOf(redone, "applied").asBoolean() && memberOf(redone, "noOp").asBoolean());
+    CONTROL_CHECK(toJsonString(memberOf(redone, "warnings")) == noEffect);
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), shifted));
+    CONTROL_CHECK(memberOf(memberOf(f.history(), "undoTop"), "undoId").text() == shiftId);
+    // With a shift to set, the undo takes effect and has no warning.
+    const auto again = f.undo(shiftId);
+    CONTROL_CHECK(memberOf(again, "applied").asBoolean() && !memberOf(again, "noOp").asBoolean());
+    CONTROL_CHECK(memberOf(again, "warnings").size() == 0);
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":0,"cents":0})");
+}
+
+/** PROTOCOL.md section 10 rule 6 for content.getNotes, whose targets include the pitch shift: a cursor read
+    before a shift is stale after it (REVISION_CONFLICT(cursor_stale)) although `revision` stays, also after the
+    undo of the shift; a fresh read pages through the shifted notes. */
+void checkNotesCursorAcrossPitchShift()
+{
+    EditFixture f;
+    if (!f.open(fourNoteSpec()))
+        return;
+    const std::string byContent = "{\"contentId\":" + jsonQuoted(f.contentId) + ",\"limit\":2";
+    const auto withCursor = [&byContent](const JsonValue& page) {
+        return jsonOf(byContent + ",\"cursor\":" + jsonQuoted(memberOf(page, "nextCursor").text()) + "}");
+    };
+    const auto first = f.api.result("content.getNotes", jsonOf(byContent + "}"));
+    if (!CONTROL_CHECK(memberOf(first, "nextCursor").isString()))
+        return;
+    // Without a change the cursor pages on.
+    CONTROL_CHECK(memberOf(f.api.result("content.getNotes", withCursor(first)), "notes").size() == 2);
+    const auto revision = f.revision();
+    const auto shift = f.setPitchShift(2, 0);
+    CONTROL_CHECK(f.revision() == revision);
+    CONTROL_CHECK(
+        isErrorOf(f.api.request("content.getNotes", withCursor(first)), "REVISION_CONFLICT", "cursor_stale", false));
+    // A fresh read pages through the shifted notes: the second page's targets are two semitones up.
+    const auto shiftedFirst = f.api.result("content.getNotes", jsonOf(byContent + "}"));
+    const auto second = f.api.result("content.getNotes", withCursor(shiftedFirst));
+    const auto& notes = memberOf(second, "notes");
+    if (CONTROL_CHECK(notes.size() == 2)) {
+        CONTROL_CHECK(std::abs(memberOf(notes.at(0), "targetMidi").asDouble() - 71.3) < 1e-3);
+        CONTROL_CHECK(std::abs(memberOf(notes.at(1), "targetMidi").asDouble() - 68.2) < 1e-3);
+    }
+    // The undo of the shift makes that cursor stale in turn.
+    f.undo(memberOf(memberOf(shift, "undo"), "undoId").text());
+    CONTROL_CHECK(f.revision() == revision);
+    CONTROL_CHECK(isErrorOf(f.api.request("content.getNotes", withCursor(shiftedFirst)), "REVISION_CONFLICT",
+                            "cursor_stale", false));
+}
+
+/** The same for content.getPitchCurve: a pitch shift changes every correctedMidi (the correction segments are
+    scaled, the original F0 is rendered with the shift's gain) without changing `revision`, so a cursor read before
+    the shift is stale after it, and one read after it is stale after the undo of the shift. */
+void checkPitchCurveCursorAcrossPitchShift()
+{
+    EditFixture f;
+    if (!f.open(fourNoteSpec()))
+        return;
+    // Inside the first note, so that both pages have voiced frames.
+    const std::string byContent = "{\"contentId\":" + jsonQuoted(f.contentId)
+                                  + R"(,"range":{"startContentSec":0.6,"endContentSec":1.4},"limit":20)";
+    const auto withCursor = [&byContent](const JsonValue& page) {
+        return jsonOf(byContent + ",\"cursor\":" + jsonQuoted(memberOf(page, "nextCursor").text()) + "}");
+    };
+    const auto first = f.api.result("content.getPitchCurve", jsonOf(byContent + "}"));
+    if (!CONTROL_CHECK(memberOf(first, "nextCursor").isString()))
+        return;
+    // Without a change the cursor pages on.
+    const auto secondBefore = f.api.result("content.getPitchCurve", withCursor(first));
+    CONTROL_CHECK(memberOf(secondBefore, "pointCount").asDouble() == 20);
+    const auto revision = f.revision();
+    const auto shift = f.setPitchShift(2, 0);
+    CONTROL_CHECK(f.revision() == revision);
+    CONTROL_CHECK(isErrorOf(f.api.request("content.getPitchCurve", withCursor(first)), "REVISION_CONFLICT",
+                            "cursor_stale", false));
+    // A fresh read pages through the shifted curve: every voiced frame of the second page is two semitones up.
+    const auto shiftedFirst = f.api.result("content.getPitchCurve", jsonOf(byContent + "}"));
+    const auto secondAfter = f.api.result("content.getPitchCurve", withCursor(shiftedFirst));
+    const auto& before = memberOf(secondBefore, "correctedMidi");
+    const auto& after = memberOf(secondAfter, "correctedMidi");
+    int voiced = 0;
+    if (CONTROL_CHECK(before.size() == after.size()))
+        for (std::size_t i = 0; i < before.size(); ++i) {
+            CONTROL_CHECK(before.at(i).isNumber() == after.at(i).isNumber());
+            if (!before.at(i).isNumber() || !after.at(i).isNumber())
+                continue;
+            ++voiced;
+            CONTROL_CHECK(std::abs(after.at(i).asDouble() - before.at(i).asDouble() - 2.0) < 1e-3);
+        }
+    CONTROL_CHECK(voiced > 0);
+    // The undo of the shift makes that cursor stale in turn; revision still stays.
+    f.undo(memberOf(memberOf(shift, "undo"), "undoId").text());
+    CONTROL_CHECK(f.revision() == revision);
+    CONTROL_CHECK(isErrorOf(f.api.request("content.getPitchCurve", withCursor(shiftedFirst)), "REVISION_CONFLICT",
+                            "cursor_stale", false));
+}
+
+/** A pitch shift and a time-grid edit of one content are separate aspects, also for the pitch-shift steps that the
+    tokens leave out: the shift changes pitchShift only, a content.shiftTiming after it the grid only (revision and
+    the shift stay), each undo takes back its own aspect, and content.getDetails shows both. */
+void checkPitchShiftWithTimeGrid()
+{
+    auto spec = fourNoteSpec();
+    spec.gridHandlesContentSec = {1.0, 2.0, 3.0};
+    EditFixture f;
+    if (!f.open(spec))
+        return;
+    const auto tokensBefore = freshTokens(f.api, f.contentId);
+    const auto revision = memberOf(tokensBefore, "revision").text();
+    const auto grid = memberOf(tokensBefore, "gridRevision").text();
+
+    const auto shift = f.setPitchShift(2, 0);
+    CONTROL_CHECK(changedComponents(shift, f.contentId) == std::vector<std::string>{"pitchShift"});
+    CONTROL_CHECK(memberOf(resultTokens(shift, f.contentId), "revision").text() == revision);
+    CONTROL_CHECK(memberOf(resultTokens(shift, f.contentId), "gridRevision").text() == grid);
+
+    const std::string timingParams = "{\"contentId\":" + jsonQuoted(f.contentId)
+                                     + ",\"expectedGridRevision\":" + jsonQuoted(grid)
+                                     + R"(,"range":{"startOutputSec":1.5,"endOutputSec":2.5},"deltaSec":0.25})";
+    const auto timing = f.api.result("content.shiftTiming", jsonOf(timingParams));
+    CONTROL_CHECK(changedComponents(timing, f.contentId) == std::vector<std::string>{"grid"});
+    const auto timingTokens = resultTokens(timing, f.contentId);
+    CONTROL_CHECK(VectorMatcher::equal(timingTokens, freshTokens(f.api, f.contentId)));
+    CONTROL_CHECK(memberOf(timingTokens, "revision").text() == revision
+                  && memberOf(timingTokens, "gridRevision").text() != grid);
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":2,"cents":0})");
+    const auto details = f.api.result("content.getDetails", jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + "}"));
+    CONTROL_CHECK(toJsonString(memberOf(details, "pitchShift")) == R"({"semitones":2,"cents":0})");
+    const auto& handles = memberOf(memberOf(details, "timeGrid"), "handles");
+    if (CONTROL_CHECK(handles.size() == 3))
+        CONTROL_CHECK(std::abs(memberOf(handles.at(1), "outputSec").asDouble() - 2.25) < 1e-6);
+
+    // The undo of the grid edit keeps the shift; the undo of the shift then keeps the grid.
+    const auto gridUndone = f.undo(memberOf(memberOf(timing, "undo"), "undoId").text());
+    CONTROL_CHECK(changedComponents(gridUndone, f.contentId) == std::vector<std::string>{"grid"});
+    CONTROL_CHECK(memberOf(resultTokens(gridUndone, f.contentId), "revision").text() == revision);
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":2,"cents":0})");
+    const auto gridAfterUndo = memberOf(resultTokens(gridUndone, f.contentId), "gridRevision").text();
+    const auto shiftUndone = f.undo(memberOf(memberOf(shift, "undo"), "undoId").text());
+    CONTROL_CHECK(changedComponents(shiftUndone, f.contentId) == std::vector<std::string>{"pitchShift"});
+    CONTROL_CHECK(VectorMatcher::equal(resultTokens(shiftUndone, f.contentId), freshTokens(f.api, f.contentId)));
+    CONTROL_CHECK(memberOf(resultTokens(shiftUndone, f.contentId), "revision").text() == revision);
+    CONTROL_CHECK(memberOf(resultTokens(shiftUndone, f.contentId), "gridRevision").text() == gridAfterUndo);
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":0,"cents":0})");
+}
+
+/** ControlPitchShiftLedger on its own: a pitch-shift step is left out of the counters. When the counters of the
+    same contentId go back (the content object was built anew), the content starts over: its counters are
+    returned as they are, and the next pitch-shift step is left out again rather than counted only once the
+    counters pass the old ones. */
+void checkPitchShiftLedgerRebuilt()
+{
+    constexpr std::uint64_t epoch = 1;
+    const std::string id = "c:01234567:1:1";
+    ControlPitchShiftLedger ledger;
+    EditableContentSnapshot snapshot;
+    const auto observed = [&](std::uint64_t notes, std::uint64_t pitch, int semitones) {
+        snapshot.notesRevision = notes;
+        snapshot.pitchRevision = pitch;
+        snapshot.pitchShiftSettings.semitone = semitones;
+        const auto counters = ledger.observe(id, epoch, snapshot);
+        return std::make_pair(counters.notes, counters.pitch);
+    };
+    using Pair = std::pair<std::uint64_t, std::uint64_t>;
+    CONTROL_CHECK(observed(5, 7, 0) == Pair(5, 7));
+    // A pitch shift: the settings change and both counters advance; the step is left out.
+    CONTROL_CHECK(observed(6, 8, 2) == Pair(5, 7));
+    // A note edit after it counts.
+    CONTROL_CHECK(observed(7, 9, 2) == Pair(6, 8));
+    // The content object is built anew under the same contentId: its counters start again.
+    CONTROL_CHECK(observed(1, 1, 2) == Pair(1, 1));
+    // A pitch shift of the new object is left out, a note edit counts.
+    CONTROL_CHECK(observed(2, 2, 0) == Pair(1, 1));
+    CONTROL_CHECK(observed(3, 3, 0) == Pair(2, 2));
+    // Only one counter going back is a rebuilt object as well.
+    CONTROL_CHECK(observed(4, 1, 0) == Pair(4, 1));
+    CONTROL_CHECK(observed(5, 2, 2) == Pair(4, 1));
+}
+
+void scenarioSetPitchShiftImpl()
+{
+    // One processor at a time: each fixture's processor is destroyed before the next one starts.
+    checkPitchShift();
+    checkPitchShiftAfterNotesOnly();
+    checkPitchShiftStepWithoutEffect();
+    checkNotesCursorAcrossPitchShift();
+    checkPitchCurveCursorAcrossPitchShift();
+    checkPitchShiftWithTimeGrid();
+    checkPitchShiftLedgerRebuilt();
+}
+
+// ---- Scenario: content.autoTune mode snapNotes ------------------------------------------------------
+
+void scenarioSnapNotesImpl()
+{
+    EditFixture f;
+    if (!f.open(fourNoteSpec()))
+        return;
+    const auto before = stateOf(*f.processor, f.clip.key);
+    const auto notesBefore = notesNow(f);
+    const std::string cMajor = R"({"root":0,"scale":"major"})";
+    const std::string snap = TRANS("音高吸附").toStdString();
+
+    // Every note to C major, hand-computed from the base pitches: 64 and 69 are in the scale; 69.3 goes to 69
+    // and 66.2 to 67, through the cent offset (SNAP keeps the base pitch).
+    const auto predicted = f.snapNotes(cMajor, R"(,"dryRun":true)");
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before) && memberOf(predicted, "undo").isNull());
+    const auto applied = f.snapNotes(cMajor);
+    CONTROL_CHECK(memberOf(applied, "applied").asBoolean() && !memberOf(applied, "noOp").asBoolean());
+    CONTROL_CHECK(noteIndexes(memberOf(applied, "changes")) == (std::vector<int>{2, 3}));
+    checkNotesAfter(notesBefore, notesNow(f),
+                    {{2, {{"targetMidi", 69}, {"offsetCents", -30}}}, {3, {{"targetMidi", 67}, {"offsetCents", 80}}}});
+    CONTROL_CHECK(changesWithoutRevision(memberOf(predicted, "changes"))
+                  == changesWithoutRevision(memberOf(applied, "changes")));
+    CONTROL_CHECK(toJsonString(memberOf(applied, "sideEffects")) == reRenderOf(f));
+    CONTROL_CHECK(toJsonString(memberOf(predicted, "sideEffects")) == reRenderOf(f));
+    CONTROL_CHECK(memberOf(applied, "created").size() == 0 && memberOf(applied, "removed").size() == 0);
+    CONTROL_CHECK(memberOf(applied, "mode").text() == "snapNotes" && memberOf(applied, "paramsUsed").isNull());
+    CONTROL_CHECK(toJsonString(memberOf(applied, "keyUsed")) == cMajor);
+    CONTROL_CHECK(toJsonString(memberOf(applied, "noteCount")) == R"({"before":4,"after":4})");
+    CONTROL_CHECK(toJsonString(memberOf(applied, "omittedCount")) == R"({"changes":0,"created":0,"removed":0})");
+    const auto& undo = memberOf(applied, "undo");
+    CONTROL_CHECK(memberOf(undo, "description").text() == snap
+                  && toJsonString(memberOf(undo, "innerActions")) == R"(["PianoRollEditAction"])");
+    CONTROL_CHECK(VectorMatcher::equal(resultTokens(applied, f.contentId), freshTokens(f.api, f.contentId)));
+    const auto after = stateOf(*f.processor, f.clip.key);
+    // SNAP again over note 2, whose frames are voiced and now corrected: nothing moves, nothing to do.
+    const auto again = f.snapNotes(cMajor, R"(,"ranges":[{"startContentSec":3.4,"endContentSec":4.6}])");
+    CONTROL_CHECK(memberOf(again, "noOp").asBoolean());
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), after));
+    // Over every note OpenTune commits again although no note moves: the unvoiced end of note 3 never gets a
+    // correction segment, so SNAP never finds its targets fully corrected (an OpenTune behaviour, reported as
+    // it is: a step without changes of notes, with its undo entry).
+    const auto whole = f.snapNotes(cMajor);
+    CONTROL_CHECK(memberOf(whole, "applied").asBoolean() && !memberOf(whole, "noOp").asBoolean()
+                  && memberOf(whole, "changes").size() == 0);
+    CONTROL_CHECK(memberOf(memberOf(whole, "undo"), "innerActions").size() == 1);
+    f.undo(memberOf(memberOf(whole, "undo"), "undoId").text());
+    CONTROL_CHECK(sameNotes(stateOf(*f.processor, f.clip.key).notes, after.notes));
+    checkUndoSymmetry(f, memberOf(undo, "undoId").text(), before, after);
+
+    // A range is a selection of the notes that overlap it: only note 2; chromatic rounds to semitones.
+    const auto ranged =
+        f.snapNotes(R"({"root":0,"scale":"chromatic"})", R"(,"ranges":[{"startContentSec":3.4,"endContentSec":4.6}])");
+    CONTROL_CHECK(noteIndexes(memberOf(ranged, "changes")) == (std::vector<int>{2}));
+    checkNotesAfter(notesBefore, notesNow(f), {{2, {{"targetMidi", 69}, {"offsetCents", -30}}}});
+    checkUndoSymmetry(f, memberOf(memberOf(ranged, "undo"), "undoId").text(), before,
+                      stateOf(*f.processor, f.clip.key));
+    // Two ranges are one undo step with one commit each: note 0 does not move but its frames get their
+    // correction, note 3 goes to 66.
+    const auto two = f.snapNotes(
+        R"({"root":0,"scale":"chromatic"})",
+        R"(,"ranges":[{"startContentSec":0.2,"endContentSec":1.8},{"startContentSec":4.8,"endContentSec":5.9}])");
+    CONTROL_CHECK(noteIndexes(memberOf(two, "changes")) == (std::vector<int>{3}));
+    CONTROL_CHECK(memberOf(memberOf(two, "undo"), "innerActions").size() == 2);
+    checkNotesAfter(notesBefore, notesNow(f), {{3, {{"targetMidi", 66}, {"offsetCents", -20}}}});
+    checkUndoSymmetry(f, memberOf(memberOf(two, "undo"), "undoId").text(), before, stateOf(*f.processor, f.clip.key));
+    // clipKey: A minor has the pitch classes of C major.
+    const auto withClipKey = f.snapNotes("\"clipKey\"", ",\"expectedKeyRevision\":" + jsonQuoted(f.keyRevision()));
+    CONTROL_CHECK(toJsonString(memberOf(withClipKey, "keyUsed")) == R"({"root":9,"scale":"minor"})");
+    CONTROL_CHECK(noteIndexes(memberOf(withClipKey, "changes")) == (std::vector<int>{2, 3}));
+    f.undo(memberOf(memberOf(withClipKey, "undo"), "undoId").text());
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before));
+    // A note without a base pitch (targetMidi 0, then a cent offset) is a target as well, as the button snaps it:
+    // its base is MIDI 0 (PitchUtils::freqToMidi() of 0 Hz), which chromatic quantization keeps, so the offset
+    // goes back to 0 and the note is committed.
+    const auto unpitched = f.editNotes(R"([{"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":0},)"
+                                       R"({"op":"shiftCents","select":{"indices":[0]},"deltaCents":30}])");
+    const auto notesUnpitched = notesNow(f);
+    const auto snappedZero =
+        f.snapNotes(R"({"root":0,"scale":"chromatic"})", R"(,"ranges":[{"startContentSec":0.2,"endContentSec":1.8}])");
+    CONTROL_CHECK(memberOf(snappedZero, "applied").asBoolean() && !memberOf(snappedZero, "noOp").asBoolean());
+    CONTROL_CHECK(noteIndexes(memberOf(snappedZero, "changes")) == (std::vector<int>{0}));
+    checkNotesAfter(notesUnpitched, notesNow(f), {{0, {{"targetMidi", 0}, {"offsetCents", 0}}}});
+    f.undo(memberOf(memberOf(snappedZero, "undo"), "undoId").text());
+    f.undo(memberOf(memberOf(unpitched, "undo"), "undoId").text());
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before));
+    // snapNotes takes no params.
+    CONTROL_CHECK(f.api.fails("content.autoTune",
+                              jsonOf("{\"contentId\":" + jsonQuoted(f.contentId)
+                                     + R"(,"mode":"snapNotes","expectedRevision":"r1","key":)" + cMajor
+                                     + R"(,"params":{"retuneSpeed":1}})"),
+                              "INVALID_ARGUMENT", "invalid_params"));
+}
+
 // ---- The specification's vectors ----------------------------------------------------------------------
 
 /** The vectors of the specification that run against the processor and must pass, by id. */
 const char* const kMustRunEditVectors[] = {
-    "content/auto-tune-not-found",  "content/auto-tune-not-ready",
-    "content/auto-tune-notes-only", "content/auto-tune-reference-capability-missing",
-    "content/auto-tune-regenerate", "content/set-key-key-changed",
-    "content/set-key-no-op",        "content/set-key-not-found",
-    "content/set-key-not-ready",    "content/set-key-ok",
-    "content/set-key-revert",       "edit/get-history-ok",
-    "edit/redo-force-without-id",   "edit/redo-history-empty",
-    "edit/undo-force-ui-entry",     "edit/undo-force-without-id",
-    "edit/undo-history-empty",      "edit/undo-no-effect-after-notes-only",
-    "edit/undo-top-mismatch",       "edit/undo-unsafe-build",
+    "content/auto-tune-key-changed",
+    "content/auto-tune-not-found",
+    "content/auto-tune-not-ready",
+    "content/auto-tune-notes-only",
+    "content/auto-tune-reference-capability-missing",
+    "content/auto-tune-regenerate",
+    "content/auto-tune-snap-notes",
+    "content/edit-notes-busy-export",
+    "content/edit-notes-content-changed",
+    "content/edit-notes-dry-run",
+    "content/edit-notes-not-ready",
+    "content/edit-notes-note-refs",
+    "content/edit-notes-set-params",
+    "content/edit-notes-set-target-pitch",
+    "content/edit-notes-shift-cents",
+    "content/edit-notes-snap-to-scale",
+    "content/edit-notes-unknown-note",
+    "content/set-key-key-changed",
+    "content/set-key-no-op",
+    "content/set-key-not-found",
+    "content/set-key-not-ready",
+    "content/set-key-ok",
+    "content/set-key-revert",
+    "content/set-pitch-shift-not-ready",
+    "content/set-pitch-shift-ok",
+    "content/set-pitch-shift-stale-handle",
+    "edit/get-history-ok",
+    "edit/redo-cleared-by-write-without-entry",
+    "edit/redo-force-without-id",
+    "edit/redo-history-empty",
+    "edit/redo-ok",
+    "edit/undo-force-ui-entry",
+    "edit/undo-force-without-id",
+    "edit/undo-history-empty",
+    "edit/undo-keeps-later-key",
+    "edit/undo-no-effect-after-notes-only",
+    "edit/undo-ok",
+    "edit/undo-top-mismatch",
+    "edit/undo-unsafe-build",
 };
 
-const std::set<std::string> kEditVectorMethods = {"edit.getHistory",  "edit.undo",        "edit.redo",
-                                                  "content.setKey",   "content.autoTune", "content.getDetails",
-                                                  "content.getNotes", "project.get"};
+const std::set<std::string> kEditVectorMethods = {
+    "edit.getHistory",   "edit.undo",          "edit.redo",        "content.setKey",        "content.autoTune",
+    "content.editNotes", "content.getDetails", "content.getNotes", "content.setPitchShift", "project.get"};
 const std::set<std::string> kEditVectorCapabilities = {"session.v1", "read.v1", "history.v1", "edit.v1"};
 
 std::vector<const JsonValue*> sentRequests(const JsonValue& vector)
@@ -937,18 +1835,26 @@ std::string editVectorSkipReason(const JsonValue& vector)
         const auto method = memberOf(*request, "method").text();
         if (kEditVectorMethods.count(method) == 0)
             return "uses " + method + ", which a later part implements";
-        // Mode reference runs only where the instance lacks reference.v1 (its refusal); snapNotes comes later.
+        // Mode reference runs only where the instance lacks reference.v1 (its refusal).
         const auto mode = memberOf(memberOf(*request, "params"), "mode").text();
         const auto& without = memberOf(memberOf(vector, "given"), "withoutCapabilities");
         const bool withoutReference = without.size() == 1 && without.at(0).text() == "reference.v1";
-        if (method == "content.autoTune" && (mode == "snapNotes" || (mode == "reference" && !withoutReference)))
-            return "uses content.autoTune mode " + mode + ", which a later part implements";
+        if (method == "content.autoTune" && mode == "reference" && !withoutReference)
+            return "uses content.autoTune mode reference, which a later part implements";
     }
     const auto& given = memberOf(vector, "given");
     for (std::size_t i = 0; i < given.size(); ++i) {
         const auto& name = given.keyAt(i);
         if (name == "dirty" || name == "editingScheme" || name == "clips")
             continue;
+        if (name == "jobs") {
+            // A running export holds the export lock; that is what the content writes see of it.
+            for (std::size_t j = 0; j < given.at(i).size(); ++j)
+                if (memberOf(given.at(i).at(j), "kind").text() != "export"
+                    || memberOf(given.at(i).at(j), "state").text() != "running")
+                    return "a job other than a running export is not established by this runner";
+            continue;
+        }
         if (name == "withoutCapabilities") {
             for (std::size_t c = 0; c < given.at(i).size(); ++c)
                 if (kEditVectorCapabilities.count(given.at(i).at(c).text()) != 0)
@@ -1009,6 +1915,37 @@ bool pushHistoryEntry(EditFixture& f, const JsonValue& entry, const std::map<std
     if (const JsonValue* bind = entry.find("bind"))
         matcher.bindings[bind->text()] = JsonValue::string(undoId);
     return true;
+}
+
+/** Establishes given.jobs, running exports only (editVectorSkipReason): a job of kind export that runs until it
+    is cancelled, its id bound to its name, and the export lock it holds, as the vectors' README requires. */
+bool establishRunningExports(EditFixture& f, const JsonValue& jobs, VectorMatcher& matcher, bool& lockHeld)
+{
+    const auto registry = f.service().jobs();
+    if (registry == nullptr)
+        return jobs.size() == 0;
+    for (std::size_t i = 0; i < jobs.size(); ++i) {
+        const auto started =
+            registry->start("export", memberOf(jobs.at(i), "cancellable").asBoolean(), [](ControlJobStep& step) {
+                if (step.cancelRequested())
+                    step.cancel();
+            });
+        if (started.jobId.empty())
+            return false;
+        matcher.bindings[memberOf(jobs.at(i), "bind").text()] = JsonValue::string(started.jobId);
+        const std::string jobId = started.jobId;
+        if (!pumpMessagesUntil(
+                [&registry, &jobId] {
+                    JsonValue job;
+                    return registry->get(jobId, job) == ControlJobs::Lookup::Found
+                           && memberOf(job, "state").text() == "running";
+                },
+                kReadTimeoutMs))
+            return false;
+        if (!lockHeld)
+            lockHeld = f.processor->tryAcquireExportLock();
+    }
+    return jobs.size() == 0 || lockHeld;
 }
 
 std::string runEditVector(const JsonValue& vector)
@@ -1085,6 +2022,9 @@ std::string runEditVector(const JsonValue& vector)
         if (f.processor->getUndoManager().undo() == nullptr)
             return "given.history.redo could not be established";
     f.bridge.project.dirty = memberOf(given, "dirty").asBoolean();
+    bool exportLockHeld = false;
+    if (!establishRunningExports(f, memberOf(given, "jobs"), matcher, exportLockHeld))
+        return "given.jobs could not be established";
 
     const auto& discovery = f.api.discovery();
     for (std::size_t i = 0; i < discovery.size(); ++i)
@@ -1140,6 +2080,8 @@ std::string runEditVector(const JsonValue& vector)
             }
         },
         kVectorExchangeMs);
+    if (exportLockHeld)
+        f.processor->releaseExportLock();
     return failure;
 }
 
@@ -1147,47 +2089,62 @@ std::string runEditVector(const JsonValue& vector)
 
 void scenarioUndo()
 {
-    controlSetReportIncompleteCapabilitiesForTesting(true);
     scenarioUndoImpl();
 }
 
 void scenarioSetKey()
 {
-    controlSetReportIncompleteCapabilitiesForTesting(true);
     scenarioSetKeyImpl();
 }
 
 void scenarioAutoTune()
 {
-    controlSetReportIncompleteCapabilitiesForTesting(true);
     scenarioAutoTuneImpl();
 }
 
-void scenarioIncompleteCapability()
+void scenarioEditNotes()
 {
-    // edit.v1 is not reported until all its methods are registered: the listener refuses its methods, while
-    // history.v1 is complete and reported.
+    scenarioEditNotesImpl();
+}
+
+void scenarioSetPitchShift()
+{
+    scenarioSetPitchShiftImpl();
+}
+
+void scenarioSnapNotes()
+{
+    scenarioSnapNotesImpl();
+}
+
+void scenarioEditCapability()
+{
+    // edit.v1 is complete and reported, without the test seam: every one of its four methods is registered, and
+    // the listener passes them to the dispatcher, which resolves the handle (here one of another instance).
+    controlSetReportIncompleteCapabilitiesForTesting(false);
     auto processor = startedProcessor();
     auto& service = processor->getControlService();
     if (!service.isRunning())
         return;
     const auto capabilities = service.dispatcher()->capabilities();
-    CONTROL_CHECK(std::find(capabilities.begin(), capabilities.end(), "history.v1") != capabilities.end());
-    CONTROL_CHECK(std::find(capabilities.begin(), capabilities.end(), "edit.v1") == capabilities.end());
-    CONTROL_CHECK(service.dispatcher()->implements("content.setKey")
-                  && service.dispatcher()->implements("content.autoTune"));
+    for (const char* capability : {"edit.v1", "history.v1"})
+        CONTROL_CHECK(std::find(capabilities.begin(), capabilities.end(), capability) != capabilities.end());
+    for (const char* method : {"content.setKey", "content.autoTune", "content.editNotes", "content.setPitchShift"})
+        CONTROL_CHECK(service.dispatcher()->implements(method) && !controlCapabilityIsIncomplete("edit.v1"));
     ApiSession api;
     if (!api.open(service))
         return;
     CONTROL_CHECK(api.fails("content.setKey",
-                            jsonOf(R"({"contentId":"c:00000000:0:1","key":{"root":0,"scale":"major"}})"), "UNSUPPORTED",
-                            "capability_missing"));
+                            jsonOf(R"({"contentId":"c:00000000:0:1","key":{"root":0,"scale":"major"}})"), "NOT_FOUND",
+                            "stale_handle"));
+    CONTROL_CHECK(api.fails("content.setPitchShift",
+                            jsonOf(R"({"contentId":"c:00000000:0:1","pitchShift":{"semitones":1,"cents":0}})"),
+                            "NOT_FOUND", "stale_handle"));
     CONTROL_CHECK(memberOf(api.result("edit.getHistory"), "history").isObject());
 }
 
 void scenarioEditVectors()
 {
-    controlSetReportIncompleteCapabilitiesForTesting(true);
     const auto root = std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR) / "vectors";
     std::vector<std::filesystem::path> files;
     for (const auto& entry : std::filesystem::directory_iterator(root / "edit"))
@@ -1195,8 +2152,11 @@ void scenarioEditVectors()
             files.push_back(entry.path());
     for (const auto& entry : std::filesystem::directory_iterator(root / "content")) {
         const auto name = entry.path().filename().u8string();
-        if (entry.path().extension() == ".json" && (name.rfind("set-key-", 0) == 0 || name.rfind("auto-tune-", 0) == 0))
-            files.push_back(entry.path());
+        if (entry.path().extension() != ".json")
+            continue;
+        for (const char* prefix : {"set-key-", "auto-tune-", "edit-notes-", "set-pitch-shift-"})
+            if (name.rfind(prefix, 0) == 0)
+                files.push_back(entry.path());
     }
     std::sort(files.begin(), files.end());
     std::set<std::string> passedIds;

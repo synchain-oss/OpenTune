@@ -86,6 +86,12 @@ public:
     /** A project was opened or the project was reloaded. Default: nothing. */
     virtual void onProjectReloaded() {}
 
+    /** The time grid of a content was changed through the control API (content.shiftTiming,
+        content.editTimeGrid): the editor does what it does after its own time-grid edit (the piano roll takes
+        the new grid of the content it shows and redraws) and redraws the arrangement, which draws clips through
+        their grids. Default: nothing. */
+    virtual void onTimeGridChanged() {}
+
     // ---- View changes that a write makes as the UI does ----------------------------------------
 
     /** Shows a placement the way the editor does after its own import: it becomes the active track's

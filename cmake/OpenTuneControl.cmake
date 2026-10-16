@@ -102,7 +102,15 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/UndoOps.h
         Source/Control/Ops/ContentTuneOps.cpp
         Source/Control/Ops/ContentTuneOps.h
-        # Note edits: added later.
+        # Note edits and the pitch shift: the steps of OpenTune's pitch shifts that the revision tokens leave
+        # out, the correction rebuild of the piano roll and its SNAP, content.editNotes and
+        # content.setPitchShift.
+        Source/Control/Edit/PitchShiftLedger.cpp
+        Source/Control/Edit/PitchShiftLedger.h
+        Source/Control/Edit/NoteCorrection.cpp
+        Source/Control/Edit/NoteCorrection.h
+        Source/Control/Ops/ContentEditOps.cpp
+        Source/Control/Ops/ContentEditOps.h
         # Time grid: added later.
     )
 
@@ -219,7 +227,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlJobTests.cpp)
         # export.start and the export lock.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlExportTests.cpp)
-        # Undo and redo, key and AUTO, with the contents they share with the reads.
+        # Undo and redo, key, AUTO, note edits and the pitch shift, with the contents they share with the reads.
         target_sources(OpenTuneControlProcessorTests PRIVATE
             Tests/Control/ControlEditTests.cpp
             Tests/Control/ControlContentFixtures.h
@@ -278,12 +286,15 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ExportFailures|--control-api"
             "ExportVectors|--control-api"
         )
-        # Undo and redo, key and AUTO (Tests/Control/ControlEditTests.cpp).
+        # Undo and redo, key and AUTO, note edits and the pitch shift (Tests/Control/ControlEditTests.cpp).
         list(APPEND _opentune_control_scenarios
             "Undo|--control-api"
             "SetKey|--control-api"
             "AutoTune|--control-api"
-            "IncompleteCapability|--control-api"
+            "EditNotes|--control-api"
+            "SetPitchShift|--control-api"
+            "SnapNotes|--control-api"
+            "EditCapability|--control-api"
             "EditVectors|--control-api"
         )
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)

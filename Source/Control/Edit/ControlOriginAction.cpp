@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "ControlOriginAction.h"
 
+#include "Content/ContentEditCommands.h"
 #include "Utils/PianoRollEditAction.h"
 #include "Utils/PianoRollNotePatchAction.h"
 #include "Utils/PitchShiftEditAction.h"
@@ -35,15 +36,31 @@ ControlOriginAction::~ControlOriginAction()
 void ControlOriginAction::undo()
 {
     for (auto it = inner_.rbegin(); it != inner_.rend(); ++it)
-        if (it->action != nullptr && !masked(*it))
-            it->action->undo();
+        apply(*it, true);
 }
 
 void ControlOriginAction::redo()
 {
     for (auto& inner : inner_)
-        if (inner.action != nullptr && !masked(inner))
-            inner.action->redo();
+        apply(inner, false);
+}
+
+void ControlOriginAction::apply(Inner& inner, bool undo)
+{
+    if (inner.action == nullptr || masked(inner.content, inner.aspect))
+        return;
+    if (inner.aspect == ControlContentAspect::PitchShift && inner.pitchShift && inner.commands != nullptr
+        && masked(inner.content, ControlContentAspect::NotesAndPitch)) {
+        // PitchShiftEditAction would put back the notes it saved; the notes of the content were replaced
+        // since by a change without an undo entry. ContentEditCommands::commitPitchShiftEdit() sets the
+        // settings and scales the current notes, as the pitch-shift dialog does; its new action is not kept.
+        inner.commands->commitPitchShiftEdit(inner.content, undo ? inner.pitchShift->first : inner.pitchShift->second);
+        return;
+    }
+    if (undo)
+        inner.action->undo();
+    else
+        inner.action->redo();
 }
 
 std::vector<std::string> ControlOriginAction::innerActionNames() const
@@ -63,16 +80,20 @@ bool ControlOriginAction::unsafe() const
 
 void ControlOriginAction::mask(const ContentKey& content, ControlContentAspect aspect)
 {
+    // A pitch shift's action restores the notes as well, so a change of the notes concerns it too.
     const bool touches = std::any_of(inner_.begin(), inner_.end(), [&](const Inner& inner) {
-        return inner.content == content && inner.aspect == aspect;
+        return inner.content == content
+               && (inner.aspect == aspect
+                   || (aspect == ControlContentAspect::NotesAndPitch && inner.aspect == ControlContentAspect::PitchShift
+                       && inner.pitchShift.has_value()));
     });
-    if (touches && std::find(masked_.begin(), masked_.end(), std::make_pair(content, aspect)) == masked_.end())
+    if (touches && !masked(content, aspect))
         masked_.emplace_back(content, aspect);
 }
 
-bool ControlOriginAction::masked(const Inner& inner) const
+bool ControlOriginAction::masked(const ContentKey& content, ControlContentAspect aspect) const
 {
-    return std::find(masked_.begin(), masked_.end(), std::make_pair(inner.content, inner.aspect)) != masked_.end();
+    return std::find(masked_.begin(), masked_.end(), std::make_pair(content, aspect)) != masked_.end();
 }
 
 // ---- ControlHistory ---------------------------------------------------------------------------------

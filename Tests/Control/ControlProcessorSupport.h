@@ -296,9 +296,21 @@ void scenarioSetKey();
 /** content.autoTune regenerate and notesOnly: hand-computed removed and dropped notes, created notes in range and
     in key, one undo step for several ranges, dryRun, defaults of the params, the checks before the change. */
 void scenarioAutoTune();
-/** edit.v1 is not reported while some of its methods are missing; history.v1 is. */
-void scenarioIncompleteCapability();
-/** The specification's vectors of edit.*, content.setKey and content.autoTune, against the real dispatcher. */
+/** content.editNotes: a table of hand-computed ops (every op, selections by index, range and all, several ops in
+    one call), dryRun equal to the commit, tokens equal to a fresh read, undo and redo back to the exact states,
+    the checks before the change, no-ops and the params. */
+void scenarioEditNotes();
+/** content.setPitchShift: revision stays while the pitchShift component changes (also for the undo, the redo,
+    the UI's Ctrl+Z and the UI's dialog), KEY_NOT_TRANSPOSED, no-ops, undo back to the exact state, and the undo of
+    a shift after notesOnly, which puts back the shift only. */
+void scenarioSetPitchShift();
+/** content.autoTune mode snapNotes: the hand-computed snap of every note, ranges as selections, dryRun equal to
+    the commit, one undo step for several ranges, the no-op of a second snap, clipKey. */
+void scenarioSnapNotes();
+/** edit.v1 is reported, with all four of its methods registered; history.v1 as well. */
+void scenarioEditCapability();
+/** The specification's vectors of edit.*, content.setKey, content.autoTune, content.editNotes and
+    content.setPitchShift, against the real dispatcher. */
 void scenarioEditVectors();
 
 } // namespace ControlTest

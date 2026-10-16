@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #pragma once
 
+#include "PitchShiftLedger.h"
+
 #include "Content/ContentKey.h"
+#include "Utils/PitchShiftSettings.h"
 #include "Utils/UndoManager.h"
 
 #include <cstdint>
@@ -14,6 +17,7 @@
 
 namespace OpenTune {
 
+class ContentEditCommands;
 class ControlHistory;
 
 /** The aspects of a content that an undo entry recorded through the control API puts back (PROTOCOL.md
@@ -37,6 +41,12 @@ enum class ControlContentAspect {
  * mode notesOnly) changed the aspect of the content it puts back: such a change is never taken back, so the
  * entry leaves that aspect as the later change set it (section 15.3 rule 9).
  *
+ * A pitch shift is the exception: OpenTune's PitchShiftEditAction puts back the notes and correction segments
+ * it saved together with the settings. Once a change without an undo entry replaced the notes of its content,
+ * the entry puts back the settings only, as content.setPitchShift sets them: through
+ * ContentEditCommands::commitPitchShiftEdit(), which scales the notes the content has now (the action that
+ * call returns is discarded, this entry is already on the history).
+ *
  * The entry registers itself with the instance's ControlHistory for as long as it exists. OpenTune's
  * UndoManager owns it and destroys it when it leaves the history; the entry keeps the history alive through
  * a shared pointer, because the processor destroys its UndoManager after its control service.
@@ -54,6 +64,10 @@ public:
         std::string name;
         ContentKey content;
         ControlContentAspect aspect = ControlContentAspect::NotesAndPitch;
+        /** Aspect PitchShift: the settings before and after the shift, and the content commands that apply
+            them while the notes of the content are masked (see the class comment). */
+        std::optional<std::pair<PitchShiftSettings, PitchShiftSettings>> pitchShift;
+        std::shared_ptr<ContentEditCommands> commands;
     };
 
     ControlOriginAction(std::shared_ptr<ControlHistory> history, std::string undoId, juce::String description,
@@ -77,7 +91,9 @@ public:
     void mask(const ContentKey& content, ControlContentAspect aspect);
 
 private:
-    bool masked(const Inner& inner) const;
+    bool masked(const ContentKey& content, ControlContentAspect aspect) const;
+    /** Undoes (undo true) or redoes one inner action, as the masks of its content allow. */
+    void apply(Inner& inner, bool undo);
 
     std::shared_ptr<ControlHistory> history_;
     std::string undoId_;
@@ -151,6 +167,9 @@ public:
     void add(ControlOriginAction* action);
     void remove(ControlOriginAction* action);
 
+    /** The pitch-shift steps that the revision tokens leave out (controlContentVersions()). */
+    ControlPitchShiftLedger& pitchShiftLedger() noexcept { return pitchShiftLedger_; }
+
 private:
     struct UiEntry
     {
@@ -185,6 +204,7 @@ private:
     std::optional<Observation> lastObserved_;
     std::vector<UiEntry> uiEntries_;
     std::vector<ControlOriginAction*> actions_;
+    ControlPitchShiftLedger pitchShiftLedger_;
 };
 
 /** True for the undo actions OpenTune cannot undo correctly: a clip split, merge or delete

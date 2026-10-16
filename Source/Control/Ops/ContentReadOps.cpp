@@ -49,7 +49,8 @@ ContentReadState readState(ControlOpContext& context, const std::string& content
                            const EditableContentSnapshot& snapshot)
 {
     ContentReadState state;
-    state.asOf = controlAsOf(controlArrangementRevision(context), {controlContentVersions(contentId, snapshot)});
+    state.asOf =
+        controlAsOf(controlArrangementRevision(context), {controlContentVersions(context, contentId, snapshot)});
     state.tokensHash = controlHashJson('t', state.asOf);
     return state;
 }

@@ -298,9 +298,8 @@ private:
 /**
  * True for a capability of which this build registers some methods but not all yet. The instance does not
  * report it, because an instance implements every method of a capability it reports (PROTOCOL.md section 3.3
- * rule 5 case 10); the listener therefore answers its methods with UNSUPPORTED(capability_missing). Now
- * edit.v1: content.setKey and content.autoTune are registered, content.editNotes and content.setPitchShift
- * follow.
+ * rule 5 case 10); the listener therefore answers its methods with UNSUPPORTED(capability_missing). No
+ * capability is incomplete now; a part that registers only some methods of a capability lists it here.
  */
 bool controlCapabilityIsIncomplete(std::string_view capability);
 

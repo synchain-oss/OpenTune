@@ -18,6 +18,7 @@ import {
   scrubPath,
   countSmoke,
   countVitest,
+  hasScenarioReport,
   inspectLog,
   loadScenarioReports,
   parseModelLoad,
@@ -464,5 +465,50 @@ describe('official-install.json', () => {
     assert.ok(names.includes('fcpe.onnx'));
     assert.ok(names.filter((n) => n.startsWith('GAME/')).length >= 5);
     for (const m of pin.models) assert.match(m.sha256, /^[0-9a-f]{64}$/, m.path);
+  });
+});
+
+describe('hasScenarioReport and has-scenario', () => {
+  const put = (dir, n, o) => fs.writeFileSync(path.join(dir, n), typeof o === 'string' ? o : JSON.stringify(o));
+  const cli = (dir, name) => spawnSync(process.execPath, [path.join(SCRIPTS, 'e2e-windows.mjs'), 'has-scenario', '--dir', dir, '--scenario', name], { encoding: 'utf8' });
+
+  test('absent when there is no effects report (older MCP ref), also for a missing directory', () => {
+    const dir = makeTempDir('e2e-has');
+    try {
+      put(dir, 'smoke.json', { schema: 'opentune-mcp-e2e-exe/1', scenario: 'smoke', steps: [] });
+      put(dir, 'contract.json', { numTotalTests: 1 });
+      assert.equal(hasScenarioReport(dir, 'effects'), false);
+      assert.equal(hasScenarioReport(path.join(dir, 'nope'), 'effects'), false);
+      assert.deepEqual([cli(dir, 'effects').status, cli(dir, 'effects').stdout.trim()], [0, 'absent']);
+    } finally {
+      removeDir(dir);
+    }
+  });
+
+  test('present for a report by scenario name, by schema prefix, or called effects.json', () => {
+    for (const [file, body] of [
+      ['a.json', { schema: 'opentune-mcp-e2e-exe/1', scenario: 'effects', steps: [] }],
+      ['b.json', { schema: 'opentune-mcp-e2e-effects/1', steps: [] }],
+      ['effects.json', { whatever: true }],
+    ]) {
+      const dir = makeTempDir('e2e-has');
+      try {
+        put(dir, file, body);
+        assert.equal(hasScenarioReport(dir, 'effects'), true, file);
+        assert.equal(cli(dir, 'effects').stdout.trim(), 'present', file);
+      } finally {
+        removeDir(dir);
+      }
+    }
+  });
+
+  test('a report of another scenario does not count', () => {
+    const dir = makeTempDir('e2e-has');
+    try {
+      put(dir, 'boundary.json', { schema: 'opentune-mcp-e2e-exe/1', scenario: 'boundary', steps: [] });
+      assert.equal(hasScenarioReport(dir, 'effects'), false);
+    } finally {
+      removeDir(dir);
+    }
   });
 });

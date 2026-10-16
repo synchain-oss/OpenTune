@@ -6,6 +6,8 @@
 #include "Content/EditableContentSnapshot.h"
 #include "Content/StandaloneContentRepository.h"
 #include "PluginProcessor.h"
+#include "Utils/Note.h"
+#include "Utils/PitchUtils.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
 
@@ -78,6 +80,22 @@ JsonValue controlJsonNumber(double value, int decimals)
     if (negative && digits != "0")
         digits.insert(0, 1, '-');
     return JsonValue::number(digits, digits == "0" ? 0.0 : static_cast<double>(integer) / scale);
+}
+
+double controlNoteTargetMidi(const Note& note, float tuningHz)
+{
+    // PitchUtils::freqToMidi(): MIDI note number of a frequency at the given A4.
+    return PitchUtils::freqToMidi(note.getAdjustedPitch(), tuningHz);
+}
+
+JsonValue controlNoteTargetMidiJson(const Note& note, float tuningHz)
+{
+    return controlJsonPitch(controlNoteTargetMidi(note, tuningHz));
+}
+
+JsonValue controlNoteOffsetCentsJson(const Note& note)
+{
+    return controlJsonPitch(static_cast<double>(note.pitchOffset) * 100.0);
 }
 
 JsonValue controlJsonText(const std::string& utf8, std::size_t maxCodePoints)

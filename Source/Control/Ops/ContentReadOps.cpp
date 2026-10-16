@@ -132,7 +132,7 @@ JsonValue noteJson(std::size_t index, const Note& note, const EditableContentSna
                    const std::optional<ControlPlacementRef>& placement, float tuningHz)
 {
     auto json = JsonValue::object();
-    const double targetMidi = midiOf(note.getAdjustedPitch(), tuningHz);
+    const double targetMidi = controlNoteTargetMidi(note, tuningHz);
     const bool hasDetected = note.isVoiced && note.originalPitch > 0.0f;
     json.appendMember("index", JsonValue::integer(static_cast<std::int64_t>(index)));
     json.appendMember("label", JsonValue::string(controlNoteLabel(
@@ -156,8 +156,8 @@ JsonValue noteJson(std::size_t index, const Note& note, const EditableContentSna
     json.appendMember("detectedMidi",
                       hasDetected ? controlJsonPitch(midiOf(note.originalPitch, tuningHz)) : JsonValue());
     // The target includes pitchOffset, the part that comes from cent shifts (Note::getAdjustedPitch()).
-    json.appendMember("targetMidi", controlJsonPitch(targetMidi));
-    json.appendMember("offsetCents", controlJsonPitch(static_cast<double>(note.pitchOffset) * 100.0));
+    json.appendMember("targetMidi", controlNoteTargetMidiJson(note, tuningHz));
+    json.appendMember("offsetCents", controlNoteOffsetCentsJson(note));
     json.appendMember("retuneSpeed", controlJsonNumber(note.retuneSpeed, 4));
     json.appendMember("vibratoDepth", controlJsonNumber(note.vibratoDepth, 4));
     json.appendMember("vibratoRateHz", controlJsonNumber(note.vibratoRate, 4));

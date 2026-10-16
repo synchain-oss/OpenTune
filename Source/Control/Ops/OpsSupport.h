@@ -19,6 +19,7 @@
 namespace OpenTune {
 
 struct EditableContentSnapshot;
+struct Note;
 
 // ---- Building results ----------------------------------------------------------------------------
 
@@ -35,6 +36,15 @@ inline JsonValue controlJsonPitch(double value)
 {
     return controlJsonNumber(value, 4);
 }
+/** The target pitch of a note in MIDI, as every method reports it: PitchUtils::freqToMidi() of
+    Note::getAdjustedPitch() at tuningHz (MIDI 0 for a note without a base pitch). */
+double controlNoteTargetMidi(const Note& note, float tuningHz);
+/** The one place that rounds a note's target for the wire: content.getNotes and the targetMidi change of a write
+    result both call it, so the "after" of a write result equals the value read back, byte for byte. */
+JsonValue controlNoteTargetMidiJson(const Note& note, float tuningHz);
+/** A note's cent offset (Note::pitchOffset in semitones, times 100), rounded as controlJsonPitch(); the one place
+    for content.getNotes and write results. */
+JsonValue controlNoteOffsetCentsJson(const Note& note);
 /** A JSON string from UTF-8 text, at most maxCodePoints code points (text from projects is untrusted
     data: it is returned as a string value only, PROTOCOL.md section 20.2). */
 JsonValue controlJsonText(const std::string& utf8, std::size_t maxCodePoints);

@@ -57,6 +57,10 @@ constexpr double kSecTolerance = 0.01;
 constexpr int kJobExchangeMs = 60000;
 /** The wait limit of the export jobs of the NOT_READY case. */
 constexpr int kShortWaitLimitMs = 300;
+/** The wait limit of the export of contents with render blocks pending: twice the export job's kStuckBlocksMs (500 ms,
+    the time the job sees blocks no worker will claim before it takes them for stuck ones), so that the wait goes past
+    the moment of that judgement and still ends at the limit when the blocks are claimable. */
+constexpr int kPendingBlocksWaitLimitMs = 1000;
 /** The wait limit of exports whose contents are ready within a few ticks of the job, or once the scenario published
     their render: one that waits for a render that never comes fails with NOT_READY at this limit instead of at 120 s.
     Shorter than kReadTimeoutMs, so that the job.get that waits for the job is answered either way. */
@@ -2131,7 +2135,7 @@ void scenarioExportDryReasons()
             const auto cache = renderService->getRenderCache(key);
             CONTROL_CHECK(cache != nullptr && cache->getChunkStats().hasActiveWork());
             {
-                const ScopedWaitLimit shortLimit(kShortWaitLimitMs);
+                const ScopedWaitLimit pendingLimit(kPendingBlocksWaitLimitMs);
                 const auto job = exportAndWait(api, clipParams(clip->second, outPath("imported-pending-early.wav")));
                 CONTROL_CHECK(failedWith(job, "NOT_READY", "export_wait_timeout"));
                 CONTROL_CHECK(!juceFileOf(outPath("imported-pending-early.wav")).exists());
@@ -2145,7 +2149,8 @@ void scenarioExportDryReasons()
     //     asked for once more at the same revision: upstream RenderCache::reconcileFullPlanAndRequest then keeps the
     //     pending blocks pending but out of the set the worker claims from, so they stay pending with the worker idle
     //     until the content changes. The content has nothing to render and no block holds rendered audio, so the
-    //     export does not wait for them. Last, as the background work of this processor never settles after it.
+    //     export does not wait for them. The background work of this processor does not settle after it, so the cases
+    //     below (2e, 2f) use contents of their own and never call settleBackgroundWork().
     {
         const ScopedSyntheticImportAnalysis analysis(true);
         renderService->pauseRenderWorker();

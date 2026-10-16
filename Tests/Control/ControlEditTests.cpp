@@ -1588,6 +1588,87 @@ void checkMultiNoteRender()
     CONTROL_CHECK(service.dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 
+// ---- Rounding: the "after" of a write is the value read back ------------------------------------------
+
+/** Every field of every change of a write result: its "after" is, byte for byte, the member that content.getNotes
+    reads back for that note now (the write result and the read round the same value the same way). */
+void checkChangesMatchReadback(EditFixture& f, const JsonValue& result, const std::string& what)
+{
+    const auto notes = notesNow(f);
+    const auto& changes = memberOf(result, "changes");
+    CONTROL_CHECK(changes.size() != 0);
+    for (std::size_t i = 0; i < changes.size(); ++i) {
+        const auto& change = changes.at(i);
+        const auto index = static_cast<std::size_t>(
+            memberOf(memberOf(memberOf(change, "ref"), "note"), "index").asDouble());
+        if (!CONTROL_CHECK(index < notes.size()))
+            continue;
+        for (const char* member : kEditedNoteMembers) {
+            const auto* field = memberOf(change, "fields").find(member);
+            if (field == nullptr)
+                continue;
+            const auto written = toJsonString(memberOf(*field, "after"));
+            const auto read = toJsonString(memberOf(notes.at(index), member));
+            if (!CONTROL_CHECK(written == read))
+                note(what + ": note " + std::to_string(index) + " " + member + " written " + written + ", read back "
+                     + read);
+        }
+    }
+}
+
+/** One write, then the check above, a prediction that equals the commit, and the undo. */
+void checkWriteRoundsLikeTheRead(EditFixture& f, const std::string& what, const std::string& ops)
+{
+    const auto predicted = f.editNotes(ops, ",\"dryRun\":true");
+    const auto applied = f.editNotes(ops);
+    if (!CONTROL_CHECK(memberOf(applied, "applied").asBoolean() && !memberOf(applied, "noOp").asBoolean()))
+        return;
+    checkChangesMatchReadback(f, applied, what);
+    CONTROL_CHECK(changesWithoutRevision(memberOf(predicted, "changes"))
+                  == changesWithoutRevision(memberOf(applied, "changes")));
+    f.undo(memberOf(memberOf(applied, "undo"), "undoId").text());
+}
+
+/** Values that sit on a rounding boundary of four decimals (x.xxxx5) in cents, semitones and the knob members. */
+void checkEditRoundingMatchesReadback(EditFixture& f)
+{
+    const auto initial = stateOf(*f.processor, f.clip.key);
+    // 97.45 cents on a note at 64 reads 64.9745 (the value of the first report), and its neighbours.
+    for (const char* cents : {"97.45", "12.345", "0.05", "33.335", "49.995", "-97.45", "-12.345", "150.005", "1199.995",
+                              "0.0049", "-0.0051", "66.665"})
+        checkWriteRoundsLikeTheRead(
+            f, std::string("shiftCents ") + cents,
+            std::string(R"([{"op":"shiftCents","select":{"all":true},"deltaCents":)") + cents + "}]");
+    // A swept grid of deltas, so that float noise lands on both sides of the boundary.
+    for (int k = 0; k < 24; ++k)
+        checkWriteRoundsLikeTheRead(
+            f, "shiftCents sweep " + std::to_string(k),
+            R"([{"op":"shiftCents","select":{"all":true},"deltaCents":)" + std::to_string(3.1415 + 7.3333 * k) + "}]");
+    for (const char* midi : {"64.97455", "69.12345", "60.00005", "71.99995", "100.55555", "33.33335", "0.00005"})
+        checkWriteRoundsLikeTheRead(
+            f, std::string("setTargetPitch ") + midi,
+            std::string(R"([{"op":"setTargetPitch","select":{"all":true},"targetMidi":)") + midi + "}]");
+    // The knob members round with four decimals as well.
+    // (retuneSpeed, vibratoDepth, vibratoRateHz, pitchDriftScale), each inside its range.
+    const char* const knobSets[] = {
+        R"("retuneSpeed":0.12345,"vibratoDepth":33.33335,"vibratoRateHz":5.55555,"pitchDriftScale":-0.33335)",
+        R"("retuneSpeed":0.99995,"vibratoDepth":99.99995,"vibratoRateHz":11.99995,"pitchDriftScale":2.99995)",
+        R"("retuneSpeed":0.00005,"vibratoDepth":0.00005,"vibratoRateHz":3.00005,"pitchDriftScale":1.00005)"};
+    for (const char* knobs : knobSets)
+        checkWriteRoundsLikeTheRead(f, std::string("setParams ") + knobs,
+                                    std::string(R"([{"op":"setParams","select":{"all":true},)") + knobs + "}]");
+    checkWriteRoundsLikeTheRead(f, "snapToScale",
+                                R"([{"op":"snapToScale","select":{"all":true},"key":{"root":0,"scale":"major"}}])");
+    // The note-based snap of content.autoTune lists its changes the same way.
+    {
+        const auto applied = f.snapNotes(R"({"root":0,"scale":"major"})");
+        if (CONTROL_CHECK(memberOf(applied, "applied").asBoolean()))
+            checkChangesMatchReadback(f, applied, "autoTune snapNotes");
+        f.undo(memberOf(memberOf(applied, "undo"), "undoId").text());
+    }
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
+}
+
 void scenarioEditNotesImpl()
 {
     EditFixture f;
@@ -1598,6 +1679,7 @@ void scenarioEditNotesImpl()
         checkNoteEditCase(f, c);
     CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
     checkNoteEditErrors(f);
+    checkEditRoundingMatchesReadback(f);
     CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 

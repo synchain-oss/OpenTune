@@ -435,6 +435,16 @@ void runGridCase(TimingFixture& f, const GridCase& gridCase)
     if (CONTROL_CHECK(handles.size() == 3))
         for (std::size_t i = 0; i < 3; ++i)
             CONTROL_CHECK(near(memberOf(handles.at(i), "outputSec"), gridCase.expected[i]));
+    // The "after" of each change is, byte for byte, the outputSec that content.getDetails reads back for the handle.
+    for (std::size_t c = 0; c < changes.size(); ++c) {
+        const auto handleId = memberOf(memberOf(changes.at(c), "ref"), "handleId").text();
+        const auto written = toJsonString(memberOf(memberOf(memberOf(changes.at(c), "fields"), "outputSec"), "after"));
+        for (std::size_t i = 0; i < handles.size(); ++i)
+            if (memberOf(handles.at(i), "handleId").text() == handleId)
+                if (!CONTROL_CHECK(toJsonString(memberOf(handles.at(i), "outputSec")) == written))
+                    note("handle " + handleId + " written " + written + ", read back "
+                         + toJsonString(memberOf(handles.at(i), "outputSec")));
+    }
 
     // Undo gives back the grid before, exactly; its tokens equal a fresh read again.
     const auto undone =
@@ -446,6 +456,35 @@ void runGridCase(TimingFixture& f, const GridCase& gridCase)
                   == memberOf(tokensBefore, "revision").text());
 }
 
+/** Requested times on a rounding boundary of six decimals (the API rounds what it writes to 6 decimals): the "after" of
+    each change equals, byte for byte, the outputSec that content.getDetails reads back. */
+void checkGridRoundingMatchesReadback(TimingFixture& f)
+{
+    const auto before = innerOf(*f.processor, f.clip.key);
+    const auto handleId = f.clip.handleIds[0];
+    for (const char* text : {"1.1234565", "1.1234575", "0.9999995", "1.5000005", "1.2499995", "1.3333335"}) {
+        const auto result = f.api.result(
+            "content.editTimeGrid",
+            jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + ",\"op\":\"moveHandles\",\"expectedGridRevision\":"
+                   + jsonQuoted(f.gridRevision()) + ",\"moves\":[{\"handleId\":" + jsonQuoted(handleId)
+                   + ",\"outputSec\":" + text + "}]}"));
+        const auto& changes = memberOf(result, "changes");
+        if (!CONTROL_CHECK(changes.size() == 1))
+            continue;
+        const auto written = toJsonString(memberOf(memberOf(memberOf(changes.at(0), "fields"), "outputSec"), "after"));
+        const auto details =
+            f.api.result("content.getDetails", jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + "}"));
+        const auto& handles = memberOf(memberOf(details, "timeGrid"), "handles");
+        const auto read = handles.size() != 0 ? toJsonString(memberOf(handles.at(0), "outputSec")) : std::string();
+        if (!CONTROL_CHECK(written == read))
+            note(std::string("moveHandles to ") + text + ": written " + written + ", read back " + read);
+        f.api.result("edit.undo",
+                     jsonOf("{\"expectedUndoId\":" + jsonQuoted(memberOf(memberOf(result, "undo"), "undoId").text())
+                            + "}"));
+    }
+    CONTROL_CHECK(sameHandles(innerOf(*f.processor, f.clip.key), before));
+}
+
 void scenarioTimingImpl()
 {
     TimingFixture f;
@@ -455,6 +494,7 @@ void scenarioTimingImpl()
         return;
     for (const auto& gridCase : gridCases())
         runGridCase(f, gridCase);
+    checkGridRoundingMatchesReadback(f);
 
     // OpenTune's own undo and redo (the UI's Ctrl+Z) take the entry back and forth as well.
     const auto before = innerOf(*f.processor, f.clip.key);

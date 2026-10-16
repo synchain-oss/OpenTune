@@ -11,6 +11,8 @@ import { after, before, describe, test } from 'node:test';
 import {
   checkInstaller,
   checkModels,
+  scrubDir,
+  scrubPath,
   countSmoke,
   countVitest,
   inspectLog,
@@ -104,15 +106,66 @@ describe('result counting', () => {
   });
 
   test('smoke report', () => {
-    const c = countSmoke({ steps: [{ name: 'hello', status: 'PASS' }, { name: 'export', status: 'fail' }, { name: 'x', status: 'SKIP' }, { name: 'y', status: 'FLAKY-SKIP' }] });
+    const c = countSmoke({ steps: [{ name: 'hello', result: 'PASS' }, { name: 'export', result: 'fail' }, { name: 'x', result: 'SKIP' }, { name: 'y', result: 'FLAKY-SKIP' }] });
     assert.deepEqual([c.pass, c.fail, c.skip, c.flakySkip], [1, 1, 1, 1]);
+  });
+});
+
+describe('smoke report format and empty results', () => {
+  test('top-level counts win over the steps array', () => {
+    const c = countSmoke({
+      result: 'FLAKY-SKIP',
+      counts: { PASS: 3, FAIL: 0, SKIP: 1, 'FLAKY-SKIP': 2 },
+      steps: [{ name: 'a', result: 'PASS', ms: 1, note: '' }],
+    });
+    assert.deepEqual([c.pass, c.fail, c.skip, c.flakySkip], [3, 0, 1, 2]);
+  });
+
+  test('a report whose result is FAIL never counts as green', () => {
+    assert.equal(countSmoke({ result: 'FAIL', steps: [] }).fail, 1);
+  });
+
+  test('zero tests or steps is a failure, not a pass', () => {
+    const log = { ok: true, backend: 'CPU', f0ModelPath: 'x', problems: [] };
+    const some = { steps: [{ name: 'hello', result: 'PASS', ms: 1 }] };
+    const r1 = renderSummary({ contract: some && { testResults: [{ assertionResults: [{ status: 'passed', fullName: 'a' }] }] }, smoke: { steps: [] }, log });
+    assert.equal(r1.failed, true);
+    assert.match(r1.markdown, /没有任何测试或步骤/);
+    const r2 = renderSummary({ contract: { testResults: [] }, smoke: some, log });
+    assert.equal(r2.failed, true);
+    assert.match(r2.markdown, /没有任何测试或步骤/);
+  });
+});
+
+describe('scrubPath and scrubDir', () => {
+  const secret = ['abcDEF', '0123456789', 'abcDEF'].join('');
+  test('scrubPath folds the user profile into <home>', () => {
+    assert.equal(scrubPath('C:\\Users\\someone\\AppData\\x.onnx'), '<home>\\AppData\\x.onnx');
+    assert.equal(scrubPath('c:/Users/someone/x'), '<home>/x');
+  });
+
+  test('scrubDir redacts nested json and log files in place', () => {
+    const dir = makeTempDir('e2e-scrub');
+    try {
+      fs.mkdirSync(path.join(dir, 'logs'));
+      fs.writeFileSync(path.join(dir, 'contract.json'), JSON.stringify({ failureMessages: [`expected serverProof: "${secret}" at C:\\Users\\someone\\x`] }));
+      fs.writeFileSync(path.join(dir, 'logs', 'a.log'), `session token = ${secret}`);
+      assert.equal(scrubDir(path.join(dir, 'missing')).length, 0);
+      assert.equal(scrubDir(dir).length, 2);
+      for (const f of ['contract.json', path.join('logs', 'a.log')]) {
+        const t = fs.readFileSync(path.join(dir, f), 'utf8');
+        assert.ok(!t.includes(secret) && !t.includes('someone'), t);
+      }
+    } finally {
+      removeDir(dir);
+    }
   });
 });
 
 describe('renderSummary', () => {
   const okLog = { ok: true, backend: 'CPU', f0ModelPath: `${MODELS}\\fcpe.onnx`, problems: [] };
   const okContract = { testResults: [{ assertionResults: [{ status: 'passed', fullName: 'a' }] }] };
-  const okSmoke = { steps: [{ name: 'hello', status: 'PASS', ms: 120 }, { name: 'export', status: 'PASS', ms: 900 }] };
+  const okSmoke = { steps: [{ name: 'hello', result: 'PASS', ms: 120 }, { name: 'export', result: 'PASS', ms: 900 }] };
 
   test('all green', () => {
     const { markdown, failed } = renderSummary({ timings: [{ step: 'install', seconds: 12.34 }], contract: okContract, smoke: okSmoke, log: okLog, mcpRef: 'feature/v1' });
@@ -170,6 +223,8 @@ describe('pin checks (temp files)', () => {
 
     fs.writeFileSync(path.join(model, 'fcpe.onnx'), 'changed');
     fs.rmSync(path.join(model, 'GAME', 'encoder.onnx'));
+    const sized = { models: [{ path: 'fcpe.onnx', size: 1, sha256: 'x' }] };
+    assert.match(checkModels(sized, model)[0], /fcpe\.onnx: size 7, pinned 1/);
     const problems = checkModels(pin, model);
     assert.equal(problems.length, 2);
     assert.match(problems.join('\n'), /fcpe\.onnx: sha256/);

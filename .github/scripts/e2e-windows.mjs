@@ -11,6 +11,7 @@
 //                                                             scrub the OpenTune logs (tokens, serverProof,
 //                                                             user names), copy them to --out-dir, assert that the
 //                                                             F0 model was loaded from --models-dir, record the backend
+//   scrub           --dir <dir>                               redact tokens, serverProof and user names in every json/log/md/txt file there
 //   record          --file <json> --step <name> --seconds <n> append one step timing
 //   summary         --timings <json> [--contract <vitest json>] [--smoke <json>] [--log <report json>]
 //                   [--mcp-ref <ref>] [--out <md>]            PASS / FAIL / SKIP / FLAKY-SKIP table; exit 1 on any FAIL
@@ -61,6 +62,11 @@ export function checkModels(pin, dir) {
       problems.push(`missing model: ${m.path}`);
       continue;
     }
+    const size = fs.statSync(file).size;
+    if (m.size && size !== m.size) {
+      problems.push(`${m.path}: size ${size}, pinned ${m.size}`);
+      continue;
+    }
     const sha = sha256File(file);
     if (sha !== m.sha256) problems.push(`${m.path}: sha256 ${sha}, pinned ${m.sha256}`);
   }
@@ -69,14 +75,34 @@ export function checkModels(pin, dir) {
 
 const SECRET_PATTERNS = [
   [/(bearer\s+)[A-Za-z0-9_\-+/=.]{8,}/gi, '$1<redacted>'],
-  [/((?:session[-_ ]?)?token|server[-_ ]?proof|authorization|secret)(["']?\s*[:=]\s*["']?)[A-Za-z0-9_\-+/=.]{8,}/gi, '$1$2<redacted>'],
+  [/((?:session[-_ ]?)?token|server[-_ ]?proof|authorization|secret)(\\*["']?\s*[:=]\s*\\*["']?)[A-Za-z0-9_\-+/=.]{8,}/gi, '$1$2<redacted>'],
 ];
 
 /** Redact session tokens, serverProof values and Windows user profile names from log text. */
 export function scrubLog(text) {
   let out = String(text);
   for (const [re, to] of SECRET_PATTERNS) out = out.replace(re, to);
-  return out.replace(/([A-Za-z]:[\\/]Users[\\/])[^\\/\s"']+/gi, '$1<user>');
+  return out.replace(/([A-Za-z]:[\\/]+Users[\\/]+)[^\\/\s"']+/gi, '$1<user>');
+}
+
+/** Like scrubLog, and also folds a user profile directory (`C:\Users\<name>`) into `<home>`; for paths in errors and reports. */
+export function scrubPath(text) {
+  return scrubLog(text).replace(/[A-Za-z]:[\\/]+Users[\\/]+<user>/gi, '<home>');
+}
+
+/** Redact every json / log / md / txt file under a directory in place, so the uploaded artifact carries no secrets. Returns the files visited. */
+export function scrubDir(dir) {
+  const done = [];
+  if (!fs.existsSync(dir)) return done;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true, recursive: true })) {
+    if (!e.isFile() || !/\.(json|log|md|txt)$/i.test(e.name)) continue;
+    const file = path.join(e.parentPath ?? e.path, e.name);
+    const raw = fs.readFileSync(file, 'utf8');
+    const out = scrubLog(raw);
+    if (out !== raw) fs.writeFileSync(file, out);
+    done.push(file);
+  }
+  return done;
 }
 
 const normPath = (p) => String(p).replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
@@ -129,17 +155,32 @@ export function countVitest(report) {
   return c;
 }
 
-/** Tally the smoke scenario report `{steps: [{name, status, ms}]}` the same way. */
+/**
+ * Tally the smoke scenario report `{result, counts: {PASS, FAIL, SKIP, 'FLAKY-SKIP'}, steps: [{name, result, ms, note}]}`.
+ * The top-level `counts` win when present; the failed step names always come from `steps`.
+ */
 export function countSmoke(report) {
   const c = { pass: 0, fail: 0, skip: 0, flakySkip: 0, failed: [] };
+  const top = report.counts && typeof report.counts === 'object' ? report.counts : null;
   for (const s of report.steps ?? []) {
-    const st = String(s.status ?? '').toUpperCase();
+    const st = String(s.result ?? '').toUpperCase();
     if (st === 'PASS') c.pass += 1;
     else if (st === 'FAIL') {
       c.fail += 1;
       c.failed.push(s.name);
     } else if (st === 'FLAKY-SKIP') c.flakySkip += 1;
     else c.skip += 1;
+  }
+  if (top) {
+    const n = (k) => (Number.isFinite(Number(top[k])) ? Number(top[k]) : 0);
+    c.pass = n('PASS');
+    c.fail = n('FAIL');
+    c.skip = n('SKIP');
+    c.flakySkip = n('FLAKY-SKIP');
+  }
+  if (String(report.result ?? '').toUpperCase() === 'FAIL' && c.fail === 0) {
+    c.fail = 1;
+    c.failed.push('report result is FAIL');
   }
   return c;
 }
@@ -161,6 +202,10 @@ export function renderSummary({ timings = [], contract = null, smoke = null, log
       failed = true;
       return;
     }
+    if (c.pass + c.fail + c.skip + c.flakySkip === 0) {
+      c.fail = 1;
+      c.failed = ['没有任何测试或步骤'];
+    }
     if (c.fail > 0) failed = true;
     rows.push(`| ${name} | ${c.pass} | ${c.fail} | ${c.skip} | ${c.flakySkip} | ${c.failed.length ? cell(c.failed.slice(0, 5).join('；')) : ''} |`);
   };
@@ -181,10 +226,10 @@ export function renderSummary({ timings = [], contract = null, smoke = null, log
   const smokeSteps = smoke?.steps ?? [];
   if (smokeSteps.length) {
     lines.push('', '冒烟场景分步耗时：', '', '| 步骤 | 结果 | 耗时（毫秒） |', '|---|---|---|');
-    for (const s of smokeSteps) lines.push(`| ${cell(s.name)} | ${cell(s.status)} | ${s.ms ?? ''} |`);
+    for (const s of smokeSteps) lines.push(`| ${cell(s.name)} | ${cell(s.result)} | ${s.ms ?? ''} |`);
   }
   lines.push('', failed ? '结果：**FAIL**' : '结果：**PASS**', '');
-  return { markdown: lines.join('\n'), failed };
+  return { markdown: scrubPath(lines.join('\n')), failed };
 }
 
 function usage(msg) {
@@ -221,7 +266,7 @@ function main(argv) {
   const need = (...names) => names.forEach((n) => opts[n] ?? usage(`--${n} is required for ${cmd}`));
   const report = (problems, okText) => {
     if (problems.length) {
-      for (const p of problems) process.stdout.write(`::error::${p}\n`);
+      for (const p of problems) process.stdout.write(`::error::${scrubPath(p)}\n`);
       process.exit(1);
     }
     process.stdout.write(`${okText}\n`);
@@ -248,8 +293,15 @@ function main(argv) {
         fs.writeFileSync(path.join(opts['out-dir'], n), scrubLog(raw));
       }
       const res = names.length ? inspectLog(all, opts['models-dir']) : { ok: false, backend: 'unknown', f0ModelPath: null, problems: ['no OpenTune log files found'] };
+      res.problems = res.problems.map(scrubPath);
+      if (res.f0ModelPath !== null) res.f0ModelPath = scrubPath(res.f0ModelPath);
       fs.writeFileSync(opts.report, `${JSON.stringify(res, null, 2)}\n`);
       report(res.problems, `F0 model loaded from the official models directory; backend ${res.backend}; ${names.length} log file(s) scrubbed`);
+      break;
+    }
+    case 'scrub': {
+      need('dir');
+      process.stdout.write(`scrubbed ${scrubDir(opts.dir).length} file(s)\n`);
       break;
     }
     case 'record': {
@@ -275,7 +327,7 @@ function main(argv) {
       break;
     }
     default:
-      usage('unknown command (check-installer | check-models | check-log | record | summary)');
+      usage('unknown command (check-installer | check-models | check-log | scrub | record | summary)');
   }
 }
 

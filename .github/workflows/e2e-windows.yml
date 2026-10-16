@@ -5,7 +5,7 @@
 name: E2E Windows
 
 # 在 GitHub 的 Windows runner 上，用真实的 OpenTune Standalone 跑 MCP 仓库的契约向量与冒烟场景。
-# 永不设为必需检查：它只在 workflow_dispatch（以及 manager 在预览前手动运行）时触发，不挂在 PR 上；
+# 永不设为必需检查：它只在 PR 带 `e2e-windows` 标签时（pull_request: labeled / synchronize）或 workflow_dispatch 时运行；
 # 结果只作参考与预览前的检查依据。
 #
 # 流程：
@@ -17,11 +17,17 @@ name: E2E Windows
 #              依次跑契约向量与冒烟场景；检查 OpenTune 日志里 F0 模型确实来自官方模型目录，并记录后端
 #              （CPU / DirectML）；上传每步耗时、结果摘要与脱敏日志。
 # 与 MCP 仓库的约定（见 inputs）：
-#   契约：`npm run test:contract`，读取 OTCP_TARGET_EXE；本 workflow 追加 vitest 的 json 报告参数。
-#   冒烟：`npm run e2e:exe`，读取 OTCP_TARGET_EXE，并把 {"steps":[{"name","status","ms"}]} 写到 OTCP_E2E_REPORT。
+#   契约：`npm run test:contract -- -t "against the exe"`，读取 OTCP_TARGET_EXE；本 workflow 追加 vitest 的 json 报告参数。
+#   冒烟：`npm run e2e:exe`，读取 OTCP_TARGET_EXE（及 OTCP_TARGET_ARGS、OTCP_TARGET_TIMEOUT_MS、OTCP_E2E_STEP_TIMEOUT_MS），
+#         把 {"result","counts":{PASS,FAIL,SKIP,FLAKY-SKIP},"steps":[{"name","result","ms","note"}]} 写到绝对路径 OTCP_E2E_REPORT。
 # 结果统计把 PASS / FAIL / SKIP / FLAKY-SKIP 分开计数（名字含 FLAKY-SKIP 的跳过项计入 FLAKY-SKIP）。
 # 任何 workflow 一律不用 pull_request 的 target 变体（CLAUDE.md §0 第 4 条）。
 on:
+  # 加标签触发：在 PR 上打 `e2e-windows` 标签即运行；之后每次推送（synchronize）在标签仍在时重跑。没有输入参数，
+  # MCP 仓库 ref 用默认值 feature/v1，脚本名用默认值。workflow_dispatch 只有在本文件合入默认分支（dev）之后才能用
+  # （gh workflow run 对只存在于非默认分支的 workflow 返回 404）。两者都不是必需检查。
+  pull_request:
+    types: [labeled, synchronize]
   workflow_dispatch:
     inputs:
       mcp-ref:
@@ -40,13 +46,15 @@ on:
 permissions:
   contents: read
 
+# 按 PR 分组，新运行取消旧运行。打了别的标签的 labeled 事件不会运行任何 job，它用独立分组，免得取消正在跑的那次。
 concurrency:
-  group: e2e-windows-${{ github.ref }}
-  cancel-in-progress: false
+  group: e2e-windows-${{ (github.event_name == 'pull_request' && (github.event.action != 'labeled' || github.event.label.name == 'e2e-windows')) && format('pr-{0}', github.event.pull_request.number) || (github.event_name == 'pull_request' && format('ignored-{0}', github.run_id)) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     name: build (Standalone Release, no models)
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e-windows') }}
     uses: ./.github/workflows/build-windows.yml
     with:
       release-package: true
@@ -54,6 +62,7 @@ jobs:
   e2e-windows:
     name: e2e-windows
     needs: build
+    if: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'e2e-windows') }}
     runs-on: windows-2022
     timeout-minutes: 60
     defaults:
@@ -61,6 +70,12 @@ jobs:
         shell: pwsh
     env:
       MCP_REPOSITORY: synchain-oss/opentune-mcp-server
+      # 没有输入参数时（pull_request 触发）的默认值。
+      MCP_REF: ${{ inputs.mcp-ref || 'feature/v1' }}
+      CONTRACT_SCRIPT: ${{ inputs.contract-script || 'test:contract' }}
+      SMOKE_SCRIPT: ${{ inputs.smoke-script || 'e2e:exe' }}
+      # 契约向量里针对 exe 的那一组。
+      CONTRACT_FILTER: against the exe
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -125,7 +140,10 @@ jobs:
 
       # 官方安装包是 Inno Setup 程序：只在 runner 上静默安装（用 /DIR= 指到临时目录）。模型由安装程序放在共享的
       # %ProgramData%\OpenTune\Models，而不是安装目录里。
+      # 安装包若在 /VERYSILENT 下仍启动程序（postinstall 没带 skipifsilent），它继承这里的临时 APPDATA，不会写真实的用户目录。
       - name: Install the official OpenTune silently
+        env:
+          APPDATA: ${{ env.E2E_WORK }}\appdata-official
         run: |
           $sw = [Diagnostics.Stopwatch]::StartNew()
           try {
@@ -138,6 +156,16 @@ jobs:
           } finally {
             node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'install official OpenTune' --seconds $sw.Elapsed.TotalSeconds
           }
+      # 结束安装器可能启动的官方 OpenTune（只按进程路径认官方安装目录里的那个），并确认真实 %APPDATA%\OpenTune 没被写过。
+      - name: Stop any official OpenTune the installer started
+        run: |
+          $root = (Resolve-Path -LiteralPath $env:E2E_OFFICIAL).Path.TrimEnd('\') + '\'
+          $found = @(Get-Process -Name OpenTune -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) })
+          Write-Host "official OpenTune processes started by the installer: $($found.Count)"
+          $found | Stop-Process -Force -ErrorAction SilentlyContinue
+          $found | ForEach-Object { $_.WaitForExit(10000) | Out-Null }
+          $real = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'OpenTune'
+          if (Test-Path -LiteralPath $real) { throw "the real user data folder exists after the official install (it must stay untouched)" }
       - name: Official models match the pinned sha256 (fcpe, GAME)
         run: |
           node $env:E2E_SCRIPT check-models --pin $env:E2E_PIN --dir $env:E2E_MODELS
@@ -147,7 +175,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ env.MCP_REPOSITORY }}
-          ref: ${{ inputs.mcp-ref }}
+          ref: ${{ env.MCP_REF }}
           path: ot-mcp
           fetch-depth: 1
           persist-credentials: false
@@ -167,15 +195,15 @@ jobs:
       - name: Contract vectors against our Standalone
         id: contract
         continue-on-error: true
+        timeout-minutes: 20
         working-directory: ot-mcp
         env:
           OTCP_TARGET_EXE: ${{ env.E2E_APP }}\OpenTune.exe
           OPENTUNE_DATA_DIR: ${{ env.E2E_DATA }}
-          CONTRACT_SCRIPT: ${{ inputs.contract-script }}
         run: |
           $sw = [Diagnostics.Stopwatch]::StartNew()
           try {
-            npm run $env:CONTRACT_SCRIPT -- --reporter=default --reporter=json "--outputFile.json=$env:E2E_OUT\contract.json"
+            npm run $env:CONTRACT_SCRIPT -- --reporter=default --reporter=json "--outputFile.json=$env:E2E_OUT\contract.json" -t $env:CONTRACT_FILTER
             if ($LASTEXITCODE -ne 0) { throw "contract vectors failed ($LASTEXITCODE)" }
           } finally {
             node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'contract vectors' --seconds $sw.Elapsed.TotalSeconds
@@ -183,12 +211,12 @@ jobs:
       - name: Smoke scenario (hello, import, Ready, autoTune, export)
         id: smoke
         continue-on-error: true
+        timeout-minutes: 20
         working-directory: ot-mcp
         env:
           OTCP_TARGET_EXE: ${{ env.E2E_APP }}\OpenTune.exe
           OPENTUNE_DATA_DIR: ${{ env.E2E_DATA }}
           OTCP_E2E_REPORT: ${{ env.E2E_OUT }}\smoke.json
-          SMOKE_SCRIPT: ${{ inputs.smoke-script }}
         run: |
           $sw = [Diagnostics.Stopwatch]::StartNew()
           try {
@@ -216,7 +244,6 @@ jobs:
           CONTRACT_OUTCOME: ${{ steps.contract.outcome }}
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
           LOG_OUTCOME: ${{ steps.logcheck.outcome }}
-          MCP_REF: ${{ inputs.mcp-ref }}
         run: |
           Write-Host "contract: $env:CONTRACT_OUTCOME; smoke: $env:SMOKE_OUTCOME; log check: $env:LOG_OUTCOME"
           node $env:E2E_SCRIPT summary --timings $env:E2E_TIMINGS --contract "$env:E2E_OUT\contract.json" `
@@ -226,6 +253,11 @@ jobs:
           Copy-Item -LiteralPath $env:GITHUB_STEP_SUMMARY -Destination "$env:E2E_OUT\summary.md" -ErrorAction SilentlyContinue
           if ($code -ne 0) { throw "e2e-windows has failing or missing results" }
           if ($env:CONTRACT_OUTCOME -ne 'success' -or $env:SMOKE_OUTCOME -ne 'success') { throw "contract or smoke step did not succeed" }
+
+      # 上传前对整个输出目录（契约报告、冒烟报告、日志、摘要）再脱敏一遍：vitest 的失败信息可能带请求或响应体。
+      - name: Scrub every file that will be uploaded
+        if: ${{ !cancelled() }}
+        run: node $env:E2E_SCRIPT scrub --dir $env:E2E_OUT
 
       - name: Upload results (timings, contract and smoke reports, scrubbed logs)
         if: ${{ !cancelled() }}

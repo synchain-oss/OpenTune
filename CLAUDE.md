@@ -150,6 +150,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   5. 真 Standalone 测试环境就绪后：改到 Dispatcher / Jobs / Ops / Edit / bridge 或 `spec.lock` 的 PR，还要跑真 Standalone 的契约与场景测试。这一步持 E2E 互斥锁，并先快照、再恢复 `OpenTune.settings` 与 AppPreferences。
   6. 署名与身份检查（`.github/scripts/fork-checks.mjs`，与 fork-gate 同一份实现）。
   7. `.github/scripts/check-ignored-delta.ps1`。
+  8. 镜像锁清单（`drift-pins.mjs --check`，三处一致，不需要构建）：`-Layer L0` 时不一致为 FAIL；其他层为 WARN，因为可上游的 PR 改了镜像也不能改 `.github/**`，由 manager 的 L0 跟进用 `node .github/scripts/drift-pins.mjs --write` 补齐。fork-gate 里同一检查：push 到 `dev` / `feature/control-api`、base 为 `dev` / `review-base/**` / `sync/**` 的 PR、以及改到 `.github/drift-pins/**` 或 `drift-pins.mjs` 的 PR 阻塞；base 为 `feature/**` 且没改这些路径的子 PR 只报告（job summary 与 `::warning::`），不阻塞。细则见 `.github/drift-pins/README.md`。
 - **构建**：JUCE 9.0.3（8.0.15 为已验证的备选），Ninja Multi-Config。lane、gates 与 CI 测试一律用 RelWithDebInfo。Release（LTCG）只用于出包与 E2E，不在 Release 下构建测试。依赖由 `bootstrap-deps.ps1` 按 `deps.lock.json` 拉取并逐个校验 sha256，绝不下载模型。
 - **CI 分档**：子 PR（base=`feature/**`）只跑轻量门禁，即 fork-gate；改到原生代码时才跑 build-windows。所以本地 gates 是第一道编译门，不要指望 CI 替你发现编译错误。PR→`dev` 跑完整套件。
 

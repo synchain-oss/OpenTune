@@ -7,8 +7,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { describe, test } from 'node:test';
 import { makeTempDir, removeDir } from '../fork-lib.mjs';
-import { checkWorkingTree, extractStatement, hashSymbol, parsePinFile, readMirrors, renderPinFiles, verifyConsistency } from '../drift-pins.mjs';
-import { REPO_ROOT } from './helpers.mjs';
+import { checkWorkingTree, decideEnforcement, extractStatement, hashSymbol, parsePinFile, readMirrors, renderPinFiles, verifyConsistency } from '../drift-pins.mjs';
 
 describe('stmt-v1', () => {
   const SAMPLE = 'namespace N {\nstatic constexpr int kLimit_Extra{1};\n  static constexpr int kLimit{500};  // comment\n}\n';
@@ -41,7 +40,7 @@ describe('pin files, mirror-map.json and MIRRORS.md agree', () => {
   const entry = (id, group, symbol, sha, normalization = 'fn-v1') => ({
     id,
     group,
-    upstream: { file: 'Source/Up.cpp', symbol, kind: 'function', normalization, sha256: sha },
+    upstream: { file: 'Source/Up.cpp', symbol, kind: normalization === 'stmt-v1' ? 'statement' : 'function', normalization, sha256: sha },
     control: [{ file: `Source/Control/${group}.cpp`, symbols: ['x'] }],
   });
   const MAP = mapOf([entry('one', 'alpha', 'A::one', h('1')), entry('two', 'alpha', 'A::two', h('2')), entry('three', 'beta', 'B::three', h('3'), 'stmt-v1')]);
@@ -147,9 +146,45 @@ describe('pin files, mirror-map.json and MIRRORS.md agree', () => {
     }
   });
 
-  test('this repository: the committed pin files match mirror-map.json and MIRRORS.md', () => {
-    const r = checkWorkingTree(REPO_ROOT);
-    assert.deepEqual(r.problems, []);
-    assert.ok(r.mirrors > 0);
+  test('kind picks the extraction and must agree with the normalization', () => {
+    const bad = (kind, normalization) => {
+      const e = entry('one', 'alpha', 'A::one', h('1'), normalization);
+      e.upstream.kind = kind;
+      return verifyConsistency({ mirrors: readMirrors(mapOf([e])), pinFiles: new Map(), mirrorsMd: MD }).join(' | ');
+    };
+    assert.match(bad('statement', 'fn-v1'), /kind「statement」应配 stmt-v1，实际是 fn-v1/);
+    assert.match(bad('function', 'stmt-v1'), /kind「function」应配 fn-v1，实际是 stmt-v1/);
+    assert.match(bad('method', 'fn-v1'), /kind「method」应为 function 或 statement/);
+    assert.doesNotMatch(bad('statement', 'stmt-v1'), /kind/);
+    assert.equal(readMirrors(MAP)[2].kind, 'statement');
+  });
+
+  test('pin files with different pinned-at tags are reported', () => {
+    const files = render();
+    files.set('beta.txt', files.get('beta.txt').replace('upstream/20261008-addb4f4', 'upstream/20261001-1234567'));
+    assert.match(verify({ pinFiles: files }).join(' | '),/pinned-at 不一致/);
+  });
+});
+
+describe('decideEnforcement: when a mismatch blocks', () => {
+  const pr = (baseRef, changedFiles = ['Source/Control/mirror-map.json', 'Source/Control/MIRRORS.md']) => decideEnforcement({ event: 'pull_request', baseRef, changedFiles });
+
+  test('a sub-PR into feature/** that touches no pin file does not block', () => {
+    assert.equal(pr('feature/control-api').blocking, false);
+    assert.equal(pr('feature/other').blocking, false);
+  });
+
+  test('a PR that changes the pin files or the script blocks, whatever the base', () => {
+    assert.equal(pr('feature/control-api', ['.github/drift-pins/auto.txt']).blocking, true);
+    assert.equal(pr('feature/control-api', ['x', '.github/scripts/drift-pins.mjs']).blocking, true);
+    assert.equal(pr('feature/control-api', ['.github/scripts/drift-pins.mjs.bak']).blocking, false);
+  });
+
+  test('a PR into dev, review-base/** or sync/** blocks', () => {
+    for (const base of ['dev', 'review-base/2026', 'sync/20261008', 'refs/heads/dev']) assert.equal(pr(base).blocking, true, base);
+  });
+
+  test('a push blocks', () => {
+    assert.equal(decideEnforcement({ event: 'push' }).blocking, true);
   });
 });

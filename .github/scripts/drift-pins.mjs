@@ -11,8 +11,9 @@
 // CLI:
 //   node drift-pins.mjs --write [--pinned-at <tag>]
 //       regenerates .github/drift-pins/<group>.txt from mirror-map.json (never edit the files by hand)
-//   node drift-pins.mjs --check [--json]
-//       pin files, mirror-map.json and MIRRORS.md agree (working tree, no git needed); exit 1 when not
+//   node drift-pins.mjs --check [--json] [--advisory] [--event <name> --base <ref> [--changed-files <file>]]
+//       pin files, mirror-map.json and MIRRORS.md agree (working tree, no git needed); exit 1 when not.
+//       --advisory (or --event, which applies decideEnforcement) reports a mismatch but exits 0
 //   node drift-pins.mjs check --rev <rev> [--pins-rev <rev>] [--json]
 //       --rev        revision that holds the upstream files to hash (for example the newest upstream commit)
 //       --pins-rev   revision that holds the pin files (default HEAD)
@@ -29,6 +30,8 @@ export const MIRROR_MAP = 'Source/Control/mirror-map.json';
 export const MIRRORS_MD = 'Source/Control/MIRRORS.md';
 export const NORMALIZATION = 'fn-v1';
 export const NORMALIZATIONS = ['fn-v1', 'stmt-v1'];
+/** upstream.kind of mirror-map.json picks the extraction (as in Tests/Control/ControlMirrorHash.h); normalization only has to agree. */
+export const NORMALIZATION_OF_KIND = { function: 'fn-v1', statement: 'stmt-v1' };
 
 /** Text of a blob as the normalisation reads it: no UTF-8 BOM, LF line endings. */
 export function normalizeSource(buf) {
@@ -344,6 +347,7 @@ export function readMirrors(mapText) {
     group: String(m.group),
     path: String(m.upstream?.file),
     symbol: String(m.upstream?.symbol),
+    kind: String(m.upstream?.kind),
     normalization: String(m.upstream?.normalization),
     sha256: String(m.upstream?.sha256),
     controlFiles: (m.control ?? []).map((c) => String(c.file)),
@@ -410,6 +414,10 @@ export function verifyConsistency({ mirrors, pinFiles, mirrorsMd }) {
   for (const m of mirrors) {
     if (!GROUP_RE.test(m.group)) problems.push(`${MIRROR_MAP}：${m.id} 的 group「${m.group}」不是 [a-z0-9-]+`);
     if (!NORMALIZATIONS.includes(m.normalization)) problems.push(`${MIRROR_MAP}：${m.id} 的规范化方式「${m.normalization}」不受支持`);
+    if (!(m.kind in NORMALIZATION_OF_KIND)) problems.push(`${MIRROR_MAP}：${m.id} 的 kind「${m.kind}」应为 function 或 statement`);
+    else if (NORMALIZATIONS.includes(m.normalization) && NORMALIZATION_OF_KIND[m.kind] !== m.normalization) {
+      problems.push(`${MIRROR_MAP}：${m.id} 的 kind「${m.kind}」应配 ${NORMALIZATION_OF_KIND[m.kind]}，实际是 ${m.normalization}`);
+    }
     if (!/^[0-9a-f]{64}$/.test(m.sha256)) problems.push(`${MIRROR_MAP}：${m.id} 的 sha256 不是 64 位小写十六进制`);
     const k = keyOf(m.path, m.symbol);
     if (seen.has(k)) problems.push(`${MIRROR_MAP}：${m.path} 的 ${m.symbol} 登记了不止一次（${m.id}）`);
@@ -419,6 +427,7 @@ export function verifyConsistency({ mirrors, pinFiles, mirrorsMd }) {
   for (const group of groups.keys()) {
     if (!pinFiles.has(`${group}.txt`)) problems.push(`${PIN_DIR}/${group}.txt 缺失：${MIRROR_MAP} 有 ${group} 组（${groups.get(group).length} 条）`);
   }
+  const pinnedAts = new Map();
   for (const [name, text] of pinFiles) {
     const where = `${PIN_DIR}/${name}`;
     const group = name.replace(/\.txt$/, '');
@@ -431,6 +440,7 @@ export function verifyConsistency({ mirrors, pinFiles, mirrorsMd }) {
     problems.push(...p.problems);
     if (p.group !== group) problems.push(`${where}：# group: 是「${p.group}」，应为 ${group}`);
     if (!TAG_RE.test(p.pinnedAt)) problems.push(`${where}：# pinned-at: 应是 upstream/YYYYMMDD-<sha7>，实际「${p.pinnedAt}」`);
+    pinnedAts.set(name, p.pinnedAt);
     const wantPorted = portedTo(list);
     if (JSON.stringify(p.portedTo) !== JSON.stringify(wantPorted)) {
       problems.push(`${where}：# ported-to: 是 [${p.portedTo.join(', ')}]，与 ${MIRROR_MAP} 的接口层文件 [${wantPorted.join(', ')}] 不一致`);
@@ -454,6 +464,9 @@ export function verifyConsistency({ mirrors, pinFiles, mirrorsMd }) {
     }
     for (const e of byKey.values()) problems.push(`${where}:${e.line} 多余条目：${e.path} 的 ${e.symbol} 不在 ${MIRROR_MAP} 的 ${group} 组里`);
   }
+  if (new Set(pinnedAts.values()).size > 1) {
+    problems.push(`${PIN_DIR}/ 的 pinned-at 不一致：${[...pinnedAts].map(([n, t]) => `${n} ${t}`).join('、')}（重新运行 --write 让各组用同一个 tag）`);
+  }
   const rows = parseMirrorsMd(mirrorsMd);
   if (!rows) problems.push(`${MIRRORS_MD}：找不到 mirror-table:begin / mirror-table:end 标记`);
   else {
@@ -468,6 +481,26 @@ export function verifyConsistency({ mirrors, pinFiles, mirrorsMd }) {
     for (const id of byId.keys()) problems.push(`${MIRRORS_MD} 多余的行：${id} 不在 ${MIRROR_MAP} 里`);
   }
   return problems;
+}
+
+const PIN_PATH_RE = /^(\.github\/drift-pins\/|\.github\/scripts\/drift-pins\.mjs$)/;
+const BLOCKING_BASE_RE = /^(dev|review-base\/.+|sync\/.+)$/;
+
+/**
+ * Whether an inconsistency fails the CI step or is only reported. Blocking: pushes (dev, feature/control-api), pull
+ * requests into dev, review-base/** or sync/**, and any pull request that touches the pin files or this script.
+ * Not blocking: a sub-PR into feature/** that touches neither; the manager's follow-up regenerates the pin files.
+ * @param {{event: string, baseRef?: string, changedFiles?: string[]}} input
+ * @returns {{blocking: boolean, reason: string}}
+ */
+export function decideEnforcement({ event, baseRef = '', changedFiles = [] }) {
+  if (event !== 'pull_request') return { blocking: true, reason: '不是 pull_request（push 到 dev 或主支线），照常阻塞' };
+  const base = String(baseRef).replace(/^refs\/heads\//, '');
+  if (BLOCKING_BASE_RE.test(base)) return { blocking: true, reason: `PR 的 base 是 ${base}，阻塞` };
+  const touched = changedFiles.find((f) => PIN_PATH_RE.test(f));
+  if (touched) return { blocking: true, reason: `PR 改了 ${touched}，阻塞` };
+  if (/^feature\/.+/.test(base)) return { blocking: false, reason: `PR 的 base 是 ${base} 且没改 ${PIN_DIR}/ 与 drift-pins.mjs：只报告，由 manager 的 L0 跟进补齐` };
+  return { blocking: true, reason: `PR 的 base ${base} 不在可放行范围内，阻塞` };
 }
 
 /** Read the three places from the working tree of `root`. */
@@ -498,6 +531,10 @@ export function checkWorkingTree(root) {
 export function writePins(root, { pinnedAt }) {
   if (!TAG_RE.test(pinnedAt)) throw new Error(`pinned-at 应是 upstream/YYYYMMDD-<sha7> 形式的 tag，实际「${pinnedAt}」`);
   const { mirrors } = readWorkingTree(root);
+  const kindProblems = mirrors.filter((m) => NORMALIZATION_OF_KIND[m.kind] !== m.normalization);
+  if (kindProblems.length) {
+    throw new Error(`${MIRROR_MAP} 的 kind 与规范化方式不配（function 配 fn-v1，statement 配 stmt-v1）：${kindProblems.map((m) => `${m.id}（${m.kind}/${m.normalization}）`).join('、')}`);
+  }
   const warnings = [];
   const sources = new Map();
   const anchorOf = (m) => {
@@ -506,7 +543,7 @@ export function writePins(root, { pinnedAt }) {
       sources.set(m.path, r.status === 0 ? r.stdout : null);
     }
     const buf = sources.get(m.path);
-    const h = buf?.length ? hashSymbol(buf, m.symbol, m.normalization) : null;
+    const h = buf?.length ? hashSymbol(buf, m.symbol, NORMALIZATION_OF_KIND[m.kind]) : null;
     if (!h) throw new Error(`${pinnedAt} 里找不到 ${m.path} 的 ${m.symbol}（${m.id}）`);
     if (h.sha256 !== m.sha256) warnings.push(`${m.id}：${pinnedAt} 上的哈希与 ${MIRROR_MAP} 不同；mirror-map 的值照写，请确认 pinned-at 是否正确`);
     return `L${h.startLine}-L${h.endLine}`;
@@ -534,7 +571,7 @@ function newestSnapshotTag(root) {
 function mainPins(argv) {
   let o;
   try {
-    ({ opts: o } = parseArgs(argv, { write: 'bool', check: 'bool', json: 'bool', 'pinned-at': 'string' }));
+    ({ opts: o } = parseArgs(argv, { write: 'bool', check: 'bool', json: 'bool', advisory: 'bool', event: 'string', base: 'string', 'changed-files': 'string', 'pinned-at': 'string' }));
   } catch (e) {
     process.stderr.write(`drift-pins: ${e.message}\n`);
     return 2;
@@ -553,13 +590,30 @@ function mainPins(argv) {
       return 0;
     }
     const r = checkWorkingTree(root);
-    if (o.json) process.stdout.write(`${JSON.stringify({ ...r, fix: r.problems.length ? FIX_HINT : null }, null, 2)}\n`);
+    let advisory = Boolean(o.advisory);
+    let why = '本地 gates 的非 L0 层只报告';
+    if (o.event) {
+      const changedFiles = o['changed-files'] ? fs.readFileSync(o['changed-files'], 'utf8').split(/\r?\n/).filter(Boolean) : [];
+      const d = decideEnforcement({ event: o.event, baseRef: o.base ?? '', changedFiles });
+      advisory = !d.blocking;
+      why = d.reason;
+    }
+    if (o.json) process.stdout.write(`${JSON.stringify({ ...r, advisory, fix: r.problems.length ? FIX_HINT : null }, null, 2)}\n`);
     else if (r.problems.length) {
-      process.stderr.write(`drift-pins：${PIN_DIR}/、${MIRROR_MAP} 与 ${MIRRORS_MD} 不一致（${r.problems.length} 处）：\n`);
-      for (const p of r.problems) process.stderr.write(`  - ${p}\n`);
-      process.stderr.write(`修复：${FIX_HINT}。\n`);
+      const head = `drift-pins：${PIN_DIR}/、${MIRROR_MAP} 与 ${MIRRORS_MD} 不一致（${r.problems.length} 处）${advisory ? '（仅报告，不阻塞）' : ''}：\n`;
+      const lines = r.problems.map((p) => `  - ${p}\n`).join('');
+      process.stderr.write(`${head}${lines}修复：${FIX_HINT}。\n`);
+      if (advisory) {
+        process.stderr.write(`${why}。\n`);
+        if (process.env.GITHUB_ACTIONS) {
+          process.stdout.write(`::warning title=drift-pins::三处不一致（${r.problems.length} 处），不阻塞此 PR；由 manager 的 L0 跟进用 node .github/scripts/drift-pins.mjs --write 补齐\n`);
+        }
+        if (process.env.GITHUB_STEP_SUMMARY) {
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### drift-pins：不一致（仅报告）\n\n${why}。由 manager 的 L0 跟进用 \`node .github/scripts/drift-pins.mjs --write\` 补齐。\n\n${r.problems.map((p) => `- ${p}`).join('\n')}\n`);
+        }
+      }
     } else process.stdout.write(`drift-pins：${r.mirrors} 条镜像、${r.groups} 个组，三处一致\n`);
-    return r.problems.length ? 1 : 0;
+    return r.problems.length && !advisory ? 1 : 0;
   } catch (e) {
     process.stderr.write(`drift-pins: ${e.message}\n`);
     return 2;

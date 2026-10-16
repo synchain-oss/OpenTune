@@ -21,7 +21,12 @@ fork 专用（L0），永不进入上游 PR。
 
 - **可上游的 PR**（移植界面逻辑的各层）只改 `mirror-map.json` 与 `Source/Control/MIRRORS.md`：改了被镜像的函数或新增镜像，就运行 `OpenTuneControlMirrorDriftTests --update`，它刷新 `mirror-map.json` 里的哈希并重新生成 `MIRRORS.md` 的表。
 - **manager 的 L0 跟进**随后运行 `node .github/scripts/drift-pins.mjs --write`，把本目录重新生成成与它们一致，并提交。
-- `node .github/scripts/drift-pins.mjs --check`（本地 gates 与 fork-gate 的 self-test 都会跑）只读工作区文件，检查三处一致：`mirror-map.json` 的每个条目在对应的 `<group>.txt` 里恰有一行且 `sha256`、规范化方式、`ported-to` 一致；没有多余的清单文件或条目；`MIRRORS.md` 表中的 id 与哈希集合与 `mirror-map.json` 一致（只比较集合，不改写 `MIRRORS.md`）。不一致时，输出写明改了哪里，并提示先运行 `OpenTuneControlMirrorDriftTests --update`、再运行 `--write`。`--write` 默认用当前分支包含的最新 `upstream/*` tag 作为 `pinned-at`，可用 `--pinned-at <tag>` 指定。
+- `node .github/scripts/drift-pins.mjs --check`（本地 gates 与 fork-gate 都会跑）只读工作区文件，检查三处一致：`mirror-map.json` 的每个条目在对应的 `<group>.txt` 里恰有一行且 `sha256`、规范化方式、`ported-to` 一致；没有多余的清单文件或条目；`MIRRORS.md` 表中的 id 与哈希集合与 `mirror-map.json` 一致（只比较集合，不改写 `MIRRORS.md`）；`mirror-map.json` 的 `upstream.kind`（`function` / `statement`）决定提取方式，与 `ControlMirrorHash.h` 一致，规范化方式（`fn-v1` / `stmt-v1`）只作校验，二者不配（例如 `statement` 配 `fn-v1`）报错；各组的 `pinned-at` 必须相同。不一致时，输出写明改了哪里，并提示先运行 `OpenTuneControlMirrorDriftTests --update`、再运行 `--write`。`--write` 默认用当前分支包含的最新 `upstream/*` tag 作为 `pinned-at`，可用 `--pinned-at <tag>` 指定。
+
+**不一致时是否阻塞**（判定函数是 `drift-pins.mjs` 里的 `decideEnforcement`，workflow 只传事件信息）：
+
+- 阻塞：push 到 `dev` 或 `feature/control-api`；base 为 `dev`、`review-base/**`、`sync/**` 的 PR；任何改到 `.github/drift-pins/**` 或 `.github/scripts/drift-pins.mjs` 的 PR；本地 `gates.ps1 -Layer L0`（FAIL）。
+- 不阻塞：base 为 `feature/**` 且没改上面这些路径的子 PR。可上游的子 PR 改了镜像却不能改 `.github/**`，自己补不了清单；这时 fork-gate 照样运行 `--check`，不一致写进 job summary 并发 `::warning::`，step 结论为成功，由 manager 的 L0 跟进用 `node .github/scripts/drift-pins.mjs --write` 补齐。本地 `gates.ps1` 的非 L0 层该行为 WARN，含义相同。
 
 ## 文件
 

@@ -11,9 +11,9 @@
 // CLI:
 //   node drift-pins.mjs --write [--pinned-at <tag>]
 //       regenerates .github/drift-pins/<group>.txt from mirror-map.json (never edit the files by hand)
-//   node drift-pins.mjs --check [--json] [--advisory] [--event <name> --base <ref> [--changed-files <file>]]
+//   node drift-pins.mjs --check [--json] [--event <name> --base <ref> [--changed-files <file>]]
 //       pin files, mirror-map.json and MIRRORS.md agree (working tree, no git needed); exit 1 when not.
-//       --advisory (or --event, which applies decideEnforcement) reports a mismatch but exits 0
+//       --event applies decideEnforcement: a mismatch that is not blocking is reported but exits 0
 //   node drift-pins.mjs check --rev <rev> [--pins-rev <rev>] [--json]
 //       --rev        revision that holds the upstream files to hash (for example the newest upstream commit)
 //       --pins-rev   revision that holds the pin files (default HEAD)
@@ -571,7 +571,7 @@ function newestSnapshotTag(root) {
 function mainPins(argv) {
   let o;
   try {
-    ({ opts: o } = parseArgs(argv, { write: 'bool', check: 'bool', json: 'bool', advisory: 'bool', event: 'string', base: 'string', 'changed-files': 'string', 'pinned-at': 'string' }));
+    ({ opts: o } = parseArgs(argv, { write: 'bool', check: 'bool', json: 'bool', event: 'string', base: 'string', 'changed-files': 'string', 'pinned-at': 'string' }));
   } catch (e) {
     process.stderr.write(`drift-pins: ${e.message}\n`);
     return 2;
@@ -590,8 +590,8 @@ function mainPins(argv) {
       return 0;
     }
     const r = checkWorkingTree(root);
-    let advisory = Boolean(o.advisory);
-    let why = '本地 gates 的非 L0 层只报告';
+    let advisory = false;
+    let why = '';
     if (o.event) {
       const changedFiles = o['changed-files'] ? fs.readFileSync(o['changed-files'], 'utf8').split(/\r?\n/).filter(Boolean) : [];
       const d = decideEnforcement({ event: o.event, baseRef: o.base ?? '', changedFiles });

@@ -19,7 +19,9 @@
 //                                                             user names), copy them to --out-dir, assert that the
 //                                                             F0 model was loaded from --models-dir, record the backend
 //   scrub           --dir <dir>                               redact tokens, serverProof and user names in every json/log/md/txt file there
-//   has-scenario    --dir <dir> --scenario <name>             prints present or absent (exit 0 either way): is there a report of that scenario
+//   prune-screenshots --dir <dir> [--keep <n>]                keep the newest n (default 8) *.png there, delete the rest
+//   has-scenario    --dir <dir> --scenario <name>             prints present or absent (exit 0 either way): is there a report of that scenario;
+//                                                             any other exit code is a script error, which the workflow treats as a failure
 //   record          --file <json> --step <name> --seconds <n> append one step timing
 //   summary         --timings <json> [--contract <vitest json>] [--smoke <json>] [--scenarios-dir <dir>] [--log <report json>]
 //                   [--mcp-ref <ref>] [--out <md>]            PASS / FAIL / SKIP / FLAKY-SKIP table; exit 1 on any FAIL.
@@ -331,6 +333,25 @@ export function hasScenarioReport(dir, name) {
   return fs.existsSync(full) && fs.statSync(full).isFile();
 }
 
+/** How many desktop screenshots the diagnostics keep for upload (they are raw images and cannot be scrubbed). */
+export const DEFAULT_KEEP_SCREENSHOTS = 8;
+
+/**
+ * Keep only the newest `keep` *.png files directly in dir (by modification time, ties broken by name) and delete the
+ * rest, so the uploaded artifact stays small. Returns the deleted file names, oldest first.
+ */
+export function pruneScreenshots(dir, keep = DEFAULT_KEEP_SCREENSHOTS) {
+  if (!Number.isInteger(keep) || keep < 1) throw new Error(`keep must be a positive integer, got ${keep}`);
+  if (!dir || !fs.existsSync(dir)) return [];
+  const shots = fs.readdirSync(dir)
+    .filter((n) => n.toLowerCase().endsWith('.png'))
+    .map((n) => ({ n, t: fs.statSync(path.join(dir, n)).mtimeMs }))
+    .sort((a, b) => b.t - a.t || (a.n < b.n ? 1 : -1));
+  const doomed = shots.slice(keep).reverse().map((s) => s.n);
+  for (const n of doomed) fs.rmSync(path.join(dir, n));
+  return doomed;
+}
+
 /** *.log files directly in one directory. */
 function listLogs(dir) {
   if (!dir || !fs.existsSync(dir)) return [];
@@ -377,6 +398,7 @@ const CLI_SPEC = {
   log: 'string',
   'mcp-ref': 'string',
   scenario: 'string',
+  keep: 'string',
   out: 'string',
 };
 
@@ -441,6 +463,13 @@ function main(argv) {
       process.stdout.write(`scrubbed ${scrubDir(opts.dir).length} file(s)\n`);
       break;
     }
+    case 'prune-screenshots': {
+      need('dir');
+      const keep = opts.keep === undefined ? DEFAULT_KEEP_SCREENSHOTS : Number(opts.keep);
+      if (!Number.isInteger(keep) || keep < 1) usage('--keep must be a positive integer');
+      process.stdout.write(`kept the newest ${keep} screenshot(s), deleted ${pruneScreenshots(opts.dir, keep).length}\n`);
+      break;
+    }
     case 'has-scenario':
       need('dir', 'scenario');
       process.stdout.write(hasScenarioReport(opts.dir, opts.scenario) ? 'present\n' : 'absent\n');
@@ -469,7 +498,7 @@ function main(argv) {
       break;
     }
     default:
-      usage('unknown command (check-installer | models-dir | check-models | check-log | scrub | record | summary | has-scenario)');
+      usage('unknown command (check-installer | models-dir | check-models | check-log | scrub | prune-screenshots | record | summary | has-scenario)');
   }
 }
 

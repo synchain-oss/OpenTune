@@ -106,7 +106,7 @@ inline std::optional<JsonValue> authenticate(TestClient& client, int port, const
  * and no render cache has a pending or running block; the failure is posted right after its block is marked, so
  * after kSettleGraceMs more the messages posted until then are dispatched (drainPostedMessages).
  */
-inline bool settleBackgroundWork(OpenTuneAudioProcessor& processor)
+inline bool settleBackgroundWork(OpenTuneAudioProcessor& processor, int timeoutMs = kSettleTimeoutMs)
 {
     auto* service = processor.getContentRenderService();
     auto* repository = processor.getStandaloneContentRepository();
@@ -123,12 +123,12 @@ inline bool settleBackgroundWork(OpenTuneAudioProcessor& processor)
                         return false;
             return true;
         },
-        kSettleTimeoutMs);
+        timeoutMs);
     pumpMessagesFor(kSettleGraceMs);
-    const auto remaining = std::max<long long>(0, kSettleTimeoutMs - millisecondsSince(started));
+    const auto remaining = std::max<long long>(0, timeoutMs - millisecondsSince(started));
     const bool drained = drainPostedMessages(static_cast<int>(remaining));
     if (!idle || !drained)
-        note("the background work of the scenario's setup did not settle within " + std::to_string(kSettleTimeoutMs)
+        note("the background work of the scenario's setup did not settle within " + std::to_string(timeoutMs)
              + " ms (render work idle: " + (idle ? "yes" : "no") + ", messages drained: " + (drained ? "yes" : "no")
              + ")");
     return idle && drained;

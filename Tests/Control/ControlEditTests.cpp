@@ -1386,6 +1386,16 @@ bool centsNear(const std::vector<double>& measured, const std::vector<double>& e
 }
 
 /**
+ * Total time the multi-note render scenario may wait for renders and for the export job. A ThreadSanitizer build runs
+ * the real render work up to about 15 times slower than the 12 s of a Windows developer machine (180 s), and it is
+ * kept below the 300 s of the ctest timeout (cmake/OpenTuneControl.cmake). The waits share this budget, each one
+ * takes what is left of it.
+ */
+constexpr int kMultiNoteRenderBudgetMs = 270000;
+/** One wait of the export job, shorter than the 5 s the client reads a response: the loop asks again while the job still runs, until the budget is spent. */
+constexpr int kExportJobPollMs = 3000;
+
+/**
  * Edits of several notes re-render every block of every edited note, and what the export reads afterwards (the
  * stored audio with the render on top, readExportPlaybackAudio for a content without a stretched time grid) holds
  * every burst at its new target, as the file of an export does at the end. Each edit runs while OpenTune's render
@@ -1403,6 +1413,10 @@ void checkMultiNoteRender()
     auto& service = processor->getControlService();
     if (!service.isRunning())
         return;
+    const auto budgetStart = Clock::now();
+    const auto budgetLeftMs = [budgetStart] {
+        return static_cast<int>(std::max<long long>(1000, kMultiNoteRenderBudgetMs - millisecondsSince(budgetStart)));
+    };
     constexpr double rate = 44100.0;
     const int samples = static_cast<int>(std::llround(burstDurationSec() * rate));
     juce::AudioBuffer<float> audio(1, samples);
@@ -1469,7 +1483,7 @@ void checkMultiNoteRender()
     CONTROL_CHECK(processor->replaceContentNotesForFullMutation(key, notes));
     CONTROL_CHECK(processor->setContentOriginalF0State(key, OriginalF0State::Ready));
     processor->requestFullContentRender(key);
-    CONTROL_CHECK(settleBackgroundWork(*processor));
+    CONTROL_CHECK(settleBackgroundWork(*processor, budgetLeftMs()));
     auto* render = processor->getContentRenderService();
     const auto cache = render != nullptr ? render->getRenderCache(key) : nullptr;
     if (!CONTROL_CHECK(cache != nullptr && cache->isCanonicalSettled()))
@@ -1484,7 +1498,7 @@ void checkMultiNoteRender()
     if (!CONTROL_CHECK(handles.has_value()))
         return;
     // Nothing of the import may still be running when the first request is timed.
-    CONTROL_CHECK(settleBackgroundWork(*processor));
+    CONTROL_CHECK(settleBackgroundWork(*processor, budgetLeftMs()));
     const auto revision = [&] { return memberOf(freshTokens(api, handles->contentId), "revision").text(); };
     const auto heard = [&] {
         juce::AudioBuffer<float> out(dry);
@@ -1511,7 +1525,7 @@ void checkMultiNoteRender()
                 note(what + ": the block of burst " + std::to_string(burst) + " was not queued for the render");
         }
         render->resumeRenderWorker();
-        CONTROL_CHECK(settleBackgroundWork(*processor) && cache->isCanonicalSettled());
+        CONTROL_CHECK(settleBackgroundWork(*processor, budgetLeftMs()) && cache->isCanonicalSettled());
         CONTROL_CHECK(centsNear(heard(), expected, what));
     };
     const std::vector<double> all45(kBurstCount, 45.0);
@@ -1541,8 +1555,17 @@ void checkMultiNoteRender()
                                   jsonOf(R"({"kind":"clip","target":{"placementId":)" + jsonQuoted(handles->placementId)
                                          + R"(},"path":)" + jsonQuoted(out.u8string()) + "}"));
     const auto jobId = memberOf(memberOf(start, "job"), "jobId").text();
-    const auto job =
-        memberOf(api.result("job.get", jsonOf(R"({"jobId":)" + jsonQuoted(jobId) + R"(,"waitMs":30000})")), "job");
+    // Waits in slices while the job runs, as long as the budget lasts.
+    JsonValue job;
+    while (true) {
+        const auto waitMs = std::min(kExportJobPollMs, budgetLeftMs());
+        const auto request =
+            jsonOf(R"({"jobId":)" + jsonQuoted(jobId) + R"(,"waitMs":)" + std::to_string(waitMs) + "}");
+        job = memberOf(api.result("job.get", request), "job");
+        const auto state = memberOf(job, "state").text();
+        if ((state != "running" && state != "queued") || millisecondsSince(budgetStart) >= kMultiNoteRenderBudgetMs)
+            break;
+    }
     if (!CONTROL_CHECK(memberOf(job, "state").text() == "succeeded")) {
         note("export job " + toJsonString(job));
         return;
@@ -1565,17 +1588,15 @@ void checkMultiNoteRender()
 
 void scenarioEditNotesImpl()
 {
-    {
-        EditFixture f;
-        if (!f.open(fourNoteSpec()))
-            return;
-        const auto initial = stateOf(*f.processor, f.clip.key);
-        for (const auto& c : noteEditCases())
-            checkNoteEditCase(f, c);
-        CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
-        checkNoteEditErrors(f);
-        CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
-    }
+    EditFixture f;
+    if (!f.open(fourNoteSpec()))
+        return;
+    const auto initial = stateOf(*f.processor, f.clip.key);
+    for (const auto& c : noteEditCases())
+        checkNoteEditCase(f, c);
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
+    checkNoteEditErrors(f);
+    CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 
 // ---- Scenario: content.setPitchShift -----------------------------------------------------------------

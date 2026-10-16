@@ -860,8 +860,8 @@ content without a key); `EditNotes` a table of hand-computed ops (every op, sele
 several ops in one call, an exact tie of the snap, `targetMidi` 0 and the ops on a note without a base pitch), each
 checked for its prediction equal to its commit, its tokens
 equal to a fresh read, and undo and redo back to the exact states, through the API and through OpenTune's own
-`UndoManager`; then the checks before the change, the no-ops and the params; then, on a clip of sine bursts with one
-render block per note, that edits of several notes (one op over all, one op per note, AUTO regenerate, a shift
+`UndoManager`; then the checks before the change, the no-ops and the params; `EditMultiNoteRender`, a scenario of its own for its render
+time, on a clip of sine bursts with one render block per note, that edits of several notes (one op over all, one op per note, AUTO regenerate, a shift
 after it, SNAP) leave every block of an edited note pending right after the commit and that the render and an
 export of the clip hold every burst at its new target (through the light pitch path, so without models); the undo
 descriptions of every edit are the UI's texts in clean UTF-8; `SetPitchShift` that `revision` stays

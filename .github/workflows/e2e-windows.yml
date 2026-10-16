@@ -299,6 +299,11 @@ jobs:
           New-Item -ItemType File -Force -Path "$env:E2E_DIAG\stop" | Out-Null
           Start-Sleep -Seconds 2
           & $env:E2E_DIAG_SCRIPT -OutDir $env:E2E_DIAG -Tag 'after'
+          # Screenshots are uploaded as they are (images cannot be scrubbed): keep only the newest few. The window lists
+          # are text; scrub them (user names in titles and paths) before anything is printed or uploaded.
+          node $env:E2E_SCRIPT prune-screenshots --dir $env:E2E_DIAG --keep 8
+          node $env:E2E_SCRIPT scrub --dir $env:E2E_DIAG
+          if ($LASTEXITCODE -ne 0) { throw "scrubbing the diagnostics failed; not printing the window lists" }
           Get-ChildItem -LiteralPath $env:E2E_DIAG | ForEach-Object { Write-Host "diag: $($_.Name) $($_.Length)" }
           Get-ChildItem -LiteralPath $env:E2E_DIAG -Filter '*.windows.txt' | Select-Object -Last 2 | ForEach-Object { Write-Host "== $($_.Name)"; Get-Content -LiteralPath $_.FullName }
 
@@ -349,7 +354,12 @@ jobs:
           $bad = @($files | Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -notmatch '<VALUE\s+name="shared\.onboardingShown"\s+val="1"' })
           foreach ($f in $files) { Write-Host "preferences: $($f.FullName.Substring($env:E2E_KEEP.Length)) onboardingShown=$(if ($bad.FullName -contains $f.FullName) { 'missing or 0' } else { '1' })" }
           if ($bad.Count) { "reason=onboarding" >> $env:GITHUB_OUTPUT; throw "onboarding template was not copied unmodified: shared.onboardingShown is not 1 in $($bad.Count) kept data directories" }
-          $effectsRan = (node $env:E2E_SCRIPT has-scenario --dir $env:E2E_OUT --scenario effects) -eq 'present'
+          # Fail closed: only an exit code 0 with the output "present" or "absent" is an answer. A script error must not
+          # be read as "effects scenario did not run".
+          $hasScenario = @(node $env:E2E_SCRIPT has-scenario --dir $env:E2E_OUT --scenario effects)
+          if ($LASTEXITCODE -ne 0) { "reason=hasscenario" >> $env:GITHUB_OUTPUT; throw "has-scenario failed (exit $LASTEXITCODE): cannot tell whether the effects scenario ran" }
+          if (($hasScenario -join '').Trim() -notin @('present', 'absent')) { "reason=hasscenario" >> $env:GITHUB_OUTPUT; throw "has-scenario printed an unexpected answer: $($hasScenario -join ' ')" }
+          $effectsRan = ($hasScenario -join '').Trim() -eq 'present'
           if (-not $effectsRan) {
             Write-Host "::warning::effects scenario did not run (no effects report in the output directory); hybrid-mode template not checked"
             "effects=skipped" >> $env:GITHUB_OUTPUT
@@ -379,6 +389,7 @@ jobs:
           Copy-Item -LiteralPath $env:GITHUB_STEP_SUMMARY -Destination "$env:E2E_OUT\summary.md" -ErrorAction SilentlyContinue
           if ($code -ne 0) { throw "e2e-windows has failing or missing results" }
           if ($env:TEMPLATE_OUTCOME -ne 'success') {
+            if ($env:TEMPLATE_REASON -eq 'hasscenario') { throw "has-scenario failed, so it is unknown whether the effects scenario ran (fail closed); see the template step log" }
             if ($env:TEMPLATE_REASON -eq 'hybrid') { throw "effects scenario data directory did not turn hybrid mode off (no kept data directory has shared.rendering.lightPitchCorrection=0); see the template step log" }
             throw "onboarding template was not copied unmodified (shared.onboardingShown is not 1 in a kept data directory, or no preferences file was kept); see the template step log"
           }

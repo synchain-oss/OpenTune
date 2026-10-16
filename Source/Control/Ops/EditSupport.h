@@ -71,8 +71,10 @@ void controlAddReRenderQueued(ControlWriteEnvelope& envelope, const ControlWorld
 void controlAddPredictedReRenderQueued(ControlWriteEnvelope& envelope, const std::string& contentId);
 
 /**
- * The changes of notes whose times stay (content.editNotes, content.autoTune mode snapNotes): one entry of entity
- * note per note index whose reported values differ between before and after, with the fields targetMidi (midi),
+ * The changes of notes that the write does not move (content.editNotes, content.autoTune mode snapNotes): one entry
+ * of entity note per note index whose reported values differ between before and after, with the fields
+ * startContentSec and endContentSec (sec; listed only when OpenTune's commit trimmed a note that overlapped its
+ * successor, which changes its times but not the note count), targetMidi (midi),
  * offsetCents (cents), retuneSpeed, vibratoDepth, vibratoRateHz (hz) and pitchDriftScale as content.getNotes
  * reports them, referenced at revision (PROTOCOL.md section 14.3). before and after hold the same notes, as many
  * and with their times; each list is counted in its own content.getNotes order (controlNoteIndexOrder), as the

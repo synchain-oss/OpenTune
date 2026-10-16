@@ -474,20 +474,41 @@ std::optional<std::vector<Note>> predictNotesOnly(const PitchCurveSnapshot& curv
     return mergeNotesRange(notes, range, generated);
 }
 
+/** The position of every note in start-time order, as content.getNotes counts them (controlNoteIndexOrder):
+    result[storageIndex] is the note index a client uses. */
+std::vector<std::size_t> noteIndexes(const std::vector<Note>& notes)
+{
+    const auto order = controlNoteIndexOrder(notes);
+    std::vector<std::size_t> index(notes.size());
+    for (std::size_t position = 0; position < order.size(); ++position)
+        index[order[position]] = position;
+    return index;
+}
+
 /** Lists removed notes (at the revision before) and created notes (at the revision after; for a prediction at
-    the current one), at most kMaxListedEntries each; returns {removed, created} omitted counts. */
+    the current one), at most kMaxListedEntries each; returns {removed, created} omitted counts. removed and
+    created hold positions in before and after as stored; the entries carry the content.getNotes index of each
+    list, in that order. */
 std::pair<std::size_t, std::size_t> listNotes(ControlWriteEnvelope& envelope, const std::string& contentId,
                                               const std::vector<Note>& before, const std::string& revisionBefore,
                                               const std::vector<Note>& after, const std::string& revisionAfter,
-                                              const std::vector<std::size_t>& removed,
-                                              const std::vector<std::size_t>& created)
+                                              const std::vector<std::size_t>& removedStored,
+                                              const std::vector<std::size_t>& createdStored)
 {
+    const auto beforeIndex = noteIndexes(before);
+    const auto afterIndex = noteIndexes(after);
+    auto removed = removedStored;
+    auto created = createdStored;
+    std::sort(removed.begin(), removed.end(),
+              [&beforeIndex](std::size_t a, std::size_t b) { return beforeIndex[a] < beforeIndex[b]; });
+    std::sort(created.begin(), created.end(),
+              [&afterIndex](std::size_t a, std::size_t b) { return afterIndex[a] < afterIndex[b]; });
     for (std::size_t i = 0; i < removed.size() && i < kMaxListedEntries; ++i)
-        envelope.addRemoved("note", controlNoteRefJson(contentId, removed[i], revisionBefore),
-                            controlNoteLabelJson(removed[i], before[removed[i]]));
+        envelope.addRemoved("note", controlNoteRefJson(contentId, beforeIndex[removed[i]], revisionBefore),
+                            controlNoteLabelJson(beforeIndex[removed[i]], before[removed[i]]));
     for (std::size_t i = 0; i < created.size() && i < kMaxListedEntries; ++i)
-        envelope.addCreated("note", controlNoteRefJson(contentId, created[i], revisionAfter),
-                            controlNoteLabelJson(created[i], after[created[i]]));
+        envelope.addCreated("note", controlNoteRefJson(contentId, afterIndex[created[i]], revisionAfter),
+                            controlNoteLabelJson(afterIndex[created[i]], after[created[i]]));
     return {removed.size() > kMaxListedEntries ? removed.size() - kMaxListedEntries : 0,
             created.size() > kMaxListedEntries ? created.size() - kMaxListedEntries : 0};
 }
@@ -590,8 +611,12 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
     // Notes that overlap a range but do not lie inside one are dropped, not regenerated: the commit removes
     // every note that overlaps the range and generates only inside it (an OpenTune behaviour).
     auto dropped = JsonValue::array();
-    for (const auto index : removed) {
-        const auto& note = beforeNotes[index];
+    const auto beforeIndex = noteIndexes(beforeNotes);
+    std::sort(removed.begin(), removed.end(),
+              [&beforeIndex](std::size_t a, std::size_t b) { return beforeIndex[a] < beforeIndex[b]; });
+    for (const auto stored : removed) {
+        const auto index = beforeIndex[stored];
+        const auto& note = beforeNotes[stored];
         const bool inside = std::any_of(committed.begin(), committed.end(), [&note](const CommittedRange& range) {
             return note.startTime >= range.startSec && note.endTime <= range.endSec;
         });
@@ -727,20 +752,16 @@ Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& 
     const auto& curve = *ref.snapshot->pitchCurve;
     const double secondsPerFrame = curve.getHopSize() / curve.getSampleRate();
     const auto beforeNotes = ref.snapshot->notes;
-    // The passes: every note, or per range the notes that overlap its frames.
-    std::vector<std::optional<std::vector<std::size_t>>> passes;
+    // The passes: every note, or per range the notes that overlap its frames. A range is kept as seconds and
+    // resolved to notes on the notes as they are at that pass: the first commit stores the notes sorted, so a
+    // position found on the notes before it names another note afterwards.
+    std::vector<std::optional<std::pair<double, double>>> passes;
     if (params.ranges.empty()) {
         passes.emplace_back(std::nullopt);
     } else {
-        for (const auto& range : frameRanges(curve, params)) {
-            const double startSec = range.startFrame * secondsPerFrame;
-            const double endSec = range.endFrameExclusive * secondsPerFrame;
-            std::vector<std::size_t> targets;
-            for (std::size_t i = 0; i < beforeNotes.size(); ++i)
-                if (beforeNotes[i].endTime > startSec && beforeNotes[i].startTime < endSec)
-                    targets.push_back(i);
-            passes.emplace_back(std::move(targets));
-        }
+        for (const auto& range : frameRanges(curve, params))
+            passes.emplace_back(
+                std::make_pair(range.startFrame * secondsPerFrame, range.endFrameExclusive * secondsPerFrame));
     }
     const auto beforeWorld = controlCaptureWorldVersions(context);
     ControlWriteEnvelope envelope(context);
@@ -750,11 +771,18 @@ Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& 
     auto planning = std::make_shared<EditableContentSnapshot>(*ref.snapshot);
     std::size_t commits = 0;
     std::optional<Error> failure;
-    for (const auto& targets : passes) {
+    for (const auto& pass : passes) {
         // A prediction plans every pass on the notes it predicted so far; a commit on the content as it is now.
         if (!params.dryRun)
             if (const auto live = controlLiveSnapshot(context, ref.key))
                 planning = std::make_shared<EditableContentSnapshot>(*live);
+        std::optional<std::vector<std::size_t>> targets;
+        if (pass) {
+            targets.emplace();
+            for (std::size_t i = 0; i < planning->notes.size(); ++i)
+                if (planning->notes[i].endTime > pass->first && planning->notes[i].startTime < pass->second)
+                    targets->push_back(i);
+        }
         const auto plan = controlPlanAutoSnap(*planning, targets, scaleSnap);
         if (plan.status != ControlAutoSnapPlan::Status::Commit)
             continue;

@@ -19,9 +19,8 @@ class OpenTuneAudioProcessorEditor;
  * the service never starts and never calls the bridge.
  *
  * This file covers the general part (project information, busy state, structure changes, the steps after an
- * undo or redo, the view, the import focus, objects the editor owns); dialogs, tracks, project flows and
- * preferences follow in files of
- * their own (ControlEditorBridge<Domain>.cpp).
+ * undo or redo, the refresh after a time-grid edit, the view, the import focus, objects the editor owns); dialogs,
+ * tracks, project flows and preferences follow in files of their own (ControlEditorBridge<Domain>.cpp).
  *
  * Threading: message thread, like the editor.
  */
@@ -39,6 +38,7 @@ public:
     std::optional<BusyState> queryBusy() const override;
     void onStructureChanged() override;
     void onUndoRedoApplied() override;
+    void onTimeGridChanged() override;
     bool focusPlacement(int trackId, std::uint64_t placementId) override;
     bool revealTracks(int count) override;
     bool currentNoteGenerationParams(NoteGeneratorParams& out) const override;

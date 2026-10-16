@@ -11,6 +11,7 @@
 #include "JobOps.h"
 #include "ProjectReadOps.h"
 #include "SessionOps.h"
+#include "TimingOps.h"
 #include "UndoOps.h"
 
 #include "Control/ContentHandles.h"
@@ -62,7 +63,7 @@ void registerControlMethods(ControlMethodTable& table)
     registerContentTuneOps(table); // content.setKey, content.autoTune
     registerContentEditOps(table); // content.editNotes, content.setPitchShift
     registerUndoOps(table);        // edit.getHistory, edit.undo, edit.redo
-    // registerTimingOps(table);       content.shiftTiming, content.editTimeGrid
+    registerTimingOps(table);      // content.shiftTiming, content.editTimeGrid
     // registerTransportOps(table);    transport.control, transport.setTempo, transport.setLoop
     // registerArrangementOps(table);  arrangement.edit, arrangement.copy, content.analyzeReference
     // registerTrackOps(table);        track.set, track.add, track.duplicate, track.delete

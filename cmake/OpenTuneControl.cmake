@@ -111,7 +111,12 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Edit/NoteCorrection.h
         Source/Control/Ops/ContentEditOps.cpp
         Source/Control/Ops/ContentEditOps.h
-        # Time grid: added later.
+        # Time grid: the handle moves of OpenTune's time tool without the piano roll (TimeGridOps),
+        # content.shiftTiming and content.editTimeGrid (seed as a job, moveHandles).
+        Source/Control/Edit/TimeGridOps.cpp
+        Source/Control/Edit/TimeGridOps.h
+        Source/Control/Ops/TimingOps.cpp
+        Source/Control/Ops/TimingOps.h
     )
 
     target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_CONTROL_SOURCES})
@@ -250,6 +255,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             Tests/Control/ControlEditTests.cpp
             Tests/Control/ControlContentFixtures.h
         )
+        # The time grid: shiftTiming, moveHandles and the seed job.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlTimingTests.cpp)
         if(MSVC)
             target_compile_options(OpenTuneControlProcessorTests PRIVATE /utf-8 /EHsc /bigobj)
         endif()
@@ -303,6 +310,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "Export|--control-api"
             "ExportFailures|--control-api"
             "ExportVectors|--control-api"
+            "ExportTimeStretch|--control-api"
         )
         # Undo and redo, key and AUTO, note edits and the pitch shift (Tests/Control/ControlEditTests.cpp).
         list(APPEND _opentune_control_scenarios
@@ -314,6 +322,12 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "SnapNotes|--control-api"
             "EditCapability|--control-api"
             "EditVectors|--control-api"
+        )
+        # The time grid (Tests/Control/ControlTimingTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "Timing|--control-api"
+            "TimeGridSeed|--control-api"
+            "TimingVectors|--control-api"
         )
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
             string(REPLACE "|" ";" _opentune_control_scenario "${_opentune_control_scenario}")
@@ -341,5 +355,6 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.JobVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ExportVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.EditVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.TimingVectors PROPERTIES TIMEOUT 300)
     endif()
 endif()

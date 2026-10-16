@@ -257,6 +257,30 @@
       "noteZh": "总混导出：对播放快照中的轨道应用独奏与静音规则，以及 hasAudio() 过滤。"
     },
     {
+      "id": "time-grid-publish",
+      "group": "export",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::setContentTimeGrid",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "09a6c402060b6db3769552513f0dccfc042523aee23182098ac0cb7cec2bc343"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ExportOps.cpp",
+          "symbols": [
+            "ExportJob::stretchState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.ExportTimeStretch"
+      ],
+      "note": "A grid change republishes the playback source, drops the old time-stretch output and queues the rebuild only when the render is settled; the export queues the same rebuild when nothing did, and asks again when it was dropped.",
+      "noteZh": "改网格会重新发布播放源、作废旧的伸缩输出，只在渲染已 settle 时排伸缩重建；导出在无人排队时照样排一次，被丢弃时再排。"
+    },
+    {
       "id": "undo-capture-before",
       "group": "undo",
       "upstream": {
@@ -898,6 +922,172 @@
       ],
       "note": "A pitch shift sets the settings and advances the notes and pitch counters by one each, which the revision token leaves out.",
       "noteZh": "移调设置参数，并把音符与音高计数器各加 1，revision 令牌扣除这一部分。"
+    },
+    {
+      "id": "time-tool-drag",
+      "group": "timing",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "PianoRollToolHandler::handleTimeToolMouseDrag",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "380d9b4473071ad6956f47007d4be9e1f503d56e6c29ee95fab7d9301dfcd374"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/TimeGridOps.cpp",
+          "symbols": [
+            "TimeGridOps::planShift",
+            "TimeGridOps::planMoves",
+            "limitInOrder"
+          ]
+        },
+        {
+          "file": "Source/Control/Edit/TimeGridOps.h",
+          "symbols": [
+            "TimeGridOps::kMinSpacingSec"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Timing",
+        "ControlProcessorTests.TimingVectors"
+      ],
+      "note": "The time tool's drag: the dragged handle limited to its neighbours plus and minus 30 ms, the uniform distance of a group drag, the left-to-right second pass, and no move without room.",
+      "noteZh": "时间工具的拖动：被拖手柄限制在邻点 ±30 ms 之内，组拖动的统一位移，从左到右的第二轮夹紧，没有空间时不动。"
+    },
+    {
+      "id": "time-tool-mouse-up",
+      "group": "timing",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "PianoRollToolHandler::handleTimeToolMouseUp",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "86eb0526c37cf75f2e231ad0486b198a6162600d736501832141de49a0ee27a4"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TimingOps.cpp",
+          "symbols": [
+            "applyPlan"
+          ]
+        },
+        {
+          "file": "Source/Control/Edit/TimeGridOps.cpp",
+          "symbols": [
+            "TimeGridOps::moveDescription"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Timing"
+      ],
+      "note": "The end of a drag: a moved grid is committed once with the drag's description; a drag that moved nothing commits nothing.",
+      "noteZh": "拖动结束：网格有变化时以拖动的描述提交一次；没有移动则不提交。"
+    },
+    {
+      "id": "time-grid-commit",
+      "group": "timing",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "toolCtx.commitTimeGrid",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "b6a2b19747de4b0620767daed0488f7ae9814b8ad1b3bb2cc9182fc33290e44a"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/TimeGridOps.cpp",
+          "symbols": [
+            "TimeGridOps::commit"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/TimingOps.cpp",
+          "symbols": [
+            "applyPlan"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Timing"
+      ],
+      "note": "How the piano roll commits a time-grid edit: a TimeGridEditAction with the grid before and after, setTimeGrid(), then one undo entry.",
+      "noteZh": "钢琴卷帘如何提交时间网格编辑：先构造带前后网格的 TimeGridEditAction，再 setTimeGrid()，最后加一条撤销条目。"
+    },
+    {
+      "id": "time-tool-pick",
+      "group": "timing",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::setCurrentTool",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "5dea5c9a87b45ffac8a47828b080f3de98de9f7001a9884f839d180a81616f45"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TimingOps.cpp",
+          "symbols": [
+            "SeedJob::seed"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.TimeGridSeed"
+      ],
+      "note": "Picking the time tool seeds the grid of the edited content with ensureTimeToolAnchorSeed(); op seed makes the same call from a job.",
+      "noteZh": "选中时间工具时用 ensureTimeToolAnchorSeed() 为正在编辑的内容种子网格；op seed 在 job 里做同一调用。"
+    },
+    {
+      "id": "time-seed-anchors",
+      "group": "timing",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::ensureTimeToolAnchorSeed",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "f5b0de0f5f5e478beacfc4a2b5f2b7dc6a11489861fb191d93afbb2547421c98"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TimingOps.cpp",
+          "symbols": [
+            "SeedJob::step",
+            "SeedJob::seed"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.TimeGridSeed"
+      ],
+      "note": "When the seed places handles at once: a grid without handles and a timing analysis ready for the current producer and audio, with anchors (featuresReady); otherwise it registers a deferred seed, which the job never lets happen.",
+      "noteZh": "种子何时立即放置手柄：网格没有手柄，且计时分析已就绪、producer 与音频指纹匹配并有锚点（featuresReady）；否则会登记延迟种子，job 从不让这种情况发生。"
+    },
+    {
+      "id": "time-seed-preheat",
+      "group": "timing",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "aad66fcc5ba8434bcb6b52865f0820145b8fb259a62e6b6b4d81902ddb908b92"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TimingOps.cpp",
+          "symbols": [
+            "SeedJob::step"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.TimeGridSeed"
+      ],
+      "note": "AlreadyReady means a ready timing analysis of the current producer and audio; with hasTimingAnchors() it is the seed's featuresReady, so the job calls ensureTimeToolAnchorSeed() only when that seeds at once.",
+      "noteZh": "AlreadyReady 表示计时分析已就绪且 producer 与音频匹配；加上 hasTimingAnchors() 即种子的 featuresReady，因此 job 只在能立即种子时调用 ensureTimeToolAnchorSeed()。"
     }
   ]
 }

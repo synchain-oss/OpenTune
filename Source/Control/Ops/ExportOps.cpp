@@ -39,6 +39,9 @@ namespace {
 constexpr std::size_t kMaxPathCodePoints = 4096;
 /** PROTOCOL.md section 19 rule 7: the longest wait for analysis and rendering. */
 constexpr int kWaitLimitMs = 120000;
+/** How long the render worker must be seen idle, with the render settled and no current time-stretch output, before
+    the job asks for the time-stretch rebuild of a content again (the rebuild it asked for was dropped). */
+constexpr int kStretchRetryIdleMs = 500;
 /** Section 19 rule 3: the last name that ifExists rename tries is "<stem> (999).wav". */
 constexpr int kLastRenameNumber = 999;
 /** The extension an export writes (section 20.1), compared without regard to case. */
@@ -577,7 +580,10 @@ struct Readiness
  *   (OpenTuneAudioProcessor::requestFullContentRender, whose reconcile retries a failed block of the same
  *   revision), then RENDER_FAILED(render_chunk_failed); render work pending: wait; else ready once the
  *   render cache is settled at its current revision (RenderCache::isCanonicalSettled). A content whose
- *   render was never requested gets one request. NOT_READY(export_wait_timeout) after the wait limit.
+ *   render was never requested gets one request. A content whose time grid is not the identity is exported
+ *   from its time-stretch output, so it is ready (or exported dry) only once that output was rebuilt at its
+ *   current revisions (stretchState); a content to export dry without a render to stretch fails at once.
+ *   NOT_READY(export_wait_timeout) after the wait limit.
  * - In the tick that finds every content ready it records the inputs and the revisions and starts the
  *   writer on a temporary file in the target directory.
  * - Once the file is written: the inputs are compared with the recorded ones (REVISION_CONFLICT
@@ -622,9 +628,153 @@ private:
     {
         bool renderRequested = false;
         bool renderRetried = false;
+        /** The content and time-grid revisions of the job's requests for the time-stretch rebuild, how many it made
+            for them, and since when the render worker has been seen idle without a current output after the last. */
+        std::optional<std::pair<std::uint64_t, std::uint64_t>> stretchRequestedFor;
+        int stretchRequests = 0;
+        std::optional<std::chrono::steady_clock::time_point> stretchIdleSince;
+    };
+
+    /** Where the time-stretch output of a content stands (stretchState). */
+    enum class Stretch {
+        /** Identity grid, or the output was built at the current revisions. */
+        Current,
+        /** The output is not current yet; the job waits. */
+        Pending,
+        /** The content has no render to stretch and none will come. */
+        NoRender,
+        /** The job asked for the rebuild kControlExportMaxStretchRequests times and the output is still not current. */
+        GaveUp
     };
 
     Readiness classify(ControlOpContext& context, const ContentKey& key)
+    {
+        auto readiness = classifyRender(context, key);
+        if (readiness.state != Readiness::State::Ready && readiness.state != Readiness::State::Dry)
+            return readiness;
+        switch (stretchState(context, key)) {
+            case Stretch::Current:
+                return readiness;
+            case Stretch::Pending:
+                return Readiness{};
+            case Stretch::NoRender:
+                return unstretchable(readiness);
+            case Stretch::GaveUp: {
+                Readiness failed;
+                failed.state = Readiness::State::Fail;
+                failed.error = {"NOT_READY", "",
+                                "the time-stretch rebuild of a content of the export was asked for "
+                                    + std::to_string(kControlExportMaxStretchRequests) + " times and did not complete",
+                                false};
+                return failed;
+            }
+        }
+        return readiness;
+    }
+
+    /**
+     * A content that section 19 rule 6 exports uncorrected (dry), whose time grid is not the identity and that has no
+     * render to stretch (classify, Stretch::NoRender): OpenTune builds the stretched audio only from a settled render
+     * (ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled), so it has no uncorrected audio of the content
+     * for the file, and waiting does not change that. The job ends at once instead of at the wait limit: a failed
+     * analysis with allowDry with ANALYSIS_FAILED(f0_failed), the failure of rule 6 for a failed analysis (allowDry
+     * cannot help); a content without voiced audio or without anything to render with NOT_READY and no reason, as
+     * no reason of the protocol names this case. Either succeeds again once the grid is the identity.
+     */
+    static Readiness unstretchable(const Readiness& dry)
+    {
+        Readiness failed;
+        failed.state = Readiness::State::Fail;
+        if (std::string_view(dry.dryReason) == "analysisFailed")
+            failed.error = {"ANALYSIS_FAILED", "f0_failed",
+                            "the pitch analysis of a content of the export failed and its time grid is stretched, so "
+                            "OpenTune has no uncorrected audio of it to export",
+                            false};
+        else
+            failed.error = {"NOT_READY", "",
+                            "a content of the export has a stretched time grid and nothing to render, so OpenTune has "
+                            "no stretched audio of it to export",
+                            false};
+        return failed;
+    }
+
+    /**
+     * Section 19 rule 6 for a content whose time grid is not the identity: OpenTune plays and exports such a
+     * content from its time-stretch output (the Stage2 rebuild, Stage2TimeStretchRebuilder), not from its render,
+     * and its export reads that output only when it was built at the content's current content and time-grid
+     * revisions (readExportPlaybackAudio in Utils/PlaybackAudioReader.h); otherwise the content would be silent or
+     * old in the file. The content is ready only once that output is current, which the export's own read
+     * (TimeStretchCache::sliceCanonicalForOutputRange) tells.
+     *
+     * The revisions come from the live snapshot (controlLiveSnapshot), while the export reads with the snapshot of
+     * the published playback source (request.source.contentSnapshot). They agree here: setContentTimeGrid()
+     * republishes the playback source before it returns, on the message thread this runs on, and the rebuild stores
+     * its output only while the published source carries the revisions it was built for
+     * (Stage2TimeStretchRebuilder::rebuild checks it before and after), so an output that is current for the live
+     * revisions is current for the published source.
+     *
+     * The rebuild needs a settled render (enqueueStage2RebuildWhenCanonicalSettled). A content without one that the
+     * job would export dry and that has no render work pending will never get one: NoRender. OpenTune queues the
+     * rebuild itself when the grid changes while the render is settled (OpenTuneAudioProcessor::setContentTimeGrid)
+     * and when a render block settles. When the render is settled, no output is current and the render worker has
+     * nothing queued or running, the job queues the rebuild as setContentTimeGrid does (with the published playback
+     * source). The worker may drop a rebuild (Stage2TimeStretchRebuilder::rebuild gives up when the published source
+     * changed meanwhile, without a new revision), so when the worker has been seen idle for kStretchRetryIdleMs with
+     * still no current output, the job asks again, up to kControlExportMaxStretchRequests times for the same
+     * revisions: GaveUp after that. New revisions start the count again.
+     */
+    Stretch stretchState(ControlOpContext& context, const ContentKey& key)
+    {
+        const auto snapshot = controlLiveSnapshot(context, key);
+        if (snapshot == nullptr || snapshot->timeGrid == nullptr || snapshot->timeGrid->isIdentity())
+            return Stretch::Current;
+        auto* service = context.processor().getContentRenderService();
+        if (service == nullptr)
+            return Stretch::Current;
+        juce::AudioBuffer<float> probe(1, 1);
+        if (service->getTimeStretchCache().sliceCanonicalForOutputRange(key, snapshot->contentRevision,
+                                                                        snapshot->timeGridRevision, 0, probe, 0, 1)
+            > 0)
+            return Stretch::Current;
+        auto& progress = contentProgress_[key];
+        const std::pair<std::uint64_t, std::uint64_t> revisions{snapshot->contentRevision, snapshot->timeGridRevision};
+        if (progress.stretchRequestedFor != revisions) {
+            progress.stretchRequestedFor.reset();
+            progress.stretchRequests = 0;
+            progress.stretchIdleSince.reset();
+        }
+        const auto cache = service->getRenderCache(key);
+        if (cache == nullptr || !cache->isCanonicalSettled()) {
+            // classifyRender returns Ready only for a settled render, so this is a content to export dry.
+            const bool renderPending = cache != nullptr && cache->getChunkStats().hasActiveWork();
+            return renderPending ? Stretch::Pending : Stretch::NoRender;
+        }
+        if (service->renderQueueDepth() != 0 || service->renderInFlight() != 0) {
+            progress.stretchIdleSince.reset();
+            return Stretch::Pending;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (progress.stretchRequests > 0) {
+            // The worker finished the rebuild the job asked for, and the output is still not current.
+            if (!progress.stretchIdleSince)
+                progress.stretchIdleSince = now;
+            if (now - *progress.stretchIdleSince < std::chrono::milliseconds(kStretchRetryIdleMs))
+                return Stretch::Pending;
+            if (progress.stretchRequests >= kControlExportMaxStretchRequests)
+                return Stretch::GaveUp;
+        }
+        PlaybackReadSource source;
+        if (service->getPlaybackReadSource(key, source)
+            && service->enqueueStage2RebuildWhenCanonicalSettled(key, snapshot, source.audioBuffer,
+                                                                 source.audioSampleRate)) {
+            progress.stretchRequestedFor = revisions;
+            ++progress.stretchRequests;
+            progress.stretchIdleSince.reset();
+        }
+        return Stretch::Pending;
+    }
+
+    Readiness classifyRender(ControlOpContext& context, const ContentKey& key)
     {
         auto& processor = context.processor();
         Readiness readiness;

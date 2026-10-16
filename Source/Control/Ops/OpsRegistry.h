@@ -299,12 +299,16 @@ private:
  * True for a capability of which this build registers some methods but not all yet. The instance does not
  * report it, because an instance implements every method of a capability it reports (PROTOCOL.md section 3.3
  * rule 5 case 10); the listener therefore answers its methods with UNSUPPORTED(capability_missing). No
- * capability is incomplete now; a part that registers only some methods of a capability lists it here.
+ * capability is incomplete now, so it returns false for every capability. It stays, with the test seam below,
+ * for the method groups that are still placeholder lines in registerControlMethods(): a part that registers
+ * only some methods of a capability lists it here until its last method is registered, so that the instance
+ * never reports a capability it implements only in part.
  */
 bool controlCapabilityIsIncomplete(std::string_view capability);
 
 /** Test seam: dispatchers created from now on report the incomplete capabilities as well, so that the
-    headless tests can call their methods. Never used by OpenTune itself. Any thread. */
+    headless tests can call their methods. Never used by OpenTune itself. Any thread. No test switches it on
+    while no capability is incomplete; it stays for the parts described at controlCapabilityIsIncomplete(). */
 void controlSetReportIncompleteCapabilitiesForTesting(bool report);
 
 /**

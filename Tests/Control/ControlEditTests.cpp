@@ -1518,6 +1518,102 @@ void checkNotesCursorAcrossPitchShift()
                             "cursor_stale", false));
 }
 
+/** The same for content.getPitchCurve: a pitch shift changes every correctedMidi (the correction segments are
+    scaled, the original F0 is rendered with the shift's gain) without changing `revision`, so a cursor read before
+    the shift is stale after it, and one read after it is stale after the undo of the shift. */
+void checkPitchCurveCursorAcrossPitchShift()
+{
+    EditFixture f;
+    if (!f.open(fourNoteSpec()))
+        return;
+    // Inside the first note, so that both pages have voiced frames.
+    const std::string byContent = "{\"contentId\":" + jsonQuoted(f.contentId)
+                                  + R"(,"range":{"startContentSec":0.6,"endContentSec":1.4},"limit":20)";
+    const auto withCursor = [&byContent](const JsonValue& page) {
+        return jsonOf(byContent + ",\"cursor\":" + jsonQuoted(memberOf(page, "nextCursor").text()) + "}");
+    };
+    const auto first = f.api.result("content.getPitchCurve", jsonOf(byContent + "}"));
+    if (!CONTROL_CHECK(memberOf(first, "nextCursor").isString()))
+        return;
+    // Without a change the cursor pages on.
+    const auto secondBefore = f.api.result("content.getPitchCurve", withCursor(first));
+    CONTROL_CHECK(memberOf(secondBefore, "pointCount").asDouble() == 20);
+    const auto revision = f.revision();
+    const auto shift = f.setPitchShift(2, 0);
+    CONTROL_CHECK(f.revision() == revision);
+    CONTROL_CHECK(isErrorOf(f.api.request("content.getPitchCurve", withCursor(first)), "REVISION_CONFLICT",
+                            "cursor_stale", false));
+    // A fresh read pages through the shifted curve: every voiced frame of the second page is two semitones up.
+    const auto shiftedFirst = f.api.result("content.getPitchCurve", jsonOf(byContent + "}"));
+    const auto secondAfter = f.api.result("content.getPitchCurve", withCursor(shiftedFirst));
+    const auto& before = memberOf(secondBefore, "correctedMidi");
+    const auto& after = memberOf(secondAfter, "correctedMidi");
+    int voiced = 0;
+    if (CONTROL_CHECK(before.size() == after.size()))
+        for (std::size_t i = 0; i < before.size(); ++i) {
+            CONTROL_CHECK(before.at(i).isNumber() == after.at(i).isNumber());
+            if (!before.at(i).isNumber() || !after.at(i).isNumber())
+                continue;
+            ++voiced;
+            CONTROL_CHECK(std::abs(after.at(i).asDouble() - before.at(i).asDouble() - 2.0) < 1e-3);
+        }
+    CONTROL_CHECK(voiced > 0);
+    // The undo of the shift makes that cursor stale in turn; revision still stays.
+    f.undo(memberOf(memberOf(shift, "undo"), "undoId").text());
+    CONTROL_CHECK(f.revision() == revision);
+    CONTROL_CHECK(isErrorOf(f.api.request("content.getPitchCurve", withCursor(shiftedFirst)), "REVISION_CONFLICT",
+                            "cursor_stale", false));
+}
+
+/** A pitch shift and a time-grid edit of one content are separate aspects, also for the pitch-shift steps that the
+    tokens leave out: the shift changes pitchShift only, a content.shiftTiming after it the grid only (revision and
+    the shift stay), each undo takes back its own aspect, and content.getDetails shows both. */
+void checkPitchShiftWithTimeGrid()
+{
+    auto spec = fourNoteSpec();
+    spec.gridHandlesContentSec = {1.0, 2.0, 3.0};
+    EditFixture f;
+    if (!f.open(spec))
+        return;
+    const auto tokensBefore = freshTokens(f.api, f.contentId);
+    const auto revision = memberOf(tokensBefore, "revision").text();
+    const auto grid = memberOf(tokensBefore, "gridRevision").text();
+
+    const auto shift = f.setPitchShift(2, 0);
+    CONTROL_CHECK(changedComponents(shift, f.contentId) == std::vector<std::string>{"pitchShift"});
+    CONTROL_CHECK(memberOf(resultTokens(shift, f.contentId), "revision").text() == revision);
+    CONTROL_CHECK(memberOf(resultTokens(shift, f.contentId), "gridRevision").text() == grid);
+
+    const std::string timingParams = "{\"contentId\":" + jsonQuoted(f.contentId)
+                                     + ",\"expectedGridRevision\":" + jsonQuoted(grid)
+                                     + R"(,"range":{"startOutputSec":1.5,"endOutputSec":2.5},"deltaSec":0.25})";
+    const auto timing = f.api.result("content.shiftTiming", jsonOf(timingParams));
+    CONTROL_CHECK(changedComponents(timing, f.contentId) == std::vector<std::string>{"grid"});
+    const auto timingTokens = resultTokens(timing, f.contentId);
+    CONTROL_CHECK(VectorMatcher::equal(timingTokens, freshTokens(f.api, f.contentId)));
+    CONTROL_CHECK(memberOf(timingTokens, "revision").text() == revision
+                  && memberOf(timingTokens, "gridRevision").text() != grid);
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":2,"cents":0})");
+    const auto details = f.api.result("content.getDetails", jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + "}"));
+    CONTROL_CHECK(toJsonString(memberOf(details, "pitchShift")) == R"({"semitones":2,"cents":0})");
+    const auto& handles = memberOf(memberOf(details, "timeGrid"), "handles");
+    if (CONTROL_CHECK(handles.size() == 3))
+        CONTROL_CHECK(std::abs(memberOf(handles.at(1), "outputSec").asDouble() - 2.25) < 1e-6);
+
+    // The undo of the grid edit keeps the shift; the undo of the shift then keeps the grid.
+    const auto gridUndone = f.undo(memberOf(memberOf(timing, "undo"), "undoId").text());
+    CONTROL_CHECK(changedComponents(gridUndone, f.contentId) == std::vector<std::string>{"grid"});
+    CONTROL_CHECK(memberOf(resultTokens(gridUndone, f.contentId), "revision").text() == revision);
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":2,"cents":0})");
+    const auto gridAfterUndo = memberOf(resultTokens(gridUndone, f.contentId), "gridRevision").text();
+    const auto shiftUndone = f.undo(memberOf(memberOf(shift, "undo"), "undoId").text());
+    CONTROL_CHECK(changedComponents(shiftUndone, f.contentId) == std::vector<std::string>{"pitchShift"});
+    CONTROL_CHECK(VectorMatcher::equal(resultTokens(shiftUndone, f.contentId), freshTokens(f.api, f.contentId)));
+    CONTROL_CHECK(memberOf(resultTokens(shiftUndone, f.contentId), "revision").text() == revision);
+    CONTROL_CHECK(memberOf(resultTokens(shiftUndone, f.contentId), "gridRevision").text() == gridAfterUndo);
+    CONTROL_CHECK(toJsonString(pitchShiftNow(f)) == R"({"semitones":0,"cents":0})");
+}
+
 /** ControlPitchShiftLedger on its own: a pitch-shift step is left out of the counters. When the counters of the
     same contentId go back (the content object was built anew), the content starts over: its counters are
     returned as they are, and the next pitch-shift step is left out again rather than counted only once the
@@ -1558,6 +1654,8 @@ void scenarioSetPitchShiftImpl()
     checkPitchShiftAfterNotesOnly();
     checkPitchShiftStepWithoutEffect();
     checkNotesCursorAcrossPitchShift();
+    checkPitchCurveCursorAcrossPitchShift();
+    checkPitchShiftWithTimeGrid();
     checkPitchShiftLedgerRebuilt();
 }
 
@@ -1991,19 +2089,16 @@ std::string runEditVector(const JsonValue& vector)
 
 void scenarioUndo()
 {
-    controlSetReportIncompleteCapabilitiesForTesting(true);
     scenarioUndoImpl();
 }
 
 void scenarioSetKey()
 {
-    controlSetReportIncompleteCapabilitiesForTesting(true);
     scenarioSetKeyImpl();
 }
 
 void scenarioAutoTune()
 {
-    controlSetReportIncompleteCapabilitiesForTesting(true);
     scenarioAutoTuneImpl();
 }
 
@@ -2050,7 +2145,6 @@ void scenarioEditCapability()
 
 void scenarioEditVectors()
 {
-    controlSetReportIncompleteCapabilitiesForTesting(true);
     const auto root = std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR) / "vectors";
     std::vector<std::filesystem::path> files;
     for (const auto& entry : std::filesystem::directory_iterator(root / "edit"))

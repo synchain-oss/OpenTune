@@ -216,9 +216,10 @@ Reads share these conventions (section 16):
   says why (section 11);
 - cursors are `<letter>1.<offset>.<paramsHash>.<tokensHash>`: bound to the selection params of the
   method (other params give `INVALID_ARGUMENT(invalid_params)`) and to the tokens of the read that issued
-  them (changed tokens give `REVISION_CONFLICT(cursor_stale)`). A cursor of `content.getNotes` is bound to
-  the content's pitch shift as well, because a pitch shift moves every target without changing `revision`
-  ("Note edits and the pitch shift"): after a shift the old cursor is stale and the client reads again.
+  them (changed tokens give `REVISION_CONFLICT(cursor_stale)`). The cursors of `content.getNotes` and
+  `content.getPitchCurve` are bound to the content's pitch shift as well, because a pitch shift moves every
+  target and every `correctedMidi` without changing `revision` ("Note edits and the pitch shift"): after a
+  shift (or its undo) the old cursor is stale and the client reads again.
 
 Handles are `c:<instanceIdShort>:<contentEpoch>:<objectId>` and
 `p:<instanceIdShort>:<contentEpoch>:<placementId>`. A handle of another instance or another content epoch
@@ -429,8 +430,9 @@ before and after a write; a step of the UI (the dialog, Ctrl+Z) is counted by th
 two reads count once, so `revision` changes once without a change of the notes; the ledger never hides a change of
 the notes. It only reads; OpenTune's counters stay as they are. A counter lower than at the last observation means
 that the content object was built anew under the same `contentId`; the ledger then starts that content over. Because
-OpenTune scales the stored notes, `content.getNotes` reports the targets moved by the shift, at the same `revision`;
-its cursors are therefore bound to the pitch shift as well, so a page is never continued across a shift.
+OpenTune scales the stored notes and segments and renders the original F0 with the shift's gain, `content.getNotes`
+reports the targets and `content.getPitchCurve` the `correctedMidi` moved by the shift, at the same `revision`; the
+cursors of both are therefore bound to the pitch shift as well, so a page is never continued across a shift.
 
 The upstream functions these follow (lines of the locked upstream base). A change of these functions upstream
 needs the same change here; they are registered in `MIRRORS.md` (see "Mirrors") and `ControlMirrorDriftTests`
@@ -836,8 +838,10 @@ equal to a fresh read, and undo and redo back to the exact states, through the A
 while the `pitchShift` component changes (also after the undo, the redo, the user's Ctrl+Z and a shift in the UI's
 dialog), `KEY_NOT_TRANSPOSED`, the no-ops, the exact state after the undo, the undo of a shift after `notesOnly`
 (the shift goes back, the generated notes stay), an undo and a redo of such a shift that have nothing to set
-(`UNDO_NO_EFFECT`), a `content.getNotes` cursor made stale by a shift and by its undo, and the ledger starting a
-content over when its counters go back; `SnapNotes` the hand-computed SNAP of every note, ranges as
+(`UNDO_NO_EFFECT`), a `content.getNotes` and a `content.getPitchCurve` cursor made stale by a shift and by its
+undo (with the curve's second page two semitones up after the shift), a pitch shift and a `content.shiftTiming` of
+one content as separate aspects (each changes only its own component, each undo takes back only its own), and the
+ledger starting a content over when its counters go back; `SnapNotes` the hand-computed SNAP of every note, ranges as
 selections, one undo step for several ranges, the no-op of a second SNAP over corrected notes, `clipKey`, and a
 note without a base pitch;
 `EditCapability` that `edit.v1` is reported with its four methods; `EditVectors` the specification's vectors of
@@ -879,7 +883,9 @@ method of a capability it reports: `read.v1` is complete (all eight reads are re
 A capability of which only some methods are registered is not reported (`controlCapabilityIsIncomplete`); its
 methods are refused by the listener until the last one is registered, and the headless tests report it with the
 test seam `controlSetReportIncompleteCapabilitiesForTesting()` to run them. No capability is incomplete now:
-`edit.v1` is reported since all four of its methods are registered.
+`edit.v1` is reported since all four of its methods are registered, and no test switches the seam on. The
+mechanism stays for the method groups that are still placeholder lines in `registerControlMethods()`, whose
+capabilities may be registered in more than one step.
 
 ## Method table
 

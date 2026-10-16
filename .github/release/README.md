@@ -18,7 +18,7 @@ Scripts (in `.github/scripts/`): `release-lib.mjs` (pure functions, unit-tested 
 
 ## Flow
 
-1. **Validate** (tag builds only): the tag is `synchain-test/v<x.y.z>-ctl.<n>`, `x.y.z` equals `project(OpenTune VERSION …)` in `CMakeLists.txt`, the tagged commit is an ancestor of `dev`, and the latest `fork-gate` check run on it succeeded. Pull requests that touch the packaging and manual runs are *rehearsals*: everything below except the draft release.
+1. **Validate** (tag builds only): the tag is `synchain-test/v<x.y.z>-ctl.<n>`, `x.y.z` equals `project(OpenTune VERSION …)` in `CMakeLists.txt`, the tagged commit is an ancestor of `dev`, and the latest `fork-gate` check run on it that GitHub Actions created (app `github-actions`) succeeded; same-name check runs from other apps are ignored. Pull requests that touch the packaging and manual runs are *rehearsals*: everything below except the draft release.
 2. **Build** (`build-windows.yml`, release-package mode): Standalone only, Release (LTCG), `OPENTUNE_ENABLE_CONTROL_API=ON`, no tests, no compiler cache. The `models\` folder created by the POST_BUILD step (LFS pointers and an empty vocoder placeholder that would hide the official models) is deleted and checked to be gone.
 3. **Notices** (`release-notices.mjs`, on the build machine): reads the Ninja graph to find every object linked into `OpenTune.exe` and writes `THIRD-PARTY-NOTICES.txt` and `build-info.json` (see below).
 4. **Package** (`release-package.mjs build`): renders the templates, writes `opentune-control.json` and `SHA256SUMS`, checks the allow-list, writes a deterministic zip (sorted names, the commit date as timestamp), reads the zip back and checks it again, renders the release body and runs the attribution check on every text file and on the body.
@@ -31,7 +31,7 @@ The zip contains one folder, `OpenTune-<version>-ctl.<n>-unofficial-win-x64/` (r
 
 `OpenTune.exe`, `OpenTuneOnnxRuntime_<x>_<y>_<z>.dll`, `DirectML.dll`, `DirectML-LICENSE.txt`, `LICENSE.txt` (AGPL-3.0), `THIRD-PARTY-NOTICES.txt`, `README-UNOFFICIAL.txt`, `README-UNOFFICIAL.zh-CN.txt`, `MODIFICATIONS.md`, `INSTALL.txt`, `INSTALL.zh-CN.txt`, `opentune-control.json`, `OpenTune-AI.cmd`, `SHA256SUMS`.
 
-Any other file, any subdirectory, or anything that matches the forbidden list fails the build. The forbidden list is checked recursively and case-insensitively: `*.onnx`, a `models` path segment, a Git LFS pointer, any name starting with `D3D12`, `d3dconfig.exe` and `STATEMENTS.txt`. The same rules are applied to the staged files and to the zip as written.
+Any other file, any subdirectory, two entries with the same name (or names that differ only in case, which collide when the zip is extracted on Windows), or anything that matches the forbidden list fails the build. The forbidden list is checked recursively and case-insensitively: `*.onnx`, a `models` path segment, a Git LFS pointer, any name starting with `D3D12`, `d3dconfig.exe` and `STATEMENTS.txt`. The same rules are applied to the staged files and to the zip as written.
 
 ## `opentune-control.json`
 
@@ -88,9 +88,14 @@ Generated from the build itself, not from a hand-written list:
 
 `build-info.json` (an input of the packaging step, not part of the package) records what was found: included and excluded components with reasons, the ARA verdict, the JUCE modules, the `D3D12Core.dll` hash, and the exact build commands.
 
-### Components with unverified terms
+### Release blockers (fail closed)
 
-A catalogue component with `"redistribution": "unverified"` is never written into the notices. If the build contains it, it is recorded as a *release blocker*: rehearsals report it as a warning, and a tagged build fails until the terms are confirmed and the catalogue entry is completed.
+`build-info.json` lists *release blockers*. Rehearsals report each one as a warning; a tagged build fails at the packaging step while any is listed. There are two kinds:
+
+- **Unverified terms in the build.** A catalogue component with `"redistribution": "unverified"` is never written into the notices. If the build contains it, it is a release blocker until the terms are confirmed and the catalogue entry is completed.
+- **A probe that misses a component the repository has.** When the repository has the component (the files of an `embedded` probe, or `probe.repoFiles` of a `source` / `include` probe) and its terms ask for something (unverified terms, a license text, the GPL-3.0 appendix), but the probe finds nothing in the build, the component is a release blocker too. A probe can stop matching after an upstream change (another way of embedding the data, a changed file, a moved path) while the component is still compiled in; dropping its notice, or the blocker of an unverified component, without a person looking would be wrong. Fix the probe, or, once it is confirmed that the build really no longer contains the component, add `"absentOk": "<reason>"` to its catalogue entry. Components whose terms ask for nothing (the piano samples) and components without repository evidence (the ARA SDK, which the Standalone does not link) are simply left out when their probe misses.
+
+### Components with unverified terms
 
 **HONOR Sans CN Medium** (the UI font, compiled into `OpenTune.exe` from `Resources/Fonts/HONORSansCN-Medium.ttf`) is in this state. Findings from the repository:
 

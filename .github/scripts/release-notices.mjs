@@ -14,11 +14,17 @@
 //   - Packages vendored inside JUCE come from JUCE.spdx.json, filtered by module and switches.
 //   - The catalogue is .github/release/notices.json.
 //
+// Release blockers (fail closed): a component with unverified redistribution terms that is in the
+// build, and a component that the repository has but whose probe finds nothing in the build while its
+// terms ask for something (unverified terms, license text, the GPL-3.0 appendix). A probe can stop
+// matching after an upstream change while the component is still compiled in; dropping its notice
+// silently would be wrong, so a person has to look (fix the probe, or record "absentOk" with a reason).
+//
 // CLI: node release-notices.mjs --build <dir> --deps <dir> --out-notices <file> --out-info <file>
 //        [--config Release] [--target OpenTuneStandalone_Standalone] [--repo <dir>] [--juce <dir>]
 //        [--catalogue <file>] [--commands <json file>]
-//   exit 0 = written (components blocked by unverified terms are listed in build-info.json and
-//   printed as warnings; release-package.mjs refuses a tagged release while any is listed),
+//   exit 0 = written (release blockers are listed in build-info.json and printed as warnings;
+//   release-package.mjs refuses a tagged release while any is listed),
 //   1 = the build does not qualify (control API off, a required file is missing), 2 = usage error
 import fs from 'node:fs';
 import path from 'node:path';
@@ -70,6 +76,15 @@ function readText(file) {
 }
 
 /**
+ * Does a catalogue component oblige the package to carry something (license text, the GPL-3.0
+ * appendix), or are its redistribution terms unverified? Such a component must not drop out of the
+ * notices just because its probe missed it.
+ */
+export function mustNotDropSilently(c) {
+  return c.redistribution === 'unverified' || Boolean(c.needsGpl3) || Boolean(c.requireOneLicenseFile) || (c.licenseFiles ?? []).some((lf) => !lf.optional);
+}
+
+/**
  * Evaluate the probes of the catalogue components and gather their license texts.
  * @returns {{sections: object[], included: string[], excluded: {id, why}[], blockers: {id, why}[], needsGpl3: boolean, vendored: object}}
  */
@@ -86,8 +101,13 @@ export function collectComponents({ catalogue, closure, exeBuf, appFiles, roots,
 
   for (const c of catalogue.components) {
     const p = c.probe ?? { kind: 'always' };
+    if (c.absentOk !== undefined && !(typeof c.absentOk === 'string' && c.absentOk.trim())) throw new Error(`${c.id}: absentOk must be a non-empty reason`);
     let found;
     let evidence;
+    // Repository files of the component (embedded data, or probe.repoFiles of a source / include
+    // probe): when they exist but the probe finds nothing, the fail-closed rule below applies.
+    let repoFiles = [];
+    let repoPattern = null;
     switch (p.kind) {
       case 'always':
         found = true;
@@ -102,12 +122,14 @@ export function collectComponents({ catalogue, closure, exeBuf, appFiles, roots,
         const hits = closure.objects.filter((o) => re.test(o.source));
         found = hits.length > 0;
         evidence = `${hits.length} compiled sources match ${p.pattern}`;
+        if (p.repoFiles) [repoFiles, repoPattern] = [expandRepoGlob(roots.repo, p.repoFiles), p.repoFiles];
         break;
       }
       case 'include': {
         const re = new RegExp(p.pattern, 'i');
         found = closure.objects.some((o) => o.includes.some((i) => re.test(i.replace(/\/+$/, ''))));
         evidence = found ? `include path matches ${p.pattern}` : `no include path matches ${p.pattern}`;
+        if (p.repoFiles) [repoFiles, repoPattern] = [expandRepoGlob(roots.repo, p.repoFiles), p.repoFiles];
         break;
       }
       case 'embedded': {
@@ -116,6 +138,7 @@ export function collectComponents({ catalogue, closure, exeBuf, appFiles, roots,
         const present = files.filter((f) => containsSample(exeBuf, fs.readFileSync(path.join(roots.repo, f))));
         found = present.length > 0;
         evidence = `${present.length} of ${files.length} files of ${p.files} embedded in OpenTune.exe`;
+        [repoFiles, repoPattern] = [files, p.files];
         break;
       }
       case 'appFile': {
@@ -133,6 +156,23 @@ export function collectComponents({ catalogue, closure, exeBuf, appFiles, roots,
         throw new Error(`${c.id}: unknown probe kind ${p.kind}`);
     }
     if (!found) {
+      if (repoFiles.length && mustNotDropSilently(c)) {
+        const inRepo = `${repoFiles.length} file(s) matching ${repoPattern}`;
+        if (c.absentOk) {
+          excluded.push({ id: c.id, why: `${evidence}; the repository has ${inRepo}; absence accepted: ${c.absentOk}` });
+          continue;
+        }
+        // Fail closed: the repository has the component and its terms ask for something, but the probe
+        // found nothing. The probe may simply have stopped matching (another embedding, a changed file,
+        // a moved path) while the component is still in the build.
+        const terms = c.redistribution === 'unverified' ? 'its redistribution terms are unverified' : 'its notice would be dropped';
+        blockers.push({
+          id: c.id,
+          why: `${c.name}: the repository has ${inRepo}, but the probe found none in the build (${evidence}) and ${terms}. Fix the probe, or set "absentOk": "<reason>" in notices.json once it is confirmed that the build no longer contains it.`,
+        });
+        excluded.push({ id: c.id, why: `release blocker: the probe found nothing although the repository has ${inRepo} (${evidence})` });
+        continue;
+      }
       excluded.push({ id: c.id, why: evidence });
       continue;
     }

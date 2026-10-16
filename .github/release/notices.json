@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "comment": "Catalogue for .github/scripts/release-notices.mjs, which writes THIRD-PARTY-NOTICES.txt of the unofficial Windows test build. A component is written only when its probe finds it in the build (compiled sources, include paths, data embedded in OpenTune.exe, files next to it, the ARA link check). Packages vendored inside JUCE come from JUCE.spdx.json; juceVendored.conditions excludes the ones whose code is switched off for the Standalone. redistribution 'unverified' keeps a component out of the notices and blocks a tagged release until its terms are confirmed. See .github/release/README.md.",
+  "comment": "Catalogue for .github/scripts/release-notices.mjs, which writes THIRD-PARTY-NOTICES.txt of the unofficial Windows test build. A component is written only when its probe finds it in the build (compiled sources, include paths, data embedded in OpenTune.exe, files next to it, the ARA link check). Packages vendored inside JUCE come from JUCE.spdx.json; juceVendored.conditions excludes the ones whose code is switched off for the Standalone. redistribution 'unverified' keeps a component out of the notices and blocks a tagged release until its terms are confirmed. Fail closed: when the repository has a component (embedded files, or probe.repoFiles of a source / include probe) whose terms ask for something (unverified terms, license text, the GPL-3.0 appendix) but its probe finds nothing in the build, the component is a release blocker too, unless the entry says \"absentOk\": \"<reason>\". See .github/release/README.md.",
   "components": [
     {
       "id": "opentune",
@@ -38,7 +38,7 @@
       "copyright": "Copyright (c) Olli Parviainen",
       "url": "https://www.surina.net/soundtouch/",
       "usedIn": "OpenTune.exe (statically linked)",
-      "probe": { "kind": "source", "pattern": "/ThirdParty/soundtouch-[^/]+/" },
+      "probe": { "kind": "source", "pattern": "/ThirdParty/soundtouch-[^/]+/", "repoFiles": "ThirdParty/soundtouch-2.3.3/source/SoundTouch/*.cpp" },
       "licenseFiles": [{ "root": "repo", "path": "LICENSES/soundtouch.LGPL-2.1.txt" }],
       "notes": [
         "SoundTouch is linked statically. The complete corresponding source code of this build, including the build scripts, is published under the AGPL (see README-UNOFFICIAL.txt), so you can modify SoundTouch and rebuild OpenTune.exe with your version."
@@ -50,7 +50,7 @@
       "license": "MIT",
       "url": "https://github.com/avaneev/r8brain-free-src",
       "usedIn": "OpenTune.exe (header-only sample-rate converter)",
-      "probe": { "kind": "include", "pattern": "/ThirdParty/r8brain-free-src[^/]*$" },
+      "probe": { "kind": "include", "pattern": "/ThirdParty/r8brain-free-src[^/]*$", "repoFiles": "ThirdParty/r8brain-free-src-master/*.h" },
       "licenseFiles": [{ "root": "repo", "path": "ThirdParty/r8brain-free-src-master/LICENSE" }]
     },
     {

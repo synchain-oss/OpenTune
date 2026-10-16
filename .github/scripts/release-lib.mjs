@@ -46,19 +46,27 @@ export function packageName({ version, label }) {
   return `OpenTune-${version}-${label}-unofficial-win-x64`;
 }
 
+/** The GitHub App that creates the real fork-gate check run (the fork-gate.yml workflow). */
+export const FORK_GATE_APP_SLUG = 'github-actions';
+
 /**
- * fork-gate must be green on the tagged commit: the most recently completed check run named
- * "fork-gate" (GitHub check-runs API objects) has conclusion "success", and none is still running.
+ * fork-gate must be green on the tagged commit: among the check runs named "fork-gate" that GitHub
+ * Actions created (GitHub check-runs API objects), the most recently completed one has conclusion
+ * "success", and none is still running. A same-name check run from any other app is ignored: an app
+ * or token with checks: write could otherwise post a green "fork-gate" of its own.
  * @returns {{ok: boolean, detail: string}}
  */
 export function evaluateForkGate(checkRuns) {
-  const runs = (Array.isArray(checkRuns) ? checkRuns : []).filter((r) => r?.name === 'fork-gate');
-  if (!runs.length) return { ok: false, detail: 'no fork-gate check run on this commit' };
-  if (runs.some((r) => r.status !== 'completed')) return { ok: false, detail: 'fork-gate is still running on this commit' };
+  const named = (Array.isArray(checkRuns) ? checkRuns : []).filter((r) => r?.name === 'fork-gate');
+  const runs = named.filter((r) => r?.app?.slug === FORK_GATE_APP_SLUG);
+  const ignored = named.length - runs.length;
+  const note = ignored ? `; ${ignored} same-name check run(s) from other apps ignored` : '';
+  if (!runs.length) return { ok: false, detail: `no fork-gate check run from GitHub Actions on this commit${note}` };
+  if (runs.some((r) => r.status !== 'completed')) return { ok: false, detail: `fork-gate is still running on this commit${note}` };
   const latest = [...runs].sort((a, b) => String(b.completed_at).localeCompare(String(a.completed_at)))[0];
   return latest.conclusion === 'success'
-    ? { ok: true, detail: `fork-gate success (${latest.html_url ?? latest.id})` }
-    : { ok: false, detail: `latest fork-gate conclusion is ${latest.conclusion}` };
+    ? { ok: true, detail: `fork-gate success (${latest.html_url ?? latest.id})${note}` }
+    : { ok: false, detail: `latest fork-gate conclusion is ${latest.conclusion}${note}` };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -115,8 +123,19 @@ export function forbiddenReasons(relPath, head) {
 export function checkPackageEntries(entries) {
   const problems = [];
   const files = [];
+  // Two entries with the same name (or names that differ only in case, which collide when the zip is
+  // extracted on Windows) are an error: which copy an extractor keeps is not defined, so the checked
+  // copy might not be the one a user gets.
+  const seen = new Map();
   for (const e of entries) {
     const p = String(e.path).replace(/\\/g, '/').replace(/^\/+|\/+$/g, '');
+    const key = p.toLowerCase();
+    if (seen.has(key)) {
+      const first = seen.get(key);
+      problems.push(first === p ? `duplicate entry: ${p}` : `duplicate entry: ${p} (differs from ${first} only in case)`);
+      continue;
+    }
+    seen.set(key, p);
     for (const why of forbiddenReasons(p, e.head)) problems.push(`forbidden: ${p} (${why})`);
     if (e.isDir) problems.push(`unexpected directory: ${p}`);
     else if (p.includes('/')) problems.push(`unexpected file in a subdirectory: ${p}`);
@@ -124,9 +143,10 @@ export function checkPackageEntries(entries) {
   }
   const used = new Set();
   for (const want of PACKAGE_FILES) {
+    const label = typeof want === 'string' ? want : want.source;
     const hits = files.filter((f) => (typeof want === 'string' ? f === want : want.test(f)));
-    if (!hits.length) problems.push(`missing: ${typeof want === 'string' ? want : want.source}`);
-    if (hits.length > 1) problems.push(`more than one file matches ${want.source}: ${hits.join(', ')}`);
+    if (!hits.length) problems.push(`missing: ${label}`);
+    if (hits.length > 1) problems.push(`more than one file matches ${label}: ${hits.join(', ')}`);
     for (const h of hits) used.add(h);
   }
   for (const f of files) if (!used.has(f)) problems.push(`not on the allow-list: ${f}`);
@@ -421,7 +441,8 @@ export function createZip(entries, { date = '1980-01-01T00:00:00Z' } = {}) {
 }
 
 /**
- * Read every entry of a zip archive (stored or deflated), checking sizes and CRC-32.
+ * Read every entry of a zip archive (stored or deflated), checking sizes and CRC-32. An entry name
+ * that occurs twice is an error (extractors differ on which copy wins).
  * @returns {{name: string, isDir: boolean, data: Buffer}[]}
  */
 export function readZip(buf) {
@@ -437,6 +458,7 @@ export function readZip(buf) {
   const count = zip.readUInt16LE(eocd + 10);
   let p = zip.readUInt32LE(eocd + 16);
   const out = [];
+  const names = new Set();
   for (let i = 0; i < count; i++) {
     if (zip.readUInt32LE(p) !== 0x02014b50) throw new Error('zip: bad central directory entry');
     const method = zip.readUInt16LE(p + 10);
@@ -449,6 +471,8 @@ export function readZip(buf) {
     const local = zip.readUInt32LE(p + 42);
     const name = zip.subarray(p + 46, p + 46 + nlen).toString('utf8');
     p += 46 + nlen + xlen + clen;
+    if (names.has(name)) throw new Error(`zip: duplicate entry ${name}`);
+    names.add(name);
     if (zip.readUInt32LE(local) !== 0x04034b50) throw new Error(`zip: bad local header for ${name}`);
     const start = local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
     const raw = zip.subarray(start, start + csize);

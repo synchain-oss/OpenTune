@@ -37,7 +37,7 @@ import {
   validateControlJson,
   verifySha256Sums,
 } from '../release-lib.mjs';
-import { collectComponents, renderNotices } from '../release-notices.mjs';
+import { collectComponents, mustNotDropSilently, renderNotices } from '../release-notices.mjs';
 import { validateBuild, verifyZipBuffer } from '../release-package.mjs';
 import { REPO_ROOT, SCRIPTS } from './helpers.mjs';
 
@@ -45,6 +45,7 @@ const ORT = 'OpenTuneOnnxRuntime_1_24_4.dll';
 const ALLOWED = PACKAGE_FILES.map((f) => (typeof f === 'string' ? f : ORT));
 const entries = (names) => names.map((n) => ({ path: n, head: Buffer.from('MZ') }));
 const SHA = 'a'.repeat(40);
+const ACTIONS = { slug: 'github-actions' };
 
 describe('tags and versions', () => {
   it('accepts synchain-test/v<x.y.z>-ctl.<n> only', () => {
@@ -68,16 +69,36 @@ describe('tags and versions', () => {
 
   it('requires fork-gate to be green on the tagged commit', () => {
     assert.equal(evaluateForkGate([]).ok, false);
-    assert.equal(evaluateForkGate([{ name: 'fork-gate', status: 'in_progress' }]).ok, false);
-    const ok = { name: 'fork-gate', status: 'completed', conclusion: 'success', completed_at: '2026-10-02T00:00:00Z' };
-    const bad = { name: 'fork-gate', status: 'completed', conclusion: 'failure', completed_at: '2026-10-01T00:00:00Z' };
+    assert.equal(evaluateForkGate([{ name: 'fork-gate', status: 'in_progress', app: ACTIONS }]).ok, false);
+    const ok = { name: 'fork-gate', status: 'completed', conclusion: 'success', completed_at: '2026-10-02T00:00:00Z', app: ACTIONS };
+    const bad = { name: 'fork-gate', status: 'completed', conclusion: 'failure', completed_at: '2026-10-01T00:00:00Z', app: ACTIONS };
     assert.equal(evaluateForkGate([bad, ok]).ok, true);
     assert.equal(evaluateForkGate([ok, { ...bad, completed_at: '2026-10-03T00:00:00Z' }]).ok, false);
     assert.equal(evaluateForkGate([{ ...ok, name: 'self-test' }]).ok, false);
   });
 
+  it('counts only the fork-gate check runs that GitHub Actions created (negative: a same-name run from another app)', () => {
+    const other = { slug: 'some-other-app' };
+    const realRed = { name: 'fork-gate', status: 'completed', conclusion: 'failure', completed_at: '2026-10-01T00:00:00Z', app: ACTIONS };
+    const fakeGreen = { name: 'fork-gate', status: 'completed', conclusion: 'success', completed_at: '2026-10-02T00:00:00Z', app: other };
+    // A newer green run from another app does not hide the red GitHub Actions run.
+    const masked = evaluateForkGate([realRed, fakeGreen]);
+    assert.equal(masked.ok, false);
+    assert.match(masked.detail, /conclusion is failure; 1 same-name check run\(s\) from other apps ignored/);
+    // Only impostors (or runs without app information): no fork-gate at all.
+    for (const runs of [[fakeGreen], [{ ...fakeGreen, app: undefined }]]) {
+      const r = evaluateForkGate(runs);
+      assert.equal(r.ok, false);
+      assert.match(r.detail, /no fork-gate check run from GitHub Actions/);
+    }
+    // Another app's run still in progress does not hold up a green GitHub Actions run, nor does its failure.
+    const realGreen = { ...realRed, conclusion: 'success' };
+    assert.equal(evaluateForkGate([realGreen, { ...fakeGreen, status: 'in_progress' }]).ok, true);
+    assert.equal(evaluateForkGate([realGreen, { ...fakeGreen, conclusion: 'failure', completed_at: '2026-10-09T00:00:00Z' }]).ok, true);
+  });
+
   it('validates a tag build: name, version, on dev, fork-gate', () => {
-    const green = [{ name: 'fork-gate', status: 'completed', conclusion: 'success', completed_at: 'x' }];
+    const green = [{ name: 'fork-gate', status: 'completed', conclusion: 'success', completed_at: 'x', app: ACTIONS }];
     const good = validateBuild({ cmakeVersion: '1.8.0', tag: 'synchain-test/v1.8.0-ctl.1', sha: SHA, checkRuns: green, isAncestorOfDev: () => true });
     assert.equal(good.mode, 'release');
     assert.equal(good.name, 'OpenTune-1.8.0-ctl.1-unofficial-win-x64');
@@ -105,7 +126,15 @@ describe('package allow-list', () => {
   it('fails on a missing file, a subdirectory or a second ONNX Runtime DLL', () => {
     assert.ok(checkPackageEntries(entries(ALLOWED.filter((n) => n !== 'INSTALL.txt'))).includes('missing: INSTALL.txt'));
     assert.ok(checkPackageEntries([...entries(ALLOWED), { path: 'docs', isDir: true }]).some((p) => p.startsWith('unexpected directory')));
-    assert.ok(checkPackageEntries(entries([...ALLOWED, 'OpenTuneOnnxRuntime_1_20_0.dll'])).some((p) => p.startsWith('more than one file')));
+    assert.deepEqual(checkPackageEntries(entries([...ALLOWED, 'OpenTuneOnnxRuntime_1_20_0.dll'])), [
+      `more than one file matches ${PACKAGE_FILES.find((f) => typeof f !== 'string').source}: ${ORT}, OpenTuneOnnxRuntime_1_20_0.dll`,
+    ]);
+  });
+
+  it('fails on a duplicate entry, also one that differs only in case; messages name the file', () => {
+    assert.deepEqual(checkPackageEntries(entries([...ALLOWED, 'OpenTune.exe'])), ['duplicate entry: OpenTune.exe']);
+    assert.deepEqual(checkPackageEntries(entries([...ALLOWED, 'install.TXT'])), ['duplicate entry: install.TXT (differs from INSTALL.txt only in case)']);
+    for (const p of checkPackageEntries(entries([...ALLOWED, 'OpenTune.exe', 'SHA256SUMS', 'x.txt']))) assert.doesNotMatch(p, /undefined/);
   });
 
   it('fails on model weights, models/, D3D12*, d3dconfig.exe, STATEMENTS.txt (recursive, any case)', () => {
@@ -220,6 +249,11 @@ describe('zip', () => {
     z[30 + 1] ^= 0xff; // first byte of the stored data, after the 30-byte local header and the name
     assert.throws(() => readZip(z), /CRC/);
   });
+
+  it('refuses an entry name that occurs twice instead of keeping one copy', () => {
+    const z = createZip([...files, { name: 'P/a.txt', data: Buffer.from('another copy') }]);
+    assert.throws(() => readZip(z), /zip: duplicate entry P\/a\.txt/);
+  });
 });
 
 describe('Ninja build graph and ARA link check', () => {
@@ -297,38 +331,74 @@ describe('notices collector', () => {
       { id: 'soundtouch', name: 'SoundTouch', license: 'LGPL-2.1', probe: { kind: 'source', pattern: '/ThirdParty/soundtouch-[^/]+/' }, licenseFiles: [{ root: 'repo', path: 'LICENSES/soundtouch.LGPL-2.1.txt' }] },
       { id: 'font', name: 'Font', probe: { kind: 'embedded', files: 'Resources/Fonts/HONORSansCN-Medium.ttf' }, redistribution: 'unverified', unverifiedReason: 'no license file' },
       { id: 'cursors', name: 'Cursors', probe: { kind: 'embedded', files: 'Resources/UI/cursors/*.png' }, needsGpl3: true },
-      { id: 'ara-sdk', name: 'ARA', probe: { kind: 'ara' } },
+      // Embedded data whose terms ask for nothing (like the CC0 piano samples).
+      { id: 'icon', name: 'Icon', probe: { kind: 'embedded', files: 'Resources/UI/cursors/adwaita_dragging.png' } },
+      { id: 'r8brain', name: 'r8brain', license: 'MIT', probe: { kind: 'include', pattern: '/ThirdParty/r8brain-free-src[^/]*$', repoFiles: 'ThirdParty/r8brain-free-src-master/*.h' }, licenseFiles: [{ root: 'repo', path: 'ThirdParty/r8brain-free-src-master/LICENSE' }] },
+      { id: 'ara-sdk', name: 'ARA', probe: { kind: 'ara' }, requireOneLicenseFile: true },
       { id: 'dml', name: 'DirectML', probe: { kind: 'appFile', pattern: '^DirectML\\.dll$' } },
     ],
   };
   const font = fs.readFileSync(path.join(REPO_ROOT, 'Resources', 'Fonts', 'HONORSansCN-Medium.ttf'));
   const mid = Math.floor(font.length / 2);
+  const cursor = fs.readFileSync(path.join(REPO_ROOT, 'Resources', 'UI', 'cursors', 'adwaita_crosshair.png'));
+  const r8brainInclude = { output: 'b.obj', source: 'C:/src/Source/Resampler.cpp', defines: {}, includes: ['C:/src/ThirdParty/r8brain-free-src-master/'] };
+  const collect = (over) => collectComponents({ catalogue, closure, exeBuf: Buffer.from('MZ'), appFiles: ['DirectML.dll'], roots, lock: { deps: [] }, sbom: {}, ...over });
 
   it('keeps an unverified component out of the notices and reports it as a release blocker', () => {
-    const exeBuf = Buffer.concat([Buffer.from('MZ'), font.subarray(mid - 4096, mid + 4096)]);
+    const exeBuf = Buffer.concat([Buffer.from('MZ'), font.subarray(mid - 4096, mid + 4096), cursor]);
     assert.ok(containsSample(exeBuf, font));
-    const got = collectComponents({ catalogue, closure, exeBuf, appFiles: ['OpenTune.exe'], roots, lock: { deps: [] }, sbom: {} });
-    assert.deepEqual(got.included, ['opentune', 'soundtouch']);
+    const got = collect({ exeBuf, appFiles: ['OpenTune.exe'], closure: { ...closure, objects: [...closure.objects, r8brainInclude] } });
+    assert.deepEqual(got.included, ['opentune', 'soundtouch', 'cursors', 'r8brain']);
     assert.deepEqual(got.blockers.map((b) => b.id), ['font']);
-    assert.deepEqual(got.excluded.map((x) => x.id).sort(), ['ara-sdk', 'cursors', 'dml', 'font']);
-    assert.equal(got.needsGpl3, false);
+    assert.match(got.blockers[0].why, /is in the build .* redistribution terms are unverified: no license file/);
+    assert.deepEqual(got.excluded.map((x) => x.id).sort(), ['ara-sdk', 'dml', 'font', 'icon']);
+    assert.equal(got.needsGpl3, true);
     const text = renderNotices({ header: { title: 'T', intro: ['no model weights'] }, sections: got.sections, gpl3Text: null });
     assert.match(text, /1\. OpenTune/);
     assert.match(text, /GNU LESSER GENERAL PUBLIC LICENSE/);
     assert.doesNotMatch(text, /Font|HONOR/);
   });
 
-  it('reports nothing when the font is not in the executable', () => {
-    const got = collectComponents({ catalogue, closure, exeBuf: Buffer.from('MZ'), appFiles: ['DirectML.dll'], roots, lock: { deps: [] }, sbom: {} });
-    assert.deepEqual(got.blockers, []);
-    assert.ok(got.included.includes('dml'));
+  it('fails closed: a probe that finds nothing of a component the repository has keeps it a release blocker (negative case)', () => {
+    // As if upstream changed how the font and the cursor images are embedded, and how r8brain is
+    // included: the repository still has their files, the probes find nothing in the build.
+    const got = collect();
+    assert.deepEqual(got.blockers.map((b) => b.id), ['font', 'cursors', 'r8brain']);
+    for (const b of got.blockers) assert.match(b.why, /the repository has \d+ file\(s\) matching .*, but the probe found none in the build/);
+    assert.match(got.blockers.find((b) => b.id === 'font').why, /redistribution terms are unverified/);
+    assert.match(got.blockers.find((b) => b.id === 'cursors').why, /its notice would be dropped/);
+    for (const id of ['font', 'cursors', 'r8brain']) assert.match(got.excluded.find((x) => x.id === id).why, /^release blocker: /);
+    assert.ok(!got.included.some((id) => ['font', 'cursors', 'r8brain'].includes(id)));
+    // Terms that ask for nothing, or no repository evidence (ARA: not linked by design): simply left out.
+    assert.ok(!got.blockers.some((b) => ['icon', 'ara-sdk'].includes(b.id)));
+    assert.deepEqual(got.included, ['opentune', 'soundtouch', 'dml']);
   });
 
-  it('the real catalogue marks HONOR Sans unverified and uses known probe kinds', () => {
+  it('absentOk with a reason accepts the absence; an empty reason is refused', () => {
+    const withAbsentOk = (reason) => ({ components: catalogue.components.map((c) => (c.id === 'cursors' ? { ...c, absentOk: reason } : c)) });
+    const got = collect({ catalogue: withAbsentOk('the cursor images are no longer compiled in') });
+    assert.deepEqual(got.blockers.map((b) => b.id), ['font', 'r8brain']);
+    assert.match(got.excluded.find((x) => x.id === 'cursors').why, /absence accepted: the cursor images are no longer compiled in$/);
+    assert.throws(() => collect({ catalogue: withAbsentOk('  ') }), /cursors: absentOk must be a non-empty reason/);
+    assert.throws(() => collect({ catalogue: withAbsentOk(true) }), /absentOk must be a non-empty reason/);
+  });
+
+  it('a source / include probe whose repository files are absent is not a blocker', () => {
+    const gone = { id: 'gone', name: 'Gone', license: 'MIT', probe: { kind: 'source', pattern: '/ThirdParty/gone/', repoFiles: 'ThirdParty/gone-1.0/*.cpp' }, licenseFiles: [{ root: 'repo', path: 'LICENSE' }] };
+    const got = collect({ catalogue: { components: [gone] } });
+    assert.deepEqual(got.blockers, []);
+    assert.deepEqual(got.excluded, [{ id: 'gone', why: '0 compiled sources match /ThirdParty/gone/' }]);
+  });
+
+  it('the real catalogue marks HONOR Sans unverified, uses known probe kinds and names repository files for fail-closed probes', () => {
     const real = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, '.github', 'release', 'notices.json'), 'utf8'));
     const kinds = new Set(['always', 'juce', 'source', 'include', 'embedded', 'appFile', 'ara']);
     for (const c of real.components) assert.ok(kinds.has(c.probe.kind), c.id);
     assert.equal(real.components.find((c) => c.id === 'honor-sans').redistribution, 'unverified');
+    for (const id of ['honor-sans', 'cursors', 'soundtouch', 'r8brain']) assert.ok(mustNotDropSilently(real.components.find((c) => c.id === id)), id);
+    for (const c of real.components) {
+      if (['source', 'include'].includes(c.probe.kind) && mustNotDropSilently(c)) assert.match(c.probe.repoFiles ?? '', /^ThirdParty\//, `${c.id}: probe.repoFiles`);
+    }
     assert.ok(fs.existsSync(path.join(REPO_ROOT, '.github', 'release', 'licenses', 'GPL-3.0.txt')));
   });
 });
@@ -385,6 +455,47 @@ describe('release-package.mjs build and verify (end to end on synthetic inputs)'
       const rv = run(['verify', '--zip', bad, '--name', name]);
       assert.equal(rv.status, 1);
       assert.match(rv.stderr, /not on the allow-list: extra\.txt/);
+
+      // Negative cases: a second OpenTune.exe under the same name, or under a name that differs only in
+      // case (the two collide when extracted on Windows), is red; neither copy is silently dropped.
+      const same = readZip(zip).map((e) => ({ name: e.name, data: e.isDir ? undefined : e.data }));
+      for (const [dupName, re] of [['OpenTune.exe', /zip: duplicate entry .*\/OpenTune\.exe/], ['opentune.EXE', /duplicate entry: opentune\.EXE \(differs from OpenTune\.exe only in case\)/]]) {
+        const dupZip = path.join(dir, 'out', 'dup.zip');
+        fs.writeFileSync(dupZip, createZip([...same, { name: `${name}/${dupName}`, data: Buffer.from('MZ another executable') }]));
+        const rd = run(['verify', '--zip', dupZip, '--name', name]);
+        assert.equal(rd.status, 1, dupName);
+        assert.match(rd.stderr, re);
+        assert.doesNotMatch(rd.stderr, /undefined/);
+      }
+    } finally {
+      removeDir(dir);
+    }
+  });
+
+  it('fail closed end to end: blockers from a probe miss stop a tag build; a rehearsal only warns', () => {
+    const catalogue = {
+      components: [
+        { id: 'honor-sans', name: 'HONOR Sans', probe: { kind: 'embedded', files: 'Resources/Fonts/HONORSansCN-Medium.ttf' }, redistribution: 'unverified', unverifiedReason: 'no license file' },
+        { id: 'cursors', name: 'Cursor images', license: 'LGPL-3.0', probe: { kind: 'embedded', files: 'Resources/UI/cursors/*.png' }, licenseFiles: [{ root: 'repo', path: 'LICENSES/cursors.LGPL-3.0.txt' }], needsGpl3: true },
+      ],
+    };
+    // An executable in which neither probe finds anything, although the repository has both.
+    const got = collectComponents({
+      catalogue, closure: { exe: 'App.exe', linkFlags: '', libraries: [], objects: [] }, exeBuf: Buffer.from('MZ'), appFiles: [],
+      roots: { repo: REPO_ROOT, juce: '/nonexistent', deps: '/nonexistent' }, lock: { deps: [] }, sbom: {},
+    });
+    assert.deepEqual(got.blockers.map((b) => b.id), ['honor-sans', 'cursors']);
+    const dir = makeTempDir('ot-release-test-');
+    try {
+      makeInputs(dir, { blockers: got.blockers });
+      const r = run(buildArgs(dir, ['--label', 'ctl.1', '--tag', `synchain-test/v${version()}-ctl.1`]));
+      assert.equal(r.status, 1, r.stdout);
+      assert.match(r.stderr, /2 release blocker\(s\); a tagged release cannot be packaged/);
+      assert.match(r.stdout, /::error title=release blocker::HONOR Sans: the repository has 1 file\(s\) matching Resources\/Fonts\/HONORSansCN-Medium\.ttf, but the probe found none/);
+      const rh = run(buildArgs(dir, ['--label', 'rehearsal-aaaaaaa']));
+      assert.equal(rh.status, 0, rh.stderr);
+      assert.match(rh.stdout, /::warning title=release blocker::Cursor images: the repository has \d+ file\(s\) matching Resources\/UI\/cursors\/\*\.png, but the probe found none/);
+      assert.doesNotMatch(rh.stdout, /::error/);
     } finally {
       removeDir(dir);
     }

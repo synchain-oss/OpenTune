@@ -123,7 +123,11 @@ export function modificationVars(nameStatusText) {
   };
 }
 
-/** Check a zip: one top-level folder, the allow-list inside it, nothing forbidden, SHA256SUMS right. */
+/**
+ * Check a zip: one top-level folder, the allow-list inside it, nothing forbidden, no duplicate entry
+ * (readZip throws on a repeated name; checkPackageEntries reports names that differ only in case),
+ * SHA256SUMS right.
+ */
 export function verifyZipBuffer(zipBuf, expectedName) {
   const problems = [];
   const entries = readZip(zipBuf);

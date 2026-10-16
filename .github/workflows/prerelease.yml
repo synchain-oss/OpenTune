@@ -10,7 +10,7 @@ name: Prerelease
 #   workflow_dispatch          演练：构建 + 打包 + 白名单与 SHA256SUMS 校验 + 短保留期 artifact，不建 release。
 #   pull_request（改到打包相关路径）  同上，演练。
 # 校验 tag（只在 tag 触发时）：名字是 synchain-test/v<x.y.z>-ctl.<n>、x.y.z 等于 CMakeLists.txt 的 VERSION、
-# 提交是 dev 的祖先、该提交上的 fork-gate 为绿。
+# 提交是 dev 的祖先、该提交上由 GitHub Actions 创建的 fork-gate 为绿（其他 App 建的同名 check run 不算）。
 # 构建经 workflow_call 调 build-windows.yml 的出包模式：Standalone、Release（LTCG）、控制接口 ON，
 # 删除 POST_BUILD 生成的 models\ 并断言不存在，按产物实际内容生成 THIRD-PARTY-NOTICES.txt。
 # 打包（release-package.mjs）：严格白名单，多一个文件、或出现 *.onnx、models/、LFS 指针、D3D12*、d3dconfig.exe、
@@ -23,11 +23,19 @@ on:
   workflow_dispatch:
   pull_request:
     branches: [dev, 'feature/**']
+    # 打包脚本及其 import / 读取的文件，加上出包模式构建用到的脚本：只改其中任何一个也要演练。
     paths:
       - '.github/workflows/prerelease.yml'
       - '.github/workflows/build-windows.yml'
       - '.github/release/**'
       - '.github/scripts/release-*.mjs'
+      - '.github/scripts/test/release-lib.test.mjs'
+      - '.github/scripts/fork-lib.mjs'
+      - '.github/scripts/check-attribution.mjs'
+      - '.github/scripts/attribution-patterns.txt'
+      - '.github/scripts/detect-native.mjs'
+      - '.github/scripts/fork-delta.mjs'
+      - '.github/scripts/with-build-slot.ps1'
       - '.github/scripts/bootstrap-deps.ps1'
       - '.github/scripts/deps.lock.json'
 

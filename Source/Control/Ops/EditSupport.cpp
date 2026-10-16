@@ -359,6 +359,12 @@ std::size_t controlListNoteChanges(ControlWriteEnvelope& envelope, const std::st
         const auto& was = before[beforeOrder[index]];
         const auto& now = after[afterOrder[index]];
         auto fields = JsonValue::object();
+        // The commit trims a note that overlaps its successor (normalizeStoredNotes()): the count of notes stays,
+        // but the times differ from what was read before. Listed as content.getNotes reports them.
+        addField(fields, "startContentSec", controlJsonSeconds(std::max(0.0, was.startTime)),
+                 controlJsonSeconds(std::max(0.0, now.startTime)), "sec");
+        addField(fields, "endContentSec", controlJsonSeconds(std::max(0.0, was.endTime)),
+                 controlJsonSeconds(std::max(0.0, now.endTime)), "sec");
         addField(fields, "targetMidi", controlNoteTargetMidiJson(was, tuningHz),
                  controlNoteTargetMidiJson(now, tuningHz), "midi");
         addField(fields, "offsetCents", controlNoteOffsetCentsJson(was), controlNoteOffsetCentsJson(now), "cents");

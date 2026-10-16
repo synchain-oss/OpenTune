@@ -366,8 +366,13 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         endforeach()
         # EditMultiNoteRender renders five blocks five times and exports: about 12 s on a Windows developer machine.
         # A sanitizer build runs 5 to 15 times slower (ASan/UBSan 2 to 3 times, TSan up to 15 times, on the slower
-        # macOS runners), so 12 s * 15 = 180 s; the timeout adds a margin on top.
+        # macOS runners), so 12 s * 15 = 180 s; the timeout adds a margin on top. TSan runs have taken 248 to 260 s
+        # there, too close to 300 s, so a sanitizer build (-fsanitize in the compiler flags) gets 900 s. The scenario
+        # derives its own wait budget from this timeout, so the number of render steps stays the same.
         set(_opentune_control_render_timeout 300)
+        if(CMAKE_C_FLAGS MATCHES "fsanitize" OR CMAKE_CXX_FLAGS MATCHES "fsanitize")
+            set(_opentune_control_render_timeout 900)
+        endif()
         set_tests_properties(ControlProcessorTests.EditMultiNoteRender PROPERTIES
             TIMEOUT ${_opentune_control_render_timeout})
         # Every vector starts a processor of its own.

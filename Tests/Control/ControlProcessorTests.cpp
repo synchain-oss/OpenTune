@@ -27,7 +27,6 @@
 #include "Control/ControlUiBridge.h"
 #include "Editor/EditorFactory.h"
 #include "PluginProcessor.h"
-#include "Runtime/ProcessRenderRuntime.h"
 #include "Utils/AppLogger.h"
 #include "Utils/AppPreferences.h"
 
@@ -624,29 +623,6 @@ private:
     std::thread thread_;
 };
 
-/**
- * Takes one owner of OpenTune's process-wide render runtime (ProcessRenderRuntime::retainOwner) for the rest of the
- * test process, before the scenario creates any processor.
- *
- * Why: the runtime shuts down whenever its last owner, a processor, goes away, and starts again with the next one.
- * That shutdown (releaseOwner, shutdownLocked) waits on workerExitCv_ under shutdownMutex_ until the control worker
- * has set workerExitDispatchAttempted_; the worker sets it and notifies without that mutex, so the notification can
- * fall between the waiter's check and its wait and be lost, and the destruction of the processor then never returns.
- * In the application the runtime starts once and shuts down at exit; a scenario that creates and destroys many
- * processors (those of the vectors) took that chance at every processor, and the slower timing under a thread
- * sanitizer makes the window wide enough to hit. With this owner the count never falls to zero between processors,
- * so no shutdown runs. It is never released, so that the test process never takes that chance either: the runtime's
- * control worker ends with the process.
- */
-void holdRenderRuntimeForProcess()
-{
-    static const bool held = [] {
-        ProcessRenderRuntime::getInstance().retainOwner();
-        return true;
-    }();
-    (void)held;
-}
-
 int runScenario(const Scenario& scenario)
 {
     const auto realDiscoveryFile = realDiscoveryFileOfThisProcess();
@@ -665,7 +641,6 @@ int runScenario(const Scenario& scenario)
             std::cerr << "cannot initialise networking" << std::endl;
             return 1;
         }
-        holdRenderRuntimeForProcess();
         scenario.run();
         // Before the message manager goes away: a dialog left open would be deleted at its shutdown,
         // where an upstream dialog uses its freed content (see closeLeftoverModalWindows).

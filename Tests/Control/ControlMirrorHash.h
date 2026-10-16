@@ -19,6 +19,7 @@
 // formatting only (indentation, line breaks between lines, blank lines, line endings, trailing blanks) does
 // not. fn-v1 is the same rule as the fork's drift-pins tool (the hashes are interchangeable).
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -442,6 +443,14 @@ inline std::optional<Located> extractStatement(const std::string& text, const st
             continue;
         }
         if (text.compare(i, anchor.size(), anchor) != 0) {
+            ++i;
+            continue;
+        }
+        // Word boundaries: "maxSize_Extra" or "xmaxSize_" must not match the anchor "maxSize_".
+        const bool leftOpen = isIdent(anchor.front()) && i > 0 && isIdent(text[i - 1]);
+        const bool rightOpen =
+            isIdent(anchor.back()) && i + anchor.size() < text.size() && isIdent(text[i + anchor.size()]);
+        if (leftOpen || rightOpen) {
             ++i;
             continue;
         }

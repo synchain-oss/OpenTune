@@ -392,6 +392,7 @@ void checkHashPrimitives()
                                "void A::h(int a) { one(); }\n"
                                "void A::h(double d) { two(); }\n"
                                "void user() { A::h(1.5); }\n"
+                               "static constexpr int kLimit_Extra{1};\n"
                                "static constexpr int kLimit{500};  // comment\n"
                                "}\n";
     const auto f = ControlMirror::extractFunction(sample, "A::f");
@@ -402,7 +403,7 @@ void checkHashPrimitives()
     check(h && h->text.find("two()") != std::string::npos, "extractFunction tells overloads apart by parameter types");
     const auto limit = ControlMirror::extractStatement(sample, "static constexpr int kLimit");
     check(limit && ControlMirror::normalizedLines(limit->text) == "static constexpr int kLimit{500};",
-          "extractStatement stops at the semicolon");
+          "extractStatement stops at the semicolon and does not match a longer identifier");
     const auto original = ControlMirror::hashSymbol(sample, "function", "A::f");
     const auto reformatted = ControlMirror::hashSymbol(
         "\xEF\xBB\xBF"

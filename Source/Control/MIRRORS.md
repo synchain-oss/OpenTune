@@ -23,7 +23,11 @@ from the UI.
 
 ## If you changed a function in the table / 改了表里的函数怎么办
 
-1. Run `ControlMirrorDriftTests` (it is part of `ctest -R Control`). A red result names the function you
+1. Run `ControlMirrorDriftTests`. It exists only in a build configured with both options ON (both are OFF
+   by default), for example `cmake -S . -B build-control -G Ninja -DOPENTUNE_ENABLE_CONTROL_API=ON
+   -DOPENTUNE_BUILD_TESTS=ON`; build it, then run
+   `ctest --test-dir build-control -C RelWithDebInfo -R ControlMirrorDrift --no-tests=error`. In a default
+   build there is no such test, and without `--no-tests=error` ctest would still exit 0. A red result names the function you
    changed, the file of `Source/Control` to bring in line, and the tests to run.
 2. Read the change, and make the same change in the mirrored code in the "Control API" column. If the
    change is meant to alter what the UI does, the API must do the same; if it does not, say so in the commit.
@@ -32,7 +36,7 @@ from the UI.
    `mirror-map.json` and regenerates the table in this file. Commit all three files together. Updating the
    hash without step 2 defeats the purpose.
 
-1. 运行 `ControlMirrorDriftTests`（它在 `ctest -R Control` 里）。变红时，输出会写明你改了哪个函数、要同步 `Source/Control` 的哪个文件、要跑哪些测试。
+1. 运行 `ControlMirrorDriftTests`。它只存在于两个选项都为 ON 的构建里（默认都是 OFF），例如 `cmake -S . -B build-control -G Ninja -DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON`；构建后运行 `ctest --test-dir build-control -C RelWithDebInfo -R ControlMirrorDrift --no-tests=error`。默认构建里没有这个测试，不加 `--no-tests=error` 时 ctest 仍返回 0。变红时，输出会写明你改了哪个函数、要同步 `Source/Control` 的哪个文件、要跑哪些测试。
 2. 读懂改动，在「Control API」一列的镜像代码里做同样的改动。若这次改动本来就要改变界面的行为，接口也必须一样；若不是，在提交里说明。
 3. 跑「Tests」一列的测试（失败信息里有现成的 `ctest -R` 表达式）。
 4. 记录新哈希：用 `--update` 运行测试可执行文件。它会改写 `mirror-map.json` 里的哈希并重新生成本文件的表。三个文件一起提交。没做第 2 步就更新哈希，等于白锁。
@@ -94,13 +98,14 @@ When you add code to `Source/Control/**` that repeats the steps of an upstream f
 1. Add an entry to `mirror-map.json`: `upstream.file` and `upstream.symbol` (the qualified name; add the
    parameter types in parentheses to tell overloads apart), `kind` (`function` or `statement`) and
    `normalization` (`fn-v1` or `stmt-v1`), the Control files and symbols, the tests that cover the mirror,
-   and a one-line note in English and Chinese. Put any hash in `sha256`.
+   and a one-line note in English and Chinese. Put a placeholder in `sha256`: 64 lower-case hexadecimal digits that differ from every other entry
+   (for example 63 zeros and one distinct digit), because the test checks the format before `--update` runs.
 2. Run the test executable with `--update` to fill in the hash and generate the table row.
 3. Name the upstream function in the comment of the mirrored code, and list it in the README.
 
 在 `Source/Control/**` 里新增照搬上游函数步骤的代码时：
 
-1. 在 `mirror-map.json` 加一条：`upstream.file` 与 `upstream.symbol`（限定名；要区分重载时在括号里写参数类型）、`kind`（`function` 或 `statement`）与 `normalization`（`fn-v1` 或 `stmt-v1`）、接口层的文件与符号、覆盖这处镜像的测试、一行中英文说明。`sha256` 先填任意值。
+1. 在 `mirror-map.json` 加一条：`upstream.file` 与 `upstream.symbol`（限定名；要区分重载时在括号里写参数类型）、`kind`（`function` 或 `statement`）与 `normalization`（`fn-v1` 或 `stmt-v1`）、接口层的文件与符号、覆盖这处镜像的测试、一行中英文说明。`sha256` 先填占位值：64 位小写十六进制，且与其他条目都不同（例如 63 个 0 加一个互不相同的数字），因为测试在 `--update` 之前就会检查格式。
 2. 用 `--update` 运行测试可执行文件，补上哈希并生成表中的行。
 3. 在镜像代码的注释里写明对应的上游函数，并在 README 里列出。
 

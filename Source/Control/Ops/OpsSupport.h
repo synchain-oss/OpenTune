@@ -44,6 +44,10 @@ std::optional<double> controlLinearToDb(double linear);
 /** The f0State string of an OpenTune analysis state (notRequested, extracting, ready, failed). */
 const char* controlF0StateName(OriginalF0State state);
 
+/** The display label of a note, for example "#12 A4 41.20-41.85s" (index, the target's name at the instance's
+    tuning or "rest", content seconds). Display only (PROTOCOL.md section 9). */
+std::string controlNoteLabel(std::size_t index, std::optional<double> targetMidi, double startSec, double endSec);
+
 // ---- Checking params on the network thread --------------------------------------------------------
 
 /**

@@ -32,33 +32,10 @@ constexpr double kFrameEpsilon = 1e-9;
 constexpr char kNotesCursor = 'n';
 constexpr char kCurveCursor = 'p';
 
-/** Names, at the instance's tuning, for the labels of notes. */
-const char* const kPitchClassNames[] = {"C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"};
-
 double midiOf(float hz, float tuningHz)
 {
     // PitchUtils::freqToMidi(): MIDI note number of a frequency at the given A4.
     return PitchUtils::freqToMidi(hz, tuningHz);
-}
-
-/** Fixed two decimals for labels (locale independent). */
-std::string fixed2(double value)
-{
-    const auto hundredths = static_cast<long long>(std::llround(std::max(0.0, value) * 100.0));
-    std::string fraction = std::to_string(hundredths % 100);
-    if (fraction.size() < 2)
-        fraction.insert(0, 1, '0');
-    return std::to_string(hundredths / 100) + "." + fraction;
-}
-
-std::string noteLabel(std::size_t index, std::optional<double> targetMidi, double startSec, double endSec)
-{
-    std::string name = "rest";
-    if (targetMidi && *targetMidi > 0.0) {
-        const int midi = static_cast<int>(std::lround(*targetMidi));
-        name = std::string(kPitchClassNames[((midi % 12) + 12) % 12]) + std::to_string(midi / 12 - 1);
-    }
-    return "#" + std::to_string(index) + " " + name + " " + fixed2(startSec) + "-" + fixed2(endSec) + "s";
 }
 
 /** The asOf of a read of one content, and the hash a cursor of that read carries. */
@@ -146,9 +123,9 @@ JsonValue noteJson(std::size_t index, const Note& note, const EditableContentSna
     const double targetMidi = midiOf(note.getAdjustedPitch(), tuningHz);
     const bool hasDetected = note.isVoiced && note.originalPitch > 0.0f;
     json.appendMember("index", JsonValue::integer(static_cast<std::int64_t>(index)));
-    json.appendMember(
-        "label", JsonValue::string(noteLabel(index, note.isVoiced ? std::optional<double>(targetMidi) : std::nullopt,
-                                             note.startTime, note.endTime)));
+    json.appendMember("label", JsonValue::string(controlNoteLabel(
+                                   index, note.isVoiced ? std::optional<double>(targetMidi) : std::nullopt,
+                                   note.startTime, note.endTime)));
     json.appendMember("startContentSec", controlJsonSeconds(std::max(0.0, note.startTime)));
     json.appendMember("endContentSec", controlJsonSeconds(std::max(0.0, note.endTime)));
     JsonValue startTimeline;

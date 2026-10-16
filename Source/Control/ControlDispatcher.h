@@ -78,6 +78,9 @@ public:
         /** The jobs of the instance (job.get, job.cancel and the methods that start jobs); stopped by
             ControlService::stop() before the listener. */
         std::shared_ptr<ControlJobs> jobs;
+        /** What the instance knows about OpenTune's undo history (edit.*, and every write that records an
+            undo entry); message thread only. */
+        std::shared_ptr<ControlHistory> history;
     };
 
     explicit ControlDispatcher(Setup setup);

@@ -304,6 +304,9 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ImportAfterOpen|--control-api"
             "ImportCancel|--control-api"
             "JobVectors|--control-api"
+            "BusyMatrix|--control-api"
+            "JobDisconnect|--control-api"
+            "ImportFailures|--control-api"
         )
         # export.start and the export lock (Tests/Control/ControlExportTests.cpp).
         list(APPEND _opentune_control_scenarios
@@ -311,6 +314,11 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ExportFailures|--control-api"
             "ExportVectors|--control-api"
             "ExportTimeStretch|--control-api"
+            "ExportAfterEdit|--control-api"
+            "ExportCancelOverwrite|--control-api"
+            "ExportDestroy|--control-api"
+            "ExportUnicodePath|--control-api"
+            "ExportDryReasons|--control-api"
         )
         # Undo and redo, key and AUTO, note edits and the pitch shift (Tests/Control/ControlEditTests.cpp).
         list(APPEND _opentune_control_scenarios
@@ -321,6 +329,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "EditMultiNoteRender|--control-api"
             "SetPitchShift|--control-api"
             "SnapNotes|--control-api"
+            "EditConflictRetry|--control-api"
+            "TokenAspects|--control-api"
             "EditCapability|--control-api"
             "EditVectors|--control-api"
         )
@@ -328,8 +338,10 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         list(APPEND _opentune_control_scenarios
             "Timing|--control-api"
             "TimeGridSeed|--control-api"
+            "TimingTokenAspects|--control-api"
             "TimingVectors|--control-api"
         )
+        set(_opentune_control_tests)
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
             string(REPLACE "|" ";" _opentune_control_scenario "${_opentune_control_scenario}")
             list(GET _opentune_control_scenario 0 _opentune_control_name)
@@ -350,6 +362,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             set_tests_properties(${_opentune_control_test} PROPERTIES
                 TIMEOUT 60
                 ENVIRONMENT "OPENTUNE_DATA_DIR=${_opentune_control_data};OPENTUNE_LIFECYCLE_TRACE_DIR=${_opentune_control_trace_dir}")
+            list(APPEND _opentune_control_tests ${_opentune_control_test})
         endforeach()
         # EditMultiNoteRender renders five blocks five times and exports: about 12 s on a Windows developer machine.
         # A sanitizer build runs 5 to 15 times slower (ASan/UBSan 2 to 3 times, TSan up to 15 times, on the slower
@@ -363,5 +376,12 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.ExportVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.EditVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.TimingVectors PROPERTIES TIMEOUT 300)
+        # Each scenario process gets its own test's TIMEOUT, from which its watchdog takes its bound (a margin before;
+        # ScenarioWatchdog in Tests/Control/ControlProcessorTests.cpp). Keep this after every TIMEOUT of the scenarios.
+        foreach(_opentune_control_test IN LISTS _opentune_control_tests)
+            get_test_property(${_opentune_control_test} TIMEOUT _opentune_control_timeout)
+            set_property(TEST ${_opentune_control_test} APPEND PROPERTY ENVIRONMENT
+                "OPENTUNE_SCENARIO_TIMEOUT_SEC=${_opentune_control_timeout}")
+        endforeach()
     endif()
 endif()

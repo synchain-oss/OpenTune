@@ -13,6 +13,7 @@
 #include "Inference/RenderCache.h"
 #include "PluginProcessor.h"
 #include "Render/ContentRenderService.h"
+#include "Runtime/ProcessRenderRuntime.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
@@ -134,9 +135,37 @@ inline bool settleBackgroundWork(OpenTuneAudioProcessor& processor, int timeoutM
     return idle && drained;
 }
 
+/**
+ * Takes one owner of OpenTune's process-wide render runtime (ProcessRenderRuntime::retainOwner) for the rest of the
+ * test process; startedProcessor() calls it before it constructs the first processor of a scenario.
+ *
+ * Why: the runtime shuts down whenever its last owner, a processor, goes away, and starts again with the next one.
+ * That shutdown (releaseOwner, shutdownLocked) waits on workerExitCv_ under shutdownMutex_ until the control worker
+ * has set workerExitDispatchAttempted_; the worker sets it and notifies without that mutex, so the notification can
+ * fall between the waiter's check and its wait and be lost, and the destruction of the processor then never returns.
+ * In the application the runtime starts once and shuts down at exit; a scenario that creates and destroys many
+ * processors (those of the vectors) took that chance at every processor, and the slower timing under a thread
+ * sanitizer makes the window wide enough to hit. With this owner the count never falls to zero between processors,
+ * so no shutdown runs. It is never released, so that the test process never takes that chance either: the runtime's
+ * control worker ends with the process.
+ *
+ * Only scenarios that start the control API take it: starting the runtime initialises OpenTune's logger (it logs
+ * when a model file is missing), and the scenarios that construct a processor without the API (Disabled and the
+ * others in ControlProcessorTests.cpp) check that nothing was initialised.
+ */
+inline void holdRenderRuntimeForProcess()
+{
+    static const bool held = [] {
+        ProcessRenderRuntime::getInstance().retainOwner();
+        return true;
+    }();
+    (void)held;
+}
+
 /** Constructs a processor with the API enabled and pumps messages until it listens. */
 inline std::unique_ptr<OpenTuneAudioProcessor> startedProcessor()
 {
+    holdRenderRuntimeForProcess();
     auto processor = std::make_unique<OpenTuneAudioProcessor>();
     auto& service = processor->getControlService();
     const auto started = Clock::now();
@@ -273,9 +302,11 @@ public:
             noteLateResponse(other);
         if (!response) {
             CONTROL_CHECK(response.has_value());
-            if (!sentOk)
+            if (!sentOk) {
+                // Nothing was sent, so no response will ever arrive for this id.
+                sent_.erase(id);
                 note(method + " (request " + std::to_string(id) + "): the request could not be sent");
-            else
+            } else
                 note(method + " (request " + std::to_string(id) + "): no response within "
                      + std::to_string(kReadTimeoutMs)
                      + " ms; the longest single message dispatch on this thread meanwhile took "
@@ -406,6 +437,15 @@ void scenarioImportAfterOpen();
 void scenarioImportCancel();
 /** The specification's vectors of job.get, job.cancel and import.start, against the real dispatcher. */
 void scenarioJobVectors();
+/** Every write method (import, export, key, AUTO in both modes, note edits, pitch shift, undo, redo, time-grid
+    edits) against every busy condition: BUSY with its reason, executed false, and nothing changed. */
+void scenarioBusyMatrix();
+/** A client closes its connection while its job.get waits: the waiter is gone, the job and a new connection are
+    fine, and destroying the processor afterwards is within the bound. */
+void scenarioJobDisconnect();
+/** An import whose pitch analysis fails keeps its clip and reports ANALYSIS_FAILED(f0_failed); audio that is too long
+    and files with too many channels fail alone with their reasons. */
+void scenarioImportFailures();
 
 // Scenarios of export.start and the export lock (ControlExportTests.cpp).
 
@@ -419,6 +459,21 @@ void scenarioExport();
 void scenarioExportFailures();
 /** The specification's vectors of export.start, against the real dispatcher. */
 void scenarioExportVectors();
+/** Edits through the API followed at once by an export, with the render of the new revision held back or published,
+    and versions that race with the export: the file is one whole version, or the job fails with
+    REVISION_CONFLICT, never a mix, a silent file or one listed as dry. */
+void scenarioExportAfterEdit();
+/** An export that would overwrite a file and is cancelled while it waits leaves the target as it was and releases
+    the lock. */
+void scenarioExportCancelOverwrite();
+/** An export job that waits, and one that writes, when the service stops: the export lock is released, no temporary
+    file is left and the stop is within the bound. */
+void scenarioExportDestroy();
+/** Import and export in a folder and a file named in Chinese with spaces: the paths round trip. */
+void scenarioExportUnicodePath();
+/** The reasons of dryContents: a content whose analysis found no voiced frame is listed as unvoiced, and a clip
+    imported and never edited, exported at once, as nothingToRender without waiting. */
+void scenarioExportDryReasons();
 /** An export of a clip whose time grid is not the identity waits until OpenTune rebuilt its time-stretch output
     at the current revisions, also when the job has to queue that rebuild itself, and never writes the clip silent. */
 void scenarioExportTimeStretch();
@@ -450,6 +505,12 @@ void scenarioSetPitchShift();
 /** content.autoTune mode snapNotes: the hand-computed snap of every note, ranges as selections, dryRun equal to
     the commit, one undo step for several ranges, the no-op of a second snap, clipKey. */
 void scenarioSnapNotes();
+/** BUSY(pointer_down), the pointer released, the user's edit, the retry with the old revision (REVISION_CONFLICT), a
+    fresh read and the write that then succeeds. */
+void scenarioEditConflictRetry();
+/** A key change leaves revision as it is: AUTO with an explicit key and the older revision succeeds, and clipKey
+    with the older key revision conflicts. */
+void scenarioTokenAspects();
 /** edit.v1 is reported, with all four of its methods registered; history.v1 as well. */
 void scenarioEditCapability();
 /** The specification's vectors of edit.*, content.setKey, content.autoTune, content.editNotes and
@@ -467,6 +528,8 @@ void scenarioTiming();
     left as it is, cancellation, and the failures of the checks the job makes again (content removed, busy, analysis
     not ready, analysis failed); a failed or cancelled job writes no handle. */
 void scenarioTimeGridSeed();
+/** A time-grid edit leaves revision as it is: a note edit by index with the revision from before it succeeds. */
+void scenarioTimingTokenAspects();
 /** The specification's vectors of content.shiftTiming and content.editTimeGrid, against the real dispatcher. */
 void scenarioTimingVectors();
 

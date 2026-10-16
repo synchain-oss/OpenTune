@@ -71,8 +71,7 @@ jobs:
     env:
       MCP_REPOSITORY: synchain-oss/opentune-mcp-server
       # 没有输入参数时（pull_request 触发）的默认值。
-      # 临时：MCP 侧保留数据目录的分支合入 feature/v1 前用它调试，合入后改回 feature/v1。
-      MCP_REF: ${{ inputs.mcp-ref || 'feat/X01m2-keep-data-dir' }}
+      MCP_REF: ${{ inputs.mcp-ref || 'feature/v1' }}
       CONTRACT_SCRIPT: ${{ inputs.contract-script || 'test:contract' }}
       SMOKE_SCRIPT: ${{ inputs.smoke-script || 'e2e:exe' }}
       # 契约向量里针对 exe 的那一组。
@@ -257,6 +256,25 @@ jobs:
           node $env:E2E_SCRIPT check-log --data-root $env:E2E_KEEP --models-dir $env:E2E_MODELS `
             --out-dir "$env:E2E_OUT\logs" --report "$env:E2E_OUT\log-report.json"
           if ($LASTEXITCODE -ne 0) { throw "log check failed" }
+
+      # 保留的各次启动数据目录（日志、首选项）：只复制文本文件（不含 control\instances 里带 token 的发现文件），随结果上传前再脱敏。
+      - name: Collect the kept data directories
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          $dst = Join-Path $env:E2E_OUT 'kept'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          $root = (Resolve-Path -LiteralPath $env:E2E_KEEP).Path.TrimEnd('\') + '\'
+          Get-ChildItem -LiteralPath $env:E2E_KEEP -Recurse -File -Force | Where-Object {
+            $rel = $_.FullName.Substring($root.Length)
+            $_.Length -lt 5MB -and $rel -notmatch '(^|\\)control(\\|$)' -and ($_.Extension -match '^\.(json|log|md|txt|xml|settings|ini|cfg|conf|properties|ya?ml)$' -or $_.Extension -eq '')
+          } | ForEach-Object {
+            $rel = $_.FullName.Substring($root.Length)
+            $to = Join-Path $dst $rel
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $to) | Out-Null
+            Copy-Item -LiteralPath $_.FullName -Destination $to
+          }
+          Get-ChildItem -LiteralPath $dst -Recurse -File | ForEach-Object { Write-Host "kept: $($_.FullName.Substring($dst.Length)) $($_.Length)" }
 
       - name: Summary (PASS / FAIL / SKIP / FLAKY-SKIP, backend, timings)
         id: summary

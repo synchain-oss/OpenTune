@@ -91,15 +91,18 @@ export function scrubPath(text) {
   return scrubLog(text).replace(/[A-Za-z]:[\\/]+Users[\\/]+<user>/gi, '<home>');
 }
 
-/** Redact every json / log / md / txt file under a directory in place, so the uploaded artifact carries no secrets. Returns the files visited. */
+/** Text files that are scrubbed: known text extensions, plus files without an extension (preferences). */
+const TEXT_FILE = /(\.(json|log|md|txt|xml|settings|ini|cfg|conf|properties|ya?ml)|^[^.]+)$/i;
+
+/** Redact every json / log / md / txt / preferences file under a directory in place, so the uploaded artifact carries no secrets. Returns the files visited. */
 export function scrubDir(dir) {
   const done = [];
   if (!fs.existsSync(dir)) return done;
   for (const e of fs.readdirSync(dir, { withFileTypes: true, recursive: true })) {
-    if (!e.isFile() || !/\.(json|log|md|txt)$/i.test(e.name)) continue;
+    if (!e.isFile() || !TEXT_FILE.test(e.name)) continue;
     const file = path.join(e.parentPath ?? e.path, e.name);
     const raw = fs.readFileSync(file, 'utf8');
-    const out = scrubLog(raw);
+    const out = scrubPath(raw);
     if (out !== raw) fs.writeFileSync(file, out);
     done.push(file);
   }

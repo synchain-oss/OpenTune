@@ -13,6 +13,7 @@
 //                                                             user names), copy them to --out-dir, assert that the
 //                                                             F0 model was loaded from --models-dir, record the backend
 //   scrub           --dir <dir>                               redact tokens, serverProof and user names in every json/log/md/txt file there
+//   has-scenario    --dir <dir> --scenario <name>             prints present or absent (exit 0 either way): is there a report of that scenario
 //   record          --file <json> --step <name> --seconds <n> append one step timing
 //   summary         --timings <json> [--contract <vitest json>] [--smoke <json>] [--scenarios-dir <dir>] [--log <report json>]
 //                   [--mcp-ref <ref>] [--out <md>]            PASS / FAIL / SKIP / FLAKY-SKIP table; exit 1 on any FAIL.
@@ -278,9 +279,21 @@ export function loadScenarioReports(dir, exclude = []) {
     } catch {
       continue; // other json files (timings, vitest report) have other shapes
     }
-    if (report && typeof report.schema === 'string' && report.schema.startsWith(SCENARIO_SCHEMA_PREFIX)) out.push({ scenario: report.scenario ?? path.basename(n, '.json'), report });
+    if (report && typeof report.schema === 'string' && report.schema.startsWith(SCENARIO_SCHEMA_PREFIX)) out.push({ scenario: report.scenario ?? path.basename(n, '.json'), report, file: n });
   }
   return out;
+}
+
+/**
+ * Whether the MCP runner wrote a report for the named scenario into dir: a scenario report (schema opentune-mcp-e2e-*)
+ * whose `scenario` is the name or whose schema starts with opentune-mcp-e2e-<name>, or a file called <name>.json.
+ */
+export function hasScenarioReport(dir, name) {
+  if (!dir || !name || !fs.existsSync(dir)) return false;
+  const byContent = loadScenarioReports(dir).some((x) => x.scenario === name || x.report.schema.startsWith(`${SCENARIO_SCHEMA_PREFIX}${name}`));
+  if (byContent) return true;
+  const full = path.join(dir, `${name}.json`);
+  return fs.existsSync(full) && fs.statSync(full).isFile();
 }
 
 /** *.log files directly in one directory. */
@@ -326,6 +339,7 @@ const CLI_SPEC = {
   'scenarios-dir': 'string',
   log: 'string',
   'mcp-ref': 'string',
+  scenario: 'string',
   out: 'string',
 };
 
@@ -380,6 +394,10 @@ function main(argv) {
       process.stdout.write(`scrubbed ${scrubDir(opts.dir).length} file(s)\n`);
       break;
     }
+    case 'has-scenario':
+      need('dir', 'scenario');
+      process.stdout.write(hasScenarioReport(opts.dir, opts.scenario) ? 'present\n' : 'absent\n');
+      break;
     case 'record': {
       need('file', 'step', 'seconds');
       const list = fs.existsSync(opts.file) ? readJson(opts.file) : [];
@@ -404,7 +422,7 @@ function main(argv) {
       break;
     }
     default:
-      usage('unknown command (check-installer | check-models | check-log | scrub | record | summary)');
+      usage('unknown command (check-installer | check-models | check-log | scrub | record | summary | has-scenario)');
   }
 }
 

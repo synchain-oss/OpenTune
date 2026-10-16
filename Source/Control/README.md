@@ -413,6 +413,14 @@ the piano roll:
   holds another number of notes, the changes cannot be described note by note: the call fails after the change
   (`INTERNAL`, `executed` true) and its undo entry stays. The SNAP of `content.autoTune` reports its changes the
   same way.
+- The commit also trims the end of a note that overlaps its successor (`normalizeStoredNotes()`). The note count does
+  not change and there is no error, so the write lists the trimmed note in `changes` with `startContentSec` and
+  `endContentSec` (unit `sec`, as `content.getNotes` reports them). A `dryRun` does not predict the trimming, and it
+  predicts a note without duration as stored although the commit drops it and fails with `INTERNAL`.
+- `content.autoTune` counts note indexes in `content.getNotes` order, whatever order the notes are stored in:
+  `removed[]`, `created[]` and the `index` of `DROPPED_BOUNDARY_NOTES` use the index of the note in the list before
+  and after the call respectively. Each pass of `snapNotes` with `ranges` picks its target notes by time on the notes
+  as they are at that pass, because the first commit stores them sorted.
 
 `content.autoTune` mode `snapNotes` (`Ops/ContentTuneOps.cpp`) is SNAP, the AUTO button in the openDyne scheme,
 ported in `controlPlanAutoSnap()`: each target note's `pitchOffset` becomes the scale's quantization of its base

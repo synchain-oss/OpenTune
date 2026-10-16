@@ -70,6 +70,10 @@ jobs:
       # 不一致时输出写明改了哪里、该跑什么（OpenTuneControlMirrorDriftTests --update，再 drift-pins.mjs --write）。
       # 是否阻塞由 drift-pins.mjs 的 decideEnforcement 判定（workflow 只传事件信息）：
       #   阻塞：push（dev、feature/control-api）；base 为 dev、review-base/**、sync/**；改了 .github/drift-pins/** 或 drift-pins.mjs 的 PR。
+      #   push 的范围是触发条件里的 dev 与 feature/**：可上游的镜像 PR 合入主支线后，主支线上这一步会一直红到 L0 跟进合入——有意为之，
+      #   作为提醒 manager 跟进的信号，不是故障。
+      #   后续：本步骤现在运行 PR 自带的 drift-pins.mjs（含 decideEnforcement），base 上还没有 --check 时只能这样自举；本 PR 合入后，
+      #   另开 L0 PR 把它挪进 delta-checks，改用 "$GATE/drift-pins.mjs"（并加入入口脚本检查列表），由 base 上的脚本判 PR。
       #   不阻塞：base 为 feature/** 且没改这些路径的子 PR——可上游的子 PR 不能改 .github/**，改了镜像也没法自己补清单；
       #   这时照样运行，不一致写进 job summary 并发 warning，由 manager 的 L0 跟进用 --write 补齐，step 结论为成功。
       - name: Mirror pins agree with mirror-map.json and MIRRORS.md

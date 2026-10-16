@@ -5,8 +5,10 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { describe, test } from 'node:test';
 import { makeTempDir, removeDir } from '../fork-lib.mjs';
+import { REPO_ROOT } from './helpers.mjs';
 import { checkWorkingTree, decideEnforcement, extractStatement, hashSymbol, parsePinFile, readMirrors, renderPinFiles, verifyConsistency } from '../drift-pins.mjs';
 
 describe('stmt-v1', () => {
@@ -162,7 +164,7 @@ describe('pin files, mirror-map.json and MIRRORS.md agree', () => {
   test('pin files with different pinned-at tags are reported', () => {
     const files = render();
     files.set('beta.txt', files.get('beta.txt').replace('upstream/20261008-addb4f4', 'upstream/20261001-1234567'));
-    assert.match(verify({ pinFiles: files }).join(' | '),/pinned-at 不一致/);
+    assert.match(verify({ pinFiles: files }).join(' | '), /pinned-at 不一致/);
   });
 });
 
@@ -186,5 +188,18 @@ describe('decideEnforcement: when a mismatch blocks', () => {
 
   test('a push blocks', () => {
     assert.equal(decideEnforcement({ event: 'push' }).blocking, true);
+  });
+});
+
+describe('drift-pins hash --normalization', () => {
+  const run = (...extra) => spawnSync(process.execPath, [path.join(REPO_ROOT, '.github', 'scripts', 'drift-pins.mjs'), 'hash', '--rev', 'HEAD', '--path', 'x', '--symbol', 'y', ...extra], { cwd: REPO_ROOT, encoding: 'utf8' });
+
+  test('a value that is not fn-v1 or stmt-v1 is a usage error (exit 2), not a silent fn-v1', () => {
+    for (const v of ['stmt-v2', 'fn-v2', 'FN-V1']) {
+      const r = run('--normalization', v);
+      assert.equal(r.status, 2, v);
+      assert.match(r.stderr, /--normalization 应为 fn-v1 或 stmt-v1/);
+    }
+    assert.doesNotMatch(run('--normalization', 'stmt-v1').stderr, /--normalization 应为/);
   });
 });

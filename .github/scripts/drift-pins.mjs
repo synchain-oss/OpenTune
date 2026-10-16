@@ -630,6 +630,10 @@ function main(argv) {
     process.stderr.write(`drift-pins: ${e.message}\n`);
     return 2;
   }
+  if (o.normalization && !NORMALIZATIONS.includes(o.normalization)) {
+    process.stderr.write(`drift-pins: --normalization 应为 ${NORMALIZATIONS.join(' 或 ')}，实际「${o.normalization}」\n`);
+    return 2;
+  }
   const top = repoTop(process.cwd());
   const rev = o.rev && tryResolveCommit(top, o.rev);
   if (!['check', 'hash'].includes(cmd) || !rev) {

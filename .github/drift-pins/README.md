@@ -25,8 +25,8 @@ fork 专用（L0），永不进入上游 PR。
 
 **不一致时是否阻塞**（判定函数是 `drift-pins.mjs` 里的 `decideEnforcement`，workflow 只传事件信息）：
 
-- 阻塞：push 到 `dev` 或 `feature/control-api`；base 为 `dev`、`review-base/**`、`sync/**` 的 PR；任何改到 `.github/drift-pins/**` 或 `.github/scripts/drift-pins.mjs` 的 PR；本地 `gates.ps1 -Layer L0`（FAIL）。
-- 不阻塞：base 为 `feature/**` 且没改上面这些路径的子 PR。可上游的子 PR 改了镜像却不能改 `.github/**`，自己补不了清单；这时 fork-gate 照样运行 `--check`，不一致写进 job summary 并发 `::warning::`，step 结论为成功，由 manager 的 L0 跟进用 `node .github/scripts/drift-pins.mjs --write` 补齐。本地 `gates.ps1` 的非 L0 层该行为 WARN，含义相同。
+- 阻塞：push 到 `dev` 或 `feature/control-api`；base 为 `dev`、`review-base/**`、`sync/**` 的 PR；任何改到 `.github/drift-pins/**` 或 `.github/scripts/drift-pins.mjs` 的 PR；本地 `gates.ps1` 在同一规则下判为 FAIL（它用 `git diff --name-only <base>...HEAD` 取改动文件，事件按 pull_request、base 取 lane 的基线分支，调用同一个 `decideEnforcement`，不再看 `-Layer`）。push 到 `feature/**` 也阻塞：可上游的镜像 PR 合入主支线后，主支线上的这一步会一直红到 L0 跟进合入，这是有意的提醒信号，不是故障。
+- 不阻塞：base 为 `feature/**` 且没改上面这些路径的子 PR。可上游的子 PR 改了镜像却不能改 `.github/**`，自己补不了清单；这时 fork-gate 照样运行 `--check`，不一致写进 job summary 并发 `::warning::`，step 结论为成功，由 manager 的 L0 跟进用 `node .github/scripts/drift-pins.mjs --write` 补齐。本地 `gates.ps1` 在同样情形下该行为 WARN，含义相同。
 
 ## 文件
 

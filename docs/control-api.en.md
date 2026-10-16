@@ -101,6 +101,12 @@ Until upstream merges the API, we plan to publish **unofficial test builds** as 
 
 No test build has been published yet.
 
+## First launch and the onboarding dialog
+
+On the very first launch with a fresh data directory, OpenTune shows a modal onboarding dialog that asks you to pick a workflow. While any modal dialog is open, the control API answers write operations with `BUSY(modal_open)`. This is normal upstream behaviour, not a defect: a real user answers the dialog once, and it does not appear again.
+
+The `e2e-windows` workflow starts OpenTune with a new data directory on every launch, so it pre-seeds a minimal preferences file that already marks first-time use as completed (`shared.onboardingShown`), through the `OTCP_TARGET_DATA_TEMPLATE` option of the MCP contract and smoke runners. It then asserts that the seeded value is present in every launch's data directory.
+
 ## Licensing
 
 - OpenTune is licensed under AGPL-3.0. This fork and all of our changes are also provided under AGPL-3.0, except the OTCP specification copy in `Tests/Control/spec/otcp/v1/`, which is MIT-licensed like its source. New source files we add carry `SPDX-License-Identifier: AGPL-3.0-or-later`.

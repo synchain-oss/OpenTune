@@ -21,6 +21,9 @@ name: E2E Windows
 #   冒烟：`npm run e2e:exe`，读取 OTCP_TARGET_EXE（及 OTCP_TARGET_ARGS、OTCP_TARGET_TIMEOUT_MS、OTCP_E2E_STEP_TIMEOUT_MS），
 #         把 {"result","counts":{PASS,FAIL,SKIP,FLAKY-SKIP},"steps":[{"name","result","ms","note"}]} 写到绝对路径 OTCP_E2E_REPORT。
 # 结果统计把 PASS / FAIL / SKIP / FLAKY-SKIP 分开计数（名字含 FLAKY-SKIP 的跳过项计入 FLAKY-SKIP）。
+# 首次引导：真实用户首次启动 OpenTune 时要回答一次首次引导对话框（选工作流程），对话框开着时接口的写操作得 BUSY(modal_open)。
+# 本 workflow 每次启动都用新的数据目录，所以契约与冒烟之前预置一个「已完成首次使用」的首选项模板
+# （shared.onboardingShown=1，经 OTCP_TARGET_DATA_TEMPLATE 在每次启动前复制进数据目录），并断言模板生效。
 # 任何 workflow 一律不用 pull_request 的 target 变体（CLAUDE.md §0 第 4 条）。
 on:
   # 加标签触发：在 PR 上打 `e2e-windows` 标签即运行；之后每次推送（synchronize）在标签仍在时重跑。没有输入参数，
@@ -96,6 +99,7 @@ jobs:
             "E2E_OFFICIAL=$work\official"
             "E2E_DATA=$work\data"
             "E2E_KEEP=$work\kept"
+            "E2E_TEMPLATE=$work\template"
             "E2E_DIAG=$work\out\diag"
             "E2E_DIAG_SCRIPT=$env:GITHUB_WORKSPACE\.github\scripts\e2e-diag.ps1"
             "E2E_OUT=$work\out"
@@ -193,6 +197,21 @@ jobs:
             node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'npm ci' --seconds $sw.Elapsed.TotalSeconds
           }
 
+      # 首次引导模板：每次启动前由 MCP 运行器把它的内容复制进这次启动的数据目录。文件名与位置同 AppPreferences 的默认值
+      # （数据目录顶层的 app-preferences.settings，JUCE PropertiesFile 的 XML 格式），只写一个键，其余取默认值。
+      - name: Seed the onboarding-completed preferences template
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:E2E_TEMPLATE | Out-Null
+          $xml = @'
+          <?xml version="1.0" encoding="UTF-8"?>
+
+          <PROPERTIES>
+            <VALUE name="shared.onboardingShown" val="1"/>
+          </PROPERTIES>
+          '@
+          [IO.File]::WriteAllText((Join-Path $env:E2E_TEMPLATE 'app-preferences.settings'), (($xml -replace "`r`n", "`n").TrimEnd() + "`n"), [Text.UTF8Encoding]::new($false))
+          Get-Content -Raw -LiteralPath (Join-Path $env:E2E_TEMPLATE 'app-preferences.settings') | Write-Host
+
       # 诊断（不绕过任何对话框）：契约与冒烟运行期间，每 15 秒记录一次桌面截图与 OpenTune 顶层窗口标题与类名。
       - name: Diagnostics sampler (screenshots and top-level windows) in the background
         run: |
@@ -209,6 +228,7 @@ jobs:
           OTCP_TARGET_EXE: ${{ env.E2E_APP }}\OpenTune.exe
           OPENTUNE_DATA_DIR: ${{ env.E2E_DATA }}
           OTCP_TARGET_DATA_DIR: ${{ env.E2E_KEEP }}
+          OTCP_TARGET_DATA_TEMPLATE: ${{ env.E2E_TEMPLATE }}
         run: |
           $sw = [Diagnostics.Stopwatch]::StartNew()
           try {
@@ -226,6 +246,7 @@ jobs:
           OTCP_TARGET_EXE: ${{ env.E2E_APP }}\OpenTune.exe
           OPENTUNE_DATA_DIR: ${{ env.E2E_DATA }}
           OTCP_TARGET_DATA_DIR: ${{ env.E2E_KEEP }}
+          OTCP_TARGET_DATA_TEMPLATE: ${{ env.E2E_TEMPLATE }}
           OTCP_E2E_REPORT: ${{ env.E2E_OUT }}\smoke.json
         run: |
           $sw = [Diagnostics.Stopwatch]::StartNew()
@@ -276,6 +297,19 @@ jobs:
           }
           Get-ChildItem -LiteralPath $dst -Recurse -File | ForEach-Object { Write-Host "kept: $($_.FullName.Substring($dst.Length)) $($_.Length)" }
 
+      # 证明模板生效：每次启动的数据目录里 app-preferences.settings 的 shared.onboardingShown 必须为 1。
+      - name: Assert the onboarding template took effect in every kept data directory
+        id: template
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          $files = @(Get-ChildItem -LiteralPath $env:E2E_KEEP -Recurse -File -Force -Filter 'app-preferences.settings' |
+            Where-Object { $_.FullName -notmatch '[\\/]control[\\/]' })
+          if ($files.Count -eq 0) { throw "onboarding template not applied: no app-preferences.settings in any kept data directory" }
+          $bad = @($files | Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -notmatch '<VALUE\s+name="shared\.onboardingShown"\s+val="1"' })
+          foreach ($f in $files) { Write-Host "preferences: $($f.FullName.Substring($env:E2E_KEEP.Length)) onboardingShown=$(if ($bad.FullName -contains $f.FullName) { 'missing or 0' } else { '1' })" }
+          if ($bad.Count) { throw "onboarding template did not take effect: shared.onboardingShown is not 1 in $($bad.Count) kept data directories" }
+
       - name: Summary (PASS / FAIL / SKIP / FLAKY-SKIP, backend, timings)
         id: summary
         if: ${{ !cancelled() }}
@@ -283,6 +317,7 @@ jobs:
           CONTRACT_OUTCOME: ${{ steps.contract.outcome }}
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
           LOG_OUTCOME: ${{ steps.logcheck.outcome }}
+          TEMPLATE_OUTCOME: ${{ steps.template.outcome }}
         run: |
           Write-Host "contract: $env:CONTRACT_OUTCOME; smoke: $env:SMOKE_OUTCOME; log check: $env:LOG_OUTCOME"
           node $env:E2E_SCRIPT summary --timings $env:E2E_TIMINGS --contract "$env:E2E_OUT\contract.json" `
@@ -291,6 +326,7 @@ jobs:
           $code = $LASTEXITCODE
           Copy-Item -LiteralPath $env:GITHUB_STEP_SUMMARY -Destination "$env:E2E_OUT\summary.md" -ErrorAction SilentlyContinue
           if ($code -ne 0) { throw "e2e-windows has failing or missing results" }
+          if ($env:TEMPLATE_OUTCOME -ne 'success') { throw "onboarding template did not take effect (shared.onboardingShown is not 1 in a kept data directory)" }
           if ($env:CONTRACT_OUTCOME -ne 'success' -or $env:SMOKE_OUTCOME -ne 'success') { throw "contract or smoke step did not succeed" }
 
       # 上传前对整个输出目录（契约报告、冒烟报告、日志、摘要）再脱敏一遍：vitest 的失败信息可能带请求或响应体。

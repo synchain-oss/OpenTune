@@ -459,6 +459,10 @@ Known OpenTune behaviours, reported as they are:
 - A pitch shift whose total cents equal the current ones (for example −1 semitone +50 cents and 0 semitones −50
   cents) is refused by `commitPitchShiftEdit()`; `content.setPitchShift` reports a no-op, as the dialog commits
   nothing.
+- The piano roll passes the Chinese undo texts of its AUTO entry and of the button's SNAP through `TRANS()`, whose
+  `juce::String(const char*)` reads the UTF-8 bytes as Latin-1, so OpenTune's own entries carry mojibake. The API
+  builds the same texts from UTF-8 (`content.autoTune` regenerate and snapNotes); `edit.getHistory` lists entries
+  made in the UI with OpenTune's text as it is.
 
 ## Readiness gate
 
@@ -627,6 +631,19 @@ Known OpenTune behaviours, reported as they are:
   fixed detail: the API never forwards OpenTune's texts.
 - The processor's export functions wait for every render work of the process (`drainRenderWorker`), not
   only for the exported contents.
+- With hybrid mode on (OpenTune's default), a render block whose corrected F0 stays within 75 cents of the
+  original on every voiced frame renders through the AutoTune cycle resampler instead of the vocoder
+  (`ProcessRenderRuntime`, `chunkNeedsVocoder()`). On sung vocals that path can leave such a block close to the
+  uncorrected audio although the block was rendered again at the current revision, so small corrections (an AUTO
+  pass, a shift of a few dozen cents) may be missing from the file in some blocks while others, past 75 cents,
+  follow their targets. The block is current, not old: the export writes it as rendered and reports `hybridMode`
+  true in `processing`; with hybrid mode off every block renders through the vocoder. When every note of a content
+  has retune speed 1, the cycle resampler locks onto the target without smoothing, so a period the detector gets
+  wrong goes straight into the block.
+- A second render request for a content at the same content revision, while blocks it covers are still pending,
+  drops those blocks from the render cache's pending set (`RenderCache::reconcileFullPlanAndRequest()` keeps a
+  pending block of an unchanged revision without queuing it again): they stay pending and are never rendered until
+  the content changes, and an export of the content waits until its limit.
 
 ## Time grid
 
@@ -868,7 +885,11 @@ content without a key); `EditNotes` a table of hand-computed ops (every op, sele
 several ops in one call, an exact tie of the snap, `targetMidi` 0 and the ops on a note without a base pitch), each
 checked for its prediction equal to its commit, its tokens
 equal to a fresh read, and undo and redo back to the exact states, through the API and through OpenTune's own
-`UndoManager`; then the checks before the change, the no-ops and the params; `SetPitchShift` that `revision` stays
+`UndoManager`; then the checks before the change, the no-ops and the params; `EditMultiNoteRender`, a scenario of its own for its render
+time, on a clip of sine bursts with one render block per note, that edits of several notes (one op over all, one op per note, AUTO regenerate, a shift
+after it, SNAP) leave every block of an edited note pending right after the commit and that the render and an
+export of the clip hold every burst at its new target (through the light pitch path, so without models); the undo
+descriptions of every edit are the UI's texts in clean UTF-8; `SetPitchShift` that `revision` stays
 while the `pitchShift` component changes (also after the undo, the redo, the user's Ctrl+Z and a shift in the UI's
 dialog), `KEY_NOT_TRANSPOSED`, the no-ops, the exact state after the undo, the undo of a shift after `notesOnly`
 (the shift goes back, the generated notes stay), an undo and a redo of such a shift that have nothing to set

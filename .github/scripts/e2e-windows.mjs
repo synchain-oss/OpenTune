@@ -5,8 +5,14 @@
 // e2e-windows helper: the checks and reports around the e2e-windows workflow, kept in one testable
 // place instead of inline workflow script.
 //
-//   check-installer --pin <json> --file <Setup.exe>          sha256 and size of the downloaded installer
+//   check-installer --pin <json> --file <Setup.exe> [--version <x.y.z>]
+//                                                             sha256 and size of the downloaded installer; --version picks
+//                                                             one of olderInstallers[] instead of the main installer
+//   models-dir      --pin <json> [--version <x.y.z>] [--app <install dir>]
+//                                                             print where that installer puts the models ({app}, %VAR% expanded)
 //   check-models    --pin <json> --dir <models dir>           every pinned model exists with the pinned sha256
+//                   (the ::error:: lines of these two show the first 12 hex digits of each hash: a full hash would
+//                   be redacted like a token, and both sides would read <redacted-hex>)
 //   check-log       (--log-dir <dir> | --data-root <dir>) --models-dir <dir> --out-dir <dir> --report <json>
 //                                                             --data-root: every *.log below it (one sub-directory per launch)
 //                                                             scrub the OpenTune logs (tokens, serverProof,
@@ -49,14 +55,43 @@ export function sha256File(file) {
   return hash.digest('hex');
 }
 
+/**
+ * First 12 hex digits of a hash, for problem lines: short enough to survive the hex redaction of scrubLog
+ * (32 digits and more), long enough to tell two hashes apart.
+ */
+export const hashPrefix = (hex) => `${String(hex).slice(0, 12)}...`;
+
+/**
+ * The pinned installer of a version: the main `installer` when no version is given or it matches,
+ * otherwise the entry of `olderInstallers[]` with that version; null when there is none.
+ */
+export function pinnedInstaller(pin, version) {
+  if (!version || pin.installer?.version === version) return pin.installer ?? null;
+  return (pin.olderInstallers ?? []).find((i) => i?.version === version) ?? null;
+}
+
+/**
+ * Where the pinned installer of a version puts the models: its own `modelsDir`, else the top-level one.
+ * `{app}` stands for the install folder (official 1.7.9 installs the models there; 1.8.1 uses the shared
+ * %ProgramData% folder), `%NAME%` for an environment variable. Null when the version is not pinned.
+ */
+export function pinnedModelsDir(pin, version, { appDir = '', env = process.env } = {}) {
+  const inst = pinnedInstaller(pin, version);
+  if (!inst) return null;
+  const raw = String(inst.modelsDir ?? pin.modelsDir ?? '');
+  return raw.replace(/\{app\}/gi, appDir.replace(/[\\/]+$/, '')).replace(/%([A-Za-z0-9_()]+)%/g, (m, name) => env[name] ?? m);
+}
+
 /** Problems (strings) with the installer file against the pin; empty when it matches. */
-export function checkInstaller(pin, file) {
+export function checkInstaller(pin, file, version) {
   const problems = [];
+  const inst = pinnedInstaller(pin, version);
+  if (!inst) return [`no pinned installer for version ${version}`];
   if (!fs.existsSync(file)) return [`installer not found: ${path.basename(file)}`];
   const size = fs.statSync(file).size;
-  if (pin.installer.size && size !== pin.installer.size) problems.push(`installer size ${size}, pinned ${pin.installer.size}`);
+  if (inst.size && size !== inst.size) problems.push(`installer size ${size}, pinned ${inst.size}`);
   const sha = sha256File(file);
-  if (sha !== pin.installer.sha256) problems.push(`installer sha256 ${sha}, pinned ${pin.installer.sha256}`);
+  if (sha !== inst.sha256) problems.push(`installer sha256 ${hashPrefix(sha)}, pinned ${hashPrefix(inst.sha256)}`);
   return problems;
 }
 
@@ -75,7 +110,7 @@ export function checkModels(pin, dir) {
       continue;
     }
     const sha = sha256File(file);
-    if (sha !== m.sha256) problems.push(`${m.path}: sha256 ${sha}, pinned ${m.sha256}`);
+    if (sha !== m.sha256) problems.push(`${m.path}: sha256 ${hashPrefix(sha)}, pinned ${hashPrefix(m.sha256)}`);
   }
   return problems;
 }
@@ -325,6 +360,8 @@ function usage(msg) {
 const CLI_SPEC = {
   pin: 'string',
   file: 'string',
+  version: 'string',
+  app: 'string',
   dir: 'string',
   'log-dir': 'string',
   'data-root': 'string',
@@ -362,8 +399,18 @@ function main(argv) {
   switch (cmd) {
     case 'check-installer':
       need('pin', 'file');
-      report(checkInstaller(readJson(opts.pin), opts.file), 'installer sha256 and size match the pin');
+      report(checkInstaller(readJson(opts.pin), opts.file, opts.version), 'installer sha256 and size match the pin');
       break;
+    case 'models-dir': {
+      need('pin');
+      const dir = pinnedModelsDir(readJson(opts.pin), opts.version, { appDir: opts.app ?? '' });
+      if (!dir) {
+        process.stdout.write(`::error::no pinned installer for version ${opts.version}\n`);
+        process.exit(1);
+      }
+      process.stdout.write(`${dir}\n`);
+      break;
+    }
     case 'check-models': {
       need('pin', 'dir');
       const pin = readJson(opts.pin);
@@ -422,7 +469,7 @@ function main(argv) {
       break;
     }
     default:
-      usage('unknown command (check-installer | check-models | check-log | scrub | record | summary | has-scenario)');
+      usage('unknown command (check-installer | models-dir | check-models | check-log | scrub | record | summary | has-scenario)');
   }
 }
 

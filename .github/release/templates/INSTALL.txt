@@ -18,8 +18,14 @@ you extract the package to.
   for all users of the computer, in the default location
   (C:\Program Files\OpenTune).
 - This package contains no model weights. This build uses the models of that
-  installation (C:\Program Files\OpenTune\models). Without it, pitch detection,
-  note generation and rendering do not work.
+  installation. The official installer puts them in the shared folder
+  C:\ProgramData\OpenTune\Models (OpenTune 1.8.1) or in
+  C:\Program Files\OpenTune\models (OpenTune 1.7.9). Without them, pitch
+  detection, note generation and rendering do not work.
+  OpenTune 1.7.9 must be installed in the default location: its models are
+  inside the installation folder, and this build cannot find them if you
+  install it elsewhere. OpenTune 1.8.1 may be installed elsewhere; then only
+  the folder in the D3D12 copy command in step 4 changes.
 
 
 2. Check the download
@@ -66,6 +72,8 @@ the CPU, which is slower.
   (DirectX 12 Agility SDK {{D3D12_AGILITY_VERSION}}, the version this build
   was made with). If it is different, delete the folder <folder>\D3D12 again;
   this build then runs on the CPU.
+- If official OpenTune is installed in another folder, replace
+  $env:ProgramFiles\OpenTune in the second command with that folder.
 - Copy only D3D12Core.dll. Do not copy D3D12SDKLayers.dll (a debugging layer).
 - If you use OpenTune MCP Server, its doctor command checks this copy and its
   hash.

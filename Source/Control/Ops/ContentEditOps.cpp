@@ -404,12 +404,11 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
     if (auto conflict = controlCheckExpectedTokens(versions, params.expectedRevision, params.expectedKeyRevision))
         return *conflict;
     const auto& snapshot = *ref.snapshot;
-    // clipKey on a content without a key: there is no key to snap to (as content.autoTune refuses it, without a
-    // reason, since the protocol has none for it).
+    // clipKey on a content without a key: there is no key to snap to (as content.autoTune refuses it).
     const bool usesClipKey =
         std::any_of(params.ops.begin(), params.ops.end(), [](const NoteOp& op) { return op.clipKey; });
     if (usesClipKey && snapshot.detectedKey.origin == Origin::Unset)
-        return controlOpError("INVALID_ARGUMENT", "",
+        return controlOpError("INVALID_ARGUMENT", "content_key_unset",
                               "key clipKey names the content's own key, but the content has no key; give the key "
                               "explicitly");
     // Note indexes count in start-time order, as content.getNotes counts them (controlNoteIndexOrder).

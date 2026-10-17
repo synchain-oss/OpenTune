@@ -147,6 +147,11 @@
       "code": "UNDO_HISTORY_POSSIBLY_STALE",
       "since": "1.0",
       "description": "Deleting a track made entries of the undo or redo history possibly stale: they were recorded before the deletion and may address tracks that have moved since. This code describes the whole history after a track deletion; UNDO_ENTRY_POSSIBLY_STALE describes one applied entry. data.undo and data.redo count the possibly stale entries."
+    },
+    {
+      "code": "IMPORT_COMMIT_REPEATED",
+      "since": "1.0",
+      "description": "OpenTune refused to commit an imported clip because the clip id it handed out was already used by a clip of the project (which can happen after a project was opened), so the import committed the clip again until it was accepted. The clip was imported; the same import from the OpenTune UI would have failed. subject: the imported placement; data.repeatCount: how many commits were repeated."
     }
   ]
 }

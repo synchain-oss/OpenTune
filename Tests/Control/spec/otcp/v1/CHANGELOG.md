@@ -2,6 +2,45 @@
 
 All notable changes to the OTCP specification are recorded here. Versions follow `MAJOR.MINOR.PATCH` (README.md, "Versions"); each released version is tagged `spec-v<version>`.
 
+## [1.0.0-rc.3] - unreleased
+
+Third release candidate of protocol major 1. It records what implementing the methods against OpenTune showed: where OpenTune behaves differently from what rc.2 assumed, which failures had no reason code, and where the specification left a choice open. The wire version stays `1.0`, and no member, code, capability or vector is removed or renamed. Three behaviours are tightened (listed under "Changed"): `timeGrid.minHandleSpacingSec` of `content.getDetails` is always present, deletions list the contents they remove, and an export without audio fails. Where the reference implementation does not send a new reason or warning yet, the text says that an implementation of this release candidate may leave it out.
+
+### Added
+
+- Registries: reason codes `content_key_unset` and `nothing_to_export` (`INVALID_ARGUMENT`), `export_dry_stretched`, `export_stretch_dropped` and `timing_analysis_timeout` (`NOT_READY`) and `timing_analysis_failed` (`ANALYSIS_FAILED`); warning code `IMPORT_COMMIT_REPEATED`. No error kind or capability is added.
+- `content.autoTune` (mode `reference`) and `content.analyzeReference`: the `referenceAnalysis` job repeats the checks of the call when it runs and fails with their errors, so `x-otcp.jobErrors` lists `INVALID_ARGUMENT`, `NOT_FOUND` and `NOT_READY`, and for `content.autoTune`, whose job writes, also `BUSY`.
+- `content.editTimeGrid`: the timeGridSeed job fails with `ANALYSIS_FAILED(timing_analysis_failed)` when OpenTune's timing analysis fails or finds no onset, and with `NOT_READY(timing_analysis_timeout)` when it does not finish within the job's wait limit; `x-otcp.jobErrors` adds `ANALYSIS_FAILED`.
+- PROTOCOL.md section 19 rule 6: a content whose time grid is not the identity is exported from time-stretched audio; the job waits for it, and ends early with `NOT_READY(export_dry_stretched)` or `NOT_READY(export_stretch_dropped)`. Rule 11 says which of the new reasons an implementation of this release candidate may still leave out.
+- `content.getDetails`: `timeGrid.nullReasons`, for a `minHandleSpacingSec` the server cannot determine.
+- `import.start`: the warning `IMPORT_COMMIT_REPEATED` when OpenTune refused a clip id that the project already used and the job committed the clip again.
+- Vectors `content/analyze-reference-job-failures` (the errors of the referenceAnalysis job) and `export/start-nothing-to-export`; `content/edit-time-grid-job-failures` shows the two new seed failures.
+
+### Changed
+
+- `content.getDetails`: `timeGrid.minHandleSpacingSec` is required; it is null, with `timeGrid.nullReasons.minHandleSpacingSec` `unavailable`, when the server cannot determine it. The vector `content/get-details-ok` expects it.
+- PROTOCOL.md section 14.4 rule 6: a content that leaves the project because a write removed the last clip that showed it is listed in `removed` (entity `content`), after the clips. The vectors `arrangement/edit-delete`, `track/delete-ok` and `edit/undo-content-removed-with-track` list it.
+- PROTOCOL.md section 19 rule 1: an export that would hold no audio (a track without clips, a master mix in which no clip is heard) fails at once with `INVALID_ARGUMENT(nothing_to_export)` instead of writing a file without audio.
+
+### Clarified
+
+- PROTOCOL.md section 8.2: a server rounds each kind of value alike in every result, so that a write reports what a later read returns; OpenTune's implementation rounds `Midi` and `Cents` values to 4 decimal places. `content.getNotes`: `detectedMidi` keeps its fraction.
+- PROTOCOL.md section 9: notes that start at the same time keep the order in which OpenTune stores them, and reads and write results count in this one order. Section 14.3: `after` in `changes` is read back from the committed state, never the requested value.
+- PROTOCOL.md section 10 rules 2 and 6, `content.getNotes` and `content.getPitchCurve`: the pitch shift moves `targetMidi`, `detectedMidi` and `correctedMidi` without changing `revision`, and the cursors of both reads are bound to the pitch shift.
+- PROTOCOL.md section 12.1, section 12.5 and `methods/README.md`: a job's result is defined by the method that started it, not by its kind; `content.analyzeReference` returns only jobs that it started; a reader that does not know the starting method accepts a result that is valid for one of the methods that start that kind.
+- PROTOCOL.md section 15.3 rule 8: a server MAY withdraw the `undoId` it assigned to an entry recorded in the UI when it can no longer confirm that entry, as after OpenTune's history (500 entries) dropped its oldest entry; a call that names a withdrawn `undoId` fails with `UNDO_CONFLICT(top_mismatch)`.
+- PROTOCOL.md section 15.3 rule 9: the rule that a change without an undo entry clears the redo history differs from the OpenTune UI, which keeps its redo history when the key is changed there; the rule stays for this release candidate.
+- PROTOCOL.md section 15.4 rule 7 (new): OpenTune shortens a note that overlaps the next one when it commits notes, which write results report and predictions do not show; it does not commit an edit of a note of zero duration, which is predicted but fails with `INTERNAL` when committed.
+- PROTOCOL.md section 19, "Hybrid mode" (informative), and the descriptions of `hybridMode` in `prefs.get`, `session.info` and `export.start`: with hybrid mode on, OpenTune renders small corrections with a pitch shift instead of the vocoder, so reported corrected pitch can differ from what is heard; the threshold is not part of the protocol.
+- PROTOCOL.md section 20.3 rule 4: a loaded media file on a volume that is not available makes every export fail with `IO_ERROR(read_failed)`.
+- PROTOCOL.md section 21 rule 1 and `content.getDetails`: an instance that does not report `reference.v1` reports `uiButtonRuns` `regenerate` even where OpenTune's AUTO button would run reference alignment because of a binding left on the clip; clients that describe the button check `reference.referencePlacementId` and the experimental features.
+- PROTOCOL.md section 21 rule 2 and `import.start`: two intended differences from the import of the OpenTune UI, in the `openDyne` scheme (notes only for the focused clip) and in layout `separateTracks` (files are appended after the last clip of their track, not placed at timeline 0).
+- `content.editNotes` and `content.autoTune`: `setTargetPitch` and `snapToScale` set the base pitch with `offsetCents` 0, while mode `snapNotes`, like OpenTune's own snap, keeps the base pitch, sets `offsetCents` and snaps from the base pitch alone; `clipKey` on a content without a key gives `INVALID_ARGUMENT(content_key_unset)`.
+- `content.editTimeGrid`: seeding a grid that already has handles still hands the work to a job, whose result is a no-op; the methods of `timing.v1` do not depend on OpenTune's experimental features, which its UI requires for the time tool.
+- `export.start`: the new reasons and the unavailable volume in the description.
+- `content.autoTune`: the order in which the reference job repeats its checks is not part of the contract.
+- vectors/README.md: `extraCapabilities`, like `capability`, is decided before `given`; a runner that cannot create a `noAccess` directory, which on Windows needs an access control list, skips the vector with that reason. `track/duplicate-target-occupied`: how OpenTune reaches a hidden track that holds clips.
+
 ## [1.0.0-rc.2] - unreleased
 
 Second release candidate of protocol major 1. It defines the schemas of the methods that 1.0.0-rc.1 listed as planned, so that every method of version 1 now has a normative schema, and it settles questions that 1.0.0-rc.1 left open. It adds to 1.0.0-rc.1; the behaviour changes listed under Clarified tighten two rc.1 behaviours (`import.start` with `newTrack` when every track holds clips, and section 15.3 rule 9): no member, code, capability or vector is removed or renamed, and the expectations of the existing vectors are unchanged. The one member that servers of 1.0.0-rc.1 must add is `contents` of the `export.start` job result; the entries under "Clarified" say where else their behaviour has to follow this version.

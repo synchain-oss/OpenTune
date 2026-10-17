@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "arrangement/edit-delete",
   "type": "request",
-  "description": "op delete, with confirm true, removes a clip. OpenTune cannot undo a delete (PROTOCOL.md section 15.4 rule 1), and no request can restore the clip: undo reason upstream_undo_defect, revert null, and the warnings UPSTREAM_UNDO_DEFECT and IRREVERSIBLE.",
+  "description": "op delete, with confirm true, removes a clip. No other clip shows its content, so the content leaves the project with it and is listed in removed after the clip (PROTOCOL.md section 14.4 rule 6). OpenTune cannot undo a delete (PROTOCOL.md section 15.4 rule 1), and no request can restore the clip: undo reason upstream_undo_defect, revert null, and the warnings UPSTREAM_UNDO_DEFECT and IRREVERSIBLE.",
   "capability": "arrangement.v1",
   "since": "1.0",
   "method": "arrangement.edit",
@@ -44,6 +44,11 @@
         {
           "entity": "placement",
           "ref": { "placementId": { "$ref": "clip.placementId" } },
+          "label": { "$any": true }
+        },
+        {
+          "entity": "content",
+          "ref": { "contentId": { "$ref": "clip.contentId" } },
           "label": { "$any": true }
         }
       ],

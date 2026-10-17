@@ -43,7 +43,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `Ops/OpsSupport.*` | What the operations share: parameter reader, handle resolution, the world revision vector and `asOf`, number and text output. |
 | `ControlJobs.*` | The jobs of the instance: registry, the tick that advances running jobs on the message thread, the long poll of `job.get`, cancellation, retention. |
 | `Ops/WriteEnvelope.*` | What every write shares: the busy checks, the dirty flag, revert recipes, the UI snapshot, `revisionDiff` and the write envelope builder. |
-| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*`, `Ops/ExportOps.*`, `Ops/UndoOps.*`, `Ops/ContentTuneOps.*`, `Ops/ContentEditOps.*`, `Ops/TimingOps.*` | The methods, one file per group (see "Method table"). |
+| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*`, `Ops/ExportOps.*`, `Ops/UndoOps.*`, `Ops/ContentTuneOps.*`, `Ops/ContentEditOps.*`, `Ops/TimingOps.*`, `Ops/ProjectOps.*` | The methods, one file per group (see "Method table"). |
 | `Edit/TimeGridOps.*` | The handle moves of OpenTune's time tool without the piano roll: the two passes of its limits, and the commit of a grid as the piano roll commits one (see "Time grid"). |
 | `Ops/EditSupport.*` | What the content edits and the undo steps share: params forms of tokens and keys, the readiness gate, the expected-token checks, note references, `reRenderQueued`, and the description of an undo step's effect from two snapshots. |
 | `Edit/ControlOriginAction.*` | The undo entry of a change made through the API (upstream undo actions wrapped with an `undoId`), and `ControlHistory`: undoIds, the API's entries, the undoIds of UI entries, changes without an undo entry. |
@@ -54,7 +54,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `ControlFileIdentity.*` | File identity (volume and file id, `st_dev` and `st_ino`), "same file" by identity, and the final rename that never replaces (PROTOCOL.md sections 20.3 and 20.4); standard library and operating system only. |
 | `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme, the processing object of `session.info` and `prefs.get`). |
 | `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
-| `../Standalone/ControlEditorBridge.*` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor; compiled into the application wrapper only. |
+| `../Standalone/ControlEditorBridge.*`, `../Standalone/ControlEditorBridgeProject.cpp` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor (the project flows in the second file); compiled into the application wrapper only. |
 
 The channel files (options to server) use only the standard library and the operating system; the
 unit tests (`Tests/Control/ControlUnitTests.cpp`) compile them on their own. The service files and every
@@ -515,8 +515,10 @@ an undo or redo (`afterUndoRedo()`), the refresh after a time-grid edit (`onTime
 `onTimeGridRevisionChanged()`, as its own commit of a grid does, and a redraw of the arrangement), the view (workspace,
 piano roll clip, selection, visible track count), the focus of an imported clip
 (`applyPlacementSelectionContext`), revealing tracks, the note generation parameters of the piano roll,
-the project session and its worker pool, and the audio device manager. Dialogs, tracks, project flows and
-preferences follow in files of their own. The headless tests use `Tests/Control/TestUiBridge.h`.
+the project session and its worker pool, and the audio device manager. The project flows are in
+`ControlEditorBridgeProject.cpp` (see "Project files"). Dialogs, tracks and preferences follow in files of their own.
+The headless tests use `Tests/Control/TestUiBridge.h`, which owns a real `ProjectSession` and a worker pool of one
+thread when a test asks for them.
 
 ## Import
 
@@ -745,6 +747,52 @@ Known OpenTune behaviours, reported as they are:
   `NOT_READY(timing_analysis_timeout)` after its wait limit, or when it is cancelled, and never seeds without the
   analysis. `TimeGridSeed` shows it.
 
+## Project files
+
+`project.save`, `project.saveAs`, `project.open` and `project.clearRecent` (`Ops/ProjectOps.cpp`, capability
+`project.io`, reported only because all four are registered). The project session and its worker pool belong to the
+editor (`ProjectSession` stays inside it, as the processor takes over no project state), so the methods reach them
+through `ControlUiBridge::projectSession()` and `projectWorkerPool()`; without an editor the save and open methods
+answer `UNSUPPORTED(capability_missing)`, and `project.clearRecent`, which is a preference, still works.
+
+The editor's own flows (`saveProject`, `startOpenProject`) show a dialog when they fail and have no way to report
+their end, so the jobs do not call them. They run the same steps on `ProjectSession`'s two-phase calls and hand the
+editor's UI steps to the bridge: `onProjectSaved()` (recent-projects menu and title), `onProjectReloaded()` (menu,
+title and `refreshAllUIFromProject()`), `onRecentProjectsChanged()` and `setProjectOperationRunning()`, the editor's
+`projectOperationBusy_` flag. The two editor functions are registered as mirrors (`project-save-flow`,
+`project-open-flow`).
+
+- **Save (`projectSave`, not cancellable).** The request takes the snapshot on the message thread
+  (`ProjectSession::prepareSave()`), a worker of the editor's pool writes the project and copies the media
+  (`ProjectSession::executeSaveToFile()`), but into a temporary file in the target directory. When the worker is done,
+  the job decides again, by file identity (PROTOCOL.md sections 20.2 rule 4 and 20.3 rule 5), whether the target is the
+  project's file, another existing file or none, and moves the temporary file into place with the final rename of
+  section 20.4: it replaces the target only for the project's own file or with `confirm`; otherwise a file that appeared
+  meanwhile ends the job with `INVALID_ARGUMENT(confirm_required)` and is not touched. Then, as the editor does, the
+  file becomes the project's file, the unsaved-changes flag is cleared unless the project changed meanwhile (dirty
+  generation), the file is pushed to the recent projects, and the editor updates its menu and title. The result is
+  never a no-op (`ControlWriteEnvelope::markEffective()`), carries `IRREVERSIBLE` (the file's earlier content cannot be
+  brought back), `OVERWROTE_OTHER_PROJECT` for another project file that was replaced, and `NOT_SAVED_IN_PROJECT`.
+- **Open (`projectOpen`, cancellable until the file is prepared).** A worker reads the project and its media
+  (`ProjectSession::prepareOpen()`); the job then commits it in one message-thread step
+  (`ProjectSession::commitPreparedOpen()`), which clears the content repository (a new content epoch: the handles of the
+  project before are stale), OpenTune's undo history and the render state. The request refuses with
+  `UNSAVED_CHANGES(project_dirty)` unless `discardUnsaved` is true; the job checks the flag once more right before the
+  commit (changes made while the file was prepared are not discarded unasked) and never saves. Tracks that hold clips
+  are shown. The result lists the previous clips and contents as removed and the new ones as created (at most 200
+  entries each, `omittedCount` counts the rest), what was restored and skipped (media files that do not exist or
+  cannot be read, with `MEDIA_MISSING` for the missing ones), and how many undo and redo entries were cleared. The
+  revert recipe opens the previous file again when the previous project had one and no unsaved changes.
+- **Busy.** A job sets the editor's project-operation flag for its whole run, so that the editor's file commands and
+  every other write answer `BUSY(project_operation)` meanwhile (the checks use `queryBusy()` as for every write).
+- **Recent projects.** `project.clearRecent` calls `AppPreferences::clearRecentProjects()`, which is what the editor's
+  command (`ProjectSession::clearRecentProjects()`) does on the same preferences.
+
+Tests: `Tests/Control/ControlProjectTests.cpp` (`ProjectRoundTrip`, `ProjectJobs`, `ProjectWithoutEditor`,
+`ProjectVectors`). `ProjectVectors` runs the specification's `project/*` vectors of `project.io` and requires an
+explicit list to pass; `project/get-ok` is a read and runs in `Vectors`, and `project/save-as-no-access` is skipped
+because the runner cannot make a file whose identity is unreadable on Windows.
+
 ## Dirty flag and revision tokens
 
 The dirty flag belongs to the editor's `ProjectSession`; without an editor it is false. Revision tokens
@@ -945,7 +993,7 @@ analysis with `allowDry`, an unvoiced one: `NOT_READY(export_dry_stretched)`), w
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
-`jobs.v1`, `import.v1`, `export.v1`, `edit.v1`, `history.v1` and `timing.v1`). The listener answers a method of an unreported capability itself with
+`jobs.v1`, `import.v1`, `export.v1`, `edit.v1`, `history.v1`, `timing.v1` and `project.io`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
@@ -985,3 +1033,7 @@ capabilities may be registered in more than one step.
 | `content.setPitchShift` | `edit.v1` | `Ops/ContentEditOps.cpp` (tokens: `Edit/PitchShiftLedger.cpp`) | `ControlProcessorTests.SetPitchShift`, `.EditVectors` | `methods/content.setPitchShift.schema.json` |
 | `content.shiftTiming` | `timing.v1` | `Ops/TimingOps.cpp` (moves in `Edit/TimeGridOps.cpp`) | `ControlProcessorTests.Timing`, `.TimingVectors` | `methods/content.shiftTiming.schema.json` |
 | `content.editTimeGrid` (ops `seed`, `moveHandles`) | `timing.v1` | `Ops/TimingOps.cpp` (moves in `Edit/TimeGridOps.cpp`) | `ControlProcessorTests.Timing`, `.TimeGridSeed`, `.TimingVectors` | `methods/content.editTimeGrid.schema.json` |
+| `project.save` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.save.schema.json` |
+| `project.saveAs` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.saveAs.schema.json` |
+| `project.open` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.open.schema.json` |
+| `project.clearRecent` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors`, `.ProjectWithoutEditor` | `methods/project.clearRecent.schema.json` |

@@ -83,8 +83,26 @@ public:
         Default: nothing. */
     virtual void onUndoRedoApplied() {}
 
-    /** A project was opened or the project was reloaded. Default: nothing. */
+    /** A project was opened or the project was reloaded: the editor does what it does after its own open (updates the
+        recent-projects menu and the title, refreshes the track panel, the arrangement, the piano roll and the
+        reference context from the new project). Default: nothing. */
     virtual void onProjectReloaded() {}
+
+    /** The project was saved to its file (project.save, project.saveAs): the editor does what it does after its own
+        save (updates the recent-projects menu and the window title). Default: nothing. */
+    virtual void onProjectSaved() {}
+
+    /** The list of recent projects changed through the control API (project.clearRecent): the editor refreshes its
+        recent-projects menu. Default: nothing. */
+    virtual void onRecentProjectsChanged() {}
+
+    // ---- Project operations ---------------------------------------------------------------------
+
+    /** Sets or clears the editor's own flag of a running project save or open, which the editor's file commands check
+        before they start (and answer with their "another project operation is running" message) and which
+        queryBusy() reports as BusyState::operationRunning. A project job of the control API sets it for its
+        whole run. Default: nothing. */
+    virtual void setProjectOperationRunning(bool /*running*/) {}
 
     /** The time grid of a content was changed through the control API (content.shiftTiming,
         content.editTimeGrid): the editor does what it does after its own time-grid edit (the piano roll takes

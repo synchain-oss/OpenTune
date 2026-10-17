@@ -533,5 +533,19 @@ void scenarioTimingTokenAspects();
 /** The specification's vectors of content.shiftTiming and content.editTimeGrid, against the real dispatcher. */
 void scenarioTimingVectors();
 
+// Scenarios of project files (ControlProjectTests.cpp).
+
+/** Save as, change, open the saved file again: notes equal, handles of the epoch before stale, flags, lists, the final
+    rename and the recent projects on the way. */
+void scenarioProjectRoundTrip();
+/** The checks before a job, busy, the cancellation rules, a target that appears while the job waits, changes made
+    while a file is prepared, a project that cannot be read. */
+void scenarioProjectJobs();
+/** Without an editor: the save and open methods say so, project.clearRecent works. */
+void scenarioProjectWithoutEditor();
+/** The specification's vectors of project.save, project.saveAs, project.open and project.clearRecent, against the
+    real dispatcher with a real project session and a worker pool. */
+void scenarioProjectVectors();
+
 } // namespace ControlTest
 } // namespace OpenTune

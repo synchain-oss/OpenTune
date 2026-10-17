@@ -586,6 +586,13 @@ private:
             "Track " + std::to_string(trackId + 1) + " " + labelSeconds(start) + "-" + labelSeconds(start + duration);
         auto placementRef = JsonValue::object();
         placementRef.appendMember("placementId", JsonValue::string(item.placementHandle));
+        if (attempt > 1) {
+            // The editor's import would have failed here: the result tells the client that the job committed the
+            // clip again (registry/warnings.json IMPORT_COMMIT_REPEATED).
+            auto data = JsonValue::object();
+            data.appendMember("repeatCount", JsonValue::integer(static_cast<std::int64_t>(attempt - 1)));
+            envelope_->addWarning("IMPORT_COMMIT_REPEATED", placementRef, std::move(data));
+        }
         envelope_->addCreated("placement", std::move(placementRef), JsonValue::string(label));
         auto contentRef = JsonValue::object();
         contentRef.appendMember("contentId", JsonValue::string(item.contentHandle));

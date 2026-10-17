@@ -860,10 +860,9 @@ Result<JsonValue> runAutoTune(ControlOpContext& context, const AutoTuneParams& p
         return runNotesOnly(context, params, ref, versions);
     // clipKey: the content's own key, guarded by expectedKeyRevision above. A content without a key
     // (content.getDetails reports key null) has none to use: the default value of DetectedKey would be
-    // snapped to and reported as keyUsed as if it were the content's key. The protocol has no reason code
-    // for this, so the error carries none.
+    // snapped to and reported as keyUsed as if it were the content's key.
     if (params.clipKey && ref.snapshot->detectedKey.origin == Origin::Unset)
-        return controlOpError("INVALID_ARGUMENT", "",
+        return controlOpError("INVALID_ARGUMENT", "content_key_unset",
                               "key clipKey names the content's own key, but the content has no key; give the key "
                               "explicitly");
     DetectedKey key = params.key.value_or(ref.snapshot->detectedKey);

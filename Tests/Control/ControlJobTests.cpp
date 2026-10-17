@@ -1069,6 +1069,21 @@ void scenarioImportAfterOpen()
     const auto& item = memberOf(memberOf(job, "result"), "items").at(0);
     CONTROL_CHECK(memberOf(item, "imported").asBoolean() && memberOf(item, "f0State").text() == "ready");
     CONTROL_CHECK(occurrences(logText(), "was repeated") == repeatedBefore + 1);
+    // The result carries the warning IMPORT_COMMIT_REPEATED for the placement, with the number of repeats.
+    {
+        const auto& warnings = memberOf(memberOf(job, "result"), "warnings");
+        std::size_t found = 0;
+        for (std::size_t i = 0; i < warnings.size(); ++i) {
+            const auto& warning = warnings.at(i);
+            if (memberOf(warning, "code").text() != "IMPORT_COMMIT_REPEATED")
+                continue;
+            ++found;
+            CONTROL_CHECK(memberOf(memberOf(warning, "subject"), "placementId").text()
+                          == memberOf(item, "placementId").text());
+            CONTROL_CHECK(memberOf(memberOf(warning, "data"), "repeatCount").asDouble() >= 1);
+        }
+        CONTROL_CHECK(found == 1);
+    }
     CONTROL_CHECK(controlImportCommitCopiesForTesting() > copiesBefore);
     const auto project = api.result("project.get");
     CONTROL_CHECK(memberOf(project, "placements").size() == 3 && memberOf(project, "contents").size() == 3);
@@ -1081,6 +1096,12 @@ void scenarioImportAfterOpen()
         importAndWait(api, R"({"items":[{"path":)" + quoted(take4) + R"(}],"layout":"single","trackId":3})");
     CONTROL_CHECK(memberOf(next, "state").text() == "succeeded");
     CONTROL_CHECK(memberOf(memberOf(memberOf(next, "result"), "items").at(0), "imported").asBoolean());
+    // Committed at once: no warning.
+    {
+        const auto& nextWarnings = memberOf(memberOf(next, "result"), "warnings");
+        for (std::size_t i = 0; i < nextWarnings.size(); ++i)
+            CONTROL_CHECK(memberOf(nextWarnings.at(i), "code").text() != "IMPORT_COMMIT_REPEATED");
+    }
     CONTROL_CHECK(controlImportCommitCopiesForTesting() == copiesAfter);
     CONTROL_CHECK(occurrences(logText(), "was repeated") == repeatedBefore + 1);
     CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 4);

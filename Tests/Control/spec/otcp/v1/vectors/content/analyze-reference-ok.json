@@ -1,0 +1,47 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/analyze-reference-ok",
+  "type": "request",
+  "description": "content.analyzeReference starts a job of kind referenceAnalysis that computes the alignment data of the clip's reference binding.",
+  "capability": "reference.v1",
+  "since": "1.0",
+  "method": "content.analyzeReference",
+  "session": "authenticated",
+  "given": {
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "referenceClip": "ref"
+      },
+      {
+        "bind": "ref",
+        "trackId": 1,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.analyzeReference",
+    "params": { "placementId": { "$ref": "clip.placementId" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "job": {
+        "jobId": { "$any": "string" },
+        "kind": "referenceAnalysis",
+        "state": { "$any": "string" }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

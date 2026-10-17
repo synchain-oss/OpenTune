@@ -1,0 +1,412 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: E2E Windows
+
+# 在 GitHub 的 Windows runner 上，用真实的 OpenTune Standalone 跑 MCP 仓库的契约向量与冒烟场景。
+# 永不设为必需检查：它只在「这次加的标签就是 `e2e-windows`」或「推送（synchronize）且 PR 带该标签」时运行（别的标签事件
+# 不运行；外部 fork 来的 PR 不自动跑），或由 workflow_dispatch 运行；结果只作参考与预览前的检查依据。
+#
+# 流程：
+#   1. build   经 workflow_call 调 build-windows.yml 的出包模式（Standalone Release、控制接口 ON、已删除
+#              POST_BUILD 生成的 models\ 并断言它不存在），得到 artifact opentune-windows-release-inputs。
+#   2. e2e     下载该 artifact 并再次断言没有 models\ 或 *.onnx；下载钉版的官方安装包（.github/e2e/official-install.json），
+#              核对 sha256 后静默安装到 runner 的临时目录（官方安装包只在 runner 上运行，绝不在开发机上运行）；
+#              核对官方模型目录里 fcpe / GAME 的 sha256；检出 MCP 仓库，npm ci，用 OTCP_TARGET_EXE 指向我们的构建，
+#              依次跑契约向量与冒烟场景；检查 OpenTune 日志里 F0 模型确实来自官方模型目录，并记录后端
+#              （CPU / DirectML）；上传每步耗时、结果摘要与脱敏日志。
+# 与 MCP 仓库的约定（见 inputs）：
+#   契约：`npm run test:contract -- -t "against the exe"`，读取 OTCP_TARGET_EXE；本 workflow 追加 vitest 的 json 报告参数。
+#   冒烟：`npm run e2e:exe`，读取 OTCP_TARGET_EXE（及 OTCP_TARGET_ARGS、OTCP_TARGET_TIMEOUT_MS、OTCP_E2E_STEP_TIMEOUT_MS），
+#         把 {"result","counts":{PASS,FAIL,SKIP,FLAKY-SKIP},"steps":[{"name","result","ms","note"}]} 写到绝对路径 OTCP_E2E_REPORT。
+# 结果统计把 PASS / FAIL / SKIP / FLAKY-SKIP 分开计数（名字含 FLAKY-SKIP 的跳过项计入 FLAKY-SKIP）。
+# 首次引导：真实用户首次启动 OpenTune 时要回答一次首次引导对话框（选工作流程），对话框开着时接口的写操作得 BUSY(modal_open)。
+# 本 workflow 每次启动都用新的数据目录，所以契约与冒烟之前预置一个「已完成首次使用」的首选项模板
+# （shared.onboardingShown=1，经 OTCP_TARGET_DATA_TEMPLATE 在每次启动前复制进数据目录），并断言模板已复制进每次启动的
+# 数据目录且未被改写。「程序确实读到了」由契约与冒烟里没有 BUSY(modal_open) 体现，不由这一步断言。
+# 效果场景（随冒烟一起运行）要验证「接口说改了什么，声音里就改了什么」，所以它在另一个模板（OTCP_E2E_EFFECTS_DATA_TEMPLATE）
+# 启动的实例上运行：该模板另外写入 shared.rendering.lightPitchCorrection=0（关闭混合模式）。原因：混合模式（真实用户默认开启）下，
+# 修正量小于 75 音分的渲染块走 DSP 移调路径而不是声码器（阈值 kPitchShiftThresholdCents = 75 音分，见 Source/Inference/ChunkRenderStrategy.h，
+# 上游原注释：DSP 移调在 75 音分内质量优于声码器）；实测在真实人声与谐波音上这类小修正几乎听不出。这是 OpenTune 自身行为（界面同样），
+# 用户可在首选项里关闭混合模式。契约与其他冒烟场景仍用默认（混合模式开启）的模板，与真实用户一致。
+# 对混合模式模板的核对只在效果场景确实运行过时才做（见模板断言一步）。
+# 任何 workflow 一律不用 pull_request 的 target 变体（CLAUDE.md §0 第 4 条）。
+on:
+  # 加标签触发：在 PR 上加上 `e2e-windows` 标签即运行（加别的标签不运行）；之后每次推送（synchronize）在标签仍在时重跑；
+  # 外部 fork 来的 PR 不自动跑。没有输入参数，
+  # MCP 仓库 ref 用默认值 feature/v1，脚本名用默认值。workflow_dispatch 只有在本文件合入默认分支（dev）之后才能用
+  # （gh workflow run 对只存在于非默认分支的 workflow 返回 404）。两者都不是必需检查。
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+    inputs:
+      mcp-ref:
+        description: 'synchain-oss/opentune-mcp-server 的分支、tag 或提交（默认 feature/v1）'
+        type: string
+        default: feature/v1
+      contract-script:
+        description: 'MCP 仓库里跑契约向量的 npm 脚本'
+        type: string
+        default: test:contract
+      smoke-script:
+        description: 'MCP 仓库里跑冒烟场景的 npm 脚本'
+        type: string
+        default: 'e2e:exe'
+
+permissions:
+  contents: read
+
+# 按 PR 分组，新运行取消旧运行。只有「会运行 job」的事件（与下面 job 的 if 同一条件）才进入 PR 分组；其他事件
+# （别的标签、外部 fork 的 PR）用按运行编号的独立分组，不会取消正在跑的那次。被调用的 build-windows 的并发分组含
+# 调用方的 workflow 名与 PR 号，只在本运行真正发起它时才存在。
+concurrency:
+  group: e2e-windows-${{ (github.event_name == 'pull_request' && (github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'e2e-windows') && (github.event.action != 'labeled' || github.event.label.name == 'e2e-windows')) && format('pr-{0}', github.event.pull_request.number)) || (github.event_name == 'pull_request' && format('ignored-{0}', github.run_id)) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build:
+    name: build (Standalone Release, no models)
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'e2e-windows') && (github.event.action != 'labeled' || github.event.label.name == 'e2e-windows')) }}
+    uses: ./.github/workflows/build-windows.yml
+    with:
+      release-package: true
+
+  e2e-windows:
+    name: e2e-windows
+    needs: build
+    if: ${{ github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'e2e-windows') && (github.event.action != 'labeled' || github.event.label.name == 'e2e-windows')) }}
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      MCP_REPOSITORY: synchain-oss/opentune-mcp-server
+      # 没有输入参数时（pull_request 触发）的默认值。
+      MCP_REF: ${{ inputs.mcp-ref || 'feature/v1' }}
+      CONTRACT_SCRIPT: ${{ inputs.contract-script || 'test:contract' }}
+      SMOKE_SCRIPT: ${{ inputs.smoke-script || 'e2e:exe' }}
+      # 契约向量里针对 exe 的那一组。
+      CONTRACT_FILTER: against the exe
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Set work paths
+        run: |
+          $work = Join-Path $env:RUNNER_TEMP 'ot-e2e'
+          New-Item -ItemType Directory -Force -Path $work | Out-Null
+          @(
+            "E2E_WORK=$work"
+            "E2E_APP=$work\app"
+            "E2E_OFFICIAL=$work\official"
+            "E2E_DATA=$work\data"
+            "E2E_KEEP=$work\kept"
+            "E2E_TEMPLATE=$work\template"
+            "E2E_TEMPLATE_EFFECTS=$work\template-effects"
+            "E2E_DIAG=$work\out\diag"
+            "E2E_DIAG_SCRIPT=$env:GITHUB_WORKSPACE\.github\scripts\e2e-diag.ps1"
+            "E2E_OUT=$work\out"
+            "E2E_TIMINGS=$work\out\timings.json"
+            "E2E_PIN=$env:GITHUB_WORKSPACE\.github\e2e\official-install.json"
+            "E2E_SCRIPT=$env:GITHUB_WORKSPACE\.github\scripts\e2e-windows.mjs"
+            "E2E_MODELS=$env:ProgramData\OpenTune\Models"
+          ) >> $env:GITHUB_ENV
+          New-Item -ItemType Directory -Force -Path "$work\out\logs", "$work\data", "$work\kept", "$work\out\diag" | Out-Null
+
+      - name: Download our Standalone build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: opentune-windows-release-inputs
+          path: ${{ runner.temp }}\ot-e2e\app-artifact
+
+      # 官方安装的 models\ 会被我们构建旁边的 models\ 遮住（模型解析先找自己目录）：build 已删除并断言，这里再断言一次。
+      - name: Assert our build has no models and no onnx files
+        run: |
+          $src = Join-Path $env:E2E_WORK 'app-artifact\app'
+          $exe = Join-Path $src 'OpenTune.exe'
+          if (-not (Test-Path -LiteralPath $exe -PathType Leaf)) { throw "OpenTune.exe missing from the build artifact" }
+          $bad = @(Get-ChildItem -LiteralPath (Join-Path $env:E2E_WORK 'app-artifact') -Recurse -Force |
+            Where-Object { ($_.PSIsContainer -and $_.Name -ieq 'models') -or $_.Name -like '*.onnx' })
+          if ($bad.Count) { throw "build artifact must not contain models: $(($bad | ForEach-Object { $_.FullName.Substring($env:E2E_WORK.Length) }) -join '; ')" }
+          Move-Item -LiteralPath $src -Destination $env:E2E_APP
+          Write-Host "our build: $(Get-ChildItem -LiteralPath $env:E2E_APP | ForEach-Object Name | Join-String -Separator ', '); no models\ and no onnx files"
+
+      # 启动合同：MCP 的 opentune_launch 要求 exe 旁边有协议主版本匹配的 opentune-control.json，否则 NO_API_BUILD 而不启动。
+      # 测试版 zip 里的这份文件由出包脚本生成；这里调用出包脚本的同一个函数（取值同 prerelease 的演练构建：CMake VERSION、
+      # 协议主版本、官方仓库与 D3D12 信息来自 release.json / build-info.json，tag 为空），写入前已校验，不合法即失败。
+      - name: Write opentune-control.json next to our OpenTune.exe (the release packaging function)
+        run: |
+          $date = (Get-Date).ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ssZ')
+          node .github/scripts/release-package.mjs control-json --inputs (Join-Path $env:E2E_WORK 'app-artifact') `
+            --out (Join-Path $env:E2E_APP 'opentune-control.json') --commit $env:GITHUB_SHA --date $date `
+            --repository $env:GITHUB_REPOSITORY --server-url $env:GITHUB_SERVER_URL
+          if ($LASTEXITCODE -ne 0) { throw "could not write a valid opentune-control.json" }
+          Copy-Item -LiteralPath (Join-Path $env:E2E_APP 'opentune-control.json') -Destination (Join-Path $env:E2E_OUT 'opentune-control.json')
+
+      - name: Download the pinned official installer (sha256 verified)
+        run: |
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          try {
+            $pin = Get-Content -Raw -LiteralPath $env:E2E_PIN | ConvertFrom-Json
+            $setup = Join-Path $env:E2E_WORK 'OpenTune-Setup.exe'
+            for ($i = 1; ; $i++) {
+              try { Invoke-WebRequest -Uri $pin.installer.url -OutFile $setup -UseBasicParsing; break }
+              catch { if ($i -ge 3) { throw }; Start-Sleep -Seconds (5 * $i) }
+            }
+            node $env:E2E_SCRIPT check-installer --pin $env:E2E_PIN --file $setup
+            if ($LASTEXITCODE -ne 0) { throw "installer does not match the pin" }
+            "E2E_SETUP=$setup" >> $env:GITHUB_ENV
+          } finally {
+            node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'download installer' --seconds $sw.Elapsed.TotalSeconds
+          }
+
+      # 官方安装包是 Inno Setup 程序：只在 runner 上静默安装（用 /DIR= 指到临时目录）。模型由安装程序放在共享的
+      # %ProgramData%\OpenTune\Models，而不是安装目录里。
+      # 安装包若在 /VERYSILENT 下仍启动程序（postinstall 没带 skipifsilent），它可能写真实的用户目录。覆盖 APPDATA 环境变量
+      # 对 JUCE 与 Inno 不起作用（二者经系统接口取已知文件夹，不读该变量），所以这里不覆盖；真正的保护是下一步：
+      # 结束官方程序并检查真实 %APPDATA%\OpenTune 不存在，否则失败。
+      - name: Install the official OpenTune silently
+        run: |
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          try {
+            $pin = Get-Content -Raw -LiteralPath $env:E2E_PIN | ConvertFrom-Json
+            $log = Join-Path $env:E2E_OUT 'official-install.log'
+            $setupArgs = @($pin.installer.silentArgs) + @("/DIR=$env:E2E_OFFICIAL", "/LOG=$log")
+            $p = Start-Process -FilePath $env:E2E_SETUP -ArgumentList $setupArgs -Wait -PassThru
+            if ($p.ExitCode -ne 0) { throw "official installer exited with $($p.ExitCode)" }
+            if (-not (Test-Path -LiteralPath (Join-Path $env:E2E_OFFICIAL 'OpenTune.exe'))) { throw "official OpenTune.exe not found after install" }
+          } finally {
+            node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'install official OpenTune' --seconds $sw.Elapsed.TotalSeconds
+          }
+      # 结束安装器可能启动的官方 OpenTune（只按进程路径认官方安装目录里的那个），并确认真实 %APPDATA%\OpenTune 没被写过。
+      - name: Stop any official OpenTune the installer started
+        run: |
+          $root = (Resolve-Path -LiteralPath $env:E2E_OFFICIAL).Path.TrimEnd('\') + '\'
+          $found = @(Get-Process -Name OpenTune -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path.StartsWith($root, [StringComparison]::OrdinalIgnoreCase) })
+          Write-Host "official OpenTune processes started by the installer: $($found.Count)"
+          $found | Stop-Process -Force -ErrorAction SilentlyContinue
+          $found | ForEach-Object { $_.WaitForExit(10000) | Out-Null }
+          $real = Join-Path ([Environment]::GetFolderPath('ApplicationData')) 'OpenTune'
+          if (Test-Path -LiteralPath $real) { throw "the real user data folder exists after the official install (it must stay untouched)" }
+      - name: Official models match the pinned sha256 (fcpe, GAME)
+        run: |
+          node $env:E2E_SCRIPT check-models --pin $env:E2E_PIN --dir $env:E2E_MODELS
+          if ($LASTEXITCODE -ne 0) { throw "official models do not match the pin" }
+
+      - name: Check out the MCP repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.MCP_REPOSITORY }}
+          ref: ${{ env.MCP_REF }}
+          path: ot-mcp
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+      - name: npm ci
+        working-directory: ot-mcp
+        run: |
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          try {
+            npm ci --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) { throw "npm ci failed ($LASTEXITCODE)" }
+          } finally {
+            node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'npm ci' --seconds $sw.Elapsed.TotalSeconds
+          }
+
+      # 首次引导模板：每次启动前由 MCP 运行器把它的内容复制进这次启动的数据目录。文件名与位置同 AppPreferences 的默认值
+      # （数据目录顶层的 app-preferences.settings，JUCE PropertiesFile 的 XML 格式），只写一个键，其余取默认值。
+      # 效果场景模板另加 shared.rendering.lightPitchCorrection=0（关闭混合模式；JUCE 把布尔值写作 0/1），其余同上。
+      - name: Seed the onboarding-completed preferences templates (default, and effects with hybrid mode off)
+        run: |
+          New-Item -ItemType Directory -Force -Path $env:E2E_TEMPLATE, $env:E2E_TEMPLATE_EFFECTS | Out-Null
+          $xml = @'
+          <?xml version="1.0" encoding="UTF-8"?>
+
+          <PROPERTIES>
+            <VALUE name="shared.onboardingShown" val="1"/>
+          </PROPERTIES>
+          '@
+          [IO.File]::WriteAllText((Join-Path $env:E2E_TEMPLATE 'app-preferences.settings'), (($xml -replace "`r`n", "`n").TrimEnd() + "`n"), [Text.UTF8Encoding]::new($false))
+          Get-Content -Raw -LiteralPath (Join-Path $env:E2E_TEMPLATE 'app-preferences.settings') | Write-Host
+          $xmlEffects = @'
+          <?xml version="1.0" encoding="UTF-8"?>
+
+          <PROPERTIES>
+            <VALUE name="shared.onboardingShown" val="1"/>
+            <VALUE name="shared.rendering.lightPitchCorrection" val="0"/>
+          </PROPERTIES>
+          '@
+          [IO.File]::WriteAllText((Join-Path $env:E2E_TEMPLATE_EFFECTS 'app-preferences.settings'), (($xmlEffects -replace "`r`n", "`n").TrimEnd() + "`n"), [Text.UTF8Encoding]::new($false))
+          Get-Content -Raw -LiteralPath (Join-Path $env:E2E_TEMPLATE_EFFECTS 'app-preferences.settings') | Write-Host
+
+      # 诊断（不绕过任何对话框）：契约与冒烟运行期间，每 15 秒记录一次桌面截图与 OpenTune 顶层窗口标题与类名。
+      - name: Diagnostics sampler (screenshots and top-level windows) in the background
+        run: |
+          Start-Process -FilePath pwsh -ArgumentList @('-NoProfile', '-File', $env:E2E_DIAG_SCRIPT, '-OutDir', $env:E2E_DIAG, '-Tag', 'during', '-Loop', '-IntervalSeconds', '15', '-StopFile', "$env:E2E_DIAG\stop") -WindowStyle Hidden
+
+      # 契约与冒烟各自 continue-on-error：两者都跑完、日志都检查完之后，由最后一步统一判定。
+      # 数据目录是临时的（OPENTUNE_DATA_DIR），不会碰 runner 上的任何真实用户目录。
+      - name: Contract vectors against our Standalone
+        id: contract
+        continue-on-error: true
+        timeout-minutes: 20
+        working-directory: ot-mcp
+        env:
+          OTCP_TARGET_EXE: ${{ env.E2E_APP }}\OpenTune.exe
+          OPENTUNE_DATA_DIR: ${{ env.E2E_DATA }}
+          OTCP_TARGET_DATA_DIR: ${{ env.E2E_KEEP }}
+          OTCP_TARGET_DATA_TEMPLATE: ${{ env.E2E_TEMPLATE }}
+        run: |
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          try {
+            npm run $env:CONTRACT_SCRIPT -- --reporter=default --reporter=json "--outputFile.json=$env:E2E_OUT\contract.json" -t $env:CONTRACT_FILTER
+            if ($LASTEXITCODE -ne 0) { throw "contract vectors failed ($LASTEXITCODE)" }
+          } finally {
+            node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'contract vectors' --seconds $sw.Elapsed.TotalSeconds
+          }
+      - name: Smoke scenario (hello, import, Ready, autoTune, export, effects)
+        id: smoke
+        continue-on-error: true
+        timeout-minutes: 20
+        working-directory: ot-mcp
+        env:
+          OTCP_TARGET_EXE: ${{ env.E2E_APP }}\OpenTune.exe
+          OPENTUNE_DATA_DIR: ${{ env.E2E_DATA }}
+          OTCP_TARGET_DATA_DIR: ${{ env.E2E_KEEP }}
+          OTCP_TARGET_DATA_TEMPLATE: ${{ env.E2E_TEMPLATE }}
+          OTCP_E2E_EFFECTS_DATA_TEMPLATE: ${{ env.E2E_TEMPLATE_EFFECTS }}
+          OTCP_E2E_REPORT: ${{ env.E2E_OUT }}\smoke.json
+        run: |
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          try {
+            npm run $env:SMOKE_SCRIPT
+            if ($LASTEXITCODE -ne 0) { throw "smoke scenario failed ($LASTEXITCODE)" }
+          } finally {
+            node $env:E2E_SCRIPT record --file $env:E2E_TIMINGS --step 'smoke scenario' --seconds $sw.Elapsed.TotalSeconds
+          }
+
+      - name: Diagnostics after the runs (screenshot and windows)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          New-Item -ItemType File -Force -Path "$env:E2E_DIAG\stop" | Out-Null
+          Start-Sleep -Seconds 2
+          & $env:E2E_DIAG_SCRIPT -OutDir $env:E2E_DIAG -Tag 'after'
+          # Screenshots are uploaded as they are (images cannot be scrubbed): keep only the newest few. The window lists
+          # are text; scrub them (user names in titles and paths) before anything is printed or uploaded.
+          node $env:E2E_SCRIPT prune-screenshots --dir $env:E2E_DIAG --keep 8
+          if ($LASTEXITCODE -ne 0) { Write-Host "::warning::pruning the screenshots failed (exit $LASTEXITCODE); the artifact may be larger than intended" }
+          node $env:E2E_SCRIPT scrub --dir $env:E2E_DIAG
+          if ($LASTEXITCODE -ne 0) { throw "scrubbing the diagnostics failed; not printing the window lists" }
+          Get-ChildItem -LiteralPath $env:E2E_DIAG | ForEach-Object { Write-Host "diag: $($_.Name) $($_.Length)" }
+          Get-ChildItem -LiteralPath $env:E2E_DIAG -Filter '*.windows.txt' | Select-Object -Last 2 | ForEach-Object { Write-Host "== $($_.Name)"; Get-Content -LiteralPath $_.FullName }
+
+      # F0 模型必须来自官方模型目录（日志里的 "Loaded F0 model (<后端>): <路径>"）；日志脱敏后才上传。
+      - name: Check the OpenTune log (models directory, backend) and scrub it
+        id: logcheck
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          Get-Process -Name OpenTune -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+          node $env:E2E_SCRIPT check-log --data-root $env:E2E_KEEP --models-dir $env:E2E_MODELS `
+            --out-dir "$env:E2E_OUT\logs" --report "$env:E2E_OUT\log-report.json"
+          if ($LASTEXITCODE -ne 0) { throw "log check failed" }
+
+      # 保留的各次启动数据目录（日志、首选项）：只复制文本文件（不含 control\instances 里带 token 的发现文件），随结果上传前再脱敏。
+      - name: Collect the kept data directories
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          $dst = Join-Path $env:E2E_OUT 'kept'
+          New-Item -ItemType Directory -Force -Path $dst | Out-Null
+          $root = (Resolve-Path -LiteralPath $env:E2E_KEEP).Path.TrimEnd('\') + '\'
+          Get-ChildItem -LiteralPath $env:E2E_KEEP -Recurse -File -Force | Where-Object {
+            $rel = $_.FullName.Substring($root.Length)
+            $_.Length -lt 5MB -and $rel -notmatch '(^|\\)control(\\|$)' -and ($_.Extension -match '^\.(json|log|md|txt|xml|settings|ini|cfg|conf|properties|ya?ml)$' -or $_.Extension -eq '')
+          } | ForEach-Object {
+            $rel = $_.FullName.Substring($root.Length)
+            $to = Join-Path $dst $rel
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $to) | Out-Null
+            Copy-Item -LiteralPath $_.FullName -Destination $to
+          }
+          Get-ChildItem -LiteralPath $dst -Recurse -File | ForEach-Object { Write-Host "kept: $($_.FullName.Substring($dst.Length)) $($_.Length)" }
+
+      # 断言模板已复制进每次启动的数据目录且未被改写：app-preferences.settings 的 shared.onboardingShown 必须为 1（程序是否读到它，看契约与冒烟里有无 BUSY(modal_open)）。
+      # 效果场景实际运行过（$env:E2E_OUT 下有 schema 以 opentune-mcp-e2e-effects 开头的报告，或 effects.json）时，另外要求至少有一个保留目录
+      # 含 shared.rendering.lightPitchCorrection 且为 0（效果场景的实例）；局限：无法区分哪个保留目录属于效果场景，所以只核对「至少一个」。
+      # 没有效果场景报告（MCP 侧尚无该场景）时跳过这项核对，不让 job 失败，Summary 里写明未核对。
+      # 失败原因写进步骤输出 reason：onboarding（有数据目录的 onboardingShown 不为 1）或 hybrid（效果场景的数据目录没有关闭混合模式）；
+      # 核对跳过时写 effects=skipped，Summary 据此输出准确的文字。
+      - name: Assert the preferences templates were applied (onboarding in every kept data directory; hybrid mode off for the effects scenario)
+        id: template
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          $files = @(Get-ChildItem -LiteralPath $env:E2E_KEEP -Recurse -File -Force -Filter 'app-preferences.settings' |
+            Where-Object { $_.FullName -notmatch '[\\/]control[\\/]' })
+          if ($files.Count -eq 0) { "reason=onboarding" >> $env:GITHUB_OUTPUT; throw "onboarding template not applied: no app-preferences.settings in any kept data directory" }
+          $bad = @($files | Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -notmatch '<VALUE\s+name="shared\.onboardingShown"\s+val="1"' })
+          foreach ($f in $files) { Write-Host "preferences: $($f.FullName.Substring($env:E2E_KEEP.Length)) onboardingShown=$(if ($bad.FullName -contains $f.FullName) { 'missing or 0' } else { '1' })" }
+          if ($bad.Count) { "reason=onboarding" >> $env:GITHUB_OUTPUT; throw "onboarding template was not copied unmodified: shared.onboardingShown is not 1 in $($bad.Count) kept data directories" }
+          # Fail closed: only an exit code 0 with the output "present" or "absent" is an answer. A script error must not
+          # be read as "effects scenario did not run".
+          $hasScenario = @(node $env:E2E_SCRIPT has-scenario --dir $env:E2E_OUT --scenario effects)
+          if ($LASTEXITCODE -ne 0) { "reason=hasscenario" >> $env:GITHUB_OUTPUT; throw "has-scenario failed (exit $LASTEXITCODE): cannot tell whether the effects scenario ran" }
+          if (($hasScenario -join '').Trim() -notin @('present', 'absent')) { "reason=hasscenario" >> $env:GITHUB_OUTPUT; throw "has-scenario printed an unexpected answer: $($hasScenario -join ' ')" }
+          $effectsRan = ($hasScenario -join '').Trim() -eq 'present'
+          if (-not $effectsRan) {
+            Write-Host "::warning::effects scenario did not run (no effects report in the output directory); hybrid-mode template not checked"
+            "effects=skipped" >> $env:GITHUB_OUTPUT
+          } else {
+            $hybridOff = @($files | Where-Object { (Get-Content -Raw -LiteralPath $_.FullName) -match '<VALUE\s+name="shared\.rendering\.lightPitchCorrection"\s+val="0"' })
+            Write-Host "kept data directories with lightPitchCorrection=0 (effects scenario): $($hybridOff.Count)"
+            if ($hybridOff.Count -eq 0) { "reason=hybrid" >> $env:GITHUB_OUTPUT; throw "effects scenario data directory did not turn hybrid mode off: no kept data directory has shared.rendering.lightPitchCorrection=0" }
+          }
+
+      - name: Summary (PASS / FAIL / SKIP / FLAKY-SKIP, backend, timings)
+        id: summary
+        if: ${{ !cancelled() }}
+        env:
+          CONTRACT_OUTCOME: ${{ steps.contract.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+          LOG_OUTCOME: ${{ steps.logcheck.outcome }}
+          TEMPLATE_OUTCOME: ${{ steps.template.outcome }}
+          TEMPLATE_REASON: ${{ steps.template.outputs.reason }}
+          TEMPLATE_EFFECTS: ${{ steps.template.outputs.effects }}
+        run: |
+          Write-Host "contract: $env:CONTRACT_OUTCOME; smoke: $env:SMOKE_OUTCOME; log check: $env:LOG_OUTCOME"
+          node $env:E2E_SCRIPT summary --timings $env:E2E_TIMINGS --contract "$env:E2E_OUT\contract.json" `
+            --smoke "$env:E2E_OUT\smoke.json" --scenarios-dir $env:E2E_OUT --log "$env:E2E_OUT\log-report.json" `
+            --mcp-ref $env:MCP_REF --out $env:GITHUB_STEP_SUMMARY
+          $code = $LASTEXITCODE
+          if ($env:TEMPLATE_EFFECTS -eq 'skipped') { Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value "`n效果场景未运行，未核对混合模式模板。`n" }
+          Copy-Item -LiteralPath $env:GITHUB_STEP_SUMMARY -Destination "$env:E2E_OUT\summary.md" -ErrorAction SilentlyContinue
+          if ($code -ne 0) { throw "e2e-windows has failing or missing results" }
+          if ($env:TEMPLATE_OUTCOME -ne 'success') {
+            if ($env:TEMPLATE_REASON -eq 'hasscenario') { throw "has-scenario failed, so it is unknown whether the effects scenario ran (fail closed); see the template step log" }
+            if ($env:TEMPLATE_REASON -eq 'hybrid') { throw "effects scenario data directory did not turn hybrid mode off (no kept data directory has shared.rendering.lightPitchCorrection=0); see the template step log" }
+            throw "onboarding template was not copied unmodified (shared.onboardingShown is not 1 in a kept data directory, or no preferences file was kept); see the template step log"
+          }
+          if ($env:CONTRACT_OUTCOME -ne 'success' -or $env:SMOKE_OUTCOME -ne 'success') { throw "contract or smoke step did not succeed" }
+
+      # 上传前对整个输出目录（契约报告、冒烟报告、日志、摘要）再脱敏一遍：vitest 的失败信息可能带请求或响应体。
+      - name: Scrub every file that will be uploaded
+        if: ${{ !cancelled() }}
+        run: node $env:E2E_SCRIPT scrub --dir $env:E2E_OUT
+
+      - name: Upload results (timings, contract and smoke reports, scrubbed logs)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-windows-results
+          path: ${{ env.E2E_OUT }}
+          if-no-files-found: warn
+          retention-days: 14

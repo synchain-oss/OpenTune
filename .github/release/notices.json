@@ -1,0 +1,152 @@
+{
+  "schema": 1,
+  "comment": "Catalogue for .github/scripts/release-notices.mjs, which writes THIRD-PARTY-NOTICES.txt of the unofficial Windows test build. A component is written only when its probe finds it in the build (compiled sources, include paths, data embedded in OpenTune.exe, files next to it, the ARA link check). Packages vendored inside JUCE come from JUCE.spdx.json; juceVendored.conditions excludes the ones whose code is switched off for the Standalone. redistribution 'unverified' keeps a component out of the notices and blocks a tagged release until its terms are confirmed (no component carries it at present). \"mustAppear\": true puts a component in the fail-closed class below although its terms ask for no license text. Fail closed: when the repository has a component (embedded files, or probe.repoFiles of a source / include probe) whose terms ask for something (unverified terms, license text, the GPL-3.0 appendix, \"mustAppear\": true) but its probe finds nothing in the build, the component is a release blocker too, unless the entry says \"absentOk\": \"<reason>\". See .github/release/README.md.",
+  "components": [
+    {
+      "id": "opentune",
+      "name": "OpenTune",
+      "license": "AGPL-3.0 (full text: LICENSE.txt in this package)",
+      "copyright": "DAYA STUDIO (YuFeng926) and contributors",
+      "url": "https://github.com/YuFeng926/OpenTune",
+      "usedIn": "OpenTune.exe",
+      "probe": { "kind": "always" },
+      "notes": [
+        "This build is a modified version of OpenTune: it adds a local control API (see MODIFICATIONS.md). The added code is licensed under AGPL-3.0-or-later.",
+        "OpenTune's own images and icons are part of OpenTune and covered by its license."
+      ]
+    },
+    {
+      "id": "juce",
+      "name": "JUCE",
+      "license": "AGPL-3.0-only. JUCE is dual-licensed (AGPLv3 or the commercial JUCE licence); this build uses it under the AGPLv3.",
+      "copyright": "Copyright (c) Raw Material Software Limited",
+      "url": "https://juce.com",
+      "usedIn": "OpenTune.exe (statically linked modules)",
+      "probe": { "kind": "juce" },
+      "licenseFiles": [{ "root": "juce", "path": "LICENSE.md" }]
+    },
+    {
+      "id": "juce-vendored",
+      "name": "Third-party code vendored inside JUCE",
+      "usedIn": "OpenTune.exe (compiled as part of the JUCE modules listed for each package)",
+      "probe": { "kind": "juce" }
+    },
+    {
+      "id": "soundtouch",
+      "name": "SoundTouch 2.3.3",
+      "license": "LGPL-2.1",
+      "copyright": "Copyright (c) Olli Parviainen",
+      "url": "https://www.surina.net/soundtouch/",
+      "usedIn": "OpenTune.exe (statically linked)",
+      "probe": { "kind": "source", "pattern": "/ThirdParty/soundtouch-[^/]+/", "repoFiles": "ThirdParty/soundtouch-2.3.3/source/SoundTouch/*.cpp" },
+      "licenseFiles": [{ "root": "repo", "path": "LICENSES/soundtouch.LGPL-2.1.txt" }],
+      "notes": [
+        "SoundTouch is linked statically. The complete corresponding source code of this build, including the build scripts, is published under the AGPL (see README-UNOFFICIAL.txt), so you can modify SoundTouch and rebuild OpenTune.exe with your version."
+      ]
+    },
+    {
+      "id": "r8brain",
+      "name": "r8brain-free-src",
+      "license": "MIT",
+      "url": "https://github.com/avaneev/r8brain-free-src",
+      "usedIn": "OpenTune.exe (header-only sample-rate converter)",
+      "probe": { "kind": "include", "pattern": "/ThirdParty/r8brain-free-src[^/]*$", "repoFiles": "ThirdParty/r8brain-free-src-master/*.h" },
+      "licenseFiles": [{ "root": "repo", "path": "ThirdParty/r8brain-free-src-master/LICENSE" }]
+    },
+    {
+      "id": "cursors",
+      "name": "Mouse cursor images (Adwaita, Capitaine, KDE Breeze cursor themes)",
+      "license": "LGPL-3.0 (with the GNU GPL v3, Appendix A)",
+      "usedIn": "OpenTune.exe (embedded images)",
+      "probe": { "kind": "embedded", "files": "Resources/UI/cursors/*.png" },
+      "licenseFiles": [{ "root": "repo", "path": "LICENSES/cursors.LGPL-3.0.txt" }],
+      "needsGpl3": true
+    },
+    {
+      "id": "piano-samples",
+      "name": "Piano samples (88 MP3 files for the piano-roll audition)",
+      "license": "CC0 / public domain, as stated in OpenTune's own third-party credits",
+      "usedIn": "OpenTune.exe (embedded audio data)",
+      "probe": { "kind": "embedded", "files": "Resources/PianoSamples-mp3/*.mp3" },
+      "notes": ["OpenTune's repository carries no separate license file for these samples."]
+    },
+    {
+      "id": "honor-sans",
+      "name": "HONOR Sans CN Medium (font)",
+      "license": "HONOR font license (commercial / personal use within OpenTune), as stated in OpenTune's own third-party credits",
+      "copyright": "Copyright (c) Honor Device Co., Ltd. Designed by Beijing Founder Electronics Co., Ltd.",
+      "usedIn": "OpenTune.exe (embedded user-interface font)",
+      "probe": { "kind": "embedded", "files": "Resources/Fonts/HONORSansCN-Medium.ttf" },
+      "mustAppear": true,
+      "notes": [
+        "The font is distributed unchanged inside OpenTune.exe, the same way official OpenTune releases distribute it. Apart from the sentence in OpenTune's credits quoted above, there is no separate license file for it."
+      ]
+    },
+    {
+      "id": "onnxruntime",
+      "name": "ONNX Runtime (DirectML build)",
+      "license": "MIT",
+      "copyright": "Copyright (c) Microsoft Corporation",
+      "url": "https://onnxruntime.ai",
+      "usedIn": "{{ORT_DLL}} (renamed onnxruntime.dll from the Microsoft.ML.OnnxRuntime.DirectML package)",
+      "probe": { "kind": "appFile", "pattern": "^OpenTuneOnnxRuntime_\\d+_\\d+_\\d+\\.dll$" },
+      "versionFromDep": "onnxruntime-dml-",
+      "licenseFiles": [
+        { "root": "dep", "dep": "onnxruntime-dml-", "path": "LICENSE" },
+        { "root": "dep", "dep": "onnxruntime-dml-", "path": "ThirdPartyNotices.txt", "optional": true }
+      ]
+    },
+    {
+      "id": "directml",
+      "name": "DirectML",
+      "license": "Microsoft Software License Terms for DirectML (full text: DirectML-LICENSE.txt in this package)",
+      "copyright": "Copyright (c) Microsoft Corporation",
+      "url": "https://www.nuget.org/packages/Microsoft.AI.DirectML",
+      "usedIn": "DirectML.dll (from the Microsoft.AI.DirectML package, unmodified)",
+      "probe": { "kind": "appFile", "pattern": "^DirectML\\.dll$" },
+      "versionFromDep": "microsoft.ai.directml.",
+      "licenseFiles": [{ "root": "dep", "dep": "microsoft.ai.directml.", "path": "ThirdPartyNotices.txt", "optional": true }]
+    },
+    {
+      "id": "ara-sdk",
+      "name": "ARA SDK (Celemony)",
+      "license": "Apache-2.0",
+      "url": "https://github.com/Celemony/ARA_SDK",
+      "usedIn": "OpenTune.exe",
+      "probe": { "kind": "ara" },
+      "licenseFiles": [
+        { "root": "repo", "path": "ThirdParty/ARA_SDK-releases-2.3.0/NOTICE.txt", "optional": true },
+        { "root": "repo", "path": "ThirdParty/ARA_SDK-releases-2.3.0/ARA_Library/LICENSE.txt", "optional": true },
+        { "root": "repo", "path": "ThirdParty/ARA_SDK-releases-2.3.0/ARA_API/LICENSE.txt", "optional": true }
+      ],
+      "requireOneLicenseFile": true
+    }
+  ],
+  "juceVendored": {
+    "conditions": {
+      "FLAC": { "anyMacro": [{ "name": "JUCE_USE_FLAC", "default": "1" }] },
+      "libogg": { "anyMacro": [{ "name": "JUCE_USE_OGGVORBIS", "default": "1" }, { "name": "JUCE_USE_OPUS", "default": "1" }] },
+      "libvorbis": { "anyMacro": [{ "name": "JUCE_USE_OGGVORBIS", "default": "1" }] },
+      "Opus": { "anyMacro": [{ "name": "JUCE_USE_OPUS", "default": "1" }] },
+      "opusfile": { "anyMacro": [{ "name": "JUCE_USE_OPUS", "default": "1" }] },
+      "libopusenc": { "anyMacro": [{ "name": "JUCE_USE_OPUS", "default": "1" }] },
+      "ASIO SDK": { "anyMacro": [{ "name": "JUCE_ASIO", "default": "0" }] },
+      "Oboe": { "never": "Android only" },
+      "AudioUnitSDK": { "never": "macOS / iOS only" },
+      "AAX SDK": { "anyMacro": [{ "name": "JucePlugin_Build_AAX", "default": "0" }] },
+      "VST3 SDK": { "anyMacro": [{ "name": "JucePlugin_Build_VST3", "default": "0" }, { "name": "JUCE_PLUGINHOST_VST3", "default": "0" }] },
+      "pslextensions": { "anyMacro": [{ "name": "JucePlugin_Build_VST3", "default": "0" }, { "name": "JUCE_PLUGINHOST_VST3", "default": "0" }] },
+      "LV2": { "anyMacro": [{ "name": "JucePlugin_Build_LV2", "default": "0" }, { "name": "JUCE_PLUGINHOST_LV2", "default": "0" }] },
+      "lilv": { "anyMacro": [{ "name": "JucePlugin_Build_LV2", "default": "0" }, { "name": "JUCE_PLUGINHOST_LV2", "default": "0" }] },
+      "serd": { "anyMacro": [{ "name": "JucePlugin_Build_LV2", "default": "0" }, { "name": "JUCE_PLUGINHOST_LV2", "default": "0" }] },
+      "sord": { "anyMacro": [{ "name": "JucePlugin_Build_LV2", "default": "0" }, { "name": "JUCE_PLUGINHOST_LV2", "default": "0" }] },
+      "sratom": { "anyMacro": [{ "name": "JucePlugin_Build_LV2", "default": "0" }, { "name": "JUCE_PLUGINHOST_LV2", "default": "0" }] },
+      "@juce-framework/webview": { "anyMacro": [{ "name": "JUCE_WEB_BROWSER", "default": "1" }] }
+    },
+    "extraText": {
+      "jpeglib": "This software is based in part on the work of the Independent JPEG Group.",
+      "ASIO SDK": "ASIO is a trademark and software of Steinberg Media Technologies GmbH. This build uses the ASIO SDK under the GNU General Public License v3 option (Appendix A)."
+    },
+    "needsGpl3": ["ASIO SDK"]
+  }
+}

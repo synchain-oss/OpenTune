@@ -899,8 +899,8 @@ void scenarioAutoTuneImpl()
                                    + R"(,"mode":"regenerate","expectedRevision":)" + jsonQuoted(f.revision())
                                    + R"(,"key":"clipKey","expectedKeyRevision":)" + jsonQuoted(f.keyRevision()) + "}"));
     CONTROL_CHECK(toJsonString(memberOf(withClipKey, "keyUsed")) == R"({"root":2,"scale":"major"})");
-    // clipKey on a content without a key: there is no key to use, so the call is refused (INVALID_ARGUMENT,
-    // without a reason: the protocol has none for it) and changes nothing.
+    // clipKey on a content without a key: there is no key to use, so the call is refused
+    // (INVALID_ARGUMENT(content_key_unset)) and changes nothing.
     {
         ClipSpec spec;
         spec.name = "keyless";
@@ -918,7 +918,7 @@ void scenarioAutoTuneImpl()
                                              + jsonQuoted(memberOf(tokens, "revision").text())
                                              + R"(,"key":"clipKey","expectedKeyRevision":)"
                                              + jsonQuoted(memberOf(tokens, "keyRevision").text()) + "}"),
-                                      "INVALID_ARGUMENT", ""));
+                                      "INVALID_ARGUMENT", "content_key_unset"));
             CONTROL_CHECK(VectorMatcher::equal(freshTokens(f.api, handles->contentId), tokens));
             CONTROL_CHECK(memberOf(f.history(), "undoCount").asDouble() == undoCount);
             // An explicit key works on the same content.
@@ -1271,7 +1271,7 @@ void checkNoteEditErrors(EditFixture& f)
                                    + ",\"expectedRevision\":" + jsonQuoted(memberOf(tokens, "revision").text())
                                    + ",\"expectedKeyRevision\":" + jsonQuoted(memberOf(tokens, "keyRevision").text())
                                    + R"(,"ops":[{"op":"snapToScale","select":{"all":true},"key":"clipKey"}]})"),
-                            "INVALID_ARGUMENT", ""));
+                            "INVALID_ARGUMENT", "content_key_unset"));
             CONTROL_CHECK(VectorMatcher::equal(freshTokens(f.api, noKey->contentId), tokens));
         }
     }

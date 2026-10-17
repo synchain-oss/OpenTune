@@ -21,6 +21,13 @@ namespace {
 
 /** How long a seed job waits for OpenTune's timing analysis of the content before it gives up. */
 constexpr int kSeedWaitLimitMs = 120000;
+
+/** The wait limit that the tests set (controlSetSeedWaitLimitForTesting); 0 for kSeedWaitLimitMs. */
+int& seedWaitLimitOverrideMs()
+{
+    static int milliseconds = 0;
+    return milliseconds;
+}
 /** moveHandles takes at most this many moves (methods/content.editTimeGrid.schema.json). */
 constexpr std::size_t kMaxMoves = 64;
 /** content.shiftTiming moves by at most this many seconds either way. */
@@ -434,12 +441,13 @@ public:
                 return;
             case OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus::InvalidContent:
             case OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus::AnalysisFailed:
-                step.fail(
-                    {"INTERNAL", "", "OpenTune's timing analysis of the content failed; no handle was placed", false});
+                step.fail({"ANALYSIS_FAILED", "timing_analysis_failed",
+                           "OpenTune's timing analysis of the content failed; no handle was placed", false});
                 return;
         }
         if (!ref.snapshot->referenceFeatures.hasTimingAnchors()) {
-            step.fail({"INTERNAL", "", "OpenTune's timing analysis found no onset to place a handle at", false});
+            step.fail({"ANALYSIS_FAILED", "timing_analysis_failed",
+                       "OpenTune's timing analysis found no onset to place a handle at", false});
             return;
         }
         seed(context, step, ref);
@@ -448,8 +456,9 @@ public:
 private:
     void wait(ControlJobStep& step)
     {
-        if (std::chrono::steady_clock::now() - started_ >= std::chrono::milliseconds(kSeedWaitLimitMs)) {
-            step.fail({"NOT_READY", "",
+        const int limitMs = seedWaitLimitOverrideMs() > 0 ? seedWaitLimitOverrideMs() : kSeedWaitLimitMs;
+        if (std::chrono::steady_clock::now() - started_ >= std::chrono::milliseconds(limitMs)) {
+            step.fail({"NOT_READY", "timing_analysis_timeout",
                        "OpenTune's timing analysis of the content did not finish within the wait limit", false});
             return;
         }
@@ -474,7 +483,8 @@ private:
         const auto after = controlLiveSnapshot(context, key_);
         if (!seeded || after == nullptr || !TimeGridOps::isSeeded(after->timeGrid.get())) {
             const bool changed = after != nullptr && after->timeGridRevision != gridBefore;
-            step.fail({"INTERNAL", "", "OpenTune placed no handle in the content's time grid", changed});
+            step.fail({"ANALYSIS_FAILED", "timing_analysis_failed",
+                       "OpenTune placed no handle in the content's time grid", changed});
             return;
         }
         // A change without an undo entry (PROTOCOL.md section 15.3 rule 9): earlier entries of the API no longer put
@@ -545,6 +555,11 @@ void registerTimingOps(ControlMethodTable& table)
 {
     table.add(controlWriteMethod<ShiftParams>("content.shiftTiming", parseShift, runShift));
     table.add(controlWriteMethod<EditGridParams>("content.editTimeGrid", parseEditGrid, runEditGrid));
+}
+
+void controlSetSeedWaitLimitForTesting(int milliseconds)
+{
+    seedWaitLimitOverrideMs() = milliseconds > 0 ? milliseconds : 0;
 }
 
 } // namespace OpenTune

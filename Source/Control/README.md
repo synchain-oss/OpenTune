@@ -386,7 +386,8 @@ the piano roll:
   same notes. `setTargetPitch` sets the target with no cent offset (the base pitch moves, `pitchOffset` becomes 0);
   `shiftCents` adds to `pitchOffset`, as the pitch move of the piano roll does; `snapToScale` sets the target to the
   nearest pitch of the key's scale, an exact tie going up (within the 1e-4 semitones the reads resolve), with no
-  cent offset; `setParams` sets the given note parameters. These are explicit ops: the snapping modes of the UI's
+  cent offset (`snapToScale` on a content without a key is `INVALID_ARGUMENT(content_key_unset)`, as is a
+  `clipKey` on such a content); `setParams` sets the given note parameters. These are explicit ops: the snapping modes of the UI's
   pitch drag (the active scale, the pitch grid, the whole-note preference) do not apply, so the editing scheme
   does not change what an op does.
 - Targets convert as OpenTune converts note pitches: the base pitch of a target is `PitchUtils::midiToFreq()`,
@@ -553,7 +554,8 @@ Known OpenTune behaviours, reported as they are:
 - After a project was opened, OpenTune gives a new clip an id that a clip of the project may already
   use, and the commit fails; each failed attempt uses up that id, so the import fails once per id in
   use. The job repeats the commit, at most once per clip whose id OpenTune can still hand out, and logs
-  it; the result carries no warning, because the protocol defines no warning code for it. The UI's
+  it; the result carries the warning `IMPORT_COMMIT_REPEATED` (subject: the placement, `data.repeatCount`:
+  the number of repeated commits). The UI's
   import fails in this situation. The commit consumes the prepared audio, so an attempt that may be
   repeated commits a copy; the job copies only when a project was opened (the content epoch is not 0)
   and a clip has an id above the highest one the instance's imports received since, and it never repeats
@@ -574,8 +576,8 @@ clip or track and stereo for the master mix.
 
 - Before the job, in this order: an export job that still runs with the same params (after defaults) is
   returned; handles; the busy state, with the export lock; the path's text (section 20.1) and its `.wav`
-  extension; that the export holds a clip with audio (`INVALID_ARGUMENT` without a reason otherwise: the
-  protocol has no reason for it, and OpenTune exports nothing then); the loaded media (below); that the
+  extension; that the export holds a clip with audio (`INVALID_ARGUMENT(nothing_to_export)` otherwise, not
+  retryable: OpenTune exports nothing then; the job returns the same when every clip is deleted while it waits); the loaded media (below); that the
   target's directory exists (`IO_ERROR(write_failed)`); with `ifExists` `error`, that no file exists at the
   target (`ALREADY_EXISTS(target_exists)`). Then the job takes the export lock until it ends.
 - Loaded media are the source files of every source OpenTune holds (`SourceStore`, active or retired,
@@ -613,12 +615,12 @@ clip or track and stereo for the master mix.
   (`ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled`). The worker can drop a rebuild (it gives up
   when the published playback source changed meanwhile), so once the worker has been idle for 0.5 s with still no
   current output, the job queues it again, at most 3 times for the same revisions
-  (`kControlExportMaxStretchRequests`), then fails with `NOT_READY` (no reason). The rebuild needs a settled render:
+  (`kControlExportMaxStretchRequests`), then fails with `NOT_READY(export_stretch_dropped)` (retryable). The rebuild needs a settled render:
   a content the job would export dry (failed or unvoiced analysis, nothing to render) whose grid is not the
   identity and that has no settled render has no audio OpenTune could put in the file, and waiting does not change
-  that, so the job ends at once: `ANALYSIS_FAILED(f0_failed)` for a failed analysis with `allowDry` (the failure of
-  rule 6 for a failed analysis; `allowDry` cannot help), otherwise `NOT_READY` without a reason (the protocol has
-  none for it). After 120 s: `NOT_READY(export_wait_timeout)`. A clip export whose clip is deleted meanwhile fails
+  that, so the job ends at once with `NOT_READY(export_dry_stretched)`, not retryable (it succeeds again once the
+  grid is the identity), whatever made the content dry (unvoiced, nothing to render, or a failed analysis with
+  `allowDry`; `allowDry` cannot help). After 120 s: `NOT_READY(export_wait_timeout)`. A clip export whose clip is deleted meanwhile fails
   with `REVISION_CONFLICT(changed_during_export)`.
 - In the tick that finds every content ready, the job records a token of the inputs (each clip's track,
   position, length, source window, gain and fades, its track's volume, and per content the revision, time
@@ -706,8 +708,9 @@ changes the content's `revision`.
   `ensureTimeToolAnchorSeed()` only once the analysis is ready, which then seeds at once. So a cancelled job
   leaves no deferred seeding behind. Every step checks that the content still exists (`NOT_FOUND
   (unknown_handle)`) and that its pitch analysis is still ready; the first step and the seeding step check
-  the busy state; an analysis that failed or found no onset ends the job with `INTERNAL`, as the time tool then
-  places no handle; after 120 s it ends with `NOT_READY`. A grid that has handles by then is left as it is
+  the busy state; an analysis that failed or found no onset (the time tool then places no handle) ends the job with
+  `ANALYSIS_FAILED(timing_analysis_failed)`; after 120 s it ends with `NOT_READY(timing_analysis_timeout)`
+  (retryable; the test seam `controlSetSeedWaitLimitForTesting` shortens the limit). A grid that has handles by then is left as it is
   (a no-op). Seeding has no undo entry, as in the UI (`ui_parity`, no revert recipe, `IRREVERSIBLE`); like
   every change without an undo entry it masks the grid in earlier entries of the API and clears the redo
   history (PROTOCOL.md section 15.3 rule 9). The seeded handles have output equal to content, so the content
@@ -741,7 +744,7 @@ Known OpenTune behaviours, reported as they are:
   time tool's seeding uses by default) per session: `ReferenceAnalysisService::workerLoop` moves its finished
   job out of `activeJob` with `std::move`, which leaves the optional engaged, so the worker never takes the next
   job. A later seed of another content, from the UI or the API, waits for an analysis that never finishes; the
-  seed job ends with `NOT_READY` after its wait limit, or when it is cancelled, and never seeds without the
+  seed job ends with `NOT_READY(timing_analysis_timeout)` after its wait limit, or when it is cancelled, and never seeds without the
   analysis. `TimeGridSeed` shows it.
 
 ## Dirty flag and revision tokens
@@ -897,7 +900,7 @@ since; `SetKey` the key aspect only, the revert recipe round trip, `key_changed`
 and the readiness gate; `AutoTune` the hand-computed removed and dropped notes, created notes inside the
 range and in key, several ranges as one step, `dryRun` (its `sideEffects` equal those of the commit, for
 `regenerate` and `notesOnly`), the params defaults and the checks before the change (also `clipKey` on a
-content without a key); `EditNotes` a table of hand-computed ops (every op, selections by index, range and all,
+content without a key: `INVALID_ARGUMENT(content_key_unset)`); `EditNotes` a table of hand-computed ops (every op, selections by index, range and all,
 several ops in one call, an exact tie of the snap, `targetMidi` 0 and the ops on a note without a base pitch), each
 checked for its prediction equal to its commit, its tokens
 equal to a fresh read, and undo and redo back to the exact states, through the API and through OpenTune's own
@@ -940,9 +943,9 @@ the pitch analysis running again, an analysis that failed or found no onset), wh
 `ControlExportTests.cpp` (`ExportTimeStretch`) exports a clip with a stretched grid while its time-stretch rebuild
 is held back (the job waits and writes nothing), one whose rebuild nothing had queued (the job queues it), and one
 whose rebuild the render worker drops (the job asks again); the files hold the stretched render, not silence. It
-also covers a job whose every rebuild is dropped (`NOT_READY` after `kControlExportMaxStretchRequests` requests)
-and contents to export dry with a stretched grid and no render (a failed analysis with `allowDry`:
-`ANALYSIS_FAILED(f0_failed)`; an unvoiced one: `NOT_READY`), which end at once without a file.
+also covers a job whose every rebuild is dropped (`NOT_READY(export_stretch_dropped)` after `kControlExportMaxStretchRequests` requests)
+and contents to export dry with a stretched grid and no render (a failed analysis with `allowDry`, an unvoiced one:
+`NOT_READY(export_dry_stretched)`), which end at once without a file.
 
 ## Capabilities and protocol versions
 

@@ -119,7 +119,10 @@
             "editingScheme": {
               "$ref": "../schemas/common.schema.json#/$defs/editingScheme"
             },
-            "hybridMode": { "type": "boolean" },
+            "hybridMode": {
+              "description": "Whether OpenTune's hybrid mode is on. With it on, OpenTune renders small corrections with a pitch shift of the audio instead of the vocoder, so the corrected pitch that results report can differ from what is heard (informative, PROTOCOL.md section 19, \"Hybrid mode\").",
+              "type": "boolean"
+            },
             "vocoderWeight": { "type": ["string", "null"], "maxLength": 64 },
             "f0Model": { "type": ["string", "null"], "maxLength": 64 },
             "renderingPriority": {

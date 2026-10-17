@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "content/get-details-ok",
   "type": "request",
-  "description": "content.getDetails of a clip with a key, a pitch shift of -2 semitones, a seeded time grid with two handles and a reference binding to the clip on track 1. Placement-dependent values are taken through the clip's only placement. Whether the AUTO button would run reference alignment depends on the instance's settings, so uiButtonRuns is matched by type.",
+  "description": "content.getDetails of a clip with a key, a pitch shift of -2 semitones, a seeded time grid with two handles and a reference binding to the clip on track 1. Placement-dependent values are taken through the clip's only placement. Whether the AUTO button would run reference alignment depends on the instance's settings, so uiButtonRuns is matched by type. The minimum handle spacing is implementation-defined, so it is matched by type as well.",
   "capability": "read.v1",
   "since": "1.0",
   "method": "content.getDetails",
@@ -90,7 +90,8 @@
             "contentSec": { "$approx": 2.5 },
             "outputSec": { "$approx": 2.5 }
           }
-        ]
+        ],
+        "minHandleSpacingSec": { "$any": "number" }
       },
       "reference": {
         "referencePlacementId": { "$ref": "ref.placementId" },

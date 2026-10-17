@@ -566,6 +566,42 @@
       "scope": "IO_ERROR",
       "since": "1.0",
       "description": "The audio device could not be opened with the requested setup. The previous setup was restored, unless executed is true."
+    },
+    {
+      "code": "content_key_unset",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "key clipKey names the content's own key, but the content has none yet (content.getDetails reports key null), so there is no key to snap to. Used by content.autoTune and by op snapToScale of content.editNotes. Not retryable: the same request fails until the content has a key; giving the key explicitly works at once."
+    },
+    {
+      "code": "nothing_to_export",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The export would hold no audio: a track export of a track without clips, or a master export in which no clip is heard. An export job whose clips were all removed while it waited ends with it too. Not retryable."
+    },
+    {
+      "code": "export_dry_stretched",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "description": "A content of the export would be exported uncorrected (PROTOCOL.md section 19 rule 6), but its time grid is not the identity, and OpenTune builds time-stretched audio only from a render, so there is no audio of that content for the file. The job ends at once instead of waiting. Not retryable: the same export fails again until the content's time grid is the identity again or the content has a render."
+    },
+    {
+      "code": "export_stretch_dropped",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "description": "The time-stretched audio of a content whose time grid is not the identity was asked for repeatedly while the export waited and was still not built at the content's current state. Retryable: a new export asks for it again."
+    },
+    {
+      "code": "timing_analysis_failed",
+      "scope": "ANALYSIS_FAILED",
+      "since": "1.0",
+      "description": "OpenTune's timing analysis of the content, from which a seed of the time grid places its handles, failed or found no onset to place a handle at, so no handle was placed. Not retryable."
+    },
+    {
+      "code": "timing_analysis_timeout",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "description": "OpenTune's timing analysis of the content did not finish within the wait limit of the timeGridSeed job, so no handle was placed. Retryable: a new seed waits for the analysis again."
     }
   ]
 }

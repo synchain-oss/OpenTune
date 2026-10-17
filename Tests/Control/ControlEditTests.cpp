@@ -1398,10 +1398,10 @@ int multiNoteRenderBudgetMs()
 {
     constexpr int kDefaultBudgetMs = 270000;
     constexpr long long kMarginMs = 30000;
-    const auto value = controlSystemEnvironment("OPENTUNE_SCENARIO_TIMEOUT_SEC");
-    if (!value || value->empty() || value->size() > 6 || value->find_first_not_of("0123456789") != std::string::npos)
+    const auto timeoutSeconds = scenarioTimeoutSeconds();
+    if (!timeoutSeconds)
         return kDefaultBudgetMs;
-    const long long budgetMs = std::stoll(*value) * 1000 - kMarginMs;
+    const long long budgetMs = *timeoutSeconds * 1000 - kMarginMs;
     return budgetMs > 0 ? static_cast<int>(budgetMs) : kDefaultBudgetMs;
 }
 /** One wait of the export job, shorter than the 5 s a client reads a response; the loop asks again while it runs. */
@@ -1858,7 +1858,8 @@ void checkNoteNumberingOnUnsortedNotes(EditFixture& f)
             const auto notes = notesNow(f);
             CONTROL_CHECK(notes.size() == 4
                           && std::abs(memberOf(notes.at(0), "endContentSec").asDouble() - 1.2) < 1e-6);
-            memberOf(f.undo(memberOf(memberOf(applied, "undo"), "undoId").text()), "applied");
+            CONTROL_CHECK(
+                memberOf(f.undo(memberOf(memberOf(applied, "undo"), "undoId").text()), "applied").asBoolean());
         }
     }
     storeNotesAsGiven(f, initial.notes);

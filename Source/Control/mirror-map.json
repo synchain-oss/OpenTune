@@ -583,6 +583,58 @@
       "noteZh": "最近工程菜单会去掉已不存在的文件；prefs.get 改为带 exists 标志列出。"
     },
     {
+      "id": "project-save-flow",
+      "group": "project",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::saveProject",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "4ea61b6bab0047adba000438b8d8ddc033a8994a014809bb1db2d32af7a9ae23"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ProjectOps.cpp",
+          "symbols": [
+            "SaveJob::step",
+            "startSave"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.ProjectRoundTrip",
+        "ControlProcessorTests.ProjectVectors"
+      ],
+      "note": "What the editor does around a save: the snapshot on the message thread, the write on the project worker, then the new project file, the flag cleared unless the project changed meanwhile, the recent project and the menu and title. The API writes through a temporary file and a final rename, and reports failures instead of showing a dialog.",
+      "noteZh": "编辑器保存时的步骤：消息线程取快照、工程 worker 写盘，之后设置新的工程文件、在工程期间没有再改动时清除脏标记、推入最近工程并更新菜单与标题。接口经临时文件和最终改名写入，失败时报告错误而不弹对话框。"
+    },
+    {
+      "id": "project-open-flow",
+      "group": "project",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::startOpenProject",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "c7b6e4598b1f6e64bd706f7677641ac91b5403e06f3be8c2a54b156fc15b4b48"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ProjectOps.cpp",
+          "symbols": [
+            "OpenJob::step",
+            "OpenJob::commit"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.ProjectRoundTrip",
+        "ControlProcessorTests.ProjectVectors"
+      ],
+      "note": "What the editor does to open a project: the worker reads and prepares the file, the message thread commits it in one step and refreshes every part of the UI. The API reports a failure instead of showing a dialog, and the editor's step that clears the recent projects after a failed open is not repeated.",
+      "noteZh": "编辑器打开工程的步骤：worker 读取并预处理文件，消息线程一次提交并刷新界面各处。接口把失败作为错误报告而不弹对话框，打开失败后清空最近工程的那一步不照做。"
+    },
+    {
       "id": "notes-correction-state",
       "group": "notes",
       "upstream": {

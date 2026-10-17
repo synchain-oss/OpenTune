@@ -334,7 +334,7 @@ JsonValue ControlWriteEnvelope::build(ControlOpContext& context, State state, Js
     const auto after = controlCaptureWorldVersions(context);
     // A side effect is a change as well: a write that only had side effects is no no-op.
     const bool recorded = changes_.size() != 0 || created_.size() != 0 || removed_.size() != 0 || idMap_.size() != 0
-                          || sideEffects_.size() != 0;
+                          || sideEffects_.size() != 0 || effective_;
     JsonValue diff = state == State::Predicted
                          ? emptyDiff()
                          : controlRevisionDiff(before_, after, limitDiff_ ? &touchedContents_ : nullptr);

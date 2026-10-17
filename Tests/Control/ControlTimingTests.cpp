@@ -19,12 +19,14 @@
 #include "Control/Edit/TimeGridOps.h"
 #include "Control/Ops/OpsRegistry.h"
 #include "Control/Ops/OpsSupport.h"
+#include "Control/Ops/TimingOps.h"
 #include "PluginProcessor.h"
 #include "Utils/TimeGrid.h"
 
 #include <algorithm>
 #include <cmath>
 #include <map>
+#include <optional>
 #include <set>
 
 namespace OpenTune {
@@ -36,6 +38,8 @@ namespace {
 constexpr int kVectorExchangeMs = 60000;
 /** How long a scenario waits for a job to reach a state. */
 constexpr int kJobStateTimeoutMs = 20000;
+/** The wait limit of a seed job in the scenario that lets it run out. */
+constexpr int kSeedTestWaitLimitMs = 600;
 /** Tolerance of hand-computed output times. */
 constexpr double kOutputTolerance = 1e-9;
 /** Tolerance of output times read back from results, which round seconds to 6 decimals. */
@@ -791,11 +795,13 @@ void scenarioTimeGridSeedFailuresImpl()
         CONTROL_CHECK(memberOf(memberOf(f.jobOf(jobId), "progress"), "phase").text() == "analysing");
         return jobId;
     };
-    const auto failedWith = [&f](const std::string& jobId, const std::string& kind, const std::string& reason) {
+    const auto failedWith = [&f](const std::string& jobId, const std::string& kind, const std::string& reason,
+                               std::optional<bool> retryable = std::nullopt) {
         const auto job = f.jobOnceTerminal(jobId);
         const auto& data = memberOf(memberOf(job, "error"), "data");
         const bool ok = memberOf(job, "state").text() == "failed" && memberOf(data, "kind").text() == kind
                         && memberOf(data, "reason").text() == reason && memberOf(data, "executed").isBoolean()
+                        && (!retryable || memberOf(data, "retryable").asBoolean() == *retryable)
                         && !memberOf(data, "executed").asBoolean();
         if (!ok)
             note("expected a job failed with " + kind + "(" + reason + "), got " + toJsonString(job));
@@ -841,15 +847,30 @@ void scenarioTimeGridSeedFailuresImpl()
         CONTROL_CHECK(failedWith(jobId, "NOT_FOUND", "unknown_handle"));
     }
 
-    // The timing analysis failed, or found no onset: OpenTune places no handle (INTERNAL).
+    // The timing analysis failed, or found no onset: OpenTune places no handle (ANALYSIS_FAILED(timing_analysis_failed),
+    // not retryable).
     for (const auto status : {ReferenceFeatureStatus::Failed, ReferenceFeatureStatus::Ready}) {
         const bool failed = status == ReferenceFeatureStatus::Failed;
         const auto clip = f.add(gridSpec(failed ? "noAnalysis" : "noOnset", false, failed ? 4 : 5));
         if (!CONTROL_CHECK(clip.has_value()))
             continue;
         CONTROL_CHECK(setTimingFeatures(*f.processor, clip->first.key, status, {}));
-        CONTROL_CHECK(failedWith(f.startSeed(clip->second), "INTERNAL", ""));
+        CONTROL_CHECK(failedWith(f.startSeed(clip->second), "ANALYSIS_FAILED", "timing_analysis_failed", false));
         CONTROL_CHECK(innerOf(*f.processor, clip->first.key).empty());
+    }
+
+    // The analysis does not finish within the job's wait limit: NOT_READY(timing_analysis_timeout), retryable. The
+    // limit is shortened for the jobs started after it.
+    {
+        const auto slow = f.add(gridSpec("slow", false, 7));
+        if (CONTROL_CHECK(slow.has_value())) {
+            controlSetSeedWaitLimitForTesting(kSeedTestWaitLimitMs);
+            CONTROL_CHECK(setTimingFeatures(*f.processor, slow->first.key, ReferenceFeatureStatus::Extracting, {}));
+            const auto jobId = f.startSeed(slow->second);
+            CONTROL_CHECK(failedWith(jobId, "NOT_READY", "timing_analysis_timeout", true));
+            controlSetSeedWaitLimitForTesting(0);
+            CONTROL_CHECK(innerOf(*f.processor, slow->first.key).empty());
+        }
     }
 
     // The checks of the call itself start no job: the readiness gate and the busy state.

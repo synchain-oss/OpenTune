@@ -675,7 +675,7 @@ private:
             case Stretch::GaveUp: {
                 Readiness failed;
                 failed.state = Readiness::State::Fail;
-                failed.error = {"NOT_READY", "",
+                failed.error = {"NOT_READY", "export_stretch_dropped",
                                 "the time-stretch rebuild of a content of the export was asked for "
                                     + std::to_string(kControlExportMaxStretchRequests) + " times and did not complete",
                                 false};
@@ -689,25 +689,18 @@ private:
      * A content that section 19 rule 6 exports uncorrected (dry), whose time grid is not the identity and that has no
      * render to stretch (classify, Stretch::NoRender): OpenTune builds the stretched audio only from a settled render
      * (ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled), so it has no uncorrected audio of the content
-     * for the file, and waiting does not change that. The job ends at once instead of at the wait limit: a failed
-     * analysis with allowDry with ANALYSIS_FAILED(f0_failed), the failure of rule 6 for a failed analysis (allowDry
-     * cannot help); a content without voiced audio or without anything to render with NOT_READY and no reason, as
-     * no reason of the protocol names this case. Either succeeds again once the grid is the identity.
+     * for the file, and waiting does not change that. The job ends at once instead of at the wait limit, whatever made
+     * the content dry (unvoiced, nothing to render, or a failed analysis with allowDry), with
+     * NOT_READY(export_dry_stretched): not retryable, it succeeds again once the grid is the identity.
      */
-    static Readiness unstretchable(const Readiness& dry)
+    static Readiness unstretchable(const Readiness&)
     {
         Readiness failed;
         failed.state = Readiness::State::Fail;
-        if (std::string_view(dry.dryReason) == "analysisFailed")
-            failed.error = {"ANALYSIS_FAILED", "f0_failed",
-                            "the pitch analysis of a content of the export failed and its time grid is stretched, so "
-                            "OpenTune has no uncorrected audio of it to export",
-                            false};
-        else
-            failed.error = {"NOT_READY", "",
-                            "a content of the export has a stretched time grid and nothing to render, so OpenTune has "
-                            "no stretched audio of it to export",
-                            false};
+        failed.error = {"NOT_READY", "export_dry_stretched",
+                        "a content of the export would be exported uncorrected, but its time grid is stretched and "
+                        "OpenTune has no render to build stretched audio from",
+                        false};
         return failed;
     }
 
@@ -1001,7 +994,7 @@ private:
             return;
         }
         if (plan.contents.empty()) {
-            fail(step, {"INVALID_ARGUMENT", "", "the export holds no clip with audio", false});
+            fail(step, {"INVALID_ARGUMENT", "nothing_to_export", "the export holds no clip with audio", false});
             return;
         }
         int ready = 0;
@@ -1268,7 +1261,7 @@ Result<JsonValue> runExportStart(ControlOpContext& context, const ExportParams& 
     if (!hasWavExtension(params.path))
         return controlOpError("INVALID_ARGUMENT", "path_bad_extension", "an export writes only .wav files");
     if (buildPlan(context, target).contents.empty())
-        return controlOpError("INVALID_ARGUMENT", "", "the export holds no clip with audio");
+        return controlOpError("INVALID_ARGUMENT", "nothing_to_export", "the export holds no clip with audio");
     // Section 19 rule 2 by file identity; the job checks again right before its final rename.
     if (const auto error = loadedMediaError(loadedMediaPaths(context), params.path))
         return controlOpError(error->kind, error->reason, error->detail);

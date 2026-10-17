@@ -641,10 +641,34 @@ void scenarioExport()
                       json(R"({"kind":"track","target":{"trackId":)" + std::to_string(arrangement->getNumTracks())
                            + R"(},"path":)" + quoted(outPath("y.wav")) + "}"),
                       "NOT_FOUND", "unknown_handle"));
-        // A track without clips: OpenTune exports nothing for it.
-        CONTROL_CHECK(api.fails(
-            "export.start", json(R"({"kind":"track","target":{"trackId":5},"path":)" + quoted(outPath("y.wav")) + "}"),
-            "INVALID_ARGUMENT", ""));
+        // A track without clips: OpenTune exports nothing for it (INVALID_ARGUMENT(nothing_to_export), not retryable).
+        {
+            const auto response = api.request(
+                "export.start",
+                json(R"({"kind":"track","target":{"trackId":5},"path":)" + quoted(outPath("y.wav")) + "}"));
+            CONTROL_CHECK(api.fails("export.start",
+                                    json(R"({"kind":"track","target":{"trackId":5},"path":)" + quoted(outPath("y.wav"))
+                                         + "}"),
+                                    "INVALID_ARGUMENT", "nothing_to_export"));
+            const auto* data = errorData(response);
+            CONTROL_CHECK(data != nullptr && !memberOf(*data, "retryable").asBoolean());
+        }
+        // A master export in which no clip is heard: every track muted, or a soloed track without clips.
+        {
+            const auto masterParams = json(R"({"kind":"master","path":)" + quoted(outPath("y.wav")) + "}");
+            std::vector<bool> wasMuted;
+            for (int t = 0; t < arrangement->getNumTracks(); ++t) {
+                wasMuted.push_back(arrangement->isTrackMuted(t));
+                CONTROL_CHECK(arrangement->setTrackMuted(t, true));
+            }
+            CONTROL_CHECK(api.fails("export.start", masterParams, "INVALID_ARGUMENT", "nothing_to_export"));
+            for (int t = 0; t < arrangement->getNumTracks(); ++t)
+                CONTROL_CHECK(arrangement->setTrackMuted(t, wasMuted[static_cast<std::size_t>(t)]));
+            // Solo hides every other track: a soloed track without clips leaves nothing to hear.
+            CONTROL_CHECK(arrangement->setTrackSolo(5, true));
+            CONTROL_CHECK(api.fails("export.start", masterParams, "INVALID_ARGUMENT", "nothing_to_export"));
+            CONTROL_CHECK(arrangement->setTrackSolo(5, false));
+        }
         CONTROL_CHECK(service.jobs()->retainedCount() == retained);
         CONTROL_CHECK(!juceFileOf(outPath("y.wav")).exists());
     }
@@ -869,6 +893,19 @@ void scenarioExportFailures()
         const auto job = waitJob(api, jobId);
         CONTROL_CHECK(failedWith(job, "REVISION_CONFLICT", "changed_during_export"));
         CONTROL_CHECK(!juceFileOf(outPath("removed.wav")).exists() && !processor->isExportLockHeld());
+    }
+
+    // Every clip of a track export is deleted while the job waits: nothing is left to export
+    // (INVALID_ARGUMENT(nothing_to_export), not retryable).
+    {
+        const auto clip = addClip(*processor, media, "vanishing", 11, 0.0, 1.0, Analysis::Running);
+        const auto jobId = startExport(api, R"({"kind":"track","target":{"trackId":11},"path":)"
+                                                + quoted(outPath("vanishing.wav")) + "}");
+        CONTROL_CHECK(processor->getStandaloneArrangement()->deletePlacementById(11, clip.placementId));
+        const auto job = waitJob(api, jobId);
+        CONTROL_CHECK(failedWith(job, "INVALID_ARGUMENT", "nothing_to_export"));
+        CONTROL_CHECK(!memberOf(memberOf(memberOf(job, "error"), "data"), "retryable").asBoolean());
+        CONTROL_CHECK(!juceFileOf(outPath("vanishing.wav")).exists() && !processor->isExportLockHeld());
     }
 
     // File identity (PROTOCOL.md section 20.3) and the final rename (section 20.4) on their own.
@@ -1396,21 +1433,23 @@ void scenarioExportTimeStretch()
     const ScopedWaitLimit waitLimit(20000);
 
     // 4. A content to export dry with a stretched grid has no render to stretch, so OpenTune has no audio of it for
-    // the file: the job ends at once, without a file. A failed analysis with allowDry: ANALYSIS_FAILED(f0_failed); an
-    // analysis without voiced audio: NOT_READY without a reason.
+    // the file: the job ends at once, without a file, with NOT_READY(export_dry_stretched), which is not retryable.
+    // The content is dry because its analysis failed (with allowDry) or because it has no voiced audio.
     {
         const auto failed = addClip(*processor, media, "failed", 3, 0.0, 2.0, Analysis::Failed);
         CONTROL_CHECK(processor->setContentTimeGrid(failed.key, stretchedGrid(failed.durationSec)));
         const auto path = (out / "failed.wav").u8string();
         const auto job =
             exportAndWait(api, clipParams(handles.placement(failed.placementId), path, R"(,"allowDry":true)"));
-        CONTROL_CHECK(failedWith(job, "ANALYSIS_FAILED", "f0_failed"));
+        CONTROL_CHECK(failedWith(job, "NOT_READY", "export_dry_stretched"));
+        CONTROL_CHECK(!memberOf(memberOf(memberOf(job, "error"), "data"), "retryable").asBoolean());
         CONTROL_CHECK(!juceFileOf(path).exists());
         const auto unvoiced = addClip(*processor, media, "unvoiced", 4, 0.0, 2.0, Analysis::Unvoiced);
         CONTROL_CHECK(processor->setContentTimeGrid(unvoiced.key, stretchedGrid(unvoiced.durationSec)));
         const auto unvoicedPath = (out / "unvoiced.wav").u8string();
         const auto unvoicedJob = exportAndWait(api, clipParams(handles.placement(unvoiced.placementId), unvoicedPath));
-        CONTROL_CHECK(failedWith(unvoicedJob, "NOT_READY", ""));
+        CONTROL_CHECK(failedWith(unvoicedJob, "NOT_READY", "export_dry_stretched"));
+        CONTROL_CHECK(!memberOf(memberOf(memberOf(unvoicedJob, "error"), "data"), "retryable").asBoolean());
         CONTROL_CHECK(!juceFileOf(unvoicedPath).exists());
     }
 
@@ -1464,7 +1503,9 @@ void scenarioExportTimeStretch()
         }
         renderService->resumeRenderWorker();
         CONTROL_CHECK(requests == kControlExportMaxStretchRequests);
-        CONTROL_CHECK(failedWith(waitJob(api, jobId), "NOT_READY", ""));
+        const auto gaveUp = waitJob(api, jobId);
+        CONTROL_CHECK(failedWith(gaveUp, "NOT_READY", "export_stretch_dropped"));
+        CONTROL_CHECK(memberOf(memberOf(memberOf(gaveUp, "error"), "data"), "retryable").asBoolean());
         CONTROL_CHECK(!stretchOutputCurrent(*processor, stubborn.key));
         CONTROL_CHECK(!juceFileOf(path).exists());
     }

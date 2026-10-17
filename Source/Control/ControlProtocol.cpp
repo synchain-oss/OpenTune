@@ -335,7 +335,8 @@ bool controlErrorRetryableByDefault(std::string_view kind)
 
 bool controlErrorRetryable(std::string_view kind, std::string_view reason)
 {
-    if (kind == "NOT_READY" && (reason == "f0_failed" || reason == "f0_empty" || reason == "grid_not_seeded"))
+    if (kind == "NOT_READY" && (reason == "f0_failed" || reason == "f0_empty" || reason == "grid_not_seeded"
+                              || reason == "export_dry_stretched"))
         return false;
     return controlErrorRetryableByDefault(kind);
 }

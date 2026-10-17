@@ -34,7 +34,8 @@ namespace OpenTune {
 void registerTimingOps(ControlMethodTable& table);
 
 /** Test seam for the headless tests: the longest time a timeGridSeed job waits for OpenTune's timing analysis
-    (120 s), for the jobs started later; 0 restores it. Never used by OpenTune itself. Message thread. */
+    (120 s); 0 restores it. The limit is read again at every wait step, so it also applies to jobs that are
+    already waiting. Never used by OpenTune itself. Message thread. */
 void controlSetSeedWaitLimitForTesting(int milliseconds);
 
 } // namespace OpenTune

@@ -796,7 +796,7 @@ void scenarioTimeGridSeedFailuresImpl()
         return jobId;
     };
     const auto failedWith = [&f](const std::string& jobId, const std::string& kind, const std::string& reason,
-                               std::optional<bool> retryable = std::nullopt) {
+                                 std::optional<bool> retryable = std::nullopt) {
         const auto job = f.jobOnceTerminal(jobId);
         const auto& data = memberOf(memberOf(job, "error"), "data");
         const bool ok = memberOf(job, "state").text() == "failed" && memberOf(data, "kind").text() == kind
@@ -847,8 +847,8 @@ void scenarioTimeGridSeedFailuresImpl()
         CONTROL_CHECK(failedWith(jobId, "NOT_FOUND", "unknown_handle"));
     }
 
-    // The timing analysis failed, or found no onset: OpenTune places no handle (ANALYSIS_FAILED(timing_analysis_failed),
-    // not retryable).
+    // The timing analysis failed, or found no onset: OpenTune places no handle
+    // (ANALYSIS_FAILED(timing_analysis_failed), not retryable).
     for (const auto status : {ReferenceFeatureStatus::Failed, ReferenceFeatureStatus::Ready}) {
         const bool failed = status == ReferenceFeatureStatus::Failed;
         const auto clip = f.add(gridSpec(failed ? "noAnalysis" : "noOnset", false, failed ? 4 : 5));

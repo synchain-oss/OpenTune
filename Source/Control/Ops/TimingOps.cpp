@@ -441,9 +441,8 @@ public:
                 return;
             case OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus::InvalidContent:
             case OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus::AnalysisFailed:
-                step.fail(
-                    {"ANALYSIS_FAILED", "timing_analysis_failed",
-                     "OpenTune's timing analysis of the content failed; no handle was placed", false});
+                step.fail({"ANALYSIS_FAILED", "timing_analysis_failed",
+                           "OpenTune's timing analysis of the content failed; no handle was placed", false});
                 return;
         }
         if (!ref.snapshot->referenceFeatures.hasTimingAnchors()) {

@@ -671,7 +671,7 @@ private:
             case Stretch::Pending:
                 return Readiness{};
             case Stretch::NoRender:
-                return unstretchable(readiness);
+                return unstretchable();
             case Stretch::GaveUp: {
                 Readiness failed;
                 failed.state = Readiness::State::Fail;
@@ -693,7 +693,7 @@ private:
      * the content dry (unvoiced, nothing to render, or a failed analysis with allowDry), with
      * NOT_READY(export_dry_stretched): not retryable, it succeeds again once the grid is the identity.
      */
-    static Readiness unstretchable(const Readiness&)
+    static Readiness unstretchable()
     {
         Readiness failed;
         failed.state = Readiness::State::Fail;

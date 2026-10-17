@@ -643,15 +643,12 @@ void scenarioExport()
                       "NOT_FOUND", "unknown_handle"));
         // A track without clips: OpenTune exports nothing for it (INVALID_ARGUMENT(nothing_to_export), not retryable).
         {
-            const auto response = api.request(
-                "export.start",
-                json(R"({"kind":"track","target":{"trackId":5},"path":)" + quoted(outPath("y.wav")) + "}"));
-            CONTROL_CHECK(api.fails("export.start",
-                                    json(R"({"kind":"track","target":{"trackId":5},"path":)" + quoted(outPath("y.wav"))
-                                         + "}"),
-                                    "INVALID_ARGUMENT", "nothing_to_export"));
+            const auto response = api.request("export.start", json(R"({"kind":"track","target":{"trackId":5},"path":)"
+                                                                   + quoted(outPath("y.wav")) + "}"));
             const auto* data = errorData(response);
-            CONTROL_CHECK(data != nullptr && !memberOf(*data, "retryable").asBoolean());
+            CONTROL_CHECK(data != nullptr && memberOf(*data, "kind").text() == "INVALID_ARGUMENT"
+                          && memberOf(*data, "reason").text() == "nothing_to_export"
+                          && !memberOf(*data, "retryable").asBoolean());
         }
         // A master export in which no clip is heard: every track muted, or a soloed track without clips.
         {

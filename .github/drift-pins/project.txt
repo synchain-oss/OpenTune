@@ -4,6 +4,9 @@
 # group: project
 # pinned-at: upstream/20261008-addb4f4
 # ported-to: Source/Control/Ops/AppReadOps.cpp
+# ported-to: Source/Control/Ops/ProjectOps.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
 Source/Utils/ProjectSession.cpp	ProjectSession::getRecentProjects	L836-L845	fn-v1	50a8852a690ecf6acf066f41a464ea6fb0aa067e9cb687b5fb88c9f220d6f7e9
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::saveProject	L935-L990	fn-v1	4ea61b6bab0047adba000438b8d8ddc033a8994a014809bb1db2d32af7a9ae23
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::startOpenProject	L1001-L1043	fn-v1	c7b6e4598b1f6e64bd706f7677641ac91b5403e06f3be8c2a54b156fc15b4b48

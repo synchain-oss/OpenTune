@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "comment": "Catalogue for .github/scripts/release-notices.mjs, which writes THIRD-PARTY-NOTICES.txt of the unofficial Windows test build. A component is written only when its probe finds it in the build (compiled sources, include paths, data embedded in OpenTune.exe, files next to it, the ARA link check). Packages vendored inside JUCE come from JUCE.spdx.json; juceVendored.conditions excludes the ones whose code is switched off for the Standalone. redistribution 'unverified' keeps a component out of the notices and blocks a tagged release until its terms are confirmed. Fail closed: when the repository has a component (embedded files, or probe.repoFiles of a source / include probe) whose terms ask for something (unverified terms, license text, the GPL-3.0 appendix) but its probe finds nothing in the build, the component is a release blocker too, unless the entry says \"absentOk\": \"<reason>\". See .github/release/README.md.",
+  "comment": "Catalogue for .github/scripts/release-notices.mjs, which writes THIRD-PARTY-NOTICES.txt of the unofficial Windows test build. A component is written only when its probe finds it in the build (compiled sources, include paths, data embedded in OpenTune.exe, files next to it, the ARA link check). Packages vendored inside JUCE come from JUCE.spdx.json; juceVendored.conditions excludes the ones whose code is switched off for the Standalone. redistribution 'unverified' keeps a component out of the notices and blocks a tagged release until its terms are confirmed (no component carries it at present). \"mustAppear\": true puts a component in the fail-closed class below although its terms ask for no license text. Fail closed: when the repository has a component (embedded files, or probe.repoFiles of a source / include probe) whose terms ask for something (unverified terms, license text, the GPL-3.0 appendix) but its probe finds nothing in the build, the component is a release blocker too, unless the entry says \"absentOk\": \"<reason>\". See .github/release/README.md.",
   "components": [
     {
       "id": "opentune",
@@ -73,12 +73,14 @@
     {
       "id": "honor-sans",
       "name": "HONOR Sans CN Medium (font)",
-      "license": "HONOR Sans font license",
+      "license": "HONOR font license (commercial / personal use within OpenTune), as stated in OpenTune's own third-party credits",
       "copyright": "Copyright (c) Honor Device Co., Ltd. Designed by Beijing Founder Electronics Co., Ltd.",
       "usedIn": "OpenTune.exe (embedded user-interface font)",
       "probe": { "kind": "embedded", "files": "Resources/Fonts/HONORSansCN-Medium.ttf" },
-      "redistribution": "unverified",
-      "unverifiedReason": "OpenTune's repository has no license file for this font. Its only statement is the credits line 'HONOR font license (commercial / personal use within OpenTune)'; the font's own name table names Honor Device Co., Ltd. as copyright holder and points to a Founder Type authorization page. Whether a third party may redistribute it inside a modified build is not stated."
+      "mustAppear": true,
+      "notes": [
+        "The font is distributed unchanged inside OpenTune.exe, the same way official OpenTune releases distribute it. Apart from the sentence in OpenTune's credits quoted above, there is no separate license file for it."
+      ]
     },
     {
       "id": "onnxruntime",

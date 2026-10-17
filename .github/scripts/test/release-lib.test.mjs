@@ -391,11 +391,57 @@ describe('notices collector', () => {
     assert.deepEqual(got.excluded, [{ id: 'gone', why: '0 compiled sources match /ThirdParty/gone/' }]);
   });
 
-  it('the real catalogue marks HONOR Sans unverified, uses known probe kinds and names repository files for fail-closed probes', () => {
+  it('mustAppear: a probe that misses the component blocks the build; without the field a component with no obligations stays omittable', () => {
+    const embedded = { kind: 'embedded', files: 'Resources/Fonts/HONORSansCN-Medium.ttf' };
+    const only = (extra) => ({ components: [{ id: 'f', name: 'F', license: 'L', probe: embedded, ...extra }] });
+    const missed = collect({ catalogue: only({ mustAppear: true }) });
+    assert.deepEqual(missed.blockers.map((b) => b.id), ['f']);
+    assert.match(missed.blockers[0].why, /the repository has 1 file\(s\) matching .*, but the probe found none in the build .* its notice would be dropped/);
+    assert.deepEqual(missed.included, []);
+    const omitted = collect({ catalogue: only({}) });
+    assert.deepEqual(omitted.blockers, []);
+    assert.deepEqual(omitted.included, []);
+    assert.match(omitted.excluded[0].why, /^0 of 1 files of /);
+    // When the probe does find it, the notice is written and nothing blocks.
+    const found = collect({ catalogue: only({ mustAppear: true }), exeBuf: Buffer.concat([Buffer.from('MZ'), font]) });
+    assert.deepEqual(found.blockers, []);
+    assert.deepEqual(found.included, ['f']);
+    assert.equal(mustNotDropSilently({ mustAppear: true }), true);
+    assert.equal(mustNotDropSilently({}), false);
+  });
+
+  it('the real catalogue ships HONOR Sans like the official build: not unverified, written into the notices, still not droppable silently', () => {
+    const real = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, '.github', 'release', 'notices.json'), 'utf8'));
+    const honor = real.components.find((c) => c.id === 'honor-sans');
+    assert.notEqual(honor.redistribution, 'unverified');
+    assert.equal(honor.unverifiedReason, undefined);
+    assert.equal(honor.mustAppear, true);
+    assert.match(honor.license, /HONOR font license \(commercial \/ personal use within OpenTune\)/);
+    assert.ok(honor.copyright);
+    const credits = fs.readFileSync(path.join(REPO_ROOT, 'Resources', 'About', 'credits.md'), 'utf8');
+    assert.ok(credits.includes('HONOR font license (commercial / personal use within OpenTune)'));
+    const got = collectComponents({
+      catalogue: { components: [honor] },
+      closure,
+      exeBuf: Buffer.concat([Buffer.from('MZ'), font]),
+      appFiles: [],
+      roots,
+      lock: { deps: [] },
+      sbom: {},
+    });
+    assert.deepEqual(got.blockers, []);
+    assert.deepEqual(got.included, ['honor-sans']);
+    assert.match(got.sections[0].license, /HONOR font license/);
+    // Dropping the field must turn the guard red: an entry without it is omittable again.
+    assert.equal(mustNotDropSilently(honor), true);
+    const { mustAppear, ...withoutField } = honor;
+    assert.equal(mustNotDropSilently(withoutField), false);
+  });
+
+  it('the real catalogue uses known probe kinds and names repository files for fail-closed probes', () => {
     const real = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, '.github', 'release', 'notices.json'), 'utf8'));
     const kinds = new Set(['always', 'juce', 'source', 'include', 'embedded', 'appFile', 'ara']);
     for (const c of real.components) assert.ok(kinds.has(c.probe.kind), c.id);
-    assert.equal(real.components.find((c) => c.id === 'honor-sans').redistribution, 'unverified');
     for (const id of ['honor-sans', 'cursors', 'soundtouch', 'r8brain']) assert.ok(mustNotDropSilently(real.components.find((c) => c.id === id)), id);
     for (const c of real.components) {
       if (['source', 'include'].includes(c.probe.kind) && mustNotDropSilently(c)) assert.match(c.probe.repoFiles ?? '', /^ThirdParty\//, `${c.id}: probe.repoFiles`);

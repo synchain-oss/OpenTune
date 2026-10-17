@@ -19,6 +19,8 @@
 // terms ask for something (unverified terms, license text, the GPL-3.0 appendix). A probe can stop
 // matching after an upstream change while the component is still compiled in; dropping its notice
 // silently would be wrong, so a person has to look (fix the probe, or record "absentOk" with a reason).
+// Catalogue fields that steer this: "redistribution": "unverified", "mustAppear": true (a boolean; puts a
+// component in the fail-closed class although its terms ask for no license text) and "absentOk": "<reason>".
 //
 // CLI: node release-notices.mjs --build <dir> --deps <dir> --out-notices <file> --out-info <file>
 //        [--config Release] [--target OpenTuneStandalone_Standalone] [--repo <dir>] [--juce <dir>]
@@ -102,6 +104,7 @@ export function collectComponents({ catalogue, closure, exeBuf, appFiles, roots,
   for (const c of catalogue.components) {
     const p = c.probe ?? { kind: 'always' };
     if (c.absentOk !== undefined && !(typeof c.absentOk === 'string' && c.absentOk.trim())) throw new Error(`${c.id}: absentOk must be a non-empty reason`);
+    if (c.mustAppear !== undefined && typeof c.mustAppear !== 'boolean') throw new Error(`${c.id}: mustAppear must be true or false`);
     let found;
     let evidence;
     // Repository files of the component (embedded data, or probe.repoFiles of a source / include

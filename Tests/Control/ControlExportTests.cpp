@@ -1244,6 +1244,7 @@ const char* const kMustRunExportVectors[] = {
     "export/start-loaded-media",
     "export/start-master",
     "export/start-not-found",
+    "export/start-nothing-to-export",
     "export/start-reports-revisions",
     "export/start-target-exists",
     "export/start-track",

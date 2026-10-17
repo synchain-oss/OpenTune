@@ -30,6 +30,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 ## 1. 第一原则：不改变 OpenTune 的行为
 
 - **只做两类改动**：① 新增接口代码；② 下表声明过的最小接入钩子。以下两种情况下，OpenTune 的行为必须与上游完全相同：CMake 选项 `OPENTUNE_ENABLE_CONTROL_API` 为 OFF；或选项为 ON、但运行时未开启接口。
+- **唯一例外**：`OPENTUNE_DATA_DIR` 的数据目录重定向在运行时未开启接口时也生效。依据规范 PROTOCOL.md §6.3（构建含控制接口时必须遵守，以免测试触碰用户真实设置）。它只在用户主动设置该环境变量时生效；非绝对路径会被忽略，OpenTune 照常使用默认目录。实现位置：`Source/Utils/AppPreferences.cpp`、`Source/Utils/AppLogger.cpp`、`Source/Control/ControlDataDirectory.h`。
 - **新增代码的位置**（`namespace OpenTune`，PascalCase 文件名）：`Source/Control/**`、`Source/Standalone/ControlEditorBridge*`、`Tests/Control/**`、`cmake/OpenTuneControl.cmake`。fork 专用测试放 `Tests/ControlFork/**`。
 - **已声明的钩子**：这是对上游已有文件的全部改动。每处钩子都要加标记 `// OpenTune Control API hook: <purpose>, see Source/Control/README.md#hooks`。
 
@@ -42,7 +43,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 | `friend class ControlEditorBridge;` + 成员；构造后创建，析构时先注销 | `Source/Standalone/PluginEditor.h/.cpp` | `.h` 约 6、`.cpp` 约 11 |
 | 导出锁（UI 与 API 共用；被占用时接口回 `BUSY(export_in_progress)`，界面照旧提示）。master 导出错误信息与按 placementId 导出不加钩子：接口错误的 detail 只用固定文本，按 placementId 导出调用已公开的 `findPlacementIndexById()` | `Source/PluginProcessor.h`、`Source/Standalone/PluginEditor.cpp` | `.h` 约 5、`.cpp` 约 15 |
 | 抽出 `afterUndoRedo()`（纯重构；选项关闭时 `performUndoRedoAction` 与上游逐字相同）+ bridge 调用 | `Source/Standalone/PluginEditor.h/.cpp` | `.h` 约 2、`.cpp` 约 8 |
-| `peekUndo` / `peekRedo` / `size` / `cursor`（只读）；`clearRedo()`（**改动型**，只在接口的写入没有撤销条目时清空重做栈，对应规范 rc.3 第 15.3 节第 9 条，且在撤销/重做进行中不动；若规范后续版本改为「重做时只屏蔽被改动的方面」即删除，钩子回到只读） | `Source/Utils/UndoManager.h`（仅头文件，类内内联） | 约 8（含 `#if`/`#endif`） |
+| `peekUndo` / `peekRedo` / `size` / `cursor`（只读）；`clearRedo()`（**改动型，会改写历史**：清空重做栈，只在接口的写入没有撤销条目时调用，唯一调用方是 `Source/Control/Edit/ControlOriginAction.cpp`，对应规范 rc.3 第 15.3 节第 9 条，且在撤销/重做进行中不动；若规范后续版本改为「重做时只屏蔽被改动的方面」即删除，钩子回到只读） | `Source/Utils/UndoManager.h`（仅头文件，类内内联，新增行全部在 `#if`/`#endif` 之内） | 约 8（含 `#if`/`#endif`） |
 | （预留，尚未接入）公开 `dismiss()`，包装私有 `finish()`（只关闭已显示的首次引导） | `Source/Editor/OnboardingOverlayComponent.*` | ~3 |
 | （预留，尚未接入）公开包装私有选择提交 | `Source/Standalone/UI/ArrangementViewComponent.*` | ~8 |
 | 参考特征生产者 getter；记录每个内容最近一次 F0 失败原因（`requestContentRefresh` 里 6 处记录调用，加两个成员函数的定义） | `Source/PluginProcessor.*` | `.h` 约 6、`.cpp` 约 43（全部在选项宏内） |

@@ -208,6 +208,7 @@ jobs:
           ref: ${{ env.MCP_REF }}
           path: ot-mcp
           fetch-depth: 1
+          lfs: false
           persist-credentials: false
       - name: npm ci
         working-directory: ot-mcp

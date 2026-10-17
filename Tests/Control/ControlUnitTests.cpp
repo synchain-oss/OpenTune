@@ -400,6 +400,14 @@ void testProtocol()
     CONTROL_CHECK(controlErrorCode("UNSUPPORTED", "unknown_method") == -32601);
     CONTROL_CHECK(controlErrorCode("UNSUPPORTED", "capability_missing") == -32000);
     CONTROL_CHECK(controlErrorCode("INTERNAL", "") == -32603);
+    // Retryability of the rc.3 reasons: a stretched grid is not cured by a retry, a dropped rebuild and a timed-out
+    // timing analysis are, and a failed timing analysis is not.
+    CONTROL_CHECK(!controlErrorRetryable("NOT_READY", "export_dry_stretched"));
+    CONTROL_CHECK(controlErrorRetryable("NOT_READY", "export_stretch_dropped"));
+    CONTROL_CHECK(controlErrorRetryable("NOT_READY", "timing_analysis_timeout"));
+    CONTROL_CHECK(!controlErrorRetryable("ANALYSIS_FAILED", "timing_analysis_failed"));
+    CONTROL_CHECK(!controlErrorRetryable("INVALID_ARGUMENT", "nothing_to_export"));
+    CONTROL_CHECK(!controlErrorRetryable("INVALID_ARGUMENT", "content_key_unset"));
     {
         const auto line =
             controlErrorResponse({}, "BUSY", "request_limit", "x\xC3\xA9" + std::string(2000, 'y'), false);

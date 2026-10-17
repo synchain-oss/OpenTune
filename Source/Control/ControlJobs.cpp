@@ -82,7 +82,7 @@ JsonValue controlErrorObjectJson(const ControlJobError& error)
     data.appendMember("kind", JsonValue::string(error.kind));
     if (!error.reason.empty())
         data.appendMember("reason", JsonValue::string(error.reason));
-    data.appendMember("retryable", JsonValue::boolean(controlErrorRetryableByDefault(error.kind)));
+    data.appendMember("retryable", JsonValue::boolean(controlErrorRetryable(error.kind, error.reason)));
     data.appendMember("detail", JsonValue::string(printableDetail(error.detail)));
     data.appendMember("executed", JsonValue::boolean(error.executed));
     auto object = JsonValue::object();

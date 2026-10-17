@@ -329,6 +329,7 @@ jobs:
           ref: ${{ env.MCP_REF }}
           path: ot-mcp
           fetch-depth: 1
+          lfs: false
           persist-credentials: false
       - name: npm ci and build the MCP bundle
         working-directory: ot-mcp

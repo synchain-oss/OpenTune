@@ -1,0 +1,18 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# group: auto
+# pinned-at: upstream/20261008-addb4f4
+# ported-to: Source/Control/Ops/ContentTuneOps.cpp
+# ported-to: Source/Control/Ops/ContentDetailsOps.cpp
+# ported-to: Source/Control/Edit/NoteCorrection.cpp
+#
+# Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
+Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::applyAutoTuneToSelection	L5237-L5342	fn-v1	d03fe6acc149df0d617c70f46310af6020a22dc8d5830a83133d63396edbd8fd
+Source/Utils/PitchCurve.cpp	PitchCurve::expandNoteBasedCorrectionRange	L210-L226	fn-v1	4527890747fbf3d3378ddecbda02b797d330be55f37f0d3eb4f09f247c249e66
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey	L5405-L5493	fn-v1	3d65b2b11862fae75ad24942e76b15d4bab56431b8e07e53dbeb622df686ff6e
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::autoTuneContentRangeByContentKey	L5375-L5403	fn-v1	b114bedd8e81d5aeea752aa654836e40b22687e68cf970dd2f38bec4b8d97e11
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::generateNotesOnlyByContentKey	L5334-L5373	fn-v1	3a889b38094b27280dbc2bbbd1ed2b53234816366b4edde74f91b0fbc95b559f
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::evaluateAutoRefUiState	L3738-L3770	fn-v1	06401d8eda665637d5a6c654bddea208dd80eaed53ae5249cd54545e8367ca6b
+Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::applyAutoSnapToAllNotes	L5344-L5524	fn-v1	b68a587562a6b975739fdda01ecf1020dab2309a204ae60c522e301c2aca4b17
+Source/Standalone/UI/PianoRollComponent.cpp	isFullyCorrectedInRange	L49-L61	fn-v1	33f0a8aa4a04cd8b94353797ad6c47ea7f13db05d99b8aa9160bbc5b587773bc

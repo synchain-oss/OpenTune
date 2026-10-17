@@ -1,0 +1,108 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "content/get-details-ok",
+  "type": "request",
+  "description": "content.getDetails of a clip with a key, a pitch shift of -2 semitones, a seeded time grid with two handles and a reference binding to the clip on track 1. Placement-dependent values are taken through the clip's only placement. Whether the AUTO button would run reference alignment depends on the instance's settings, so uiButtonRuns is matched by type. The minimum handle spacing is implementation-defined, so it is matched by type as well.",
+  "capability": "read.v1",
+  "since": "1.0",
+  "method": "content.getDetails",
+  "session": "authenticated",
+  "given": {
+    "editingScheme": "openTune",
+    "clips": [
+      {
+        "bind": "clip",
+        "trackId": 0,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready",
+        "key": { "root": 9, "scale": "minor" },
+        "pitchShift": { "semitones": -2, "cents": 0 },
+        "timeGrid": [
+          { "bind": "h1", "contentSec": 1 },
+          { "bind": "h2", "contentSec": 2.5 }
+        ],
+        "referenceClip": "ref"
+      },
+      {
+        "bind": "ref",
+        "trackId": 1,
+        "startTimelineSec": 2,
+        "durationSec": 6,
+        "analysis": "ready"
+      }
+    ]
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "content.getDetails",
+    "params": { "contentId": { "$ref": "clip.contentId" } }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "asOf": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [
+          {
+            "contentId": { "$ref": "clip.contentId" },
+            "revision": { "$ref": "clip.revision" },
+            "gridRevision": { "$ref": "clip.gridRevision" },
+            "keyRevision": { "$ref": "clip.keyRevision" }
+          }
+        ]
+      },
+      "derived": { "$any": "array" },
+      "contentId": { "$ref": "clip.contentId" },
+      "viaPlacementId": { "$ref": "clip.placementId" },
+      "placementIds": [{ "$ref": "clip.placementId" }],
+      "durationSec": { "$approx": 6 },
+      "key": {
+        "root": 9,
+        "scale": "minor",
+        "origin": { "$any": "string" },
+        "confidence": { "$any": true }
+      },
+      "pitchShift": { "semitones": -2, "cents": 0 },
+      "analysis": {
+        "f0State": "ready",
+        "failure": null,
+        "hopSec": { "$any": "number" }
+      },
+      "render": {
+        "current": { "$any": "boolean" },
+        "publishedRevision": { "$any": "string" },
+        "desiredRevision": { "$any": "string" }
+      },
+      "timeGrid": {
+        "seeded": true,
+        "identity": true,
+        "handles": [
+          {
+            "handleId": { "$ref": "h1" },
+            "contentSec": { "$approx": 1 },
+            "outputSec": { "$approx": 1 }
+          },
+          {
+            "handleId": { "$ref": "h2" },
+            "contentSec": { "$approx": 2.5 },
+            "outputSec": { "$approx": 2.5 }
+          }
+        ],
+        "minHandleSpacingSec": { "$any": "number" }
+      },
+      "reference": {
+        "referencePlacementId": { "$ref": "ref.placementId" },
+        "alignmentReady": { "$any": "boolean" }
+      },
+      "autoModes": {
+        "editingScheme": "openTune",
+        "uiButtonRuns": { "$any": "string" },
+        "available": { "$any": "array" }
+      }
+    }
+  },
+  "connectionAfter": "open"
+}

@@ -1,0 +1,1145 @@
+{
+  "schema": 1,
+  "normalizations": {
+    "fn-v1": "The text of one function, from the line with its qualified name followed by \"(\" to the line of the \"}\" that closes its body.",
+    "stmt-v1": "The text of one declaration, from the line that holds the given text to the first \";\" outside brackets.",
+    "common": "The file is read as UTF-8 without BOM and with LF line endings. Braces and quotes inside comments and literals are skipped. Then every line loses its leading and trailing white space, empty lines are dropped, runs of blanks and tabs become one space, lines are joined with LF, and the sha256 of the bytes is written in lower-case hexadecimal. Comments are kept."
+  },
+  "mirrors": [
+    {
+      "id": "piano-roll-projection",
+      "group": "timeline",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "makePianoRollProjection",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "808f9ba6ee68e6a696094c49cbfe1a75f62fd59453aa1c63d3570fe936585126"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/OpsSupport.cpp",
+          "symbols": [
+            "controlContentToTimeline",
+            "controlTimelineToContent"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Reads",
+        "ControlProcessorTests.Vectors"
+      ],
+      "note": "Content time to timeline time through a placement: the window starts at tauForward(clipIn) of the time grid.",
+      "noteZh": "经放置把内容时间换算成时间线时间：窗口从时间网格的 tauForward(clipIn) 开始。"
+    },
+    {
+      "id": "import-append-start",
+      "group": "import",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::computeTrackAppendStartSeconds",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "22325f69ac145f820bb9031d901b599f6bad14e36bf1659c8dd629eb498144ae"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ImportOps.cpp",
+          "symbols": [
+            "ImportJob::appendStart"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Import",
+        "ControlProcessorTests.ImportAfterOpen",
+        "ControlProcessorTests.JobVectors"
+      ],
+      "note": "Where an import without startTimelineSec starts: the end of the last clip with audio on the track.",
+      "noteZh": "未给 startTimelineSec 的导入从哪里开始：轨道上最后一个有音频的片段的结尾。"
+    },
+    {
+      "id": "import-start-pending",
+      "group": "import",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::startPendingImport",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "00601c6aa02eaecbe2ab7237ac5fa70b8051f1c2031857a8a4cb2cc85c82de85"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ImportOps.cpp",
+          "symbols": [
+            "ImportJob::stepImport",
+            "ImportJob::commit",
+            "ImportJob::enterAnalysis"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Import",
+        "ControlProcessorTests.ImportAfterOpen",
+        "ControlProcessorTests.ImportCancel"
+      ],
+      "note": "The editor steps of one import: commit at the start position, hidden tracks, focus, analysis request.",
+      "noteZh": "编辑器导入一个文件的步骤：在起点提交、显示隐藏轨道、聚焦、请求分析。"
+    },
+    {
+      "id": "import-next-in-queue",
+      "group": "import",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::processNextImportInQueue",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "042d6de2ccffb8d9be9eeca57da4d7e0c38595108466a2baeeba12369a238826"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ImportOps.cpp",
+          "symbols": [
+            "ImportJob::stepImport"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Import",
+        "ControlProcessorTests.ImportCancel"
+      ],
+      "note": "The import queue goes on with the next file after one finished.",
+      "noteZh": "一个文件完成后，导入队列接着处理下一个。"
+    },
+    {
+      "id": "import-channel-limit",
+      "group": "import",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::prepareImport",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "3bef90e530e4ca53a0cb19d840ab2f65fc61d5409ccc4240709c1706ec86537e"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ImportOps.cpp",
+          "symbols": [
+            "kMaxChannels",
+            "PreparedFile::run"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/SessionOps.cpp",
+          "symbols": [
+            "kImportMaxChannels"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Import",
+        "ControlProcessorTests.Reads"
+      ],
+      "note": "The import accepts at most 2 channels (reported by session.info and checked before the commit).",
+      "noteZh": "导入最多接受 2 个声道（session.info 报告，提交前检查）。"
+    },
+    {
+      "id": "fcpe-max-duration",
+      "group": "import",
+      "upstream": {
+        "file": "Source/Inference/FCPEExtractor.h",
+        "symbol": "static constexpr double kMaxAudioDurationSec",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "ca8a541a8bddc2ef074ee5c3a24f2c3d9b3fafb91f9ffb5a33d78b0ecc287a1e"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ImportOps.cpp",
+          "symbols": [
+            "kMaxAnalysisSec",
+            "PreparedFile::run"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/SessionOps.cpp",
+          "symbols": [
+            "kImportMaxAnalysisSec"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Import",
+        "ControlProcessorTests.Reads"
+      ],
+      "note": "The pitch analysis accepts audio up to 600 s; longer files are rejected by the import and reported by session.info.",
+      "noteZh": "音高分析最长接受 600 秒；更长的文件会被导入拒绝，并由 session.info 报告。"
+    },
+    {
+      "id": "export-placement",
+      "group": "export",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::exportPlacementAudio",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "7c7908f928fc73ae82fe50abdb285a55b971dc4ca6d05b8366382d5642901e86"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ExportOps.cpp",
+          "symbols": [
+            "buildPlan",
+            "hasPlaybackAudio"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Export",
+        "ControlProcessorTests.ExportFailures",
+        "ControlProcessorTests.ExportVectors"
+      ],
+      "note": "Clip export: the content that is mixed, and the hasAudio() filter.",
+      "noteZh": "片段导出：哪些内容被混入，以及 hasAudio() 过滤。"
+    },
+    {
+      "id": "export-track",
+      "group": "export",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::exportTrackAudio",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b9345f926645385c5eaf9d82653a81b9e6c8466c84e15d80f57a98b9dd529cf5"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ExportOps.cpp",
+          "symbols": [
+            "buildPlan",
+            "hasPlaybackAudio"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Export",
+        "ControlProcessorTests.ExportFailures",
+        "ControlProcessorTests.ExportVectors"
+      ],
+      "note": "Track export: the clips of one track with audio.",
+      "noteZh": "轨道导出：该轨道上有音频的片段。"
+    },
+    {
+      "id": "export-master-mix",
+      "group": "export",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::exportMasterMixAudio",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b0a39a60a1331ceb7d77dfac623193e9358c9f22fc973057896854c6ca8b38bb"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ExportOps.cpp",
+          "symbols": [
+            "buildPlan",
+            "hasPlaybackAudio"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Export",
+        "ControlProcessorTests.ExportFailures",
+        "ControlProcessorTests.ExportVectors"
+      ],
+      "note": "Master mix export: solo and mute rules over the tracks of the playback snapshot, and the hasAudio() filter.",
+      "noteZh": "总混导出：对播放快照中的轨道应用独奏与静音规则，以及 hasAudio() 过滤。"
+    },
+    {
+      "id": "time-grid-publish",
+      "group": "export",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::setContentTimeGrid",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "09a6c402060b6db3769552513f0dccfc042523aee23182098ac0cb7cec2bc343"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ExportOps.cpp",
+          "symbols": [
+            "ExportJob::stretchState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.ExportTimeStretch"
+      ],
+      "note": "A grid change republishes the playback source, drops the old time-stretch output and queues the rebuild only when the render is settled; the export queues the same rebuild when nothing did, and asks again when it was dropped.",
+      "noteZh": "改网格会重新发布播放源、作废旧的伸缩输出，只在渲染已 settle 时排伸缩重建；导出在无人排队时照样排一次，被丢弃时再排。"
+    },
+    {
+      "id": "undo-capture-before",
+      "group": "undo",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::captureBeforeUndoSnapshot",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "8375780fad24b0704ce7670abbf0adc5c034c06b492d5b5debbf01283cd1ef5c"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/ContentEditTransaction.cpp",
+          "symbols": [
+            "ContentEditTransaction::captureBefore"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Undo",
+        "ControlProcessorTests.AutoTune",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "What is captured before an edit: the committed notes and the correction segments of the curve.",
+      "noteZh": "编辑前捕获什么：已提交的音符与曲线的修正段。"
+    },
+    {
+      "id": "undo-record-range",
+      "group": "undo",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::recordUndoAction",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b6c8b0e08bdf49e683a803673ef1bc9e99a4c0eda1b5155f1d849d61f9ffb8a5"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/ContentEditTransaction.cpp",
+          "symbols": [
+            "ContentEditTransaction::recordRange",
+            "ContentEditTransaction::notesInRange",
+            "ContentEditTransaction::segmentsInRange"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Undo",
+        "ControlProcessorTests.AutoTune",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "How an edit over a frame range becomes a PianoRollEditAction: notes and segments cut to the range.",
+      "noteZh": "帧范围内的编辑如何成为 PianoRollEditAction：音符与修正段按范围裁剪。"
+    },
+    {
+      "id": "auto-apply-selection",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::applyAutoTuneToSelection",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "d03fe6acc149df0d617c70f46310af6020a22dc8d5830a83133d63396edbd8fd"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentTuneOps.cpp",
+          "symbols": [
+            "frameRanges",
+            "runRegenerate"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AutoTune",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "AUTO over a selection (openTune scheme): range resolution, capture, commit, undo range.",
+      "noteZh": "对选区执行 AUTO（openTune 方案）：范围解析、捕获、提交、撤销范围。"
+    },
+    {
+      "id": "auto-expand-range",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/Utils/PitchCurve.cpp",
+        "symbol": "PitchCurve::expandNoteBasedCorrectionRange",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "4527890747fbf3d3378ddecbda02b797d330be55f37f0d3eb4f09f247c249e66"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentTuneOps.cpp",
+          "symbols": [
+            "runRegenerate"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AutoTune",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "The frame range that a note-based correction recomputes, used as the undo range.",
+      "noteZh": "基于音符的修正会重算的帧范围，用作撤销范围。"
+    },
+    {
+      "id": "auto-commit-generated-notes",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "3d65b2b11862fae75ad24942e76b15d4bab56431b8e07e53dbeb622df686ff6e"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentTuneOps.cpp",
+          "symbols": [
+            "predictRegenerate",
+            "runRegenerate"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AutoTune",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "Which notes the commit removes, drops and creates (merge rules); the dryRun prediction and the result follow it.",
+      "noteZh": "提交会移除、丢弃、创建哪些音符（合并规则）；dryRun 预测与结果据此给出。"
+    },
+    {
+      "id": "auto-range-by-content-key",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::autoTuneContentRangeByContentKey",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b114bedd8e81d5aeea752aa654836e40b22687e68cf970dd2f38bec4b8d97e11"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentTuneOps.cpp",
+          "symbols": [
+            "predictRegenerate"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AutoTune"
+      ],
+      "note": "The AUTO command over a frame range: generation from the original pitch, then the commit.",
+      "noteZh": "对帧范围执行 AUTO 命令：由原始音高生成，再提交。"
+    },
+    {
+      "id": "auto-notes-only",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::generateNotesOnlyByContentKey",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "3a889b38094b27280dbc2bbbd1ed2b53234816366b4edde74f91b0fbc95b559f"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentTuneOps.cpp",
+          "symbols": [
+            "predictNotesOnly",
+            "runNotesOnly"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AutoTune"
+      ],
+      "note": "Note generation without the pitch correction (notesOnly), and its dryRun prediction.",
+      "noteZh": "只生成音符而不修音（notesOnly），及其 dryRun 预测。"
+    },
+    {
+      "id": "key-scale-changed",
+      "group": "key",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::scaleChanged",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "cbb148243601f384628e28f72ec0613b2090705abbdfbdefd912932314f3157d"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentTuneOps.cpp",
+          "symbols": [
+            "runSetKey"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.SetKey",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "Setting the key by hand: the manual key, the no-op case and the dirty flag.",
+      "noteZh": "手动设置调式：手动调式、无变化的情形与脏标记。"
+    },
+    {
+      "id": "auto-button-mode",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::evaluateAutoRefUiState",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "06401d8eda665637d5a6c654bddea208dd80eaed53ae5249cd54545e8367ca6b"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentDetailsOps.cpp",
+          "symbols": [
+            "runGetDetails"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Details"
+      ],
+      "note": "Which mode the AUTO button runs (autoModes.uiButtonRuns).",
+      "noteZh": "AUTO 按钮运行哪种模式（autoModes.uiButtonRuns）。"
+    },
+    {
+      "id": "undo-add-action",
+      "group": "undo",
+      "upstream": {
+        "file": "Source/Utils/UndoManager.cpp",
+        "symbol": "UndoManager::addAction",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "0a228a34b8121f67becac58618136faf749c9f44fe6f931857a9344a98d0425b"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/ControlOriginAction.cpp",
+          "symbols": [
+            "ControlHistory::prune",
+            "ControlHistory::onChangeWithoutEntry"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Undo"
+      ],
+      "note": "A new action discards the redo entries and, when the history is full, the oldest entry (every position moves).",
+      "noteZh": "新动作会丢弃重做条目；历史已满时再丢弃最旧的条目（所有位置前移）。"
+    },
+    {
+      "id": "undo-max-size",
+      "group": "undo",
+      "upstream": {
+        "file": "Source/Utils/UndoManager.h",
+        "symbol": "static constexpr int maxSize_",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "8d1f7717b8f534ec84e71f396eabe39c8b6c292e20ea20ecf8ea1103ac54106a"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/ControlOriginAction.h",
+          "symbols": [
+            "ControlHistory::kUndoHistoryCapacity"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Undo"
+      ],
+      "note": "The number of undo entries OpenTune keeps (500).",
+      "noteZh": "OpenTune 保留的撤销条目数（500）。"
+    },
+    {
+      "id": "recent-projects",
+      "group": "project",
+      "upstream": {
+        "file": "Source/Utils/ProjectSession.cpp",
+        "symbol": "ProjectSession::getRecentProjects",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "50a8852a690ecf6acf066f41a464ea6fb0aa067e9cb687b5fb88c9f220d6f7e9"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AppReadOps.cpp",
+          "symbols": [
+            "runPrefsGet"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Details"
+      ],
+      "note": "The recent projects menu drops the files that no longer exist; prefs.get lists them with an exists flag instead.",
+      "noteZh": "最近工程菜单会去掉已不存在的文件；prefs.get 改为带 exists 标志列出。"
+    },
+    {
+      "id": "project-save-flow",
+      "group": "project",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::saveProject",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "4ea61b6bab0047adba000438b8d8ddc033a8994a014809bb1db2d32af7a9ae23"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ProjectOps.cpp",
+          "symbols": [
+            "SaveJob::step",
+            "startSave"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.ProjectRoundTrip",
+        "ControlProcessorTests.ProjectVectors"
+      ],
+      "note": "What the editor does around a save: the snapshot on the message thread, the write on the project worker, then the new project file, the flag cleared unless the project changed meanwhile, the recent project and the menu and title. The API writes through a temporary file and a final rename, and reports failures instead of showing a dialog.",
+      "noteZh": "编辑器保存时的步骤：消息线程取快照、工程 worker 写盘，之后设置新的工程文件、在工程期间没有再改动时清除脏标记、推入最近工程并更新菜单与标题。接口经临时文件和最终改名写入，失败时报告错误而不弹对话框。"
+    },
+    {
+      "id": "project-open-flow",
+      "group": "project",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::startOpenProject",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "c7b6e4598b1f6e64bd706f7677641ac91b5403e06f3be8c2a54b156fc15b4b48"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ProjectOps.cpp",
+          "symbols": [
+            "OpenJob::step",
+            "OpenJob::commit"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.ProjectRoundTrip",
+        "ControlProcessorTests.ProjectVectors"
+      ],
+      "note": "What the editor does to open a project: the worker reads and prepares the file, the message thread commits it in one step and refreshes every part of the UI. The API reports a failure instead of showing a dialog, and the editor's step that clears the recent projects after a failed open is not repeated.",
+      "noteZh": "编辑器打开工程的步骤：worker 读取并预处理文件，消息线程一次提交并刷新界面各处。接口把失败作为错误报告而不弹对话框，打开失败后清空最近工程的那一步不照做。"
+    },
+    {
+      "id": "notes-correction-state",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "buildNoteBasedCorrectionState",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "beb351d2d4a7b1b38930b0b77ceba84e89e5e0578330007f270c276abc688e1f"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/NoteCorrection.cpp",
+          "symbols": [
+            "controlNoteBasedCorrection"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "The correction of edited notes: a scratch copy of the curve, baked by applyCorrectionToRange() over the edit range with the clip's pitch-shift ratio (NoteGeneratorParams{} where the UI passes its knobs).",
+      "noteZh": "编辑后音符的修正：曲线的临时副本，按片段的移调比例在编辑范围内经 applyCorrectionToRange() 烘焙（界面传旋钮值的地方接口传 NoteGeneratorParams{}）。"
+    },
+    {
+      "id": "notes-correction-commit",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "commitNoteBasedCorrection",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "e48f2d28b94f54fc6c1e6c428fe17d329ff7bfe0e18735dcd50dd645d89a56ca"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/NoteCorrection.cpp",
+          "symbols": [
+            "controlNoteBasedCorrection",
+            "controlCommitCorrection"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "What a note gesture commits: the affected range of expandNoteBasedCorrectionRange() and the corrected segments that overlap it.",
+      "noteZh": "一次音符手势提交什么：expandNoteBasedCorrectionRange() 得到的受影响范围，以及与它重叠的修正段。"
+    },
+    {
+      "id": "notes-drag-edit-range",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "PianoRollToolHandler::noteDragEditRange",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "c5b2a78ef2c6500d8486555bd257585a065e2865e0bf86515069c0dcb5ea698a"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/NoteCorrection.cpp",
+          "symbols": [
+            "controlNotesFrameRange"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes"
+      ],
+      "note": "The frame range of an edit of notes: from the earliest start to the latest end of the notes that changed.",
+      "noteZh": "音符编辑的帧范围：从改动音符最早的开始到最晚的结束。"
+    },
+    {
+      "id": "notes-drag-pitch",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "PianoRollToolHandler::dragNotePitch",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "ea8d450d86c56f6c176b0834a798ee8f9dc31728543c4b13697054bb880dc9be"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentEditOps.cpp",
+          "symbols": [
+            "applyOp"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "The pitch move changes the cent offset (pitchOffset) of each note and keeps its base pitch; shiftCents adds to it without the UI's snapping modes.",
+      "noteZh": "音高移动改变每个音符的音分偏移（pitchOffset），基准音高不变；shiftCents 只做加法，不用界面的吸附模式。"
+    },
+    {
+      "id": "notes-end-pitch-drag",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "PianoRollToolHandler::endNotePitchDrag",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b95c1478a2d72ffd4920fa5b86b80e84a45e07195ebf939763459000810a1189"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentEditOps.cpp",
+          "symbols": [
+            "runEditNotes",
+            "descriptionOf"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes"
+      ],
+      "note": "The end of a pitch move: one commit of the notes that changed, and its undo description.",
+      "noteZh": "音高移动结束：对改动的音符提交一次，以及它的撤销描述。"
+    },
+    {
+      "id": "notes-double-click-snap",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "PianoRollToolHandler::handlePitchToolDoubleClick",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "e92dab4e48bf3aa59d2e28dd485d25924c2abecb24d9342350d51809fb529b01"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentEditOps.cpp",
+          "symbols": [
+            "descriptionOf"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes"
+      ],
+      "note": "The double click of the pitch, modulation and drift tools: the undo descriptions of the snap and of the drift edit.",
+      "noteZh": "音高、调制与漂移工具的双击：吸附与漂移编辑的撤销描述。"
+    },
+    {
+      "id": "notes-edit-parameter",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::editParameter",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "5d6ce786448ba93a5d6964a97f022f863b0a4033f693b4765bb58f68fdb5732b"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentEditOps.cpp",
+          "symbols": [
+            "applyOp",
+            "descriptionOf"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "The parameter knobs on selected notes: the note fields they set and the undo description Edit note parameter.",
+      "noteZh": "选中音符上的参数旋钮：设置哪些音符字段，以及撤销描述 Edit note parameter。"
+    },
+    {
+      "id": "notes-commit-range",
+      "group": "notes",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::commitEditedContentNotesAndSegments(const EditableContentSnapshot&, const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&, F0FrameRange)",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "d36905e2ce2a215252e967053a84a82f57d9ce22adbc753f030f27af85fb9eaf"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/NoteCorrection.cpp",
+          "symbols": [
+            "controlCommitCorrection"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.EditNotes",
+        "ControlProcessorTests.SnapNotes"
+      ],
+      "note": "The range commit of the piano roll: the notes and segments cut to the affected range, then commitNotesAndSegments().",
+      "noteZh": "钢琴卷帘的范围提交：音符与修正段按受影响范围裁剪，再调用 commitNotesAndSegments()。"
+    },
+    {
+      "id": "auto-snap-notes",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::applyAutoSnapToAllNotes",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b68a587562a6b975739fdda01ecf1020dab2309a204ae60c522e301c2aca4b17"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/NoteCorrection.cpp",
+          "symbols": [
+            "controlPlanAutoSnap"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/ContentTuneOps.cpp",
+          "symbols": [
+            "runSnapNotes"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.SnapNotes",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "SNAP, the AUTO button of the openDyne scheme: each target's offset from its base pitch quantized to the scale, the no-change rule, the dirty range and the segments with and without a selection.",
+      "noteZh": "SNAP（openDyne 方案的 AUTO 按钮）：每个目标的偏移由基准音高按音阶量化得到；无变化判据、脏范围，以及有无选中时的修正段。"
+    },
+    {
+      "id": "auto-snap-fully-corrected",
+      "group": "auto",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "isFullyCorrectedInRange",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "33f0a8aa4a04cd8b94353797ad6c47ea7f13db05d99b8aa9160bbc5b587773bc"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/NoteCorrection.cpp",
+          "symbols": [
+            "fullyCorrectedInRange"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.SnapNotes"
+      ],
+      "note": "When SNAP has nothing to do: every frame of the targets is covered by a correction segment.",
+      "noteZh": "SNAP 何时无事可做：目标音符的每一帧都被修正段覆盖。"
+    },
+    {
+      "id": "pitch-shift-dialog",
+      "group": "pitch-shift",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::pitchShiftRequested",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "45978577677ef625442d9158614d1766864696fc6a7987efde859ef616915d3d"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentEditOps.cpp",
+          "symbols": [
+            "runSetPitchShift"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.SetPitchShift",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "The pitch-shift dialog: only a shift other than the current one is committed, its PitchShiftEditAction is pushed and the project is marked as changed.",
+      "noteZh": "移调对话框：只提交与当前不同的移调，推入它的 PitchShiftEditAction，并把工程标为已修改。"
+    },
+    {
+      "id": "pitch-shift-commit",
+      "group": "pitch-shift",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::commitPitchShiftEdit",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "850ca4359099e1e4ab10486260cf4bcb783e588dff3404cacc626a25bda85d04"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ContentEditOps.cpp",
+          "symbols": [
+            "runSetPitchShift"
+          ]
+        },
+        {
+          "file": "Source/Control/Edit/ControlOriginAction.cpp",
+          "symbols": [
+            "ControlOriginAction::apply"
+          ]
+        },
+        {
+          "file": "Source/Control/Edit/PitchShiftLedger.cpp",
+          "symbols": [
+            "ControlPitchShiftLedger::observe"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.SetPitchShift",
+        "ControlProcessorTests.EditVectors"
+      ],
+      "note": "The commit of a pitch shift: nothing without a pitch curve or for the same total cents; otherwise the notes and segments scaled and applied through applyContentPitchShiftState().",
+      "noteZh": "移调提交：没有音高曲线或总音分相同时什么都不做；否则缩放音符与修正段，经 applyContentPitchShiftState() 应用。"
+    },
+    {
+      "id": "pitch-shift-apply-state",
+      "group": "pitch-shift",
+      "upstream": {
+        "file": "Source/Content/StandaloneClipContent.cpp",
+        "symbol": "StandaloneClipContent::applyPitchShiftState",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "3596954e736e6121ad0b286f3938d843dfc47a14c7e82007b09e068e5db2d485"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/PitchShiftLedger.cpp",
+          "symbols": [
+            "ControlPitchShiftLedger::observe"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.SetPitchShift"
+      ],
+      "note": "A pitch shift sets the settings and advances the notes and pitch counters by one each, which the revision token leaves out.",
+      "noteZh": "移调设置参数，并把音符与音高计数器各加 1，revision 令牌扣除这一部分。"
+    },
+    {
+      "id": "time-tool-drag",
+      "group": "timing",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "PianoRollToolHandler::handleTimeToolMouseDrag",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "380d9b4473071ad6956f47007d4be9e1f503d56e6c29ee95fab7d9301dfcd374"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/TimeGridOps.cpp",
+          "symbols": [
+            "TimeGridOps::planShift",
+            "TimeGridOps::planMoves",
+            "limitInOrder"
+          ]
+        },
+        {
+          "file": "Source/Control/Edit/TimeGridOps.h",
+          "symbols": [
+            "TimeGridOps::kMinSpacingSec"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Timing",
+        "ControlProcessorTests.TimingVectors"
+      ],
+      "note": "The time tool's drag: the dragged handle limited to its neighbours plus and minus 30 ms, the uniform distance of a group drag, the left-to-right second pass, and no move without room.",
+      "noteZh": "时间工具的拖动：被拖手柄限制在邻点 ±30 ms 之内，组拖动的统一位移，从左到右的第二轮夹紧，没有空间时不动。"
+    },
+    {
+      "id": "time-tool-mouse-up",
+      "group": "timing",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
+        "symbol": "PianoRollToolHandler::handleTimeToolMouseUp",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "86eb0526c37cf75f2e231ad0486b198a6162600d736501832141de49a0ee27a4"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TimingOps.cpp",
+          "symbols": [
+            "applyPlan"
+          ]
+        },
+        {
+          "file": "Source/Control/Edit/TimeGridOps.cpp",
+          "symbols": [
+            "TimeGridOps::moveDescription"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Timing"
+      ],
+      "note": "The end of a drag: a moved grid is committed once with the drag's description; a drag that moved nothing commits nothing.",
+      "noteZh": "拖动结束：网格有变化时以拖动的描述提交一次；没有移动则不提交。"
+    },
+    {
+      "id": "time-grid-commit",
+      "group": "timing",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "toolCtx.commitTimeGrid",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "b6a2b19747de4b0620767daed0488f7ae9814b8ad1b3bb2cc9182fc33290e44a"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/TimeGridOps.cpp",
+          "symbols": [
+            "TimeGridOps::commit"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/TimingOps.cpp",
+          "symbols": [
+            "applyPlan"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Timing"
+      ],
+      "note": "How the piano roll commits a time-grid edit: a TimeGridEditAction with the grid before and after, setTimeGrid(), then one undo entry.",
+      "noteZh": "钢琴卷帘如何提交时间网格编辑：先构造带前后网格的 TimeGridEditAction，再 setTimeGrid()，最后加一条撤销条目。"
+    },
+    {
+      "id": "time-tool-pick",
+      "group": "timing",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::setCurrentTool",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "5dea5c9a87b45ffac8a47828b080f3de98de9f7001a9884f839d180a81616f45"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TimingOps.cpp",
+          "symbols": [
+            "SeedJob::seed"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.TimeGridSeed"
+      ],
+      "note": "Picking the time tool seeds the grid of the edited content with ensureTimeToolAnchorSeed(); op seed makes the same call from a job.",
+      "noteZh": "选中时间工具时用 ensureTimeToolAnchorSeed() 为正在编辑的内容种子网格；op seed 在 job 里做同一调用。"
+    },
+    {
+      "id": "time-seed-anchors",
+      "group": "timing",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::ensureTimeToolAnchorSeed",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "f5b0de0f5f5e478beacfc4a2b5f2b7dc6a11489861fb191d93afbb2547421c98"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TimingOps.cpp",
+          "symbols": [
+            "SeedJob::step",
+            "SeedJob::seed"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.TimeGridSeed"
+      ],
+      "note": "When the seed places handles at once: a grid without handles and a timing analysis ready for the current producer and audio, with anchors (featuresReady); otherwise it registers a deferred seed, which the job never lets happen.",
+      "noteZh": "种子何时立即放置手柄：网格没有手柄，且计时分析已就绪、producer 与音频指纹匹配并有锚点（featuresReady）；否则会登记延迟种子，job 从不让这种情况发生。"
+    },
+    {
+      "id": "time-seed-preheat",
+      "group": "timing",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "aad66fcc5ba8434bcb6b52865f0820145b8fb259a62e6b6b4d81902ddb908b92"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TimingOps.cpp",
+          "symbols": [
+            "SeedJob::step"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.TimeGridSeed"
+      ],
+      "note": "AlreadyReady means a ready timing analysis of the current producer and audio; with hasTimingAnchors() it is the seed's featuresReady, so the job calls ensureTimeToolAnchorSeed() only when that seeds at once.",
+      "noteZh": "AlreadyReady 表示计时分析已就绪且 producer 与音频匹配；加上 hasTimingAnchors() 即种子的 featuresReady，因此 job 只在能立即种子时调用 ensureTimeToolAnchorSeed()。"
+    }
+  ]
+}

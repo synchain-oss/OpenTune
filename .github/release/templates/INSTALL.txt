@@ -1,0 +1,112 @@
+OpenTune {{APP_VERSION}} with the local control API - unofficial test build {{BUILD_LABEL}}
+INSTALL (Windows 10 / 11, x64)
+
+(中文：INSTALL.zh-CN.txt)
+
+This is NOT an official OpenTune release. The only official channel is
+{{OFFICIAL_RELEASES_URL}}. Read README-UNOFFICIAL.txt first.
+
+The commands below are for Windows PowerShell. Replace <folder> with the folder
+you extract the package to.
+
+
+1. Install official OpenTune first
+----------------------------------
+
+- Install official OpenTune {{MIN_OFFICIAL_VERSION}} or later from
+  {{OFFICIAL_RELEASES_URL}}
+  for all users of the computer, in the default location
+  (C:\Program Files\OpenTune).
+- This package contains no model weights. This build uses the models of that
+  installation. The official installer puts them in the shared folder
+  C:\ProgramData\OpenTune\Models (OpenTune 1.8.1) or in
+  C:\Program Files\OpenTune\models (OpenTune 1.7.9). Without them, pitch
+  detection, note generation and rendering do not work.
+  OpenTune 1.7.9 must be installed in the default location: its models are
+  inside the installation folder, and this build cannot find them if you
+  install it elsewhere. OpenTune 1.8.1 may be installed elsewhere; then only
+  the folder in the D3D12 copy command in step 4 changes.
+
+
+2. Check the download
+---------------------
+
+- Compare the SHA-256 of the zip with the value on the release page:
+
+    Get-FileHash -Algorithm SHA256 .\{{PACKAGE_NAME}}.zip
+
+- Remove the "downloaded from the internet" mark from the zip before
+  extracting it, so that Windows does not mark every extracted file:
+
+    Unblock-File .\{{PACKAGE_NAME}}.zip
+
+
+3. Extract
+----------
+
+- Extract the zip to a folder of your own outside "Program Files", for example
+  %USERPROFILE%\Apps. Do not extract it into the official installation folder
+  and do not replace any official files.
+- Check every extracted file against SHA256SUMS (no output means all match):
+
+    cd <folder>
+    Get-Content .\SHA256SUMS | ForEach-Object {
+      $hash, $name = $_ -split '  ', 2
+      if ((Get-FileHash -Algorithm SHA256 -LiteralPath $name).Hash -ne $hash) { "MISMATCH: $name" }
+    }
+
+
+4. GPU acceleration: copy D3D12Core.dll once (optional)
+-------------------------------------------------------
+
+This package does not include the DirectX 12 Agility runtime. Copy it once
+from your official installation. Without it, this build runs AI inference on
+the CPU, which is slower.
+
+    New-Item -ItemType Directory -Force -Path '<folder>\D3D12' | Out-Null
+    Copy-Item -LiteralPath "$env:ProgramFiles\OpenTune\D3D12\D3D12Core.dll" -Destination '<folder>\D3D12\D3D12Core.dll'
+    (Get-FileHash -Algorithm SHA256 -LiteralPath '<folder>\D3D12\D3D12Core.dll').Hash
+
+- The hash must be
+  {{D3D12CORE_SHA256}}
+  (DirectX 12 Agility SDK {{D3D12_AGILITY_VERSION}}, the version this build
+  was made with). If it is different, delete the folder <folder>\D3D12 again;
+  this build then runs on the CPU.
+- If official OpenTune is installed in another folder, replace
+  $env:ProgramFiles\OpenTune in the second command with that folder.
+- Copy only D3D12Core.dll. Do not copy D3D12SDKLayers.dll (a debugging layer).
+- If you use OpenTune MCP Server, its doctor command checks this copy and its
+  hash.
+
+
+5. Start
+--------
+
+- OpenTune-AI.cmd starts OpenTune with the local control API on. Use it when
+  OpenTune MCP Server should operate OpenTune.
+- OpenTune.exe starts OpenTune with the control API off.
+- Windows SmartScreen: the files are not code-signed, so SmartScreen may show
+  "Windows protected your PC". If the hashes in steps 2 and 3 matched, click
+  "More info", then "Run anyway".
+- Smart App Control (Windows 11): when it is on, it may block unsigned
+  programs such as this one, and it offers no exception for a single program.
+  This test build then cannot run on that computer. We do not recommend
+  turning Smart App Control off just for this build.
+
+
+6. Settings and logs are shared with official OpenTune
+------------------------------------------------------
+
+- This build uses the same settings and log files as official OpenTune (in
+  your user profile, under %APPDATA%). Changes made in one appear in the other.
+- While the control API is on, OpenTune writes a discovery file to
+  %LOCALAPPDATA%\OpenTune\control\instances\ and deletes it on normal exit.
+
+
+7. Uninstall
+------------
+
+- Close OpenTune.
+- Delete <folder>.
+- Delete %LOCALAPPDATA%\OpenTune\control\ (files of the control API).
+- Do not delete %APPDATA%\OpenTune: official OpenTune uses it too.

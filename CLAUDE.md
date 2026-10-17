@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 > 本文件是 AI 编码代理与贡献者在本 fork 内的常驻法条。它只存在于 fork（`dev` 及其派生分支），**永不进入上游 PR**。上游 `.gitignore` 忽略 `CLAUDE.md`，本文件以 `git add -f -- CLAUDE.md` 入库。与维护者书面指令冲突时以维护者为准。
 >
-> 文中提到的脚本与检查（`scripts/gates.ps1`、`check-ignored-delta.ps1`、`.github/scripts/attribution-patterns.txt`、fork-gate、branch-gate、`sync-dryrun.yml` 等）随后续 PR 陆续加入，路径以合入后为准；加入之前以本机护栏与人工检查代替。
+> fork 专用脚本一律放在 `.github/scripts/`（上游已经跟踪 `scripts/`）。本地 gates、`check-ignored-delta.ps1`、署名规则副本、fork-gate、branch-gate、`build-windows.yml`、`asan.yml`、`build-macos.yml`、`control-sanitizers.yml`、`sync-dryrun.yml`（试 rebase 脚本 `try-rebase.mjs`）与 `runner-probe.yml` 已经就位；文中其余脚本与检查随后续 PR 陆续加入，路径以合入后为准，加入之前以本机护栏与人工检查代替。
 
 ## 0. 基本约定
 
@@ -30,22 +30,23 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 ## 1. 第一原则：不改变 OpenTune 的行为
 
 - **只做两类改动**：① 新增接口代码；② 下表声明过的最小接入钩子。以下两种情况下，OpenTune 的行为必须与上游完全相同：CMake 选项 `OPENTUNE_ENABLE_CONTROL_API` 为 OFF；或选项为 ON、但运行时未开启接口。
+- **唯一例外**：`OPENTUNE_DATA_DIR` 的数据目录重定向在运行时未开启接口时也生效。依据规范 PROTOCOL.md §6.3（构建含控制接口时必须遵守，以免测试触碰用户真实设置）。它只在用户主动设置该环境变量时生效；非绝对路径会被忽略，OpenTune 照常使用默认目录。实现位置：`Source/Utils/AppPreferences.cpp`、`Source/Utils/AppLogger.cpp`、`Source/Control/ControlDataDirectory.h`。
 - **新增代码的位置**（`namespace OpenTune`，PascalCase 文件名）：`Source/Control/**`、`Source/Standalone/ControlEditorBridge*`、`Tests/Control/**`、`cmake/OpenTuneControl.cmake`。fork 专用测试放 `Tests/ControlFork/**`。
 - **已声明的钩子**：这是对上游已有文件的全部改动。每处钩子都要加标记 `// OpenTune Control API hook: <purpose>, see Source/Control/README.md#hooks`。
 
-| 钩子 | 文件 | 约行数 |
+| 钩子 | 文件 | 约行数（含 `#if`/`#endif`/include 等条件编译行） |
 |---|---|---|
-| ControlService 成员；构造末尾受保护的 callAsync 启动；析构**第一句** `stop()`；getter（Standalone 宏 + 选项宏） | `Source/PluginProcessor.h/.cpp` | 20–25 |
-| 公开 `ensureRuntimeInitialized()` | `Source/PluginProcessor.h/.cpp` | 6–8 |
-| `OPENTUNE_DATA_DIR` 重定向 | `Source/Utils/AppPreferences.cpp`（+ `AppLogger.cpp`） | 5（+3） |
-| `contentEpoch` + getter | `Source/Content/StandaloneContentRepository.h/.cpp` | 4–6 |
-| `friend class ControlEditorBridge;` + 成员；构造后创建，析构时先注销 | `Source/Standalone/PluginEditor.h/.cpp` | ~6 |
-| 导出锁（UI 与 API 共用）、master 导出错误信息、按 placementId 导出 clip | `Source/PluginProcessor.*`、`Source/Standalone/PluginEditor.cpp` | 15–25 |
-| 抽出 `afterUndoRedo()`（纯重构）+ bridge 调用 | `Source/Standalone/PluginEditor.cpp` | 5–8 |
-| `peekUndo` / `peekRedo` / `size` / `cursor` | `Source/Utils/UndoManager.h/.cpp` | ~8 |
-| 公开 `dismiss()`，包装私有 `finish()`（只关闭已显示的首次引导） | `Source/Editor/OnboardingOverlayComponent.*` | ~3 |
-| （可选）公开包装私有选择提交 | `Source/Standalone/UI/ArrangementViewComponent.*` | ~8 |
-| 参考特征生产者 getter；记录每个内容最近一次 F0 失败原因 | `Source/PluginProcessor.*` | ~4 / ~8 |
+| ControlService 成员；构造末尾受保护的 callAsync 启动；析构**第一句** `stop()`；getter（Standalone 宏 + 选项宏） | `Source/PluginProcessor.h/.cpp` | 与下一行合计约 33（.h 21 + .cpp 12） |
+| 公开 `ensureRuntimeInitialized()` | `Source/PluginProcessor.h/.cpp` | 含在上一行的合计内 |
+| `OPENTUNE_DATA_DIR` 重定向 | `Source/Utils/AppPreferences.cpp`（+ `AppLogger.cpp`） | `AppPreferences.cpp` 与 `AppLogger.cpp` 各约 8 |
+| `contentEpoch` + getter | `Source/Content/StandaloneContentRepository.h/.cpp` | 约 11（含 `#if`/`#endif` 与访问说明符） |
+| `friend class ControlEditorBridge;` + 成员；构造后创建，析构时先注销 | `Source/Standalone/PluginEditor.h/.cpp` | `.h` 约 6、`.cpp` 约 11 |
+| 导出锁（UI 与 API 共用；被占用时接口回 `BUSY(export_in_progress)`，界面照旧提示）。master 导出错误信息与按 placementId 导出不加钩子：接口错误的 detail 只用固定文本，按 placementId 导出调用已公开的 `findPlacementIndexById()` | `Source/PluginProcessor.h`、`Source/Standalone/PluginEditor.cpp` | `.h` 约 5、`.cpp` 约 15 |
+| 抽出 `afterUndoRedo()`（纯重构；选项关闭时 `performUndoRedoAction` 与上游逐字相同）+ bridge 调用 | `Source/Standalone/PluginEditor.h/.cpp` | `.h` 约 2、`.cpp` 约 8 |
+| `peekUndo` / `peekRedo` / `size` / `cursor`（只读）；`clearRedo()`（**改动型，会改写历史**：清空重做栈，只在接口的写入没有撤销条目时调用，唯一调用方是 `Source/Control/Edit/ControlOriginAction.cpp`，对应规范 rc.3 第 15.3 节第 9 条，且在撤销/重做进行中不动；若规范后续版本改为「重做时只屏蔽被改动的方面」即删除，钩子回到只读） | `Source/Utils/UndoManager.h`（仅头文件，类内内联，新增行全部在 `#if`/`#endif` 之内） | 约 8（含 `#if`/`#endif`） |
+| （预留，尚未接入）公开 `dismiss()`，包装私有 `finish()`（只关闭已显示的首次引导） | `Source/Editor/OnboardingOverlayComponent.*` | ~3 |
+| （预留，尚未接入）公开包装私有选择提交 | `Source/Standalone/UI/ArrangementViewComponent.*` | ~8 |
+| 参考特征生产者 getter；记录每个内容最近一次 F0 失败原因（`requestContentRefresh` 里 6 处记录调用，加两个成员函数的定义） | `Source/PluginProcessor.*` | `.h` 约 6、`.cpp` 约 43（全部在选项宏内） |
 | `option()` + `include(cmake/OpenTuneControl.cmake)` | `CMakeLists.txt` | 2–5 |
 
 - **表外的上游文件一律不改。** 确需新钩子时先停下，在 PR 或返回结果的问题列表里提出。由 manager 更新本表与 `Source/Control/README.md` 的钩子清单后再做。
@@ -63,7 +64,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - 实时（音频）路径上不加锁、不分配内存、不做 I/O。
 - 内容修改只在消息线程进行，唯一入口是 `ControlDispatcher::runOnMessageThread`。网络线程等待主线程时，绝不持有 `CompletionCallbackLease`。关闭合同见 `Source/Control/README.md`。
 - 测试：每个文件一个 `main()`，用 CMake `add_test` 注册，不用 gtest / Catch2。生命周期测试沿用上游 `Tests/LifecycleWatchdog.h`。超时不够时用命名常量。
-- 新文件首行写 SPDX：`// SPDX-License-Identifier: AGPL-3.0-or-later`（规范副本目录除外）。
+- 新文件首行写 SPDX：`// SPDX-License-Identifier: AGPL-3.0-or-later`（规范副本目录除外）。豁免与 fork-gate 的 `spdx` 检查一致：无法加注释头的文件（`.json`、`.txt`、`.sha256` 等数据文件；`CMakeLists.txt` 不豁免）、规范副本目录 `Tests/Control/spec/**`，以及与维护者正本逐字节一致的署名规则副本（`.github/scripts/check-attribution.mjs`、`attribution-patterns.txt`）。Markdown 用 HTML 注释形式写 SPDX。
 - `Source/Control/**`、`Tests/Control/**`、`ControlEditorBridge*` 的新文件用 clang-format 18.1.8 格式化（fork 专用配置）。
 - **绝不格式化上游文件。** 只写需要的那几行。不改上游文件的缩进、空白、include 顺序、换行符或编码；部分上游文件带 UTF-8 BOM，必须保留。fork-gate 会检查上游文件新增行的空白。
 - `Source/Control/**` 里每个公开类与函数都要有英文 doc 注释，写明职责、线程要求和错误语义。调用上游函数的地方，注明调用的是哪个函数、为什么调用。
@@ -136,20 +137,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 - 不修改 `.gitignore`。上游的忽略模式不锚定（如 `.*/`、`docs/`、`tools/`、`specs/`、`research/`、`spike/`、`Logs/`、`knowledge/`、`Python/`、`openspec/`、`build-*/`、`CLAUDE.md`、`AGENTS.md`），我们的新目录要避开这些名字。
 - 本 fork 需要 force-add 的文件有：`.github/` 下的每个新文件、根目录 `CLAUDE.md`、`docs/control-api.md`、`docs/control-api.en.md`。每个都用 `git add -f -- <精确路径>` 暂存。
-- 每次暂存后运行 `check-ignored-delta.ps1`：确认 force-add 的路径都在允许清单内，并且没有误加被忽略的构建产物、依赖或模型。
+- 每次暂存后运行 `pwsh .github/scripts/check-ignored-delta.ps1`：确认 force-add 的路径都在允许清单内，并且没有误加被忽略的构建产物、依赖或模型。
 
 ## 8. 本地 gates（开 PR 前必跑）
 
-> 以下脚本随后续 PR 加入，路径以合入后为准。
+> 脚本都在 `.github/scripts/`，`gates.ps1` 按下列顺序执行。真机启动与真 Standalone 契约测试随后续 PR 加入，加入之前 gates 对它们报 SKIP。下列之外还有两步：构建之后删除 POST_BUILD 生成的 `models\` 并断言它已不存在（原因见 §11）；署名与身份检查之后，用 gitleaks 扫描增量的提交与文件。`OPENTUNE_DATA_DIR` 钩子合入之前第 4 项无法生效，gates 用「测试数据隔离」一行如实报告 ctest 是否写入了真实用户目录。
 
-- 一键运行 `pwsh scripts/gates.ps1`（在 lane 内）。它输出带 SHA 的 PASS/FAIL/SKIP 汇总表，原样贴进 PR。依次执行：
+- 一键运行 `pwsh .github/scripts/gates.ps1 -Layer <层>`（在 lane 内；只改文档或脚本时加 `-SkipBuild`）。它输出带 SHA 的 PASS/FAIL/SKIP 汇总表，原样贴进 PR。依次执行：
   1. LFS 设置检查：`lfs.fetchexclude=*`，模型文件仍是未 smudge 的指针。
-  2. configure / build / ctest / 真机启动，全部经 `with-build-slot.ps1`：全机一个构建槽，命名互斥锁，空闲内存检查，显式 `--parallel 8`。
-  3. `ctest -R Control`，再加上游已有测试，用 `-E ARALifecycleContractTests` 排除一项。该测试依赖 ARA_DRAFT 的 `persistentID`，在锁定的 ARA SDK 2.3.0 下编不过，属于上游问题。
+  2. configure / build / ctest / 真机启动，全部经 `.github/scripts/with-build-slot.ps1`：全机默认 2 个构建槽（环境变量 `OPENTUNE_BUILD_SLOTS` 或 `gates.ps1 -BuildSlots` 可调，范围 1–8），命名互斥锁，每个槽拿到后检查空闲内存，每个槽显式 `--parallel 8`。
+  3. `ctest -R Control`，再加上游已有测试，用 `-E ARALifecycleContractTests` 排除一项。该测试依赖 ARA_DRAFT 的 `persistentID`，在锁定的 ARA SDK 2.3.0 下编不过，属于上游问题。`-Layer` 为 L2 及以上时，gates 还会在 `<构建目录>\control-on` 用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` 再 configure / build / `ctest -R Control` 一遍（单独一行，Control 测试数为 0 即 FAIL），因为 lane 默认构建目录的控制接口是关闭的；这一轮 ctest 前后还会对真实 `%APPDATA%OpenTune` 各做一次快照，有新建、修改或删除即 FAIL（「测试数据隔离（control-on 一轮）」一行）；L0 与 `-SkipBuild` 时这两行 SKIP。
   4. 所有测试都使用临时 `OPENTUNE_DATA_DIR`，因为上游 ctest 会写真实的 `%APPDATA%\OpenTune`。
   5. 真 Standalone 测试环境就绪后：改到 Dispatcher / Jobs / Ops / Edit / bridge 或 `spec.lock` 的 PR，还要跑真 Standalone 的契约与场景测试。这一步持 E2E 互斥锁，并先快照、再恢复 `OpenTune.settings` 与 AppPreferences。
-  6. 署名与身份检查。
-  7. `check-ignored-delta.ps1`。
+  6. 署名与身份检查（`.github/scripts/fork-checks.mjs`，与 fork-gate 同一份实现）。
+  7. `.github/scripts/check-ignored-delta.ps1`。
+  8. 镜像锁清单（`drift-pins.mjs --check`，三处一致，不需要构建）：判定与 fork-gate 相同（`drift-pins.mjs` 的 `decideEnforcement`，改动文件取 `git diff --name-only <base>...HEAD`，不看 `-Layer`）：本分支改到清单或脚本时不一致为 FAIL，否则为 WARN，因为可上游的 PR 改了镜像也不能改 `.github/**`，由 manager 的 L0 跟进用 `node .github/scripts/drift-pins.mjs --write` 补齐。fork-gate 里同一检查：push 到 `dev` / `feature/control-api`、base 为 `dev` / `review-base/**` / `sync/**` 的 PR、以及改到 `.github/drift-pins/**` 或 `drift-pins.mjs` 的 PR 阻塞；base 为 `feature/**` 且没改这些路径的子 PR 只报告（job summary 与 `::warning::`），不阻塞。细则见 `.github/drift-pins/README.md`。
 - **构建**：JUCE 9.0.3（8.0.15 为已验证的备选），Ninja Multi-Config。lane、gates 与 CI 测试一律用 RelWithDebInfo。Release（LTCG）只用于出包与 E2E，不在 Release 下构建测试。依赖由 `bootstrap-deps.ps1` 按 `deps.lock.json` 拉取并逐个校验 sha256，绝不下载模型。
 - **CI 分档**：子 PR（base=`feature/**`）只跑轻量门禁，即 fork-gate；改到原生代码时才跑 build-windows。所以本地 gates 是第一道编译门，不要指望 CI 替你发现编译错误。PR→`dev` 跑完整套件。
 

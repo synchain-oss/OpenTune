@@ -1,0 +1,168 @@
+{
+  "schema": 1,
+  "comment": "OpenTune fork build dependencies (Windows and macOS; entries with a platforms list are fetched only on those hosts), read by bootstrap-deps.ps1. Versions follow CMakeLists.txt, not BUILDING.*.md. sha256 pins are verified on every run; nugetSha512 / publishedSha256 are the publisher's own hashes and are cross-checked when present. No model weights are ever listed here. Binary tools (sccache, gitleaks, clang-format) are pinned in tools.lock.json instead.",
+  "mirror": {
+    "baseUrl": "https://github.com/synchain-oss/OpenTune/releases/download/deps-v1",
+    "comment": "Archive deps are tried at <baseUrl>/<file> first and fall back to their upstream urls; every copy must match the same sha256 pin. git deps always come from upstream. An empty baseUrl disables the mirror."
+  },
+  "deps": [
+    {
+      "name": "JUCE-9.0.3",
+      "kind": "git",
+      "url": "https://github.com/juce-framework/JUCE.git",
+      "ref": "9.0.3",
+      "commit": "be29c81492b6151c8ea8d14c840e1311963b3a83",
+      "recursive": false,
+      "junction": "JUCE-master",
+      "verify": [
+        "extras/Build/CMake/JUCEUtils.cmake",
+        "modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp",
+        "modules/juce_audio_devices/native/asio/iasiodrv.h"
+      ]
+    },
+    {
+      "name": "JUCE-8.0.15",
+      "kind": "git",
+      "optional": "fallback",
+      "url": "https://github.com/juce-framework/JUCE.git",
+      "ref": "8.0.15",
+      "commit": "91ad83ae34a81e0833b1a2b0866f54846370ae53",
+      "recursive": false,
+      "junction": "JUCE-master",
+      "verify": [
+        "extras/Build/CMake/JUCEUtils.cmake",
+        "modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp"
+      ]
+    },
+    {
+      "name": "ARA_SDK-releases-2.3.0",
+      "kind": "git",
+      "url": "https://github.com/Celemony/ARA_SDK.git",
+      "ref": "releases/2.3.0",
+      "commit": "0005c532bb03eb210e7bb490329fc6d7ba1792c7",
+      "recursive": true,
+      "junction": "ThirdParty/ARA_SDK-releases-2.3.0",
+      "verify": [
+        "ARA_API/ARAInterface.h",
+        "ARA_Library/Utilities/ARAChannelFormat.cpp",
+        "ARA_Library/Dispatch/ARAPlugInDispatch.cpp"
+      ]
+    },
+    {
+      "name": "soundtouch-2.3.3",
+      "kind": "archive",
+      "format": "tar.gz",
+      "file": "soundtouch-2.3.3.tar.gz",
+      "urls": [
+        "https://www.surina.net/soundtouch/soundtouch-2.3.3.tar.gz"
+      ],
+      "sha256": "43b23dfac2f64a3aff55d64be096ffc7b73842c3f5665caff44975633a975a99",
+      "exclude": [
+        "soundtouch/source/SoundTouchDLL/LazarusTest/libSoundTouchDll.so"
+      ],
+      "stripSingleRoot": true,
+      "junction": "ThirdParty/soundtouch-2.3.3",
+      "verify": [
+        "source/SoundTouch/SoundTouch.cpp",
+        "include/SoundTouch.h"
+      ]
+    },
+    {
+      "name": "onnxruntime-osx-arm64-1.20.0",
+      "platforms": ["macos"],
+      "kind": "archive",
+      "format": "tar.gz",
+      "file": "onnxruntime-osx-arm64-1.20.0.tgz",
+      "urls": [
+        "https://github.com/microsoft/onnxruntime/releases/download/v1.20.0/onnxruntime-osx-arm64-1.20.0.tgz"
+      ],
+      "sha256": "2bcfaafa9ff0a3a94f78e3af2f135ffde5bb2d79b08e83a50dbc450b0d20ddae",
+      "size": 7875127,
+      "stripSingleRoot": true,
+      "junction": "ThirdParty/onnxruntime-osx-universal2-1.20.0",
+      "verify": [
+        "include/onnxruntime_cxx_api.h",
+        "lib/libonnxruntime.1.20.0.dylib"
+      ]
+    },
+    {
+      "name": "onnxruntime-win-x64-1.24.4",
+      "platforms": ["windows"],
+      "kind": "archive",
+      "format": "zip",
+      "file": "onnxruntime-win-x64-1.24.4.zip",
+      "urls": [
+        "https://github.com/microsoft/onnxruntime/releases/download/v1.24.4/onnxruntime-win-x64-1.24.4.zip"
+      ],
+      "sha256": "d2319fddfb6ea4db99ccc4b60c85c517bcd855721f5daa6a06d40d7cb2ee2357",
+      "publishedSha256": "d2319fddfb6ea4db99ccc4b60c85c517bcd855721f5daa6a06d40d7cb2ee2357",
+      "size": 74442783,
+      "stripSingleRoot": true,
+      "junction": "ThirdParty/onnxruntime-win-x64-1.24.4",
+      "verify": [
+        "include/onnxruntime_cxx_api.h",
+        "include/onnxruntime_c_api.h"
+      ]
+    },
+    {
+      "name": "onnxruntime-dml-1.24.4",
+      "platforms": ["windows"],
+      "kind": "archive",
+      "format": "nupkg",
+      "file": "microsoft.ml.onnxruntime.directml.1.24.4.nupkg",
+      "urls": [
+        "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.directml/1.24.4/microsoft.ml.onnxruntime.directml.1.24.4.nupkg"
+      ],
+      "sha256": "57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681",
+      "nugetSha512": "ZjOyv495vhfVXoTJp2utRyn8ir1TFIvCj0B9JP8QZGBXS0oFx+lY7ZCZqSdnVShQX6EtxYi2T3VOtYXcmBTV4A==",
+      "size": 12458649,
+      "stripSingleRoot": false,
+      "junction": "ThirdParty/onnxruntime-dml-1.24.4",
+      "verify": [
+        "build/native/include/dml_provider_factory.h",
+        "runtimes/win-x64/native/onnxruntime.dll"
+      ]
+    },
+    {
+      "name": "microsoft.ai.directml.1.15.4",
+      "platforms": ["windows"],
+      "kind": "archive",
+      "format": "nupkg",
+      "file": "microsoft.ai.directml.1.15.4.nupkg",
+      "urls": [
+        "https://api.nuget.org/v3-flatcontainer/microsoft.ai.directml/1.15.4/microsoft.ai.directml.1.15.4.nupkg"
+      ],
+      "sha256": "4e7cb7ddce8cf837a7a75dc029209b520ca0101470fcdf275c1f49736a3615b9",
+      "nugetSha512": "/edn9WkEq8kP1T9l2HKckYq39uPF4ezdR5kI/AK0U1zysIYPerKsubcx1suAm3LD1dTQKFP7j16gIqR7xE7yhQ==",
+      "size": 202292617,
+      "stripSingleRoot": false,
+      "junction": "ThirdParty/microsoft.ai.directml.1.15.4",
+      "verify": [
+        "include/DirectML.h",
+        "bin/x64-win/DirectML.dll",
+        "bin/x64-win/DirectML.lib"
+      ]
+    },
+    {
+      "name": "microsoft.direct3d.d3d12.1.619.5",
+      "platforms": ["windows"],
+      "kind": "archive",
+      "format": "nupkg",
+      "file": "microsoft.direct3d.d3d12.1.619.5.nupkg",
+      "urls": [
+        "https://api.nuget.org/v3-flatcontainer/microsoft.direct3d.d3d12/1.619.5/microsoft.direct3d.d3d12.1.619.5.nupkg"
+      ],
+      "sha256": "0e9bcf32aac9a79343ede9b21e4864950ee54577e3d8e19bfcdf002bb4e9bfd6",
+      "nugetSha512": "98CoGWEAZtfPA9GKQ0n1G08em08bP4/19/vZSQ5oNHFpbm/lChH4Y57+MkfBauGHmfML02CWFgeX3YgKD860fw==",
+      "size": 35271083,
+      "stripSingleRoot": false,
+      "junction": "ThirdParty/microsoft.direct3d.d3d12.1.619.5",
+      "verify": [
+        "build/native/include/d3d12.h",
+        "build/native/include/d3dx12",
+        "build/native/bin/x64/D3D12Core.dll",
+        "build/native/bin/x64/D3D12SDKLayers.dll"
+      ]
+    }
+  ]
+}

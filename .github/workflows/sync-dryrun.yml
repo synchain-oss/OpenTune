@@ -1,0 +1,76 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: Sync Dry-run
+
+# 每日只读的试 rebase：取上游 YuFeng926/OpenTune 的 standalone 最新，在 runner 内的临时克隆里把「我们的增量」
+# （CLAUDE.md §5 的定义，fork-delta.mjs）rebase 上去，报告冲突文件数、冲突块数，以及
+# .github/drift-pins/ 中登记的被镜像函数在上游是否变化，全部写进 job summary，用来预估最终 rebase 的成本。
+# 永不推送：permissions 只有 contents: read，checkout 不保留凭据，临时克隆没有 remote 也没有 hooks，
+# 脚本（.github/scripts/try-rebase.mjs）里没有 push。上游只做匿名只读 fetch，不对其做任何写操作。
+# 注意：public fork 的定时（schedule）workflow 默认不跑，需要维护者在 Actions 页面手动启用一次；
+# 之后 60 天内仓库没有活动时 GitHub 会再次自动停用。手动运行（workflow_dispatch）不受影响。
+# 另外，PR → feature/** 改到本 workflow 或试 rebase 脚本时也运行一次，用来在合入前验证改动。
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+  pull_request:
+    branches: ['feature/**']
+    paths:
+      - '.github/workflows/sync-dryrun.yml'
+      - '.github/scripts/try-rebase.mjs'
+      - '.github/scripts/drift-pins.mjs'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-dryrun-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dry-run:
+    # 定时任务只在默认分支 dev 上运行，所以用 matrix 同时统计 dev 与主支线两个分支的增量。
+    name: try-rebase ${{ matrix.branch }} onto upstream standalone
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # PR 事件下两个分支行检出的是同一个合并提交、结果相同，所以只跑 dev 一行（job 级 if 读不到 matrix 上下文，
+        # 因此在 matrix 取值处按事件收窄）。
+        branch: ${{ fromJSON(github.event_name == 'pull_request' && '["dev"]' || '["dev","feature/control-api"]') }}
+    env:
+      GIT_LFS_SKIP_SMUDGE: '1'
+      UPSTREAM_URL: https://github.com/YuFeng926/OpenTune.git
+    steps:
+      # lfs: false —— 绝不下载模型权重（CLAUDE.md §11）。fetch-depth: 0：增量的定义需要完整历史。
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.sha || matrix.branch }}
+          fetch-depth: 0
+          lfs: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      # 增量的定义依赖锁定的上游基点：显式取 upstream-mirror 分支与 upstream/* tag（与 fork-gate 相同）。
+      - name: Fetch the locked upstream base (mirror branch and snapshot tags)
+        run: >-
+          git fetch --no-tags --force origin
+          '+refs/heads/upstream-mirror:refs/remotes/origin/upstream-mirror'
+          '+refs/tags/upstream/*:refs/tags/upstream/*'
+      - name: Fetch the newest upstream standalone (anonymous, read-only)
+        run: git fetch --no-tags --force "$UPSTREAM_URL" '+refs/heads/standalone:refs/remotes/upstream/standalone'
+      - name: Trial rebase of our delta onto it (nothing is pushed)
+        run: |
+          set -euo pipefail
+          git log -1 --format='upstream standalone: %H %cs' refs/remotes/upstream/standalone
+          node .github/scripts/try-rebase.mjs --upstream refs/remotes/upstream/standalone --summary "$RUNNER_TEMP/sync-dryrun.md"
+          {
+            echo "## 分支：${{ matrix.branch }}${{ github.event_name == 'pull_request' && '（PR 触发：实际检出的是本 PR 的合并提交，只跑这一行）' || '' }}"
+            echo
+            cat "$RUNNER_TEMP/sync-dryrun.md"
+          } >> "$GITHUB_STEP_SUMMARY"

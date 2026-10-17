@@ -1,0 +1,74 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: Runner Probe
+
+# 记录 GitHub 托管 runner（windows-2022、macos-14）的核数、内存、磁盘，以及预装的 VS 与 CMake 版本，
+# 写进 job summary。用来判断构建时间盒、--parallel 与缓存大小是否合理，只读、不编译、无 secrets。
+# 触发：手动；PR → feature/** 改到本 workflow 自身时。
+on:
+  pull_request:
+    branches: ['feature/**']
+    paths:
+      - '.github/workflows/runner-probe.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: runner-probe-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: windows-2022
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - name: Probe
+        shell: pwsh
+        run: |
+          $os = Get-CimInstance Win32_OperatingSystem
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          $disk = Get-PSDrive -PSProvider FileSystem | Where-Object { $_.Name -in @('C', 'D') }
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vs = if (Test-Path -LiteralPath $vswhere) { & $vswhere -all -products * -format json | ConvertFrom-Json } else { @() }
+          $cmake = (cmake --version | Select-Object -First 1)
+          $ninja = if (Get-Command ninja -ErrorAction SilentlyContinue) { ninja --version } else { '未在 PATH 上（VS 自带的在 Common7\IDE\CommonExtensions\Microsoft\CMake\Ninja）' }
+          $lines = @(
+            '### runner：windows-2022', '',
+            "- 系统：$($os.Caption) $($os.Version)",
+            "- CPU：$($cpu.Name.Trim())；逻辑核数 $([Environment]::ProcessorCount)；物理核数 $(@(Get-CimInstance Win32_Processor | Measure-Object -Property NumberOfCores -Sum).Sum)",
+            "- 内存：$([math]::Round($os.TotalVisibleMemorySize / 1MB, 1)) GB（当前可用 $([math]::Round($os.FreePhysicalMemory / 1MB, 1)) GB）",
+            "- CMake：$cmake；Ninja：$ninja"
+          )
+          foreach ($d in $disk) { $lines += "- 磁盘 $($d.Name):：可用 $([math]::Round($d.Free / 1GB, 1)) GB，已用 $([math]::Round($d.Used / 1GB, 1)) GB" }
+          $lines += '- Visual Studio：'
+          foreach ($i in $vs) { $lines += "  - $($i.displayName) $($i.installationVersion)（$($i.installationPath | Split-Path -Leaf)）" }
+          $msvc = Get-ChildItem -LiteralPath (Join-Path $vs[0].installationPath 'VC\Tools\MSVC') -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+          $lines += "- MSVC 工具集：$($msvc -join '、')"
+          $asan = Get-ChildItem -LiteralPath (Join-Path $vs[0].installationPath 'VC\Tools\MSVC') -Recurse -Filter 'clang_rt.asan_dynamic-x86_64.dll' -ErrorAction SilentlyContinue | Select-Object -First 1
+          $lines += "- ASan 运行库（clang_rt.asan_dynamic-x86_64.dll）：$(if ($asan) { '已预装' } else { '未找到' })"
+          $lines -join "`n" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+  macos:
+    name: macos-14
+    runs-on: macos-14
+    timeout-minutes: 10
+    steps:
+      - name: Probe
+        run: |
+          {
+            echo "### runner：macos-14"
+            echo
+            echo "- 系统：$(sw_vers -productName) $(sw_vers -productVersion)（$(uname -m)）"
+            echo "- CPU：$(sysctl -n machdep.cpu.brand_string)；逻辑核数 $(sysctl -n hw.logicalcpu)；物理核数 $(sysctl -n hw.physicalcpu)"
+            echo "- 内存：$(( $(sysctl -n hw.memsize) / 1024 / 1024 / 1024 )) GB"
+            echo "- 磁盘：$(df -h / | awk 'NR==2 {print "可用 " $4 "，总计 " $2}')"
+            echo "- Xcode：$(xcodebuild -version | tr '\n' ' ')"
+            echo "- Clang：$(clang --version | head -1)"
+            echo "- CMake：$(cmake --version | head -1)；Ninja：$(ninja --version 2>/dev/null || echo 未预装)"
+            echo "- PowerShell：$(pwsh --version 2>/dev/null || echo 未预装)；Node：$(node --version 2>/dev/null || echo 未预装)"
+          } | tee -a "$GITHUB_STEP_SUMMARY"

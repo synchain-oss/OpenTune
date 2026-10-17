@@ -384,6 +384,13 @@ describe('notices collector', () => {
     assert.throws(() => collect({ catalogue: withAbsentOk(true) }), /absentOk must be a non-empty reason/);
   });
 
+  it('mustAppear written as a non-boolean value is refused', () => {
+    const withMustAppear = (value) => ({ components: catalogue.components.map((c) => (c.id === 'cursors' ? { ...c, mustAppear: value } : c)) });
+    assert.throws(() => collect({ catalogue: withMustAppear('true') }), /cursors: mustAppear must be true or false/);
+    assert.throws(() => collect({ catalogue: withMustAppear(1) }), /mustAppear must be true or false/);
+    assert.doesNotThrow(() => collect({ catalogue: withMustAppear(false) }));
+  });
+
   it('a source / include probe whose repository files are absent is not a blocker', () => {
     const gone = { id: 'gone', name: 'Gone', license: 'MIT', probe: { kind: 'source', pattern: '/ThirdParty/gone/', repoFiles: 'ThirdParty/gone-1.0/*.cpp' }, licenseFiles: [{ root: 'repo', path: 'LICENSE' }] };
     const got = collect({ catalogue: { components: [gone] } });

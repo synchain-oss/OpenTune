@@ -18,9 +18,11 @@ class OpenTuneAudioProcessorEditor;
  * never reaches an editor that is being built or torn down. With the control API not enabled at run time
  * the service never starts and never calls the bridge.
  *
- * This file covers the general part (project information, busy state, structure changes, the steps after an
- * undo or redo, the refresh after a time-grid edit, the view, the import focus, objects the editor owns); dialogs,
- * tracks, project flows and preferences follow in files of their own (ControlEditorBridge<Domain>.cpp).
+ * ControlEditorBridge.cpp covers the general part (project information, busy state, structure changes, the steps
+ * after an undo or redo, the refresh after a time-grid edit, the view, the import focus, objects the editor owns);
+ * ControlEditorBridgeProject.cpp the project flows (the steps after a save or an open, the recent projects, the flag
+ * of a running project operation); dialogs, tracks and preferences follow in files of their own
+ * (ControlEditorBridge<Domain>.cpp).
  *
  * Threading: message thread, like the editor.
  */
@@ -39,6 +41,10 @@ public:
     void onStructureChanged() override;
     void onUndoRedoApplied() override;
     void onTimeGridChanged() override;
+    void onProjectReloaded() override;
+    void onProjectSaved() override;
+    void onRecentProjectsChanged() override;
+    void setProjectOperationRunning(bool running) override;
     bool focusPlacement(int trackId, std::uint64_t placementId) override;
     bool revealTracks(int count) override;
     bool currentNoteGenerationParams(NoteGeneratorParams& out) const override;

@@ -40,6 +40,17 @@ constexpr int kVectorExchangeMs = 60000;
 constexpr int kJobStateTimeoutMs = 20000;
 /** The wait limit of a seed job in the scenario that lets it run out. */
 constexpr int kSeedTestWaitLimitMs = 600;
+
+/** Sets the seed jobs' wait limit for its lifetime and restores the default (0) when it goes out of scope, also when
+    a failed check ends the scope early. */
+struct SeedWaitLimitGuard
+{
+    explicit SeedWaitLimitGuard(int milliseconds) { controlSetSeedWaitLimitForTesting(milliseconds); }
+    ~SeedWaitLimitGuard() { controlSetSeedWaitLimitForTesting(0); }
+    SeedWaitLimitGuard(const SeedWaitLimitGuard&) = delete;
+    SeedWaitLimitGuard& operator=(const SeedWaitLimitGuard&) = delete;
+};
+
 /** Tolerance of hand-computed output times. */
 constexpr double kOutputTolerance = 1e-9;
 /** Tolerance of output times read back from results, which round seconds to 6 decimals. */
@@ -859,16 +870,15 @@ void scenarioTimeGridSeedFailuresImpl()
         CONTROL_CHECK(innerOf(*f.processor, clip->first.key).empty());
     }
 
-    // The analysis does not finish within the job's wait limit: NOT_READY(timing_analysis_timeout), retryable. The
-    // limit is shortened for the jobs started after it.
+    // The analysis does not finish within the job's wait limit: NOT_READY(timing_analysis_timeout), retryable. Every
+    // wait step re-reads the limit, so jobs already waiting see the change; the guard restores it on every exit.
     {
         const auto slow = f.add(gridSpec("slow", false, 7));
         if (CONTROL_CHECK(slow.has_value())) {
-            controlSetSeedWaitLimitForTesting(kSeedTestWaitLimitMs);
+            const SeedWaitLimitGuard limit(kSeedTestWaitLimitMs);
             CONTROL_CHECK(setTimingFeatures(*f.processor, slow->first.key, ReferenceFeatureStatus::Extracting, {}));
             const auto jobId = f.startSeed(slow->second);
             CONTROL_CHECK(failedWith(jobId, "NOT_READY", "timing_analysis_timeout", true));
-            controlSetSeedWaitLimitForTesting(0);
             CONTROL_CHECK(innerOf(*f.processor, slow->first.key).empty());
         }
     }

@@ -285,8 +285,7 @@ bool setTarget(Note& note, double midi, float tuningHz)
 {
     const float pitch = PitchUtils::midiToFreq(static_cast<float>(midi), tuningHz);
     if (note.pitchOffset == 0.0f
-        && std::abs(controlNoteTargetMidi(note, tuningHz) - PitchUtils::freqToMidi(pitch, tuningHz))
-               < kPitchTolerance)
+        && std::abs(controlNoteTargetMidi(note, tuningHz) - PitchUtils::freqToMidi(pitch, tuningHz)) < kPitchTolerance)
         return false;
     note.pitch = pitch;
     note.pitchOffset = 0.0f;

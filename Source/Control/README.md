@@ -554,15 +554,14 @@ so `revert` is null and the result carries `IRREVERSIBLE`. An import that commit
 
 Known OpenTune behaviours, reported as they are:
 
-- After a project was opened, OpenTune gives a new clip an id that a clip of the project may already
-  use, and the commit fails; each failed attempt uses up that id, so the import fails once per id in
-  use. The job repeats the commit, at most once per clip whose id OpenTune can still hand out, and logs
-  it; the result carries the warning `IMPORT_COMMIT_REPEATED` (subject: the placement, `data.repeatCount`: the number of
-  repeated commits). The UI's
-  import fails in this situation. The commit consumes the prepared audio, so an attempt that may be
-  repeated commits a copy; the job copies only when a project was opened (the content epoch is not 0)
-  and a clip has an id above the highest one the instance's imports received since, and it never repeats
-  a failure that the clip id cannot have caused. Otherwise it commits once without a copy, as the UI.
+- After a project was opened, OpenTune gives a new clip an id that a clip of the project may already use, and the commit
+  fails; each failed attempt uses up that id, so the import fails once per id in use. The job repeats the commit, at
+  most once per clip whose id OpenTune can still hand out, and logs it; the result carries the warning
+  `IMPORT_COMMIT_REPEATED` (subject: the placement, `data.repeatCount`: the number of repeated commits). The UI's import
+  fails in this situation. The commit consumes the prepared audio, so an attempt that may be repeated commits a copy;
+  the job copies only when a project was opened (the content epoch is not 0) and a clip has an id above the highest one
+  the instance's imports received since, and it never repeats a failure that the clip id cannot have caused. Otherwise
+  it commits once without a copy, as the UI.
 - `commitPreparedImportAsPlacement()` selects every clip it commits and makes its track the active
   track, also with `focus: false`. The job does not undo that; the result's `ui` snapshot
   (`activeTrackId`, `selectedPlacementIds`) shows it. `focus` decides only whether the editor shows the
@@ -577,57 +576,51 @@ master mix with the processor functions of the editor's export (`exportAudioRequ
 `exportMasterMixAudio`, which wait for the render worker and write 44.1 kHz 32-bit float WAV, mono for a
 clip or track and stereo for the master mix.
 
-- Before the job, in this order: an export job that still runs with the same params (after defaults) is
-  returned; handles; the busy state, with the export lock; the path's text (section 20.1) and its `.wav`
-  extension; that the export holds a clip with audio (`INVALID_ARGUMENT(nothing_to_export)` otherwise, not retryable:
-  OpenTune exports nothing then; the job returns the same when every clip is deleted while it waits); the loaded media
-  (below); that the
-  target's directory exists (`IO_ERROR(write_failed)`); with `ifExists` `error`, that no file exists at the
-  target (`ALREADY_EXISTS(target_exists)`). Then the job takes the export lock until it ends.
+- Before the job, in this order: an export job that still runs with the same params (after defaults) is returned;
+  handles; the busy state, with the export lock; the path's text (section 20.1) and its `.wav` extension; that the
+  export holds a clip with audio (`INVALID_ARGUMENT(nothing_to_export)` otherwise, not retryable: OpenTune exports
+  nothing then; the job returns the same when every clip is deleted while it waits); the loaded media (below); that the
+  target's directory exists (`IO_ERROR(write_failed)`); with `ifExists` `error`, that no file exists at the target
+  (`ALREADY_EXISTS(target_exists)`). Then the job takes the export lock until it ends.
 - Loaded media are the source files of every source OpenTune holds (`SourceStore`, active or retired,
   since an undo step can bring a retired one back). The target is compared with each by file identity
   (`ControlFileIdentity`, section 20.3), not by its spelling: the same file with other letter case, a
   hard link or a link is refused with `INVALID_ARGUMENT(target_is_loaded_media)`; an identity that cannot
   be determined is `IO_ERROR(read_failed)`. The job checks every name again right before its rename.
-- While it waits, each tick of the job builds again what the file is made of (the clips whose content has
-  a playback source with audio, as the processor's export functions choose them: for the master mix only
-  the soloed tracks while one is soloed, otherwise the tracks that are not muted) and decides per content
-  (section 19 rule 6): analysis not finished: wait; no voiced frame (an analysis that failed with `f0_empty`,
-  or that ended ready with no F0 frame above 0 Hz, the test of `controlCheckContentReady`): export it
-  uncorrected and list it in `dryContents` as `unvoiced`, before anything about its render; another failure of
-  the analysis: `ANALYSIS_FAILED(f0_failed)`, or with `allowDry` uncorrected (`analysisFailed`); no render
-  block, or only blank ones: uncorrected, `nothingToRender`; render work pending or running: wait; then a
-  failed render block: one more `requestFullContentRender()` (its reconcile retries a failed block of the same
-  revision), then `RENDER_FAILED(render_chunk_failed)`; ready once the render cache is settled at its revision
-  (`RenderCache::isCanonicalSettled`). The job never asks again while blocks are pending: upstream
-  `RenderCache::reconcileFullPlanAndRequest` keeps a block that is still pending at an unchanged revision
-  pending but out of its set of blocks to claim, the worker's queue drops it, and it is rendered only after the
-  content changes. A content without render blocks (its render was never requested) is dry at once when it has
-  nothing to render (no correction segment, the identity pitch shift, no note with an active EQ: OpenTune's
-  render would mark every block blank) and its time grid is the identity; the job then neither asks for a render
-  nor waits for the render worker. Such a content is dry as well when its only render work is blocks out of
-  the worker's reach (pending, none running, none to claim, for 0.5 s) and no block holds the rendered audio of
-  an earlier version; any other content waits for those blocks until the wait limit. Any other content without
-  render blocks gets one render request. A
-  content whose time grid is not the identity is played and exported from its time-stretch output (the
-  Stage2 rebuild), which OpenTune's export reads only when it was built at the content's current content
-  and time-grid revisions (`readExportPlaybackAudio`); otherwise the content would be silent in the file. Such a
-  content is ready, or exported dry, only once that output is current (`TimeStretchCache::
-  sliceCanonicalForOutputRange`, the export's own read). OpenTune queues the rebuild when the grid changes
-  while the render is settled and when a render block settles; when the render is settled, no output is
-  current and the render worker is idle, the job queues it as `setContentTimeGrid()` does
-  (`ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled`). The worker can drop a rebuild (it gives up
+- While it waits, each tick of the job builds again what the file is made of (the clips whose content has a playback
+  source with audio, as the processor's export functions choose them: for the master mix only the soloed tracks while
+  one is soloed, otherwise the tracks that are not muted) and decides per content (section 19 rule 6): analysis not
+  finished: wait; no voiced frame (an analysis that failed with `f0_empty`, or that ended ready with no F0 frame above 0
+  Hz, the test of `controlCheckContentReady`): export it uncorrected and list it in `dryContents` as `unvoiced`, before
+  anything about its render; another failure of the analysis: `ANALYSIS_FAILED(f0_failed)`, or with `allowDry`
+  uncorrected (`analysisFailed`); no render block, or only blank ones: uncorrected, `nothingToRender`; render work
+  pending or running: wait; then a failed render block: one more `requestFullContentRender()` (its reconcile retries a
+  failed block of the same revision), then `RENDER_FAILED(render_chunk_failed)`; ready once the render cache is settled
+  at its revision (`RenderCache::isCanonicalSettled`). The job never asks again while blocks are pending: upstream
+  `RenderCache::reconcileFullPlanAndRequest` keeps a block that is still pending at an unchanged revision pending but
+  out of its set of blocks to claim, the worker's queue drops it, and it is rendered only after the content changes. A
+  content without render blocks (its render was never requested) is dry at once when it has nothing to render (no
+  correction segment, the identity pitch shift, no note with an active EQ: OpenTune's render would mark every block
+  blank) and its time grid is the identity; the job then neither asks for a render nor waits for the render worker. Such
+  a content is dry as well when its only render work is blocks out of the worker's reach (pending, none running, none to
+  claim, for 0.5 s) and no block holds the rendered audio of an earlier version; any other content waits for those
+  blocks until the wait limit. Any other content without render blocks gets one render request. A content whose time
+  grid is not the identity is played and exported from its time-stretch output (the Stage2 rebuild), which OpenTune's
+  export reads only when it was built at the content's current content and time-grid revisions
+  (`readExportPlaybackAudio`); otherwise the content would be silent in the file. Such a content is ready, or exported
+  dry, only once that output is current (`TimeStretchCache:: sliceCanonicalForOutputRange`, the export's own read).
+  OpenTune queues the rebuild when the grid changes while the render is settled and when a render block settles; when
+  the render is settled, no output is current and the render worker is idle, the job queues it as `setContentTimeGrid()`
+  does (`ContentRenderService::enqueueStage2RebuildWhenCanonicalSettled`). The worker can drop a rebuild (it gives up
   when the published playback source changed meanwhile), so once the worker has been idle for 0.5 s with still no
-  current output, the job queues it again, at most 3 times for the same revisions
-  (`kControlExportMaxStretchRequests`), then fails with `NOT_READY(export_stretch_dropped)` (retryable). The rebuild
-  needs a settled render:
-  a content the job would export dry (failed or unvoiced analysis, nothing to render) whose grid is not the
-  identity and that has no settled render has no audio OpenTune could put in the file, and waiting does not change
-  that, so the job ends at once with `NOT_READY(export_dry_stretched)`, not retryable (it succeeds again once the grid
-  is the identity), whatever made the content dry (unvoiced, nothing to render, or a failed analysis with `allowDry`;
-  `allowDry` cannot help). After 120 s: `NOT_READY(export_wait_timeout)`. A clip export whose clip is deleted meanwhile
-  fails
-  with `REVISION_CONFLICT(changed_during_export)`.
+  current output, the job queues it again, at most 3 times for the same revisions (`kControlExportMaxStretchRequests`),
+  then fails with `NOT_READY(export_stretch_dropped)` (retryable). The rebuild needs a settled render: a content the job
+  would export dry (failed or unvoiced analysis, nothing to render) whose grid is not the identity and that has no
+  settled render has no audio OpenTune could put in the file, and waiting does not change that, so the job ends at once
+  with `NOT_READY(export_dry_stretched)`, not retryable (it succeeds again once the grid is the identity), whatever made
+  the content dry (unvoiced, nothing to render, or a failed analysis with `allowDry`; `allowDry` cannot help). After 120
+  s: `NOT_READY(export_wait_timeout)`. A clip export whose clip is deleted meanwhile fails with
+  `REVISION_CONFLICT(changed_during_export)`.
 - In the tick that finds every content ready, the job records a token of the inputs (each clip's track,
   position, length, source window, gain and fades, its track's volume, and per content the revision, time
   grid and pitch shift) and the revisions it reports, and starts the writer on a thread of its own with a
@@ -705,23 +698,21 @@ changes the content's `revision`.
   time tool means for its drag (see "Known OpenTune behaviours" below). The project is marked as changed (the
   UI does not mark it after a time-grid edit), `reRenderQueued` names the content, and the editor is told
   through `ControlUiBridge::onTimeGridChanged()`.
-- **Seed** (`content.editTimeGrid` op `seed`) places the initial handles as OpenTune does when the time tool is
-  picked (`PianoRollComponent::setCurrentTool` calls `OpenTuneAudioProcessor::ensureTimeToolAnchorSeed()`). That
-  function seeds from the content's timing analysis (the reference feature analysis) and, while that analysis
-  is not ready, starts it and registers the content for a seeding of its own once it finishes. The API runs
-  the seed as a job of kind `timeGridSeed` instead: the job asks for the analysis with
-  `preheatReferenceAlignmentFeatures()` (which does nothing while it runs or is ready), waits, and calls
-  `ensureTimeToolAnchorSeed()` only once the analysis is ready, which then seeds at once. So a cancelled job
-  leaves no deferred seeding behind. Every step checks that the content still exists (`NOT_FOUND
-  (unknown_handle)`) and that its pitch analysis is still ready; the first step and the seeding step check
+- **Seed** (`content.editTimeGrid` op `seed`) places the initial handles as OpenTune does when the time tool is picked
+  (`PianoRollComponent::setCurrentTool` calls `OpenTuneAudioProcessor::ensureTimeToolAnchorSeed()`). That function seeds
+  from the content's timing analysis (the reference feature analysis) and, while that analysis is not ready, starts it
+  and registers the content for a seeding of its own once it finishes. The API runs the seed as a job of kind
+  `timeGridSeed` instead: the job asks for the analysis with `preheatReferenceAlignmentFeatures()` (which does nothing
+  while it runs or is ready), waits, and calls `ensureTimeToolAnchorSeed()` only once the analysis is ready, which then
+  seeds at once. So a cancelled job leaves no deferred seeding behind. Every step checks that the content still exists
+  (`NOT_FOUND (unknown_handle)`) and that its pitch analysis is still ready; the first step and the seeding step check
   the busy state; an analysis that failed or found no onset (the time tool then places no handle) ends the job with
   `ANALYSIS_FAILED(timing_analysis_failed)`; after 120 s it ends with `NOT_READY(timing_analysis_timeout)` (retryable;
   the test seam `controlSetSeedWaitLimitForTesting` shortens the limit). A grid that has handles by then is left as it
-  is
-  (a no-op). Seeding has no undo entry, as in the UI (`ui_parity`, no revert recipe, `IRREVERSIBLE`); like
-  every change without an undo entry it masks the grid in earlier entries of the API and clears the redo
-  history (PROTOCOL.md section 15.3 rule 9). The seeded handles have output equal to content, so the content
-  sounds the same and nothing is rendered again.
+  is (a no-op). Seeding has no undo entry, as in the UI (`ui_parity`, no revert recipe, `IRREVERSIBLE`); like every
+  change without an undo entry it masks the grid in earlier entries of the API and clears the redo history (PROTOCOL.md
+  section 15.3 rule 9). The seeded handles have output equal to content, so the content sounds the same and nothing is
+  rendered again.
 - **Export**: a content whose grid is not the identity is exported only once its time-stretch output is
   current (see "Export").
 - Inserting and deleting handles, and setting or resetting a whole grid, are not part of this build.
@@ -747,12 +738,11 @@ Known OpenTune behaviours, reported as they are:
 - The UI does not mark the project as changed after a time-grid edit or a seed; the API does (section 15.5).
 - `ensureTimeToolAnchorSeed()` replaces a grid whose handles are all of kind `UserAdded` and that is the identity;
   the API never calls it for a grid that has handles.
-- The reference analysis service runs only one synchronous analysis (the standard producer, which the
-  time tool's seeding uses by default) per session: `ReferenceAnalysisService::workerLoop` moves its finished
-  job out of `activeJob` with `std::move`, which leaves the optional engaged, so the worker never takes the next
-  job. A later seed of another content, from the UI or the API, waits for an analysis that never finishes; the
-  seed job ends with `NOT_READY(timing_analysis_timeout)` after its wait limit, or when it is cancelled, and never seeds
-  without the
+- The reference analysis service runs only one synchronous analysis (the standard producer, which the time tool's
+  seeding uses by default) per session: `ReferenceAnalysisService::workerLoop` moves its finished job out of `activeJob`
+  with `std::move`, which leaves the optional engaged, so the worker never takes the next job. A later seed of another
+  content, from the UI or the API, waits for an analysis that never finishes; the seed job ends with
+  `NOT_READY(timing_analysis_timeout)` after its wait limit, or when it is cancelled, and never seeds without the
   analysis. `TimeGridSeed` shows it.
 
 ## Dirty flag and revision tokens
@@ -896,45 +886,40 @@ the paused render worker while the clip's notes change), `NOT_READY` with a shor
 directory whose files' identity cannot be read is skipped, because on Windows that identity stays
 readable through the rights of the parent directories).
 
-`Tests/Control/ControlEditTests.cpp` holds the scenarios of the undo history, the key, AUTO, the note edits and
-the pitch shift, with a test bridge for the dirty flag and the selection; entries the user would make in the UI are
-pushed as the UI
-pushes them (the upstream actions, unwrapped). `Undo` covers undo and redo of an API entry back to the exact
-states (also with OpenTune's own `UndoManager::undo()`, as the UI's Ctrl+Z), `top_mismatch` with the user's
-edit left intact, `force` and the undoIds of UI entries, the redo through the revert recipe, changes without
-an undo entry (`UNDO_NO_EFFECT`, the cleared redo history, the later key kept), a full history whose
-entries moved (the undoId of a UI entry is no longer confirmed), a clip split on top and a project opened
-since; `SetKey` the key aspect only, the revert recipe round trip, `key_changed`, the no-op, the UI's scale
-and the readiness gate; `AutoTune` the hand-computed removed and dropped notes, created notes inside the
-range and in key, several ranges as one step, `dryRun` (its `sideEffects` equal those of the commit, for
-`regenerate` and `notesOnly`), the params defaults and the checks before the change (also `clipKey` on a
-content without a key: `INVALID_ARGUMENT(content_key_unset)`); `EditNotes` a table of hand-computed ops (every op,
-selections by index, range and all,
-several ops in one call, an exact tie of the snap, `targetMidi` 0 and the ops on a note without a base pitch), each
-checked for its prediction equal to its commit, its tokens
-equal to a fresh read, and undo and redo back to the exact states, through the API and through OpenTune's own
-`UndoManager`; then the checks before the change, the no-ops and the params, values on a rounding boundary whose
-`after` equals the value read back byte for byte, and commits that store other notes than the prediction (notes
-stored out of start-time order, for the ops and for SNAP; a note without duration, which the commit drops, answered
-with `INTERNAL` and `executed` true); `EditMultiNoteRender`, a scenario of its own for its render
-time, on a clip of sine bursts with one render block per note, that edits of several notes (one op over all, one op per note, AUTO regenerate, a shift
-after it, SNAP) leave every block of an edited note pending right after the commit and that the render and an
-export of the clip hold every burst at its new target (through the light pitch path, so without models); the undo
-descriptions of every edit are the UI's texts in clean UTF-8; `SetPitchShift` that `revision` stays
-while the `pitchShift` component changes (also after the undo, the redo, the user's Ctrl+Z and a shift in the UI's
-dialog), `KEY_NOT_TRANSPOSED`, the no-ops, the exact state after the undo, the undo of a shift after `notesOnly`
-(the shift goes back, the generated notes stay), an undo and a redo of such a shift that have nothing to set
-(`UNDO_NO_EFFECT`), a `content.getNotes` and a `content.getPitchCurve` cursor made stale by a shift and by its
-undo (with the curve's second page two semitones up after the shift), a pitch shift and a `content.shiftTiming` of
-one content as separate aspects (each changes only its own component, each undo takes back only its own), and the
-ledger starting a content over when its counters go back; `SnapNotes` the hand-computed SNAP of every note, ranges as
-selections, one undo step for several ranges, the no-op of a second SNAP over corrected notes, `clipKey`, and a
-note without a base pitch;
-`EditCapability` that `edit.v1` is reported with its four methods; `EditVectors` the specification's vectors of
-`edit/`, `content/set-key-*`, `content/auto-tune-*`, `content/edit-notes-*` and `content/set-pitch-shift-*`
-(`given.history` is established with the same actions, a running export of `given.jobs` holds the export lock;
-vectors of later parts are listed as skipped, with the reason). The shared contents with synthetic F0 are in
-`ControlContentFixtures.h`, defined in `ControlDispatcherTests.cpp`.
+`Tests/Control/ControlEditTests.cpp` holds the scenarios of the undo history, the key, AUTO, the note edits and the
+pitch shift, with a test bridge for the dirty flag and the selection; entries the user would make in the UI are pushed
+as the UI pushes them (the upstream actions, unwrapped). `Undo` covers undo and redo of an API entry back to the exact
+states (also with OpenTune's own `UndoManager::undo()`, as the UI's Ctrl+Z), `top_mismatch` with the user's edit left
+intact, `force` and the undoIds of UI entries, the redo through the revert recipe, changes without an undo entry
+(`UNDO_NO_EFFECT`, the cleared redo history, the later key kept), a full history whose entries moved (the undoId of a UI
+entry is no longer confirmed), a clip split on top and a project opened since; `SetKey` the key aspect only, the revert
+recipe round trip, `key_changed`, the no-op, the UI's scale and the readiness gate; `AutoTune` the hand-computed removed
+and dropped notes, created notes inside the range and in key, several ranges as one step, `dryRun` (its `sideEffects`
+equal those of the commit, for `regenerate` and `notesOnly`), the params defaults and the checks before the change (also
+`clipKey` on a content without a key: `INVALID_ARGUMENT(content_key_unset)`); `EditNotes` a table of hand-computed ops
+(every op, selections by index, range and all, several ops in one call, an exact tie of the snap, `targetMidi` 0 and the
+ops on a note without a base pitch), each checked for its prediction equal to its commit, its tokens equal to a fresh
+read, and undo and redo back to the exact states, through the API and through OpenTune's own `UndoManager`; then the
+checks before the change, the no-ops and the params, values on a rounding boundary whose `after` equals the value read
+back byte for byte, and commits that store other notes than the prediction (notes stored out of start-time order, for
+the ops and for SNAP; a note without duration, which the commit drops, answered with `INTERNAL` and `executed` true);
+`EditMultiNoteRender`, a scenario of its own for its render time, on a clip of sine bursts with one render block per
+note, that edits of several notes (one op over all, one op per note, AUTO regenerate, a shift after it, SNAP) leave
+every block of an edited note pending right after the commit and that the render and an export of the clip hold every
+burst at its new target (through the light pitch path, so without models); the undo descriptions of every edit are the
+UI's texts in clean UTF-8; `SetPitchShift` that `revision` stays while the `pitchShift` component changes (also after
+the undo, the redo, the user's Ctrl+Z and a shift in the UI's dialog), `KEY_NOT_TRANSPOSED`, the no-ops, the exact state
+after the undo, the undo of a shift after `notesOnly` (the shift goes back, the generated notes stay), an undo and a
+redo of such a shift that have nothing to set (`UNDO_NO_EFFECT`), a `content.getNotes` and a `content.getPitchCurve`
+cursor made stale by a shift and by its undo (with the curve's second page two semitones up after the shift), a pitch
+shift and a `content.shiftTiming` of one content as separate aspects (each changes only its own component, each undo
+takes back only its own), and the ledger starting a content over when its counters go back; `SnapNotes` the
+hand-computed SNAP of every note, ranges as selections, one undo step for several ranges, the no-op of a second SNAP
+over corrected notes, `clipKey`, and a note without a base pitch; `EditCapability` that `edit.v1` is reported with its
+four methods; `EditVectors` the specification's vectors of `edit/`, `content/set-key-*`, `content/auto-tune-*`,
+`content/edit-notes-*` and `content/set-pitch-shift-*` (`given.history` is established with the same actions, a running
+export of `given.jobs` holds the export lock; vectors of later parts are listed as skipped, with the reason). The shared
+contents with synthetic F0 are in `ControlContentFixtures.h`, defined in `ControlDispatcherTests.cpp`.
 
 `Tests/Control/ControlTimingTests.cpp` holds the scenarios of the time grid, on contents with synthetic F0 whose
 grids are applied as OpenTune's content owner applies one. `Timing` runs a table of `content.shiftTiming` and

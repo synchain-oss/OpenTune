@@ -29,7 +29,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <set>
+#include <string_view>
 #include <vector>
 
 namespace OpenTune {
@@ -1239,7 +1241,8 @@ const std::set<std::string> kReportedCapabilities = {"session.v1", "read.v1"};
  * Methods of a capability the instance reports that are not registered in OpsRegistry yet. An instance
  * must implement every method of every capability it reports (PROTOCOL.md section 3.3 rule 5 case 10), so
  * this list is a debt: it must be empty before dev is merged, and read.v1 may never be on it. A method is
- * removed from the list when it is registered (scenarioCompleteness fails on a stale entry).
+ * removed from the list when it is registered (scenarioCompleteness fails on a stale entry). An entry is
+ * written with a comment that names why the method is missing. There is none now.
  */
 const std::set<std::string> kUnimplementedReportedMethods = {};
 
@@ -1859,19 +1862,57 @@ void scenarioCompleteness()
         CONTROL_CHECK(std::find(reported.begin(), reported.end(), capability) != reported.end());
 
     // The listener answers session.hello itself, so the dispatcher's method table has no entry for it.
-    int checked = 0;
+    std::set<std::string> indexed;
     for (std::size_t i = 0; i < methods.size(); ++i) {
         const auto& entry = methods.at(i);
         const auto method = memberOf(entry, "method").text();
         const auto capability = memberOf(entry, "capability").text();
         if (std::find(reported.begin(), reported.end(), capability) == reported.end() || method == "session.hello")
             continue;
-        ++checked;
+        indexed.insert(method);
+        // The C++ method table of the protocol must agree with the index as well.
+        const char* tableCapability = controlMethodCapability(method);
+        if (!CONTROL_CHECK(tableCapability != nullptr && capability == tableCapability))
+            note(method + ": capability of the index differs from the method table of the protocol");
         const bool exempt = kUnimplementedReportedMethods.count(method) != 0;
         if (!CONTROL_CHECK(dispatcher->implements(method) || exempt))
             note("capability " + capability + " is reported, but " + method + " is not registered in OpsRegistry");
         // An exemption of a method that exists is stale: the list shrinks, it does not rot.
         CONTROL_CHECK(!(exempt && dispatcher->implements(method)));
+    }
+    // Index, schemas and the C++ method table are three views of one list: the capability each names for a method
+    // must agree, and the set of methods the schemas tie to a reported capability must equal the index's set, so
+    // that a drift between the files of the locked copy cannot hide a missing method.
+    std::set<std::string> schemaMethods;
+    for (const auto& file :
+         std::filesystem::directory_iterator(std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR) / "methods")) {
+        const auto name = file.path().filename().u8string();
+        constexpr std::string_view kSuffix = ".schema.json";
+        if (name.size() <= kSuffix.size() || name.compare(name.size() - kSuffix.size(), kSuffix.size(), kSuffix) != 0)
+            continue;
+        const auto schema = parseJson(readFile(file.path()));
+        if (!CONTROL_CHECK(schema.ok))
+            continue;
+        const auto& tag = memberOf(schema.value, "x-otcp");
+        const auto method = memberOf(tag, "method").text();
+        const auto capability = memberOf(tag, "capability").text();
+        const char* schemaTableCapability = controlMethodCapability(method);
+        if (!CONTROL_CHECK(schemaTableCapability != nullptr && capability == schemaTableCapability))
+            note(name + ": capability of the schema differs from the method table of the protocol");
+        if (std::find(reported.begin(), reported.end(), capability) == reported.end() || method == "session.hello")
+            continue;
+        schemaMethods.insert(method);
+        const bool exempt = kUnimplementedReportedMethods.count(method) != 0;
+        if (!CONTROL_CHECK(dispatcher->implements(method) || exempt))
+            note("capability " + capability + " is reported, but " + method + " is not registered in OpsRegistry");
+    }
+    if (!CONTROL_CHECK(schemaMethods == indexed)) {
+        for (const auto& method : indexed)
+            if (schemaMethods.count(method) == 0)
+                note(method + ": listed in the index, but no schema ties it to a reported capability");
+        for (const auto& method : schemaMethods)
+            if (indexed.count(method) == 0)
+                note(method + ": has a schema, but the index does not list it under a reported capability");
     }
     // The exemption must be for a method of a reported capability, or it exempts nothing.
     for (const auto& method : kUnimplementedReportedMethods) {
@@ -1886,10 +1927,10 @@ void scenarioCompleteness()
     }
     // session.info, the eight reads, job.get, job.cancel, import.start, export.start, the three methods of the
     // undo history, the four of edit.v1 and the two of timing.v1.
-    CONTROL_CHECK(checked >= 22);
+    CONTROL_CHECK(indexed.size() >= 22);
     if (!kUnimplementedReportedMethods.empty())
         note("exempt methods remain; the list must be empty before dev is merged");
-    note(std::to_string(checked) + " methods of the reported capabilities are registered");
+    note(std::to_string(indexed.size()) + " methods of the reported capabilities are registered");
 }
 
 void scenarioOffMainThread()

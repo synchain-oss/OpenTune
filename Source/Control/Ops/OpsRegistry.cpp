@@ -9,6 +9,7 @@
 #include "ExportOps.h"
 #include "ImportOps.h"
 #include "JobOps.h"
+#include "ProjectOps.h"
 #include "ProjectReadOps.h"
 #include "SessionOps.h"
 #include "TimingOps.h"
@@ -67,7 +68,7 @@ void registerControlMethods(ControlMethodTable& table)
     // registerTransportOps(table);    transport.control, transport.setTempo, transport.setLoop
     // registerArrangementOps(table);  arrangement.edit, arrangement.copy, content.analyzeReference
     // registerTrackOps(table);        track.set, track.add, track.duplicate, track.delete
-    // registerProjectOps(table);      project.save, project.saveAs, project.open, project.clearRecent
+    registerProjectOps(table);     // project.save, project.saveAs, project.open, project.clearRecent
     // registerPrefsOps(table);        prefs.set
     // registerAudioDeviceOps(table);  audio.get, audio.set
 }

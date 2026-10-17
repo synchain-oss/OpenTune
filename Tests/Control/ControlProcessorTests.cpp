@@ -569,6 +569,10 @@ const Scenario kScenarios[] = {
     {"TimeGridSeed", scenarioTimeGridSeed, false},
     {"TimingTokenAspects", scenarioTimingTokenAspects, false},
     {"TimingVectors", scenarioTimingVectors, false},
+    {"ProjectRoundTrip", scenarioProjectRoundTrip, false},
+    {"ProjectJobs", scenarioProjectJobs, false},
+    {"ProjectWithoutEditor", scenarioProjectWithoutEditor, false},
+    {"ProjectVectors", scenarioProjectVectors, false},
 };
 
 /** How much earlier than the ctest TIMEOUT of its test the watchdog of a scenario ends it. */

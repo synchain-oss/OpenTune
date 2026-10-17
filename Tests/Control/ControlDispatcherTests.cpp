@@ -362,7 +362,7 @@ void checkSessionInfo(ApiSession& api)
     // Only the capabilities this build implements completely are reported.
     CONTROL_CHECK(
         toJsonString(memberOf(info, "capabilities"))
-        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","edit.v1","history.v1","timing.v1"])");
+        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","edit.v1","history.v1","timing.v1","project.io"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");
@@ -767,7 +767,7 @@ void checkErrors(ApiSession& api, const ClipHandles& handles)
     CONTROL_CHECK(api.fails("project.get", json(R"({"verbose":true})"), "INVALID_ARGUMENT", "invalid_params"));
     // A method of a capability this build does not report (a later part implements it), and a method the
     // protocol does not define.
-    CONTROL_CHECK(api.fails("project.save", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
+    CONTROL_CHECK(api.fails("prefs.set", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
     CONTROL_CHECK(api.fails("track.rename", JsonValue::object(), "UNSUPPORTED", "unknown_method"));
 }
 
@@ -1858,7 +1858,7 @@ void scenarioCompleteness()
     const auto& methods = memberOf(parsed.value, "methods");
     const auto reported = dispatcher->capabilities();
     for (const char* capability :
-         {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "edit.v1", "history.v1", "timing.v1"})
+         {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "edit.v1", "history.v1", "timing.v1", "project.io"})
         CONTROL_CHECK(std::find(reported.begin(), reported.end(), capability) != reported.end());
 
     // The listener answers session.hello itself, so the dispatcher's method table has no entry for it.

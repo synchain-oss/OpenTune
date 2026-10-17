@@ -81,6 +81,11 @@
               "entity": "placement",
               "ref": { "placementId": { "$ref": "clip.placementId" } },
               "label": { "$any": true }
+            },
+            {
+              "entity": "content",
+              "ref": { "contentId": { "$ref": "clip.contentId" } },
+              "label": { "$any": true }
             }
           ],
           "possiblyStaleEntries": { "undo": 0, "redo": 0 }

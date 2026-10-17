@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "track/delete-ok",
   "type": "request",
-  "description": "Deleting track 1 removes its clip, moves track 2 with its clip down to position 1 (trackIdMap) and removes the reference binding that the moved clip had to the deleted clip (danglingReferences). The deletion cannot be undone: undo reason no_upstream_undo, revert null, warning IRREVERSIBLE. No undo entry became possibly stale, because the histories are empty.",
+  "description": "Deleting track 1 removes its clip and, since no other clip shows it, the clip's content (both listed in removed, PROTOCOL.md section 14.4 rule 6), moves track 2 with its clip down to position 1 (trackIdMap) and removes the reference binding that the moved clip had to the deleted clip (danglingReferences). The deletion cannot be undone: undo reason no_upstream_undo, revert null, warning IRREVERSIBLE. No undo entry became possibly stale, because the histories are empty.",
   "capability": "tracks.v1",
   "since": "1.0",
   "method": "track.delete",
@@ -72,6 +72,11 @@
         {
           "entity": "placement",
           "ref": { "placementId": { "$ref": "b.placementId" } },
+          "label": { "$any": true }
+        },
+        {
+          "entity": "content",
+          "ref": { "contentId": { "$ref": "b.contentId" } },
           "label": { "$any": true }
         }
       ],

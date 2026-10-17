@@ -112,6 +112,10 @@ public:
     /** A side effect that happened (section 14.6); effect is an object with at least revert. */
     void addSideEffect(std::string name, JsonValue effect);
 
+    /** The write had an effect that none of the records above describes (a project save wrote a file): the result is
+        no no-op even when nothing else was recorded and nothing changed in the world revision vector. */
+    void markEffective() noexcept { effective_ = true; }
+
     /** A content or placement the write touched: its tokens are reported after the write. */
     void touchContent(const std::string& contentId);
     void touchPlacement(std::uint64_t placementId);
@@ -155,6 +159,7 @@ private:
     std::vector<std::string> touchedContents_;
     std::vector<std::uint64_t> touchedPlacements_;
     bool limitDiff_ = false;
+    bool effective_ = false;
     JsonValue undo_;
     /** setUndoable() or setNotUndoable() was called. */
     bool undoSet_ = false;

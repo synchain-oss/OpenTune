@@ -276,13 +276,6 @@ std::array<bool, 12> pitchClassesOf(const DetectedKey& key)
     return buildPitchClassMask(snap.mode, snap.root);
 }
 
-/** The target as content.getNotes reports it: PitchUtils::freqToMidi() of Note::getAdjustedPitch(), which is MIDI 0
-    for a note without a base pitch (0 Hz). */
-double targetMidiOf(const Note& note, float tuningHz)
-{
-    return PitchUtils::freqToMidi(note.getAdjustedPitch(), tuningHz);
-}
-
 /** Sets the note's target to midi with no cent offset, unless it is there already. The base pitch is
     PitchUtils::midiToFreq() of midi at the instance's tuning, the conversion OpenTune uses for note pitches; it
     gives 0 Hz for MIDI 0 (and below), so targetMidi 0 leaves the note without a base pitch: its target reads as
@@ -292,7 +285,8 @@ bool setTarget(Note& note, double midi, float tuningHz)
 {
     const float pitch = PitchUtils::midiToFreq(static_cast<float>(midi), tuningHz);
     if (note.pitchOffset == 0.0f
-        && std::abs(targetMidiOf(note, tuningHz) - PitchUtils::freqToMidi(pitch, tuningHz)) < kPitchTolerance)
+        && std::abs(controlNoteTargetMidi(note, tuningHz) - PitchUtils::freqToMidi(pitch, tuningHz))
+               < kPitchTolerance)
         return false;
     note.pitch = pitch;
     note.pitchOffset = 0.0f;
@@ -324,8 +318,8 @@ bool applyOp(const NoteOp& op, Note& note, const std::array<bool, 12>* scale, fl
             }
             break;
         case NoteOpKind::SnapToScale:
-            changed =
-                scale != nullptr && setTarget(note, nearestScalePitch(targetMidiOf(note, tuningHz), *scale), tuningHz);
+            changed = scale != nullptr
+                      && setTarget(note, nearestScalePitch(controlNoteTargetMidi(note, tuningHz), *scale), tuningHz);
             break;
         case NoteOpKind::SetParams: {
             // Every given parameter, as the knobs and the modulation and drift tools set them.

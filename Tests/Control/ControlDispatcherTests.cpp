@@ -29,7 +29,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <filesystem>
 #include <set>
+#include <string_view>
 #include <vector>
 
 namespace OpenTune {
@@ -1239,7 +1241,8 @@ const std::set<std::string> kReportedCapabilities = {"session.v1", "read.v1"};
  * Methods of a capability the instance reports that are not registered in OpsRegistry yet. An instance
  * must implement every method of every capability it reports (PROTOCOL.md section 3.3 rule 5 case 10), so
  * this list is a debt: it must be empty before dev is merged, and read.v1 may never be on it. A method is
- * removed from the list when it is registered (scenarioCompleteness fails on a stale entry).
+ * removed from the list when it is registered (scenarioCompleteness fails on a stale entry). An entry is
+ * written with a comment that names why the method is missing. There is none now.
  */
 const std::set<std::string> kUnimplementedReportedMethods = {};
 
@@ -1873,6 +1876,33 @@ void scenarioCompleteness()
         // An exemption of a method that exists is stale: the list shrinks, it does not rot.
         CONTROL_CHECK(!(exempt && dispatcher->implements(method)));
     }
+    // The schema of each method names its capability as well (x-otcp.capability); it must agree with the index
+    // and every method it ties to a reported capability must be registered, so that a drift between the two
+    // files of the locked copy cannot hide a missing method.
+    int schemas = 0;
+    for (const auto& file : std::filesystem::directory_iterator(
+             std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR) / "methods")) {
+        const auto name = file.path().filename().u8string();
+        constexpr std::string_view kSuffix = ".schema.json";
+        if (name.size() <= kSuffix.size() || name.compare(name.size() - kSuffix.size(), kSuffix.size(), kSuffix) != 0)
+            continue;
+        const auto schema = parseJson(readFile(file.path()));
+        if (!CONTROL_CHECK(schema.ok))
+            continue;
+        const auto& tag = memberOf(schema.value, "x-otcp");
+        const auto method = memberOf(tag, "method").text();
+        const auto capability = memberOf(tag, "capability").text();
+        const char* indexed = controlMethodCapability(method);
+        if (!CONTROL_CHECK(indexed != nullptr && capability == indexed))
+            note(name + ": capability of the schema differs from the method table of the protocol");
+        if (std::find(reported.begin(), reported.end(), capability) == reported.end() || method == "session.hello")
+            continue;
+        ++schemas;
+        const bool exempt = kUnimplementedReportedMethods.count(method) != 0;
+        if (!CONTROL_CHECK(dispatcher->implements(method) || exempt))
+            note("capability " + capability + " is reported, but " + method + " is not registered in OpsRegistry");
+    }
+    CONTROL_CHECK(schemas == checked);
     // The exemption must be for a method of a reported capability, or it exempts nothing.
     for (const auto& method : kUnimplementedReportedMethods) {
         const char* capability = controlMethodCapability(method);

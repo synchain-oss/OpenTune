@@ -583,10 +583,10 @@ constexpr int kDefaultScenarioBoundMs = 55000;
  */
 int scenarioBoundMs()
 {
-    const auto value = controlSystemEnvironment("OPENTUNE_SCENARIO_TIMEOUT_SEC");
-    if (!value || value->empty() || value->size() > 6 || value->find_first_not_of("0123456789") != std::string::npos)
+    const auto timeoutSeconds = scenarioTimeoutSeconds();
+    if (!timeoutSeconds)
         return kDefaultScenarioBoundMs;
-    const long long timeoutMs = std::stoll(*value) * 1000;
+    const long long timeoutMs = *timeoutSeconds * 1000;
     return timeoutMs > 2LL * kScenarioBoundMarginMs ? static_cast<int>(timeoutMs - kScenarioBoundMarginMs)
                                                     : static_cast<int>(timeoutMs / 2);
 }

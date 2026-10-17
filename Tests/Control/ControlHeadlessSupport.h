@@ -160,6 +160,16 @@ inline std::filesystem::path isolatedDataDirectory()
     return std::filesystem::u8path(*value);
 }
 
+/** OPENTUNE_SCENARIO_TIMEOUT_SEC in whole seconds (the ctest TIMEOUT of the test, set by cmake/OpenTuneControl.cmake);
+    nullopt when it is not set to a decimal number of at most six digits. */
+inline std::optional<long long> scenarioTimeoutSeconds()
+{
+    const auto value = controlSystemEnvironment("OPENTUNE_SCENARIO_TIMEOUT_SEC");
+    if (!value || value->empty() || value->size() > 6 || value->find_first_not_of("0123456789") != std::string::npos)
+        return std::nullopt;
+    return std::stoll(*value);
+}
+
 /** Sets a variable of the process environment, or removes it with nullopt (an empty value also
     removes it on Windows). Visible to controlSystemEnvironment and to child processes. */
 inline void setEnvironmentVariable(const char* name, const std::optional<std::string>& value)

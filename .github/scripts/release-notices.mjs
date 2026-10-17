@@ -77,11 +77,11 @@ function readText(file) {
 
 /**
  * Does a catalogue component oblige the package to carry something (license text, the GPL-3.0
- * appendix), or are its redistribution terms unverified? Such a component must not drop out of the
- * notices just because its probe missed it.
+ * appendix), are its redistribution terms unverified, or does the catalogue say "mustAppear"? Such a
+ * component must not drop out of the notices just because its probe missed it.
  */
 export function mustNotDropSilently(c) {
-  return c.redistribution === 'unverified' || Boolean(c.needsGpl3) || Boolean(c.requireOneLicenseFile) || (c.licenseFiles ?? []).some((lf) => !lf.optional);
+  return c.redistribution === 'unverified' || Boolean(c.mustAppear) || Boolean(c.needsGpl3) || Boolean(c.requireOneLicenseFile) || (c.licenseFiles ?? []).some((lf) => !lf.optional);
 }
 
 /**

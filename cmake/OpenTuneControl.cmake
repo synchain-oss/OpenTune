@@ -139,6 +139,12 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/PrefsOps.h
         Source/Control/Ops/AudioDeviceOps.cpp
         Source/Control/Ops/AudioDeviceOps.h
+        # Reference alignment: content.analyzeReference and the job of content.autoTune in mode reference, with the
+        # alignment of OpenTune's AUTO button handed back as one undo action.
+        Source/Control/Edit/ReferenceAlignment.cpp
+        Source/Control/Edit/ReferenceAlignment.h
+        Source/Control/Ops/ReferenceOps.cpp
+        Source/Control/Ops/ReferenceOps.h
     )
 
     target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_CONTROL_SOURCES})
@@ -293,6 +299,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlUiTests.cpp)
         # Preferences and audio device: prefs.set (with its job), audio.get and audio.set on a fake device manager.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlPrefsTests.cpp)
+        # Reference alignment: content.analyzeReference and content.autoTune mode reference.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlReferenceTests.cpp)
         if(MSVC)
             target_compile_options(OpenTuneControlProcessorTests PRIVATE /utf-8 /EHsc /bigobj)
         endif()
@@ -406,6 +414,12 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "AudioDevice|--control-api"
             "AudioVectors|--control-api"
         )
+        # Reference alignment (Tests/Control/ControlReferenceTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "Reference|--control-api"
+            "ReferenceAnalysisLimit|--control-api"
+            "ReferenceVectors|--control-api"
+        )
         set(_opentune_control_tests)
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
             string(REPLACE "|" ";" _opentune_control_scenario "${_opentune_control_scenario}")
@@ -451,6 +465,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.UiVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.PrefsVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.AudioVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.ReferenceVectors PROPERTIES TIMEOUT 300)
         # Each scenario process gets its own test's TIMEOUT, from which its watchdog takes its bound (a margin before;
         # ScenarioWatchdog in Tests/Control/ControlProcessorTests.cpp). Keep this after every TIMEOUT of the scenarios.
         foreach(_opentune_control_test IN LISTS _opentune_control_tests)

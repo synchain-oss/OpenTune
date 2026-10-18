@@ -563,6 +563,7 @@ void scenarioTrackBarrier();
 /** The specification's vectors of the transport and the tracks, and those of the undo history that need the barrier,
     against the real dispatcher with a test bridge and a fake audio device. */
 void scenarioTrackVectors();
+
 // Scenarios of the dialogs and the onboarding (ControlUiTests.cpp).
 
 /** ui.getState: the capability (incomplete until ui.setSelection), the busy flags, the dialogs from the bottom without
@@ -592,6 +593,19 @@ void scenarioPrefsVectors();
 void scenarioAudioDevice();
 /** The specification's vectors of audio.get and audio.set, against the real dispatcher. */
 void scenarioAudioVectors();
+
+// Scenarios of the reference alignment (ControlReferenceTests.cpp).
+
+/** content.analyzeReference and content.autoTune mode reference: the analysis job, the alignment in one undo step
+    with undo and redo, the no-op of a second alignment. */
+void scenarioReference();
+/** The wait limit and its upstream cause (the analysis service completes one analysis per session), one job per
+    placement, cancellation, and the checks the jobs make again (binding removed, analysis running, clip deleted,
+    dialog open); the checks of the call. */
+void scenarioReferenceAnalysisLimit();
+/** The specification's vectors of content.analyzeReference and content.autoTune mode reference, and the details of a
+    clip with a reference binding, against the real dispatcher. */
+void scenarioReferenceVectors();
 
 } // namespace ControlTest
 } // namespace OpenTune

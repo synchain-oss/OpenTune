@@ -707,13 +707,16 @@ void checkTrackDelete(Fixture& f)
     const auto a = f.addClip(0);
     const auto b = f.addClip(1);
     const auto c = f.addClip(2);
+    // A hidden slot that holds a clip: removeTrackAndShift() leaves it where it is.
+    f.addClip(5);
     settleBackgroundWork(*f.processor);
     CONTROL_CHECK(arrangement.setPlacementReferencePlacement(2, c.placementId, b.placementId));
     f.setTracks(R"([{"trackId":2,"muted":true,"volumeLinear":0.5,"colour":"#112233"}])");
     const auto before = f.project();
     const auto bHandles = fixtureHandlesOf(before, 1, 2.0);
     const auto cHandles = fixtureHandlesOf(before, 2, 2.0);
-    if (!CONTROL_CHECK(bHandles.has_value() && cHandles.has_value()))
+    const auto hiddenHandles = fixtureHandlesOf(before, 5, 2.0);
+    if (!CONTROL_CHECK(bHandles.has_value() && cHandles.has_value() && hiddenHandles.has_value()))
         return;
     (void)a;
 
@@ -741,6 +744,14 @@ void checkTrackDelete(Fixture& f)
     // trackIdMap, the removed clip and content, the binding that went with the clip.
     const auto& map = memberOf(deleted, "trackIdMap");
     CONTROL_CHECK(map.size() == 2 && memberOf(map.at(0), "after").isNull() && near(memberOf(map.at(1), "after"), 1.0));
+    // The clip of the hidden slot stays on its track: it is not in trackIdMap and has no change entry.
+    for (std::size_t i = 0; i < map.size(); ++i)
+        CONTROL_CHECK(!near(memberOf(map.at(i), "before"), 5.0));
+    const auto hiddenClips = placementsOn(project, 5);
+    CONTROL_CHECK(hiddenClips.size() == 1
+                  && memberOf(hiddenClips[0], "placementId").text() == hiddenHandles->placementId);
+    CONTROL_CHECK(
+        changeOf(deleted, "placement", "placementId", JsonValue::string(hiddenHandles->placementId)).isNull());
     const auto& removed = memberOf(deleted, "removed");
     CONTROL_CHECK(removed.size() == 2 && memberOf(removed.at(0), "entity").text() == "placement"
                   && memberOf(removed.at(1), "entity").text() == "content");
@@ -1013,10 +1024,45 @@ void checkBarrierRemovedContent(Fixture& f)
     CONTROL_CHECK(memberOf(memberOf(historyOf(f), "redoTop"), "undoId").text() == undoId);
 }
 
+/** A content that a track deletion took out of the project is listed again when an undo brings a clip back. */
+void checkRemovedContentRevivedByUndo(Fixture& f)
+{
+    f.addClip(0);
+    settleBackgroundWork(*f.processor);
+    const auto source = fixtureHandlesOf(f.project(), 0, 2.0);
+    if (!CONTROL_CHECK(source.has_value()))
+        return;
+    // Track 2 gets a second clip (B) that shows the same content as the clip A of track 0.
+    CONTROL_CHECK(near(memberOf(f.api.result("track.duplicate", json(R"({"trackId":0,"mode":"share"})")), "newTrackId"),
+                       2.0));
+    // The UI deletes A (an undo entry of the UI), then the API deletes track 2: the content has no clip left.
+    if (!CONTROL_CHECK(placementsOn(f.project(), 0).size() == 1))
+        return;
+    const auto outcome = f.processor->deletePlacement(0, 0);
+    if (!CONTROL_CHECK(outcome.has_value()))
+        return;
+    f.processor->getUndoManager().addAction(std::make_unique<DeletePlacementAction>(*f.processor, *outcome));
+    // OpenTune reclaims a retired clip on its next message-loop turn, and the undo is lost then; hold the sweep back
+    // so that the undo still finds the clip, as it does when the end user presses Ctrl+Z at once.
+    f.processor->cancelPendingUpdate();
+    f.deleteTrack(2);
+    f.processor->cancelPendingUpdate();
+    const std::string params = "{\"contentId\":" + quoted(source->contentId) + "}";
+    CONTROL_CHECK(f.api.fails("content.getNotes", json(params), "NOT_FOUND", "unknown_handle"));
+    // edit.undo refuses a clip deletion (undo_unsafe_build); the end user's Ctrl+Z undoes it through the manager.
+    f.processor->cancelPendingUpdate();
+    CONTROL_CHECK(f.processor->getUndoManager().undo() != nullptr);
+    // The undo brings A back with the content: the project and content.* agree again.
+    const auto after = f.project();
+    CONTROL_CHECK(placementsOn(after, 0).size() == 1);
+    CONTROL_CHECK(listsContent(after, source->contentId));
+    CONTROL_CHECK(memberOf(f.api.result("content.getNotes", json(params)), "notes").size() == 2);
+}
+
 void scenarioTrackBarrierImpl()
 {
-    for (const auto check :
-         {checkBarrierApiEntry, checkBarrierLaterTrack, checkBarrierUiEntry, checkBarrierRemovedContent}) {
+    for (const auto check : {checkBarrierApiEntry, checkBarrierLaterTrack, checkBarrierUiEntry,
+                             checkBarrierRemovedContent, checkRemovedContentRevivedByUndo}) {
         Fixture f;
         if (f.open())
             check(f);

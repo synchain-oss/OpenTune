@@ -245,9 +245,13 @@ public:
      * such a content: StandaloneArrangement::removeTrackAndShift() drops the placements without retiring them or
      * their contents, so the content repository still lists the content as live. The control API does not show it
      * any more (controlLiveContents(), controlLiveSnapshot()), as a content that left the project. Forgotten when
-     * the content epoch changes (a project was opened).
+     * the content epoch changes (a project was opened), and for a content that a clip shows again (the undo of an
+     * earlier clip deletion brings such a clip back): see reviveShownContents(). Message thread only.
      */
     void markContentsRemoved(const std::vector<ContentKey>& contents, std::uint64_t epoch);
+    bool hasRemovedContents() const { return !removedContents_.empty(); }
+    /** Forgets the marks of the contents in \p shown: a clip of the arrangement shows them again. */
+    void reviveShownContents(const std::vector<ContentKey>& shown);
     bool isContentRemoved(const ContentKey& content, std::uint64_t epoch) const;
 
 private:

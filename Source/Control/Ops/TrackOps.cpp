@@ -626,10 +626,6 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
 
     ControlWriteEnvelope envelope(context);
     const auto clipsBefore = controlLivePlacements(context);
-    const int slots = controlTrackSlotCount(context);
-    std::vector<bool> trackHadClips(static_cast<std::size_t>(slots), false);
-    for (const auto& ref : clipsBefore)
-        trackHadClips[static_cast<std::size_t>(ref.trackId)] = true;
     std::vector<ControlPlacementRef> removed;
     for (const auto& ref : clipsBefore)
         if (ref.trackId == params.trackId)
@@ -711,7 +707,8 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
         envelope.touchPlacement(now.placement.placementId);
     }
 
-    // trackIdMap: the deleted track, and every later track that is shown or holds clips.
+    // trackIdMap: the deleted track, and every later shown track. removeTrackAndShift() moves only the shown tracks
+    // after the deleted one; hidden slots keep their position and their clips.
     auto trackIdMap = JsonValue::array();
     const auto mapEntry = [](int from, JsonValue to) {
         auto entry = JsonValue::object();
@@ -720,9 +717,8 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
         return entry;
     };
     trackIdMap.append(mapEntry(params.trackId, JsonValue()));
-    for (int trackId = params.trackId + 1; trackId < slots; ++trackId)
-        if (trackId < visible || trackHadClips[static_cast<std::size_t>(trackId)])
-            trackIdMap.append(mapEntry(trackId, JsonValue::integer(trackId - 1)));
+    for (int trackId = params.trackId + 1; trackId < visible; ++trackId)
+        trackIdMap.append(mapEntry(trackId, JsonValue::integer(trackId - 1)));
 
     // No undo and no revert: OpenTune has no way to bring the track back.
     envelope.addWarning("IRREVERSIBLE", controlTrackRef(params.trackId));

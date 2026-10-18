@@ -294,6 +294,19 @@ std::string controlPlacementId(ControlOpContext& context, std::uint64_t placemen
                                placementId);
 }
 
+namespace {
+/** A content that a clip of the arrangement shows is in the project, whatever an earlier track deletion marked. */
+void reviveShownContents(ControlOpContext& context, ControlHistory& history)
+{
+    if (!history.hasRemovedContents())
+        return;
+    std::vector<ContentKey> shown;
+    for (const auto& ref : controlLivePlacements(context))
+        shown.push_back(ref.placement.contentKey);
+    history.reviveShownContents(shown);
+}
+} // namespace
+
 std::shared_ptr<const EditableContentSnapshot> controlLiveSnapshot(ControlOpContext& context, const ContentKey& key)
 {
     auto& processor = context.processor();
@@ -302,9 +315,11 @@ std::shared_ptr<const EditableContentSnapshot> controlLiveSnapshot(ControlOpCont
     if (clip == nullptr || clip->isRetired())
         return nullptr;
     // A content that a track deletion took out of the project is not live, although OpenTune leaks its clip.
-    if (const auto history = context.history())
+    if (const auto history = context.history()) {
+        reviveShownContents(context, *history);
         if (history->isContentRemoved(key, controlContentEpoch(context)))
             return nullptr;
+    }
     return processor.getContentSnapshot(key);
 }
 
@@ -371,6 +386,8 @@ std::vector<ContentKey> controlLiveContents(ControlOpContext& context)
     if (repository == nullptr)
         return out;
     const auto history = context.history();
+    if (history != nullptr)
+        reviveShownContents(context, *history);
     const auto epoch = controlContentEpoch(context);
     for (const auto& key : repository->getAllClips())
         if (!repository->isRetired(key) && !(history != nullptr && history->isContentRemoved(key, epoch)))

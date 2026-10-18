@@ -858,7 +858,8 @@ without one); `track.set` works on the arrangement alone.
   copies it.
 - `track.delete` follows `trackDeleteRequested`: `StandaloneArrangement::removeTrackAndShift()`, then the panel shows
   the mix of the arrangement and one track fewer. It needs `confirm`, the revision of the arrangement, and a shown
-  track that is not the only one. `trackIdMap`, `removed` (the clips, then the contents that left with their last
+  track that is not the only one. `trackIdMap` lists the deleted track and the shown tracks after it (hidden slots
+  keep their position and clips, so they are not listed). `removed` (the clips, then the contents that left with their last
   clip), `danglingReferences` and `possiblyStaleEntries` describe the effect; see "Undo history" for the barrier.
 
 OpenTune behaviours that the methods report and do not fix:

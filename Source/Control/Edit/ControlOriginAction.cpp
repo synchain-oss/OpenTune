@@ -293,6 +293,15 @@ void ControlHistory::markContentsRemoved(const std::vector<ContentKey>& contents
             removedContents_.push_back(key);
 }
 
+void ControlHistory::reviveShownContents(const std::vector<ContentKey>& shown)
+{
+    removedContents_.erase(std::remove_if(removedContents_.begin(), removedContents_.end(),
+                                          [&shown](const ContentKey& key) {
+                                              return std::find(shown.begin(), shown.end(), key) != shown.end();
+                                          }),
+                           removedContents_.end());
+}
+
 bool ControlHistory::isContentRemoved(const ContentKey& content, std::uint64_t epoch) const
 {
     return removedContentsEpoch_ == epoch

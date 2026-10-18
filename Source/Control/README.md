@@ -55,6 +55,8 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `ControlFileIdentity.*` | File identity (volume and file id, `st_dev` and `st_ino`), "same file" by identity, and the final rename that never replaces (PROTOCOL.md sections 20.3 and 20.4); standard library and operating system only. |
 | `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme, the processing object of `session.info` and `prefs.get`). |
 | `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
+| `Ops/TransportOps.*`, `Ops/TrackOps.*`, `Ops/TrackSupport.*` | `transport.control`, `transport.setTempo`, `transport.setLoop`; `track.set`, `track.add`, `track.duplicate`, `track.delete`; and what the track methods share (slot checks, the state of a track, the shown-track count; reusable by the clip methods). See "Transport and tracks". |
+| `../Standalone/ControlEditorBridgeTracks.cpp` | The steps of the bridge for the track panel, the arrangement and the transport bar (shown tracks, mix, play state, tempo). |
 | `../Standalone/ControlEditorBridge.*`, `../Standalone/ControlEditorBridgeProject.cpp`, `../Standalone/ControlEditorBridgeModals.cpp`, `../Standalone/ControlEditorBridgePrefs.cpp` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor (the project flows in the second file, the dialogs and the onboarding in the third, the preferences and the audio device in the fourth); compiled into the application wrapper only. |
 
 The channel files (options to server) use only the standard library and the operating system; the
@@ -351,8 +353,27 @@ API reads it through the hook `peekUndo` / `peekRedo` / `size` / `cursor` and ap
   content has no pitch curve or already has a shift of the same total cents: the step is used up, changes
   nothing and gives `noOp` and `UNDO_NO_EFFECT` (`ControlOriginAction::lastStepTookEffect()`), and the log
   records it.
-- Track deletion barriers (`possiblyStale`, `UNDO_CONFLICT(stale_entry)`, `UNDO_ENTRY_POSSIBLY_STALE`)
-  come with the track methods; until then no entry is possibly stale.
+- **Track deletion barrier** (section 15.3 rule 6; `ControlHistory::onTrackDeleted()`, called by `track.delete`).
+  OpenTune keys clip entries by track position, so an entry recorded before a deletion may address a track that
+  moved. An entry made through the API knows its tracks (`ControlOriginAction::Inner::tracks`, set by the methods
+  that record clip changes): it becomes `possiblyStale` when the deleted track or a later one is among them, and
+  an entry that addresses no track (a note edit addresses its content) or only earlier tracks does not.
+  `edit.getHistory` reports `possiblyStale`; `edit.undo` and `edit.redo` refuse such an entry with
+  `UNDO_CONFLICT(stale_entry)` unless `force` is true, and a call with `force` applies it and confirms it
+  (`ControlHistory::confirmStale()`: no warning, `possiblyStale` false) until another deletion makes it stale again. An
+  entry of the UI cannot be inspected, so every one recorded before a deletion is possibly stale; without `force`
+  the step is applied with the warning `UNDO_ENTRY_POSSIBLY_STALE`. `track.delete` reports the entries it made
+  possibly stale on each side (`possiblyStaleEntries`, warning `UNDO_HISTORY_POSSIBLY_STALE`).
+  The hook gives no access to an entry by position (only the two tops, `size()` and `cursor()`), so an entry of the
+  UI is told by its position: every position below the size the history had at the deletion holds an entry
+  recorded before it, and a position that a later entry took over after an undo keeps counting as possibly stale
+  until the history is observed shorter (`ControlHistory::prune()`). That can report an entry too many, never one too
+  few. An entry of the API knows whether it sits on the redo side (it sees its own `undo()` and `redo()`), which
+  gives the two counts. A deletion made in the OpenTune UI itself is not observed (there is no hook for it), so
+  entries recorded before it are not marked.
+  When a deletion removed the content an entry of the API addresses (the deleted track held every clip that showed
+  it), the entry is applied as the UI applies it: the step is used up and changes nothing, so the result is a
+  `noOp` with `UNDO_NO_EFFECT` (the content is no longer live, `ControlHistory::isContentRemoved()`).
 
 ## ContentEditTransaction
 
@@ -840,6 +861,69 @@ Tests: `Tests/Control/ControlProjectTests.cpp` (`ProjectRoundTrip`, `ProjectJobs
 explicit list to pass; `project/get-ok` is a read and runs in `Vectors`, and `project/save-as-no-access` is skipped
 because the runner cannot make a file whose identity is unreadable on Windows.
 
+## Transport and tracks
+
+The transport (`Ops/TransportOps.cpp`, capability `transport.v1`) and the tracks (`Ops/TrackOps.cpp`, capability
+`tracks.v1`; the helpers that clip methods share are in `Ops/TrackSupport.*`). Both capabilities are reported:
+all their methods are registered.
+
+**Transport.** `transport.control` calls the processor's Standalone transport functions (`play`, `pause`, `stop`,
+`pauseAtPosition`, `setPosition`) and records the call with `recordControlCall()`, as the editor's listener functions
+do, so `transport.get` reports it as `lastControl`. `playFromLastStart` and `pauseAtLastStart` are the two branches of
+the editor's play-from-start button (`playFromStartToggleRequested`). "Last start" is the position of the last play
+**or seek** (`getPlayStartPosition()`), not 0: `play` and `seek` set it, and so does a seek in the UI. A `play` during
+playback, a `pause` or `pauseAtLastStart` while stopped, and any call that leaves the play state, position and play
+start as they are, change nothing and are `noOp`. The audio callback carries the commands out a block later, so the
+result reports the position that `stop` (0) and `pauseAtLastStart` (the last start) are about to give it when an
+audio device runs; without one the position does not advance, nothing carries a command out, and `play` and
+`playFromLastStart` carry `NO_AUDIO_DEVICE`. The play state and the position are view state (`not_persisted_state`,
+no revert, no `IRREVERSIBLE`, the project is not marked as changed). `transport.setTempo` calls `setBpm()` and
+`setTimeSignature()` and marks the project as changed (the UI does too); there is no undo entry (`ui_parity`) and the
+revert recipe sets the previous values. Only a numerator up to 32 and a denominator that is a power of two up to 32
+are accepted: the processor's setter would silently ignore other denominators. `transport.setLoop` sets the flag,
+which has no audible effect in the Standalone (`LOOP_NO_EFFECT_STANDALONE` when it is turned on, `NOT_PERSISTED`). The
+editor refreshes its transport bar and piano roll through `ControlUiBridge::onTransportChanged()` and
+`onTempoChanged()`.
+
+**Tracks.** OpenTune identifies a track by its position and has `MAX_TRACKS` slots; the editor shows the first few
+(`ControlUiBridge::visibleTrackCount()`, `setVisibleTrackCount()`), and a project that was opened can have clips in
+hidden slots. The methods that change the number of shown tracks need the editor (`UNSUPPORTED(capability_missing)`
+without one); `track.set` works on the arrangement alone.
+
+- `track.set` sets mute, solo, volume and colour through the arrangement's setters (the ones behind the panel's
+  controls). The volume knob covers linear 0 to 4: more is limited and reported with `CLAMPED`. The colour is set
+  directly, without the colour dialog. `changes` lists every track whose members changed, `audible` too, which follows
+  the solo flags of the other tracks. The revert recipe sets the previous values of the members that changed (the
+  volume in dB, or linearly when it was silent).
+- `track.add` follows the panel's + button (`TrackPanelComponent::showMoreTracks`): it shows more slots, which is view
+  state (`NOT_PERSISTED`, the project is not marked as changed). The panel's context menu entry (`trackAddRequested`)
+  also marks the project as changed; the schema follows the button.
+- `track.duplicate` follows `trackDuplicateRequested`: mix state and a copy of every clip go to the first hidden slot.
+  Mode `share` is what the UI does (the copies show the same contents, `SHARED_CONTENT`); mode `clone` first gives every
+  clip a content of its own with `OpenTuneAudioProcessor::cloneContent()`. A clip that waits to be reclaimed
+  (`isRetired`) is not copied, where the UI would copy it as well. The reference binding of a clip is copied, as the UI
+  copies it.
+- `track.delete` follows `trackDeleteRequested`: `StandaloneArrangement::removeTrackAndShift()`, then the panel shows
+  the mix of the arrangement and one track fewer. It needs `confirm`, the revision of the arrangement, and a shown
+  track that is not the only one. `trackIdMap` lists the deleted track and the shown tracks after it (hidden slots
+  keep their position and clips, so they are not listed). `removed` (the clips, then the contents that left with their last
+  clip), `danglingReferences` and `possiblyStaleEntries` describe the effect; see "Undo history" for the barrier.
+
+OpenTune behaviours that the methods report and do not fix:
+
+- `removeTrackAndShift()` drops the placements without retiring them or their contents, so the content repository still
+  lists the contents of the removed clips as live (and their audio stays in memory until the project is closed). The
+  control API does not show such a content any more: `ControlHistory::markContentsRemoved()` keeps them out of
+  `controlLiveContents()` and `controlLiveSnapshot()`, so `project.get` does not list them and their handles are
+  `NOT_FOUND(unknown_handle)`. The leak itself stays.
+- A clip of another track whose reference binding names a removed clip keeps the binding in OpenTune; `track.delete`
+  clears it with `setPlacementReferencePlacement(..., 0)` and reports it in `danglingReferences` and `changes`.
+- Earlier clip undo steps address tracks by position: after a deletion they may do nothing, while the UI still uses the
+  step up and marks the project as changed. The API reports it (`noOp`, `UNDO_NO_EFFECT`).
+
+Mirrors: `track-add`, `track-duplicate`, `track-delete`, `transport-play-from-start` and `track-volume-range`.
+
+Tests: `Tests/Control/ControlTracksTests.cpp` (`Transport`, `Tracks`, `TrackBarrier`, `TrackVectors`).
 ## Dialogs and onboarding
 
 `ui.getState` and `ui.dismiss` (`Ops/UiOps.cpp`, capability `ui.bridge`). The third method of `ui.bridge`,
@@ -1195,6 +1279,20 @@ also covers a job whose every rebuild is dropped (`NOT_READY(export_stretch_drop
 `kControlExportMaxStretchRequests` requests) and contents to export dry with a stretched grid and no render (a failed
 analysis with `allowDry`, an unvoiced one: `NOT_READY(export_dry_stretched)`), which end at once without a file.
 
+`Tests/Control/ControlTracksTests.cpp` holds the scenarios of the transport and the tracks, with a test bridge that
+follows the editor in the number of shown tracks and the notifications, and a fake audio device in a real
+`juce::AudioDeviceManager` (running, or none open). `Transport` runs every `transport.control` action and the
+play-from-start rules, the no-ops, `NO_AUDIO_DEVICE`, the tempo (with its revert recipe sent unchanged), the loop flag,
+the params, busy, and the answer without an editor. `Tracks` runs `track.set` (values, `CLAMPED`, solo and `audible`,
+the colour, the revert recipe, hidden tracks, the checks), `track.add` (the limit), `track.duplicate` (both modes, the
+mix and reference binding copied, `target_track_occupied`, `track_limit`), `track.delete` (the checks in order,
+`trackIdMap`, the removed clip and content, a content that another clip still shows, the dangling reference binding,
+the mix that moves down) and the three methods that need the editor without one. `TrackBarrier` runs the barrier of a
+track deletion with undo entries of the API that address tracks (OpenTune's `MultiMovePlacementAction` in a
+`ControlOriginAction`), entries of the UI, `force` and its confirmation, the second deletion, and a note edit whose
+content left the project (`UNDO_NO_EFFECT`). `TrackVectors` runs the specification's `transport/*` and `track/*`
+vectors and the six `edit/` vectors that need a deletion's barrier (`given.history` with clip moves is established with
+the same actions); `track/delete-arrangement-changed` needs `arrangement.edit` and is skipped.
 `Tests/Control/ControlUiTests.cpp` holds the scenarios of `ui.getState` and `ui.dismiss`, against the dialogs and the
 onboarding overlay of `TestUiBridge`, with the incomplete `ui.bridge` reported through the test seam. `UiState` checks
 the capabilities (neither `ui.bridge` nor `ui.onboardingClose` without the seam, `ui.onboardingClose` right after
@@ -1222,7 +1320,7 @@ runs against the facts of an instance without it).
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
-`jobs.v1`, `import.v1`, `export.v1`, `edit.v1`, `history.v1`, `timing.v1`, `project.io`, `prefs.write`, `audio.device` and `reference.v1`). The listener answers a method of an unreported capability itself with
+`jobs.v1`, `import.v1`, `export.v1`, `edit.v1`, `history.v1`, `timing.v1`, `transport.v1`, `tracks.v1`, `project.io`, `prefs.write`, `audio.device` and `reference.v1`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
@@ -1275,3 +1373,10 @@ than one step.
 | `prefs.set` | `prefs.write` | `Ops/PrefsOps.cpp` (a job of kind `prefsApply` for a change of the editing scheme) | `ControlProcessorTests.PrefsRoundTrip`, `.PrefsSchemeJob`, `.PrefsVectors` | `methods/prefs.set.schema.json` |
 | `audio.get` | `audio.device` | `Ops/AudioDeviceOps.cpp` | `ControlProcessorTests.AudioDevice`, `.AudioVectors` | `methods/audio.get.schema.json` |
 | `audio.set` | `audio.device` | `Ops/AudioDeviceOps.cpp` | `ControlProcessorTests.AudioDevice`, `.AudioVectors` | `methods/audio.set.schema.json` |
+| `transport.control` | `transport.v1` | `Ops/TransportOps.cpp` | `ControlProcessorTests.Transport`, `.TrackVectors` | `methods/transport.control.schema.json` |
+| `transport.setTempo` | `transport.v1` | `Ops/TransportOps.cpp` | `ControlProcessorTests.Transport`, `.TrackVectors` | `methods/transport.setTempo.schema.json` |
+| `transport.setLoop` | `transport.v1` | `Ops/TransportOps.cpp` | `ControlProcessorTests.Transport`, `.TrackVectors` | `methods/transport.setLoop.schema.json` |
+| `track.set` | `tracks.v1` | `Ops/TrackOps.cpp` | `ControlProcessorTests.Tracks`, `.TrackVectors` | `methods/track.set.schema.json` |
+| `track.add` | `tracks.v1` | `Ops/TrackOps.cpp` | `ControlProcessorTests.Tracks`, `.TrackVectors` | `methods/track.add.schema.json` |
+| `track.duplicate` | `tracks.v1` | `Ops/TrackOps.cpp` | `ControlProcessorTests.Tracks`, `.TrackVectors` | `methods/track.duplicate.schema.json` |
+| `track.delete` | `tracks.v1` | `Ops/TrackOps.cpp` (barrier in `Edit/ControlOriginAction.cpp`) | `ControlProcessorTests.Tracks`, `.TrackBarrier`, `.TrackVectors` | `methods/track.delete.schema.json` |

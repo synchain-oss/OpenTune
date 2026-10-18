@@ -121,6 +121,14 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # reached through the bridge) and project.clearRecent.
         Source/Control/Ops/ProjectOps.cpp
         Source/Control/Ops/ProjectOps.h
+        # Transport and tracks: transport.control, transport.setTempo, transport.setLoop, and track.set, track.add,
+        # track.duplicate, track.delete (the track helpers are shared with the clip methods).
+        Source/Control/Ops/TrackSupport.cpp
+        Source/Control/Ops/TrackSupport.h
+        Source/Control/Ops/TransportOps.cpp
+        Source/Control/Ops/TransportOps.h
+        Source/Control/Ops/TrackOps.cpp
+        Source/Control/Ops/TrackOps.h
         # Dialogs and onboarding: ui.getState and ui.dismiss (ui.bridge; ui.setSelection follows with the selection
         # part), on the editor's modal windows and onboarding overlay reached through the bridge.
         Source/Control/Ops/UiOps.cpp
@@ -146,6 +154,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Standalone/ControlEditorBridge.cpp
         Source/Standalone/ControlEditorBridge.h
         Source/Standalone/ControlEditorBridgeProject.cpp
+        Source/Standalone/ControlEditorBridgeTracks.cpp
         # Dialogs and onboarding: the modal windows, closing them as Escape does, the overlay, the scale of the UI.
         Source/Standalone/ControlEditorBridgeModals.cpp
         # Preferences and audio device (the editor applies the preferences; the ASIO restore of a device switch).
@@ -284,6 +293,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlTimingTests.cpp)
         # Project files: save, save as, open and clear recent, with a project session and a worker pool of the test.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlProjectTests.cpp)
+        # Transport and tracks: the play state, the tempo, the track panel and the barrier of a track deletion.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlTracksTests.cpp)
         # Dialogs and onboarding: ui.getState and ui.dismiss with dialogs and an overlay of the test bridge.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlUiTests.cpp)
         # Preferences and audio device: prefs.set (with its job), audio.get and audio.set on a fake device manager.
@@ -381,6 +392,13 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ProjectWithoutEditor|--control-api"
             "ProjectVectors|--control-api"
         )
+        # Transport and tracks (Tests/Control/ControlTracksTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "Transport|--control-api"
+            "Tracks|--control-api"
+            "TrackBarrier|--control-api"
+            "TrackVectors|--control-api"
+        )
         # Dialogs and onboarding (Tests/Control/ControlUiTests.cpp).
         list(APPEND _opentune_control_scenarios
             "UiState|--control-api"
@@ -443,6 +461,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.EditVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.TimingVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ProjectVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.TrackVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.UiVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.PrefsVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.AudioVectors PROPERTIES TIMEOUT 300)

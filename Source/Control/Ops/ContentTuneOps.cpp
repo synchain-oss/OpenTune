@@ -4,6 +4,7 @@
 #include "EditSupport.h"
 #include "OpsJson.h"
 #include "OpsSupport.h"
+#include "ReferenceOps.h"
 #include "WriteEnvelope.h"
 
 #include "Content/EditableContentSnapshot.h"
@@ -227,6 +228,8 @@ const char* modeName(TuneMode mode)
 struct AutoTuneParams
 {
     ControlHandle contentId;
+    /** Mode reference: the placement whose reference binding is used. */
+    std::optional<ControlHandle> placementId;
     TuneMode mode = TuneMode::Regenerate;
     std::string expectedRevision;
     /** Content seconds; empty for the whole content. */
@@ -344,6 +347,7 @@ bool parseAutoTune(const JsonValue& params, AutoTuneParams& out, std::string& wh
     if (out.clipKey && !out.expectedKeyRevision)
         return reject(reader, why, "key clipKey needs expectedKeyRevision");
     out.contentId = *contentId;
+    out.placementId = placementId;
     out.expectedRevision = *expectedRevision;
     return true;
 }
@@ -839,10 +843,52 @@ Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& 
     return result;
 }
 
+/**
+ * Mode reference: the checks of the call, then the work goes to a job of kind referenceAnalysis (Ops/ReferenceOps.h),
+ * which computes the alignment data the binding lacks and aligns the content in one undo step, after comparing the
+ * tokens this call checked with the content's current ones. The call changes nothing; its result is the write envelope
+ * of the state "handed to a job", with the members of content.autoTune that the job's result fills in (mode, no key
+ * and no params, no note count yet).
+ */
+Result<JsonValue> runReferenceAutoTune(ControlOpContext& context, const AutoTuneParams& params,
+                                       const ControlContentRef& ref)
+{
+    if (!params.placementId)
+        return controlOpError("INVALID_ARGUMENT", "invalid_params", "mode reference needs placementId");
+    auto placement = controlResolvePlacement(context, *params.placementId);
+    if (!placement.ok())
+        return placement.error();
+    if (!(placement.value().placement.contentKey == ref.key))
+        return controlOpError("INVALID_ARGUMENT", "placement_content_mismatch",
+                              "the placement does not show the content contentId names");
+    auto binding = controlResolveReferenceBinding(context, placement.value().placement.placementId, std::nullopt);
+    if (!binding.ok())
+        return binding.error();
+    ControlWriteEnvelope envelope(context);
+    envelope.touchContent(ref.contentId);
+    // The tokens runAutoTune() has just checked; the job compares them again before it aligns (PROTOCOL.md section 10
+    // rule 3), since it commits later, after the alignment data is there.
+    auto job = controlStartReferenceAlignJob(context, binding.value(),
+                                             {ref.contentId, params.expectedRevision, params.expectedKeyRevision});
+    if (!job.ok())
+        return job.error();
+    auto result = envelope.handedToJob(context, std::move(job).value());
+    auto omittedCount = JsonValue::object();
+    omittedCount.appendMember("changes", JsonValue::integer(0));
+    omittedCount.appendMember("created", JsonValue::integer(0));
+    omittedCount.appendMember("removed", JsonValue::integer(0));
+    result.appendMember("omittedCount", std::move(omittedCount));
+    result.appendMember("mode", JsonValue::string(modeName(TuneMode::Reference)));
+    result.appendMember("keyUsed", JsonValue());
+    result.appendMember("paramsUsed", JsonValue());
+    result.appendMember("noteCount", JsonValue());
+    return result;
+}
+
 Result<JsonValue> runAutoTune(ControlOpContext& context, const AutoTuneParams& params)
 {
-    // Reference alignment comes with the reference methods (x-otcp.valueCapabilities: reference.v1).
-    if (params.mode == TuneMode::Reference)
+    // Reference alignment needs the capability reference.v1 besides edit.v1 (x-otcp.valueCapabilities).
+    if (params.mode == TuneMode::Reference && !controlReportsCapability(context, "reference.v1"))
         return controlOpError("UNSUPPORTED", "capability_missing",
                               "content.autoTune mode reference needs the capability reference.v1");
     auto content = controlResolveContent(context, params.contentId);
@@ -856,6 +902,8 @@ Result<JsonValue> runAutoTune(ControlOpContext& context, const AutoTuneParams& p
     const auto versions = controlContentVersions(context, ref.contentId, *ref.snapshot);
     if (auto conflict = controlCheckExpectedTokens(versions, params.expectedRevision, params.expectedKeyRevision))
         return *conflict;
+    if (params.mode == TuneMode::Reference)
+        return runReferenceAutoTune(context, params, ref);
     if (params.mode == TuneMode::NotesOnly)
         return runNotesOnly(context, params, ref, versions);
     // clipKey: the content's own key, guarded by expectedKeyRevision above. A content without a key

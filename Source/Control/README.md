@@ -2,7 +2,7 @@
 
 # OpenTune control API (OTCP v1)
 
-> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、撤销历史（撤销识别、ControlOriginAction、没有撤销条目的写入）、ContentEditTransaction 与它镜像的上游函数、音符编辑与移调（content.editNotes、content.setPitchShift、AUTO 的 SNAP，修正段按钢琴卷帘的步骤重建，令牌扣除移调步骤）、内容写入的就绪门、忙碌检查、编辑器 bridge、导入、导出（界面与接口共用的导出锁、逐内容的就绪判定、等待伸缩重建、临时文件与最终改名）、时间网格（照时间工具的两轮夹紧移动手柄、整段平移、以 job 种子锚点、TimeGridEditAction 撤销步、它镜像的上游函数）、镜像登记（MIRRORS.md、mirror-map.json、ControlMirrorDriftTests）、AI agent 快速规则、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
+> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、撤销历史（撤销识别、ControlOriginAction、没有撤销条目的写入）、ContentEditTransaction 与它镜像的上游函数、音符编辑与移调（content.editNotes、content.setPitchShift、AUTO 的 SNAP，修正段按钢琴卷帘的步骤重建，令牌扣除移调步骤）、内容写入的就绪门、忙碌检查、编辑器 bridge、导入、导出（界面与接口共用的导出锁、逐内容的就绪判定、等待伸缩重建、临时文件与最终改名）、时间网格（照时间工具的两轮夹紧移动手柄、整段平移、以 job 种子锚点、TimeGridEditAction 撤销步、它镜像的上游函数）、对话框与首次引导（ui.getState、ui.dismiss：模态窗口的分类、照 Esc 关闭、系统文件选择器、阻止或关闭首次引导、不能压下的 F0 诊断）、镜像登记（MIRRORS.md、mirror-map.json、ControlMirrorDriftTests）、AI agent 快速规则、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
 
 This directory holds the local control API of OpenTune Standalone: a JSON-RPC protocol over a loopback
 TCP connection (OTCP v1, specified in `Tests/Control/spec/otcp/v1/PROTOCOL.md`), with which another
@@ -43,7 +43,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `Ops/OpsSupport.*` | What the operations share: parameter reader, handle resolution, the world revision vector and `asOf`, number and text output. |
 | `ControlJobs.*` | The jobs of the instance: registry, the tick that advances running jobs on the message thread, the long poll of `job.get`, cancellation, retention. |
 | `Ops/WriteEnvelope.*` | What every write shares: the busy checks, the dirty flag, revert recipes, the UI snapshot, `revisionDiff` and the write envelope builder. |
-| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*`, `Ops/ExportOps.*`, `Ops/UndoOps.*`, `Ops/ContentTuneOps.*`, `Ops/ContentEditOps.*`, `Ops/TimingOps.*`, `Ops/ProjectOps.*` | The methods, one file per group (see "Method table"). |
+| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*`, `Ops/ExportOps.*`, `Ops/UndoOps.*`, `Ops/ContentTuneOps.*`, `Ops/ContentEditOps.*`, `Ops/TimingOps.*`, `Ops/ProjectOps.*`, `Ops/UiOps.*` | The methods, one file per group (see "Method table"). |
 | `Edit/TimeGridOps.*` | The handle moves of OpenTune's time tool without the piano roll: the two passes of its limits, and the commit of a grid as the piano roll commits one (see "Time grid"). |
 | `Ops/EditSupport.*` | What the content edits and the undo steps share: params forms of tokens and keys, the readiness gate, the expected-token checks, note references, `reRenderQueued`, and the description of an undo step's effect from two snapshots. |
 | `Edit/ControlOriginAction.*` | The undo entry of a change made through the API (upstream undo actions wrapped with an `undoId`), and `ControlHistory`: undoIds, the API's entries, the undoIds of UI entries, changes without an undo entry. |
@@ -55,7 +55,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `ControlFileIdentity.*` | File identity (volume and file id, `st_dev` and `st_ino`), "same file" by identity, and the final rename that never replaces (PROTOCOL.md sections 20.3 and 20.4); standard library and operating system only. |
 | `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme, the processing object of `session.info` and `prefs.get`). |
 | `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
-| `../Standalone/ControlEditorBridge.*`, `../Standalone/ControlEditorBridgeProject.cpp` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor (the project flows in the second file); compiled into the application wrapper only. |
+| `../Standalone/ControlEditorBridge.*`, `../Standalone/ControlEditorBridgeProject.cpp`, `../Standalone/ControlEditorBridgeModals.cpp` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor (the project flows in the second file, the dialogs and the onboarding in the third); compiled into the application wrapper only. |
 
 The channel files (options to server) use only the standard library and the operating system; the
 unit tests (`Tests/Control/ControlUnitTests.cpp`) compile them on their own. The service files and every
@@ -517,7 +517,8 @@ an undo or redo (`afterUndoRedo()`), the refresh after a time-grid edit (`onTime
 piano roll clip, selection, visible track count), the focus of an imported clip
 (`applyPlacementSelectionContext`), revealing tracks, the note generation parameters of the piano roll,
 the project session and its worker pool, and the audio device manager. The project flows are in
-`ControlEditorBridgeProject.cpp` (see "Project files"). Dialogs, tracks and preferences follow in files of their own.
+`ControlEditorBridgeProject.cpp` (see "Project files"), the dialogs and the onboarding in
+`ControlEditorBridgeModals.cpp` (see "Dialogs and onboarding"). Tracks and preferences follow in files of their own.
 The headless tests use `Tests/Control/TestUiBridge.h`, which owns a real `ProjectSession` and a worker pool of one
 thread when a test asks for them.
 
@@ -838,6 +839,98 @@ Tests: `Tests/Control/ControlProjectTests.cpp` (`ProjectRoundTrip`, `ProjectJobs
 explicit list to pass; `project/get-ok` is a read and runs in `Vectors`, and `project/save-as-no-access` is skipped
 because the runner cannot make a file whose identity is unreadable on Windows.
 
+## Dialogs and onboarding
+
+`ui.getState` and `ui.dismiss` (`Ops/UiOps.cpp`, capability `ui.bridge`). The third method of `ui.bridge`,
+`ui.setSelection`, follows with the selection part. Until it is registered `ui.bridge` is incomplete
+(`controlCapabilityIsIncomplete`): the instance does not report it, the listener refuses both methods with
+`UNSUPPORTED(capability_missing)`, and only the headless tests reach them, through the test seam.
+`ui.onboardingClose`, a capability without methods of its own, is reported right after `ui.bridge`
+(`kFeatureCapabilities` in `Ops/OpsRegistry.cpp`), because every build with the editor bridge can close an overlay that
+is showing. Both methods describe the editor window and answer `UNSUPPORTED(capability_missing)` without an editor.
+
+The editor's side is `Source/Standalone/ControlEditorBridgeModals.cpp`. It reads the open windows through JUCE's
+`ModalComponentManager` (index 0 is the window in front; `openDialogs()` lists them from the bottom) and calls only
+what the dialogs and the overlay offer publicly, so it needs no hook in their classes. The reserved hook "public
+`dismiss()` on `OnboardingOverlayComponent`" is not needed: the overlay's public `keyPressed()` finishes it on Escape.
+
+**Classification** (`classify()`). A window it does not know is `unknown` with `closeCommits` true, as the protocol asks.
+
+| Modal window | Recognised by | kind | closeCommits | What closing it as Escape does |
+|---|---|---|---|---|
+| Track colour (`OpenTuneAudioProcessorEditor::trackColorChangeRequested`) | a `DialogWindow` named `Track <n> Color` whose content holds a `juce::ColourSelector`; `trackId` is n - 1 | `trackColour` | true | The content's destructor sets the track's colour to the one shown, refreshes the track panel and the arrangement, and marks the project as changed. |
+| `ConfirmDialogContent::showMessage`, `showDiagnostic` (also the OriginalF0 and render-failure diagnostics) | a `ConfirmDialogContent` with one button, or with Copy then OK | `message` | false | Its dismiss path: the window closes, no button action runs. |
+| Any other `ConfirmDialogContent` (unsaved changes, overwrite, the onboarding's workflow choice, ...) | a `ConfirmDialogContent` | `confirm` | false | Its dismiss callback, which cancels the action it asked about; the onboarding's choice dialog finishes the overlay. |
+| Pitch shift (`pitchShiftRequested`) | `PitchShiftDialogContent` | `pitchShift` | false | The window hides; only its confirm and reset buttons commit. |
+| Preferences | `TabbedPreferencesDialog` | `preferences` | false | The window hides; the pages apply each setting when it changes. |
+| Shortcut capture (in the preferences) | `ShortcutCaptureDialogContent` | `unknown` | true | Escape would become the new shortcut, so `ui.dismiss` closes it with its window's close button, which cancels. |
+| Popup menus and any other window (also the audio settings of the Standalone wrapper) | anything else | `unknown` | true | Escape, else the window's close button, else `exitModalState`. |
+| File chooser | `juce::FileChooser`'s modal component (`FileChooser::Native`, told apart only by its type name) or a `FileChooserDialogBox` | not listed | - | Not closed: only the user can close it. |
+
+Titles are the window's name (`DialogWindow::getName()`). `ConfirmDialogContent` and the shortcut dialog draw their
+title themselves and keep it private, so their title is empty.
+
+**Closing** (`closeTopDialog()`). Escape goes to the content first and then to the window (`Component::keyPressed`,
+public there), as when the dialog has the keyboard focus. A dialog that ignores Escape closes with its window's close
+button, any other modal component with `exitModalState`. Then the window's content is deleted at once
+(`ResizableWindow::clearContentComponent()`), while the modal manager deletes the empty window later as always: what the
+dialog does when it closes has happened when the call returns (the colour is committed before the result is built), and
+the content stops listening to its window before the window goes.
+
+`ui.dismiss` with target `dialogs` checks before it closes anything. A file chooser above a listed dialog refuses the
+call with `BUSY(modal_open)`; a dialog whose `closeCommits` is true refuses it without `confirm`
+(`INVALID_ARGUMENT(dialog_commits_on_close)`). It then closes from the top down and stops early when closing a dialog
+opened another (the new one is left open, unchecked). A committed colour is a change of the track (`changes`,
+`sideEffects.dialogCommitted`, `DIALOG_CLOSE_COMMITTED`) without an undo entry (`ui_parity`), as in OpenTune; its revert
+recipe is `track.set`, which is null, with `IRREVERSIBLE`, while the instance does not report `tracks.v1`. A colour
+dialog that shows the track's own colour still commits it (the project is marked as changed, `dialogCommitted` is
+reported) but lists no change. Dialogs that commit nothing are view state: `not_persisted_state`, revert null, no
+warning.
+
+**Busy.** `ui.getState` is a read and never answers BUSY. `ui.dismiss` checks with `ControlBusyScope::DialogDismiss`:
+an open dialog does not refuse it, a gesture, an import of the UI, an export or a project operation does. A file
+chooser of the operating system is a modal component of JUCE while it is open (on Windows `FileChooser` makes its own
+component modal while the system dialog runs), so `queryBusy()` reports `modalOpen` and every other write answers
+`BUSY(modal_open)`; `ui.getState` counts it in `busy.modalOpen` but does not list it. This follows from JUCE's code and
+is checked headlessly only; whether a native chooser on macOS appears in the modal stack is still to be confirmed in a
+real window.
+
+**Onboarding.** `onboarding.shown` is the preference `onboardingShown` (`AppPreferences`), which the editor's timer
+checks before it starts the overlay; `onboarding.showing` is `OnboardingOverlayComponent::isActive()`. With target
+`onboarding`:
+- Not showing and never shown: sets the preference, which keeps the overlay from starting (`no_upstream_undo`,
+  `IRREVERSIBLE`). Preventing it is the client's call before the work that the overlay would interrupt; the API never
+  sets the preference by itself.
+- Showing (needs `ui.onboardingClose`): does what pressing Escape until the overlay is gone does. The dialogs above it
+  close first (the workflow choice is a `ConfirmDialogContent` whose dismissal finishes the overlay; a dialog that
+  commits on close refuses the call), then the overlay's own `keyPressed()` finishes it, as its exit button does.
+  OpenTune sets `onboardingShown` when the overlay shows its choice, so in the real window the preference is already
+  true and the result lists no change: undo `not_persisted_state`, not a no-op. The vector `ui/dismiss-onboarding-close`
+  describes an overlay that has not set the preference yet; the test bridge plays that, and the change of
+  `onboardingShown` from false to true is reported.
+- Shown before and not showing: a no-op.
+
+**F0 diagnostic.** The OriginalF0 diagnostic is shown by the editor's heartbeat (`timerCallback`) whenever the
+processor's F0 failure generation changes, for any content, and nothing tells it which analysis the API started; the
+render-failure diagnostic is posted by `ProcessRenderRuntime::notifyApplicationRenderFailure()`, which knows no editor.
+Suppressing either for work the API started would need a hook in upstream logic, so the API does not: both are
+`message` dialogs, which `ui.getState` lists and `ui.dismiss` closes.
+
+**uiScale** is the scale the editor last applied for the selected clip (`lastResolvedScaleRootNote_`,
+`lastResolvedScaleType_`, set by `applyResolvedScaleForPlacementContent()`), which the transport bar shows and AUTO,
+SNAP and the pitch tool use. A scale picked in the transport bar while no clip is selected changes only the UI and is
+not reflected.
+
+**Deviations from the vectors.** OpenTune always has an active track (track 0 in a new project), so the UI snapshot
+reports `activeTrackId` 0 where `ui/get-state-ok` expects null; its runner checks 0 instead. The titles of
+`ConfirmDialogContent` dialogs are empty (above). `ui/dismiss-confirm-commit` needs `tracks.v1` for its revert recipe
+and is skipped until that capability is reported; `UiDismiss` covers the same commit without it.
+
+Tests: `Tests/Control/ControlUiTests.cpp` (`UiState`, `UiDismiss`, `UiOnboardingWithheld`, `UiVectors`) against the
+test bridge's dialogs and overlay (`TestUiBridge`); `UiVectors` requires an explicit list of `ui/*` vectors to pass and
+lists the vectors of `ui.setSelection` as pending. The classification and the closing of the real windows run only in
+the Standalone application.
+
 ## Dirty flag and revision tokens
 
 The dirty flag belongs to the editor's `ProjectSession`; without an editor it is false. Revision tokens
@@ -1034,6 +1127,17 @@ also covers a job whose every rebuild is dropped (`NOT_READY(export_stretch_drop
 `kControlExportMaxStretchRequests` requests) and contents to export dry with a stretched grid and no render (a failed
 analysis with `allowDry`, an unvoiced one: `NOT_READY(export_dry_stretched)`), which end at once without a file.
 
+`Tests/Control/ControlUiTests.cpp` holds the scenarios of `ui.getState` and `ui.dismiss`, against the dialogs and the
+onboarding overlay of `TestUiBridge`, with the incomplete `ui.bridge` reported through the test seam. `UiState` checks
+the capabilities (neither `ui.bridge` nor `ui.onboardingClose` without the seam, `ui.onboardingClose` right after
+`ui.bridge` with it), the busy flags, the dialog stack from the bottom without file choosers, the onboarding, the UI
+snapshot, the scale and a bridge without dialogs. `UiDismiss` closes view-state dialogs (`not_persisted_state`), a
+track colour without and with `confirm` (the colour, `dialogCommitted`, `DIALOG_CLOSE_COMMITTED`, the revert recipe,
+dirty, an unchanged colour), a stack with a file chooser on top or in the middle, a dialog that opens another or will
+not close, prevents and closes the onboarding (with the dialogs above it), the no-ops, busy and the params.
+`UiOnboardingWithheld` runs an instance without `ui.onboardingClose`. `UiVectors` runs the specification's `ui/*`
+vectors; a fixed list of them must pass, and those of `ui.setSelection` are reported as pending.
+
 `Tests/Control/ControlReferenceTests.cpp` holds the scenarios of the reference alignment. The alignment data of the reference
 clip is given to its content as the processor stores a finished analysis, with notes two semitones above the target's;
 the target's own analysis runs through OpenTune's service. `Reference` runs the analysis job, the alignment (hand-checked
@@ -1058,10 +1162,13 @@ method of a capability it reports: `read.v1` is complete (all eight reads are re
 
 A capability of which only some methods are registered is not reported (`controlCapabilityIsIncomplete`); its
 methods are refused by the listener until the last one is registered, and the headless tests report it with the
-test seam `controlSetReportIncompleteCapabilitiesForTesting()` to run them. No capability is incomplete now:
-`edit.v1` is reported since all four of its methods are registered, and no test switches the seam on. The
-mechanism stays for the method groups that are still placeholder lines in `registerControlMethods()`, whose
-capabilities may be registered in more than one step.
+test seam `controlSetReportIncompleteCapabilitiesForTesting()` to run them. `edit.v1` is reported since all four of
+its methods are registered. `ui.bridge` is incomplete now: `ui.getState` and `ui.dismiss` are registered and
+`ui.setSelection` is not yet, so the instance reports neither `ui.bridge` nor `ui.onboardingClose`, which extends it,
+and the scenarios of `ControlUiTests.cpp` switch the seam on (`controlSetWithheldCapabilitiesForTesting()` leaves a
+reported capability out, for the vectors' precondition `withoutCapabilities`). The mechanism stays for the method
+groups that are still placeholder lines in `registerControlMethods()`, whose capabilities may be registered in more
+than one step.
 
 ## Method table
 
@@ -1081,6 +1188,8 @@ capabilities may be registered in more than one step.
 | `job.cancel` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.ImportCancel`, `.JobVectors` | `methods/job.cancel.schema.json` |
 | `import.start` | `import.v1` | `Ops/ImportOps.cpp` | `ControlProcessorTests.Import`, `.ImportAfterOpen`, `.ImportCancel`, `.JobVectors` | `methods/import.start.schema.json` |
 | `export.start` | `export.v1` | `Ops/ExportOps.cpp` (identity and rename in `ControlFileIdentity.cpp`) | `ControlProcessorTests.Export`, `.ExportFailures`, `.ExportVectors`, `.ExportTimeStretch` | `methods/export.start.schema.json` |
+| `ui.getState` | `ui.bridge` (incomplete, not reported yet) | `Ops/UiOps.cpp` (editor side in `../Standalone/ControlEditorBridgeModals.cpp`) | `ControlProcessorTests.UiState`, `.UiVectors` | `methods/ui.getState.schema.json` |
+| `ui.dismiss` | `ui.bridge` (incomplete, not reported yet); closing a showing overlay also `ui.onboardingClose` | `Ops/UiOps.cpp` (editor side in `../Standalone/ControlEditorBridgeModals.cpp`) | `ControlProcessorTests.UiDismiss`, `.UiOnboardingWithheld`, `.UiVectors` | `methods/ui.dismiss.schema.json` |
 | `edit.getHistory` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.EditVectors` | `methods/edit.getHistory.schema.json` |
 | `edit.undo` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.AutoTune`, `.EditVectors` | `methods/edit.undo.schema.json` |
 | `edit.redo` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.EditVectors` | `methods/edit.redo.schema.json` |

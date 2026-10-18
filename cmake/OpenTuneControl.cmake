@@ -121,6 +121,10 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # reached through the bridge) and project.clearRecent.
         Source/Control/Ops/ProjectOps.cpp
         Source/Control/Ops/ProjectOps.h
+        # Dialogs and onboarding: ui.getState and ui.dismiss (ui.bridge; ui.setSelection follows with the selection
+        # part), on the editor's modal windows and onboarding overlay reached through the bridge.
+        Source/Control/Ops/UiOps.cpp
+        Source/Control/Ops/UiOps.h
         # Reference alignment: content.analyzeReference and the job of content.autoTune in mode reference, with the
         # alignment of OpenTune's AUTO button handed back as one undo action.
         Source/Control/Edit/ReferenceAlignment.cpp
@@ -136,6 +140,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Standalone/ControlEditorBridge.cpp
         Source/Standalone/ControlEditorBridge.h
         Source/Standalone/ControlEditorBridgeProject.cpp
+        # Dialogs and onboarding: the modal windows, closing them as Escape does, the overlay, the scale of the UI.
+        Source/Standalone/ControlEditorBridgeModals.cpp
     )
     # PUBLIC, so that every target that compiles or links the SharedCode sees the same class layouts.
     target_compile_definitions(OpenTuneStandalone PUBLIC OPENTUNE_ENABLE_CONTROL_API=1)
@@ -270,6 +276,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlTimingTests.cpp)
         # Project files: save, save as, open and clear recent, with a project session and a worker pool of the test.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlProjectTests.cpp)
+        # Dialogs and onboarding: ui.getState and ui.dismiss with dialogs and an overlay of the test bridge.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlUiTests.cpp)
         # Reference alignment: content.analyzeReference and content.autoTune mode reference.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlReferenceTests.cpp)
         if(MSVC)
@@ -363,6 +371,13 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ProjectWithoutEditor|--control-api"
             "ProjectVectors|--control-api"
         )
+        # Dialogs and onboarding (Tests/Control/ControlUiTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "UiState|--control-api"
+            "UiDismiss|--control-api"
+            "UiOnboardingWithheld|--control-api"
+            "UiVectors|--control-api"
+        )
         # Reference alignment (Tests/Control/ControlReferenceTests.cpp).
         list(APPEND _opentune_control_scenarios
             "Reference|--control-api"
@@ -410,6 +425,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.EditVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.TimingVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ProjectVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.UiVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ReferenceVectors PROPERTIES TIMEOUT 300)
         # Each scenario process gets its own test's TIMEOUT, from which its watchdog takes its bound (a margin before;
         # ScenarioWatchdog in Tests/Control/ControlProcessorTests.cpp). Keep this after every TIMEOUT of the scenarios.

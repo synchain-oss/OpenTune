@@ -547,6 +547,19 @@ void scenarioProjectWithoutEditor();
     real dispatcher with a real project session and a worker pool. */
 void scenarioProjectVectors();
 
+// Scenarios of the dialogs and the onboarding (ControlUiTests.cpp).
+
+/** ui.getState: the capability (incomplete until ui.setSelection), the busy flags, the dialogs from the bottom without
+    file choosers, titles, the onboarding, the scale, without an editor. */
+void scenarioUiState();
+/** ui.dismiss: params, busy, closing from the top, dialog_commits_on_close, a committed colour without tracks.v1, file
+    choosers, a dialog that does not close or opens another, and target onboarding (prevent, close, choice dialog). */
+void scenarioUiDismiss();
+/** target onboarding on an instance without ui.onboardingClose: prevents, does not close. */
+void scenarioUiOnboardingWithheld();
+/** The specification's vectors of ui/ (those of ui.setSelection are pending). */
+void scenarioUiVectors();
+
 // Scenarios of the reference alignment (ControlReferenceTests.cpp).
 
 /** content.analyzeReference and content.autoTune mode reference: the analysis job, the alignment in one undo step

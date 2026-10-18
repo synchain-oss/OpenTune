@@ -1142,6 +1142,175 @@
       "noteZh": "AlreadyReady 表示计时分析已就绪且 producer 与音频匹配；加上 hasTimingAnchors() 即种子的 featuresReady，因此 job 只在能立即种子时调用 ensureTimeToolAnchorSeed()。"
     },
     {
+      "id": "ui-track-colour-dialog",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::trackColorChangeRequested",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "d94e32c47a816cde0f730ba063675e288f29e15344d7d16b1ec22fd8ccd5313b"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeModals.cpp",
+          "symbols": [
+            "trackOfColourTitle",
+            "classify"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/UiOps.cpp",
+          "symbols": [
+            "closeDialogs"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiDismiss",
+        "ControlProcessorTests.UiVectors"
+      ],
+      "note": "The track colour dialog is a DialogWindow titled \"Track <n> Color\" (n = trackId + 1) whose content holds a ColourSelector; the content's destructor sets the track's colour, the track panel's colour, redraws the arrangement and marks the project dirty however the window closes, so the bridge classifies it as trackColour with closeCommits and ui.dismiss reports the commit.",
+      "noteZh": "轨道颜色对话框是标题为 \"Track <n> Color\"（n = trackId + 1）、内容含 ColourSelector 的 DialogWindow；无论窗口怎样关闭，内容的析构都会设置轨道颜色与轨道面板颜色、重绘编排视图并把工程标为已修改，因此 bridge 把它归为 closeCommits 为真的 trackColour，ui.dismiss 报告这次提交。"
+    },
+    {
+      "id": "ui-confirm-dialog-buttons",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Editor/ConfirmDialogContent.h",
+        "symbol": "showDiagnostic",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "7609e9f6a7966d92096c234b96b3bdf8fc74b41eaa121e1b7880753c43b74b10"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeModals.cpp",
+          "symbols": [
+            "confirmDialogKind"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiState",
+        "ControlProcessorTests.UiDismiss"
+      ],
+      "note": "A diagnostic is a ConfirmDialogContent with the buttons Copy, then OK (showMessage has one button); the bridge tells a message from a confirm dialog by these buttons, so the OriginalF0 and render-failure diagnostics are listed as message.",
+      "noteZh": "诊断提示是按钮为 Copy、OK 的 ConfirmDialogContent（showMessage 只有一个按钮）；bridge 凭这些按钮区分 message 与 confirm，因此 OriginalF0 与渲染失败的诊断列为 message。"
+    },
+    {
+      "id": "ui-onboarding-escape",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Editor/OnboardingOverlayComponent.cpp",
+        "symbol": "OnboardingOverlayComponent::keyPressed",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "992c67c954dd62ef1e9ed9bd6401f23810ab6e7ffc46ff324002959388d60d60"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeModals.cpp",
+          "symbols": [
+            "closeOnboarding"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiDismiss",
+        "ControlProcessorTests.UiVectors"
+      ],
+      "note": "Escape finishes the overlay (its private finish(), which the exit button calls as well); the bridge closes a showing overlay through this public keyPressed() instead of a hook.",
+      "noteZh": "Esc 会结束引导层（私有的 finish()，退出按钮也调用它）；bridge 经这个公开的 keyPressed() 关闭正在显示的引导层，不需要钩子。"
+    },
+    {
+      "id": "ui-onboarding-choice",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Editor/OnboardingOverlayComponent.cpp",
+        "symbol": "OnboardingOverlayComponent::showWorkflowChoice",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "8166989dc823bdcdabff1fe16b50f2ab7e14aa49285c211d3fa89ea77707ab04"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeModals.cpp",
+          "symbols": [
+            "confirmDialogKind"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/UiOps.cpp",
+          "symbols": [
+            "dismissOnboarding"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiDismiss",
+        "ControlProcessorTests.UiVectors"
+      ],
+      "note": "The workflow choice is a ConfirmDialogContent with three buttons (a confirm dialog) whose dismissal finishes the overlay, and showing it sets onboardingShown; ui.dismiss with target onboarding closes it first and then reports no change of the preference in the real window.",
+      "noteZh": "工作流选择是三个按钮的 ConfirmDialogContent（confirm 对话框），关闭它会结束引导层，显示时就把 onboardingShown 置为真；ui.dismiss 以 onboarding 为目标时先关闭它，因此在真实窗口里不报告首选项的改动。"
+    },
+    {
+      "id": "ui-onboarding-start",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "!appPreferences_.getState().shared.onboardingShown",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "f3e8e0b7262fa465ea03cf171426507552904a567147628977a8b2a9b7dabfec"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/UiOps.cpp",
+          "symbols": [
+            "dismissOnboarding"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiDismiss",
+        "ControlProcessorTests.UiOnboardingWithheld"
+      ],
+      "note": "The editor's timer starts the overlay only while onboardingShown is false (and no modal window, project operation, import or export is running); ui.dismiss prevents the overlay by setting that preference.",
+      "noteZh": "编辑器的定时器只在 onboardingShown 为假时启动引导层（且没有模态窗口、工程操作、导入或导出）；ui.dismiss 通过设置这个首选项阻止引导层出现。"
+    },
+    {
+      "id": "ui-scale",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::applyResolvedScaleForPlacementContent",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "1a44cea413389d578bb28e542e65913ae31a870d22e628a08b59fae4f1da0822"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeModals.cpp",
+          "symbols": [
+            "uiScale"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/UiOps.cpp",
+          "symbols": [
+            "runGetState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiState",
+        "ControlProcessorTests.UiVectors"
+      ],
+      "note": "lastResolvedScaleRootNote_ and lastResolvedScaleType_ (UI scale types 1..8) are the scale the editor last applied for the selected clip; ui.getState reports them as uiScale.",
+      "noteZh": "lastResolvedScaleRootNote_ 与 lastResolvedScaleType_（界面调式类型 1..8）是编辑器最近为所选片段应用的调式；ui.getState 把它们报告为 uiScale。"
+    },
+    {
       "id": "reference-align-commit",
       "group": "reference",
       "upstream": {

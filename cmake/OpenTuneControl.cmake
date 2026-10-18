@@ -125,6 +125,12 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # part), on the editor's modal windows and onboarding overlay reached through the bridge.
         Source/Control/Ops/UiOps.cpp
         Source/Control/Ops/UiOps.h
+        # Preferences and audio device: prefs.set (a job of kind prefsApply for a change of the editing scheme) and
+        # audio.get / audio.set (the steps of the audio settings page on the editor's device manager, with rollback).
+        Source/Control/Ops/PrefsOps.cpp
+        Source/Control/Ops/PrefsOps.h
+        Source/Control/Ops/AudioDeviceOps.cpp
+        Source/Control/Ops/AudioDeviceOps.h
         # Reference alignment: content.analyzeReference and the job of content.autoTune in mode reference, with the
         # alignment of OpenTune's AUTO button handed back as one undo action.
         Source/Control/Edit/ReferenceAlignment.cpp
@@ -142,6 +148,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Standalone/ControlEditorBridgeProject.cpp
         # Dialogs and onboarding: the modal windows, closing them as Escape does, the overlay, the scale of the UI.
         Source/Standalone/ControlEditorBridgeModals.cpp
+        # Preferences and audio device (the editor applies the preferences; the ASIO restore of a device switch).
+        Source/Standalone/ControlEditorBridgePrefs.cpp
     )
     # PUBLIC, so that every target that compiles or links the SharedCode sees the same class layouts.
     target_compile_definitions(OpenTuneStandalone PUBLIC OPENTUNE_ENABLE_CONTROL_API=1)
@@ -278,6 +286,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlProjectTests.cpp)
         # Dialogs and onboarding: ui.getState and ui.dismiss with dialogs and an overlay of the test bridge.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlUiTests.cpp)
+        # Preferences and audio device: prefs.set (with its job), audio.get and audio.set on a fake device manager.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlPrefsTests.cpp)
         # Reference alignment: content.analyzeReference and content.autoTune mode reference.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlReferenceTests.cpp)
         if(MSVC)
@@ -378,6 +388,14 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "UiOnboardingWithheld|--control-api"
             "UiVectors|--control-api"
         )
+        # Preferences and audio device (Tests/Control/ControlPrefsTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "PrefsRoundTrip|--control-api"
+            "PrefsSchemeJob|--control-api"
+            "PrefsVectors|--control-api"
+            "AudioDevice|--control-api"
+            "AudioVectors|--control-api"
+        )
         # Reference alignment (Tests/Control/ControlReferenceTests.cpp).
         list(APPEND _opentune_control_scenarios
             "Reference|--control-api"
@@ -426,6 +444,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.TimingVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ProjectVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.UiVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.PrefsVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.AudioVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ReferenceVectors PROPERTIES TIMEOUT 300)
         # Each scenario process gets its own test's TIMEOUT, from which its watchdog takes its bound (a margin before;
         # ScenarioWatchdog in Tests/Control/ControlProcessorTests.cpp). Keep this after every TIMEOUT of the scenarios.

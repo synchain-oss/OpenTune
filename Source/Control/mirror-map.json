@@ -1311,6 +1311,447 @@
       "noteZh": "lastResolvedScaleRootNote_ 与 lastResolvedScaleType_（界面调式类型 1..8）是编辑器最近为所选片段应用的调式；ui.getState 把它们报告为 uiScale。"
     },
     {
+      "id": "prefs-tuning",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "tuningSlider_.onValueChange",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "66f9e08b43190d050b10b42dfe24b9cbf3f56b3e85e6c08e76e52007c0ee96a6"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsRoundTrip",
+        "ControlProcessorTests.PrefsSchemeJob",
+        "ControlProcessorTests.PrefsVectors"
+      ],
+      "note": "The tuning slider of the preferences window stores the frequency of A4 (AppPreferences::setTuning) and has the editor apply the preferences; prefs.set tuningHz does the same.",
+      "noteZh": "偏好设置窗口的调音滑块用 AppPreferences::setTuning 保存 A4 频率，并让编辑器应用偏好；prefs.set 的 tuningHz 做同样的事。"
+    },
+    {
+      "id": "prefs-editing-scheme",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "schemeSelector_.onChange",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "b52d24642074c172d077dd5fcb7a4faad424054758ef0868006a754d5b37d54d"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsRoundTrip",
+        "ControlProcessorTests.PrefsSchemeJob",
+        "ControlProcessorTests.PrefsVectors"
+      ],
+      "note": "The scheme selector stores the editing scheme (AppPreferences::setAudioEditingScheme) and has the editor apply the preferences; prefs.set editingScheme does the same, as a job that waits for the editor.",
+      "noteZh": "编辑方案下拉框用 AppPreferences::setAudioEditingScheme 保存方案，并让编辑器应用偏好；prefs.set 的 editingScheme 做同样的事，但作为等待编辑器的 job。"
+    },
+    {
+      "id": "prefs-experimental-features",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "experimentalFeaturesToggle_.onClick",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "8db49147776f7c136e8dec4369bc0b20bfae1cce61afd6082793957d86da0013"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsRoundTrip",
+        "ControlProcessorTests.PrefsSchemeJob",
+        "ControlProcessorTests.PrefsVectors"
+      ],
+      "note": "The experimental-features toggle stores the switch (AppPreferences::setExperimentalFeaturesEnabled) and has the editor apply the preferences; prefs.set experimentalFeatures does the same.",
+      "noteZh": "实验功能开关用 AppPreferences::setExperimentalFeaturesEnabled 保存开关，并让编辑器应用偏好；prefs.set 的 experimentalFeatures 做同样的事。"
+    },
+    {
+      "id": "prefs-hybrid-mode",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "lightPitchCorrectionToggle_.onClick",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "a17c133ad7bfcd10a053edc8f8672d073139e7506f928be064ae24794c51cc7e"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsRoundTrip",
+        "ControlProcessorTests.PrefsSchemeJob",
+        "ControlProcessorTests.PrefsVectors"
+      ],
+      "note": "The hybrid toggle stores the switch (AppPreferences::setLightPitchCorrectionEnabled), calls the processor callback below and has the editor apply the preferences; prefs.set hybridMode does the same.",
+      "noteZh": "混合模式开关用 AppPreferences::setLightPitchCorrectionEnabled 保存开关，调用下面的 processor 回调，并让编辑器应用偏好；prefs.set 的 hybridMode 做同样的事。"
+    },
+    {
+      "id": "prefs-hybrid-render",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "auto onLightPitchCorrectionChanged",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "bfc69ae92af42c5fdda968e455b0f3e1f766000e3ee4578eb4e67dc436ecb4ff"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "recordDelta"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsRoundTrip",
+        "ControlProcessorTests.PrefsSchemeJob",
+        "ControlProcessorTests.PrefsVectors"
+      ],
+      "note": "The processor callback of the hybrid toggle makes every content render again (invalidateAllContentCaches); prefs.set hybridMode calls it too and reports reRenderQueued.",
+      "noteZh": "混合模式开关的 processor 回调让所有内容重新渲染（invalidateAllContentCaches）；prefs.set 的 hybridMode 也调用它，并报告 reRenderQueued。"
+    },
+    {
+      "id": "audio-list-types",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "refreshTypeSelector",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "e90f77cf83f2ec1f8bbfc28b8464bca8ae9c331ff6a01b356e4a3e6b9639910c"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "readAvailable"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "The device types the settings page lists: every available type of the device manager.",
+      "noteZh": "音频设置页列出的设备类型：设备管理器的全部可用类型。"
+    },
+    {
+      "id": "audio-list-devices",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "refreshDeviceSelector",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "0dae83bdc14965617d6befc5dd5efb56ad691826e3df33f3abad47f33d1b4e5b"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "readAvailable"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "The output devices the page lists: the output device names of the current type.",
+      "noteZh": "音频设置页列出的输出设备：当前类型的输出设备名称。"
+    },
+    {
+      "id": "audio-list-sample-rates",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "refreshSampleRateSelector",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "c805ce0ecf16691765914ed9420de715088b37c93ebf1d11dba6cd8abe8c44d8"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "readAvailable",
+            "readDevice"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "The sample rates the page lists: the rates of the open device, with the current one selected (compared within 0.01 Hz).",
+      "noteZh": "音频设置页列出的采样率：已打开设备支持的采样率，当前值按 0.01 Hz 容差选中。"
+    },
+    {
+      "id": "audio-list-buffer-sizes",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "refreshBufferSizeSelector",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "ecd243d7e8ac41ab14fa69d1f09d1d0ce86169f65b6d65a6c4cb2fecc3f6a972"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "readAvailable",
+            "readDevice"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "The buffer sizes the page lists: the sizes of the open device, with the current one selected.",
+      "noteZh": "音频设置页列出的缓冲区大小：已打开设备支持的大小，当前值被选中。"
+    },
+    {
+      "id": "audio-list-channel-pairs",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "refreshChannelToggles",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "47efbf0baf66c797357648d785f392ba826a1ad51bcf2eeda835e36f90346682"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "outputChannelCount",
+            "outputChannelPairCount",
+            "readDevice"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "The output channel pairs the page offers: at most two output channels (one pair); a pair is active when one of its channels is.",
+      "noteZh": "音频设置页提供的输出声道对：最多两个输出声道（一对）；声道对中任一声道启用即视为启用。"
+    },
+    {
+      "id": "audio-refresh",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "refresh",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "787f1bd415041c85b9ddd859669b79318f48f60269c9ddd37b0aedb298c4f57b"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "rescanDevices"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "The page scans the current device type for devices before it fills its selectors; audio.get and audio.set scan first as well.",
+      "noteZh": "设置页在填充下拉框前先重新扫描当前设备类型的设备；audio.get 与 audio.set 同样先扫描。"
+    },
+    {
+      "id": "audio-apply-setup",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "applySetup",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "6a3fb2f78606b37cfb1697d43b41b5ecf178fd597261d340310f9fa256513434"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "applySetup",
+            "restoreToPrior"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "A new setup is opened with setAudioDeviceSetup and chosen as the device; when it fails the page opens the previous setup again. audio.set restores the setup from before the whole call.",
+      "noteZh": "新配置用 setAudioDeviceSetup 打开并设为所选设备；失败时设置页重新打开之前的配置。audio.set 恢复到整个调用之前的配置。"
+    },
+    {
+      "id": "audio-type-switch",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "typeChanged",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "bd515cc391a1e93926308e68c50f90e7acb9a32c5f5778d1c450c802275a5fe0"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "applyRequest",
+            "restoreToPrior"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "Switching the device type: an ASIO device is first restored to the system sample rate; a type that does not take over, or a device that does not open, switches the type back and restores the previous setup.",
+      "noteZh": "切换设备类型：ASIO 设备先恢复到系统采样率；类型未切换成功或设备打不开时，切回原类型并恢复之前的配置。"
+    },
+    {
+      "id": "audio-output-switch",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "outputDeviceChanged",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "661b2e040ff89412baee2c066a42141169fea5636981ebcd4b47829749437b53"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "applyRequest"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "Switching the output device: the new device opens with its default channels, a type without separate inputs and outputs takes the output as its input, and ASIO is restored to the system sample rate first.",
+      "noteZh": "切换输出设备：新设备用默认声道打开，没有独立输入输出的类型把输出设备同时作为输入设备，ASIO 先恢复到系统采样率。"
+    },
+    {
+      "id": "audio-sample-rate",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "sampleRateChanged",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "0426085a9a471db91e273025b5b596d3b491f4bb7435d223ebeb8d41700c3d85"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "applyRequest"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "A new sample rate is taken from the list of the open device and set into the current setup.",
+      "noteZh": "新采样率取自已打开设备的列表，并写入当前配置。"
+    },
+    {
+      "id": "audio-buffer-size",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "bufferSizeChanged",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "674ba10d4615d1341999a7d201bc662153776915ca1b09a5d664d3d81967acf4"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "applyRequest"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "A new buffer size is taken from the list of the open device and set into the current setup.",
+      "noteZh": "新缓冲区大小取自已打开设备的列表，并写入当前配置。"
+    },
+    {
+      "id": "audio-channel-pair",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "channelPairClicked",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "002c3b41ed3e1eb608686f869aeb2483a471983e46fda7577f9654751f80e95d"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "applyRequest"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "A channel pair is chosen by activating only its channels (at most two output channels) and no longer using the default channels.",
+      "noteZh": "选择声道对时只启用该对的声道（最多两个输出声道），并不再使用默认声道。"
+    },
+    {
       "id": "reference-align-commit",
       "group": "reference",
       "upstream": {

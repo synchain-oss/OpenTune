@@ -818,9 +818,14 @@ does not recompute existing results (`NOT_RETROACTIVE`).
   (`PianoRollComponent::ensureOpenDyneNotesIfNeeded`); the job compares the clip's note topology flag before and after and
   reports `sideEffects.notesGenerated` with `SCHEME_GENERATED_NOTES` and `IRREVERSIBLE`, and marks the project as
   changed. If the editor has not applied the scheme within the limit (10 s, `controlSetPrefsApplyTimeoutForTesting()`
-  in tests), the job puts every preference of the call back, tells the editor again and fails with `INTERNAL`
-  (`executed` false); a job that the registry destroys before it ended (the control API is stopping) puts them back as
-  well. No half-applied set of preferences stays.
+  in tests), the job takes its changes back, tells the editor again and fails with `INTERNAL`; a job that the registry
+  destroys before it ended (the control API is stopping) takes them back as well. The restore goes preference by
+  preference: only a preference that still holds the value the job wrote gets its previous value back. One that a
+  later `prefsApply` job, still waiting, changed from that value is left to that job, whose own restore then writes the
+  first job's previous value; so two jobs that time out one after the other leave the preferences as they were before
+  both. Any other preference that changed while the job waited (another `prefs.set`, the preferences window) keeps its
+  new value; the error's detail names it and `executed` is true. Otherwise `executed` is false: no half-applied set of
+  preferences stays.
 - **Everything else is applied at once** and returns the envelope.
 - **Busy.** Like every write, `prefs.set` answers `BUSY` first (`modal_open` while the preferences window is open).
 

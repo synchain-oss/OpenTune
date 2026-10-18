@@ -13,8 +13,10 @@
 
 #include <juce_core/juce_core.h>
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -147,6 +149,21 @@ PrefsDelta computeDelta(const PrefsState& state, const PrefsRequest& request)
     delta.hybrid = request.hybridMode && *request.hybridMode != state.hybridMode;
     delta.experimental = request.experimentalFeatures && *request.experimentalFeatures != state.experimentalFeatures;
     return delta;
+}
+
+/** The state that a request makes of the state before it: the preferences of the delta set to the request's values. */
+PrefsState stateAfter(const PrefsState& before, const PrefsRequest& request, const PrefsDelta& delta)
+{
+    auto after = before;
+    if (delta.tuning)
+        after.tuningHz = *request.tuningHz;
+    if (delta.scheme)
+        after.notesPrimary = *request.notesPrimary;
+    if (delta.hybrid)
+        after.hybridMode = *request.hybridMode;
+    if (delta.experimental)
+        after.experimentalFeatures = *request.experimentalFeatures;
+    return after;
 }
 
 /**
@@ -353,9 +370,9 @@ void recordGeneratedNotes(ControlOpContext& context, ControlWriteEnvelope& envel
 /**
  * The job of a prefs.set that changes the editing scheme. Its first step makes every change of the request (so the
  * call that started it changed nothing), the following steps wait until the editor reports the scheme as applied, and
- * the last step ends the job with the write envelope. If the editor does not apply the scheme in time, the job puts
- * the previous preferences back and fails. A job that the registry destroys before it ended (the control API is
- * stopping) also puts them back.
+ * the last step ends the job with the write envelope. If the editor does not apply the scheme in time, the job takes
+ * its changes back (withdraw()) and fails. A job that the registry destroys before it ended (the control API is
+ * stopping) also takes them back.
  */
 class PrefsApplyJob
 {
@@ -369,7 +386,8 @@ public:
     {
         // Destroyed on the message thread before the processor goes away (ControlJobs::stop()).
         if (started_ && !finished_ && environment_.processor != nullptr)
-            restoreState(nullptr, *environment_.processor, before_, delta_);
+            withdraw(nullptr, *environment_.processor);
+        leavePending();
     }
 
     void step(ControlJobStep& jobStep)
@@ -392,16 +410,33 @@ public:
     }
 
 private:
+    /** The jobs that made their changes and have not ended, in the order they made them. Message thread only. A job
+        that takes its changes back looks for the later ones among them (settle()). */
+    static std::vector<PrefsApplyJob*>& pendingJobs()
+    {
+        static std::vector<PrefsApplyJob*> jobs;
+        return jobs;
+    }
+
+    void leavePending()
+    {
+        auto& jobs = pendingJobs();
+        jobs.erase(std::remove(jobs.begin(), jobs.end(), this), jobs.end());
+    }
+
     /** The envelope starts immediately before the change; the change is made and handed to the editor. */
     void begin(ControlOpContext& context)
     {
         before_ = readState(context.processor());
         delta_ = computeDelta(before_, request_);
+        written_ = stateAfter(before_, request_, delta_);
+        restoreTo_ = before_;
         envelope_.emplace(context);
         watch_ = delta_.scheme && *request_.notesPrimary ? captureNotesWatch(context) : NotesWatch{};
         applyDelta(context, request_, delta_);
         startedAtMs_ = juce::Time::getMillisecondCounter();
         started_ = true;
+        pendingJobs().push_back(this);
     }
 
     void finish(ControlOpContext& context, ControlJobStep& jobStep)
@@ -412,24 +447,89 @@ private:
         envelope_->limitDiffToTouchedContents();
         auto result = envelope_->committed(context);
         finished_ = true;
+        leavePending();
         jobStep.succeed(std::move(result));
     }
 
-    /** The editor did not apply the scheme: no half-applied set of preferences stays. */
+    /** The editor did not apply the scheme: the job takes its changes back, so that no half-applied set of
+        preferences stays. A preference that another write changed meanwhile keeps that write's value; the detail
+        names it, and executed is true because the job's change was not rolled back completely (PROTOCOL.md section
+        17.4 rule 3). */
     void abandon(ControlOpContext& context, ControlJobStep& jobStep)
     {
-        restoreState(&context, context.processor(), before_, delta_);
+        const auto kept = withdraw(&context, context.processor());
         finished_ = true;
-        jobStep.fail(ControlJobError{"INTERNAL", "",
-                                     "the editor did not apply the editing scheme in time; the previous preferences "
-                                     "were restored",
-                                     false});
+        leavePending();
+        std::string detail = "the editor did not apply the editing scheme in time; the previous preferences were "
+                             "restored";
+        if (!kept.empty()) {
+            detail += " except those another write changed while the job waited, which keep that write's value:";
+            for (const auto& name : kept)
+                detail += " " + name;
+        }
+        jobStep.fail(ControlJobError{"INTERNAL", "", detail, !kept.empty()});
+    }
+
+    /**
+     * Takes the changes of this job back, preference by preference (settle()), and tells the editor when context is
+     * given. Message thread. Returns the names of the preferences that keep the value of another write.
+     */
+    std::vector<std::string> withdraw(ControlOpContext* context, OpenTuneAudioProcessor& processor)
+    {
+        const auto current = readState(processor);
+        PrefsDelta restore;
+        std::vector<std::string> kept;
+        settle(&PrefsDelta::tuning, &PrefsState::tuningHz, "tuningHz", current, restore, kept);
+        settle(&PrefsDelta::scheme, &PrefsState::notesPrimary, "editingScheme", current, restore, kept);
+        settle(&PrefsDelta::hybrid, &PrefsState::hybridMode, "hybridMode", current, restore, kept);
+        settle(&PrefsDelta::experimental, &PrefsState::experimentalFeatures, "experimentalFeatures", current, restore,
+               kept);
+        restoreState(context, processor, restoreTo_, restore);
+        return kept;
+    }
+
+    /**
+     * How one preference this job changed is taken back. A later pending job of the same processor that read the
+     * value this job wrote as its previous value gets this job's previous value instead, so that its own restore never
+     * writes this job's value back (its success keeps its own value). Then: a preference that holds the previous value
+     * already needs nothing; one that still holds the value this job wrote is marked in restore; one that such a later
+     * job changed from that value is left to it; any other was changed by another write while the job waited (a
+     * prefs.set, the preferences window), keeps that value and is added to kept.
+     */
+    template <typename T>
+    void settle(bool PrefsDelta::*item, T PrefsState::*value, const char* name, const PrefsState& current,
+                PrefsDelta& restore, std::vector<std::string>& kept)
+    {
+        if (!(delta_.*item))
+            return;
+        bool handedOver = false;
+        auto& jobs = pendingJobs();
+        const auto self = std::find(jobs.begin(), jobs.end(), this);
+        if (self != jobs.end())
+            for (auto later = std::next(self); later != jobs.end(); ++later) {
+                auto& job = **later;
+                if (job.environment_.processor == environment_.processor && job.delta_.*item
+                    && job.restoreTo_.*value == written_.*value) {
+                    job.restoreTo_.*value = restoreTo_.*value;
+                    handedOver = true;
+                }
+            }
+        if (current.*value == restoreTo_.*value)
+            return;
+        if (current.*value == written_.*value)
+            restore.*item = true;
+        else if (!handedOver)
+            kept.emplace_back(name);
     }
 
     ControlOpEnvironment environment_;
     PrefsRequest request_;
     PrefsState before_;
     PrefsDelta delta_;
+    /** The preferences this job wrote, and what taking them back writes: before_, except where an earlier job handed
+        over its previous value (settle()). */
+    PrefsState written_;
+    PrefsState restoreTo_;
     NotesWatch watch_;
     std::optional<ControlWriteEnvelope> envelope_;
     std::uint32_t startedAtMs_ = 0;

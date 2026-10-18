@@ -202,7 +202,9 @@ struct FakeAudioRig
 /**
  * The editor as far as these methods see it. onPreferencesChanged() hands the
  * preferences to the "views": the editing scheme is applied at once, after a
- * delay or never; with generateNotes, applying the notes-primary scheme
+ * delay or never (an editor that never applies reports no scheme as applied,
+ * as views stopped in the middle of a switch would, so that two jobs can wait
+ * at once); with generateNotes, applying the notes-primary scheme
  * generates the notes of the clip open in the piano roll
  * (view.pianoRollPlacementId, pianoRollKey) when none were ever generated, as
  * PianoRollComponent::ensureOpenDyneNotesIfNeeded does.
@@ -232,6 +234,8 @@ public:
     std::optional<bool> editingSchemeApplied(bool notesPrimary) const override
     {
         ++schemeQueries;
+        if (apply == Apply::Never)
+            return false;
         if (apply == Apply::AfterDelay && hasPending
             && juce::Time::getMillisecondCounter() - pendingSinceMs >= static_cast<std::uint32_t>(applyDelayMs))
             applyPending();
@@ -713,6 +717,92 @@ void checkSchemeTimeout(ApiSession& api, OpenTuneAudioProcessor& processor, Pref
                   && memberOf(memberOf(prefs, "processing"), "editingScheme").text() == "openTune");
 }
 
+/** How long the jobs of the two checks below wait for the editor: long enough
+   that the next call is made while the first job still waits, also on a loaded
+   machine. */
+constexpr std::uint32_t kWaitingJobTimeoutMs = 1500;
+/** Bound for a job's first step to make its changes. */
+constexpr int kJobChangeMs = 5000;
+
+/** The job ended failed with INTERNAL and this executed. */
+bool jobFailedInternal(const JsonValue& job, bool executed)
+{
+    const auto& data = memberOf(memberOf(job, "error"), "data");
+    const bool ok = memberOf(job, "state").text() == "failed" && memberOf(data, "kind").text() == "INTERNAL"
+                    && memberOf(data, "executed").isBoolean() && memberOf(data, "executed").asBoolean() == executed;
+    if (!ok)
+        note(std::string("expected a prefsApply job failed with INTERNAL, executed ") + (executed ? "true" : "false")
+             + ": " + toJsonString(job));
+    return ok;
+}
+
+/** Two jobs wait at once, the second started from the scheme the first wrote.
+   They time out in the order they started: the first leaves the scheme to the
+   second (which changed it from the first's value) with the first's previous
+   value, so after both every preference is back to the value before the first,
+   and neither left a change (executed false). */
+void checkOverlappingTimeouts(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge)
+{
+    auto& preferences = processor.getAppPreferences();
+    const auto baseline = api.result("prefs.get");
+    bridge.apply = PrefsBridge::Apply::Never;
+    controlSetPrefsApplyTimeoutForTesting(kWaitingJobTimeoutMs);
+    const auto notifications = bridge.preferenceNotifications;
+    const auto first = jobIdOf(api.result("prefs.set", json(R"({"editingScheme":"openDyne","tuningHz":433})")));
+    CONTROL_CHECK(!first.empty());
+    CONTROL_CHECK(pumpMessagesUntil([] { return TuningConfig::currentTuningHz() == 433.0f; }, kJobChangeMs));
+    // The second reads openDyne, the value the first wrote, as its previous scheme.
+    const auto second = jobIdOf(api.result("prefs.set", json(R"({"editingScheme":"openTune","hybridMode":false})")));
+    CONTROL_CHECK(!second.empty());
+    CONTROL_CHECK(
+        pumpMessagesUntil([&] { return !preferences.getState().shared.lightPitchCorrectionEnabled; }, kJobChangeMs));
+    auto params = JsonValue::object();
+    params.appendMember("jobId", JsonValue::string(first));
+    const auto firstState = memberOf(memberOf(api.result("job.get", params), "job"), "state").text();
+    CONTROL_CHECK(firstState == "queued" || firstState == "running");
+    const auto firstJob = waitJob(api, first);
+    const auto secondJob = waitJob(api, second);
+    controlSetPrefsApplyTimeoutForTesting(0);
+    CONTROL_CHECK(jobFailedInternal(firstJob, false));
+    CONTROL_CHECK(jobFailedInternal(secondJob, false));
+    const auto state = preferences.getState().shared;
+    CONTROL_CHECK(!AudioEditingScheme::usesNotesPrimaryScheme(state.audioEditingScheme)
+                  && state.lightPitchCorrectionEnabled && !state.experimentalFeaturesEnabled);
+    CONTROL_CHECK(TuningConfig::currentTuningHz() == 440.0f);
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+    // Two changes and two restores: the first restored the tuning, the second
+    // the hybrid mode; the scheme already held the value before the first.
+    CONTROL_CHECK(bridge.preferenceNotifications == notifications + 4);
+}
+
+/** Another write while a job waits: the job takes back what still holds its
+   value and leaves the preference the write changed, which the detail names;
+   executed is true, as the job did not roll its change back completely. */
+void checkWriteDuringWait(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge)
+{
+    auto& preferences = processor.getAppPreferences();
+    bridge.apply = PrefsBridge::Apply::Never;
+    controlSetPrefsApplyTimeoutForTesting(kWaitingJobTimeoutMs);
+    const auto jobId = jobIdOf(api.result("prefs.set", json(R"({"editingScheme":"openDyne","tuningHz":433})")));
+    CONTROL_CHECK(!jobId.empty());
+    CONTROL_CHECK(pumpMessagesUntil([] { return TuningConfig::currentTuningHz() == 433.0f; }, kJobChangeMs));
+    // A call that changes only the tuning succeeds at once, while the job waits.
+    const auto write = api.result("prefs.set", json(R"({"tuningHz":445})"));
+    CONTROL_CHECK(memberOf(write, "applied").asBoolean() && memberOf(write, "job").isNull());
+    const auto job = waitJob(api, jobId);
+    controlSetPrefsApplyTimeoutForTesting(0);
+    CONTROL_CHECK(jobFailedInternal(job, true));
+    const auto detail = memberOf(memberOf(memberOf(job, "error"), "data"), "detail").text();
+    CONTROL_CHECK(detail.find("tuningHz") != std::string::npos && detail.find("editingScheme") == std::string::npos);
+    // The scheme is back; the tuning keeps the value of the later write.
+    CONTROL_CHECK(!AudioEditingScheme::usesNotesPrimaryScheme(preferences.getState().shared.audioEditingScheme));
+    CONTROL_CHECK(TuningConfig::currentTuningHz() == 445.0f);
+    const auto prefs = api.result("prefs.get");
+    CONTROL_CHECK(numberIs(memberOf(memberOf(prefs, "processing"), "tuningHz"), 445.0)
+                  && memberOf(memberOf(prefs, "processing"), "editingScheme").text() == "openTune");
+    resetPreferences(processor);
+}
+
 } // namespace
 
 void scenarioPrefsSchemeJob()
@@ -737,6 +827,8 @@ void scenarioPrefsSchemeJob()
         return;
     checkSchemeJob(api, *processor, bridge, clip, *handles);
     checkSchemeTimeout(api, *processor, bridge);
+    checkOverlappingTimeouts(api, *processor, bridge);
+    checkWriteDuringWait(api, *processor, bridge);
 
     // Without an editor there is no one to wait for: the job applies the preference and ends.
     {

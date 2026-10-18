@@ -156,6 +156,28 @@ public:
 
     /** The Standalone application's audio device manager; nullptr when not supported. */
     virtual juce::AudioDeviceManager* audioDevice() { return nullptr; }
+
+    // ---- Tracks and transport -----------------------------------------------------------------
+
+    /** Sets the number of track slots the editor shows, as its + button, Duplicate Track and Delete Track do:
+        the track panel and the arrangement show the same count. A count outside 1 to the number of slots is
+        limited to it. Returns false when not supported. */
+    virtual bool setVisibleTrackCount(int /*count*/) { return false; }
+
+    /** The mute, solo, volume or colour of tracks, or the clips of a track, were changed through the control
+        API: the editor shows the arrangement's values in its track panel for the tracks it shows, as after its
+        own Delete Track, and redraws the arrangement. Default: nothing. */
+    virtual void onTrackMixChanged() {}
+
+    /** The play state, the position or the loop flag was changed through the control API: the editor shows the
+        processor's play state and loop flag in its transport bar, as after its own play, pause, stop and loop
+        buttons. Default: nothing. */
+    virtual void onTransportChanged() {}
+
+    /** The tempo or the time signature was changed through the control API: the editor shows the processor's
+        values in its transport bar and its piano roll, as after its own tempo and time-signature fields.
+        Default: nothing. */
+    virtual void onTempoChanged() {}
 };
 
 } // namespace OpenTune

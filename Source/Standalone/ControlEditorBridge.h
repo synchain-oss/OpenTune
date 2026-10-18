@@ -55,6 +55,12 @@ public:
     juce::ThreadPool* projectWorkerPool() override;
     juce::AudioDeviceManager* audioDevice() override;
 
+    // ---- Tracks and transport (ControlEditorBridgeTracks.cpp) ----
+    bool setVisibleTrackCount(int count) override;
+    void onTrackMixChanged() override;
+    void onTransportChanged() override;
+    void onTempoChanged() override;
+
 private:
     /** The placement the arrangement selects on its active track, or 0. */
     std::uint64_t activeSelection() const;

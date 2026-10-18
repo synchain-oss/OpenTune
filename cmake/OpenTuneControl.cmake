@@ -121,6 +121,14 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # reached through the bridge) and project.clearRecent.
         Source/Control/Ops/ProjectOps.cpp
         Source/Control/Ops/ProjectOps.h
+        # Transport and tracks: transport.control, transport.setTempo, transport.setLoop, and track.set, track.add,
+        # track.duplicate, track.delete (the track helpers are shared with the clip methods).
+        Source/Control/Ops/TrackSupport.cpp
+        Source/Control/Ops/TrackSupport.h
+        Source/Control/Ops/TransportOps.cpp
+        Source/Control/Ops/TransportOps.h
+        Source/Control/Ops/TrackOps.cpp
+        Source/Control/Ops/TrackOps.h
     )
 
     target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_CONTROL_SOURCES})
@@ -130,6 +138,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Standalone/ControlEditorBridge.cpp
         Source/Standalone/ControlEditorBridge.h
         Source/Standalone/ControlEditorBridgeProject.cpp
+        Source/Standalone/ControlEditorBridgeTracks.cpp
     )
     # PUBLIC, so that every target that compiles or links the SharedCode sees the same class layouts.
     target_compile_definitions(OpenTuneStandalone PUBLIC OPENTUNE_ENABLE_CONTROL_API=1)
@@ -264,6 +273,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlTimingTests.cpp)
         # Project files: save, save as, open and clear recent, with a project session and a worker pool of the test.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlProjectTests.cpp)
+        # Transport and tracks: the play state, the tempo, the track panel and the barrier of a track deletion.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlTracksTests.cpp)
         if(MSVC)
             target_compile_options(OpenTuneControlProcessorTests PRIVATE /utf-8 /EHsc /bigobj)
         endif()
@@ -355,6 +366,13 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ProjectWithoutEditor|--control-api"
             "ProjectVectors|--control-api"
         )
+        # Transport and tracks (Tests/Control/ControlTracksTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "Transport|--control-api"
+            "Tracks|--control-api"
+            "TrackBarrier|--control-api"
+            "TrackVectors|--control-api"
+        )
         set(_opentune_control_tests)
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
             string(REPLACE "|" ";" _opentune_control_scenario "${_opentune_control_scenario}")
@@ -396,6 +414,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.EditVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.TimingVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ProjectVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.TrackVectors PROPERTIES TIMEOUT 300)
         # Each scenario process gets its own test's TIMEOUT, from which its watchdog takes its bound (a margin before;
         # ScenarioWatchdog in Tests/Control/ControlProcessorTests.cpp). Keep this after every TIMEOUT of the scenarios.
         foreach(_opentune_control_test IN LISTS _opentune_control_tests)

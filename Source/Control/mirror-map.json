@@ -1140,6 +1140,133 @@
       ],
       "note": "AlreadyReady means a ready timing analysis of the current producer and audio; with hasTimingAnchors() it is the seed's featuresReady, so the job calls ensureTimeToolAnchorSeed() only when that seeds at once.",
       "noteZh": "AlreadyReady 表示计时分析已就绪且 producer 与音频匹配；加上 hasTimingAnchors() 即种子的 featuresReady，因此 job 只在能立即种子时调用 ensureTimeToolAnchorSeed()。"
+    },
+    {
+      "id": "track-add",
+      "group": "tracks",
+      "upstream": {
+        "file": "Source/Standalone/UI/TrackPanelComponent.cpp",
+        "symbol": "TrackPanelComponent::showMoreTracks",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "57d1c3ebe110ec17bb6e25a2f083baffb752bd467299f7ff122ea71e5da86924"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TrackOps.cpp",
+          "symbols": [
+            "runAdd"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Tracks",
+        "ControlProcessorTests.TrackVectors"
+      ],
+      "note": "The + button shows one more track slot; track.add repeats it count times. It marks nothing as changed (the panel's menu entry trackAddRequested does).",
+      "noteZh": "+ 按钮多显示一个轨道槽位；track.add 重复 count 次。它不标脏（轨道面板菜单里的 trackAddRequested 会标脏）。"
+    },
+    {
+      "id": "track-duplicate",
+      "group": "tracks",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::trackDuplicateRequested",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "ab88da61de0c340ee2dbec3a29f3024ab23da62a09c5fb9231473564484e065c"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TrackOps.cpp",
+          "symbols": [
+            "runDuplicate"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Tracks",
+        "ControlProcessorTests.TrackVectors"
+      ],
+      "note": "Duplicate Track: mix state and every clip of the track go to the first hidden slot, which is then shown; the clips keep gain, fades and reference binding.",
+      "noteZh": "复制轨道：轨道的混音状态和全部片段进入第一个隐藏槽位并显示；片段保留增益、淡入淡出和参考绑定。"
+    },
+    {
+      "id": "track-delete",
+      "group": "tracks",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::trackDeleteRequested",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "26a5e4725c859bdd4d1a41a5322c0b1d405b30423f62265a9e714242107a10ac"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TrackOps.cpp",
+          "symbols": [
+            "runDelete"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Tracks",
+        "ControlProcessorTests.TrackBarrier",
+        "ControlProcessorTests.TrackVectors"
+      ],
+      "note": "Delete Track: only a shown track and never the last one; removeTrackAndShift moves the later tracks up, then the panel shows their mix and one track fewer.",
+      "noteZh": "删除轨道：只删可见轨道且不删最后一条；removeTrackAndShift 把后面的轨道上移，随后面板显示它们的混音并少一条轨道。"
+    },
+    {
+      "id": "transport-play-from-start",
+      "group": "transport",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::playFromStartToggleRequested",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b1e8d0baa669ea5b8ad41e3a02183dbe282a27a72655426d166afee30ac68370"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TransportOps.cpp",
+          "symbols": [
+            "runControl"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Transport",
+        "ControlProcessorTests.TrackVectors"
+      ],
+      "note": "The play-from-start button: while playing it pauses at the last start, otherwise it moves there and plays; the last start is the position of the last play or seek.",
+      "noteZh": "从起点播放按钮：播放中暂停在上次起点，否则回到那里播放；上次起点是上次播放或定位的位置。"
+    },
+    {
+      "id": "track-volume-range",
+      "group": "tracks",
+      "upstream": {
+        "file": "Source/Standalone/UI/TrackPanelComponent.h",
+        "symbol": "setRange(0.0, 4.0, 0.001)",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "22470180421ad465f92af82b88aa58c03b7dfdef4dbf99d37f8a1c4f9ba23034"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TrackOps.cpp",
+          "symbols": [
+            "kMaxVolumeLinear",
+            "requestedVolume"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Tracks",
+        "ControlProcessorTests.TrackVectors"
+      ],
+      "note": "The track volume knob covers the linear range 0 to 4; track.set limits a larger volume to it (CLAMPED).",
+      "noteZh": "轨道音量旋钮的线性范围是 0 到 4；track.set 把更大的音量限制到该范围（CLAMPED）。"
     }
   ]
 }

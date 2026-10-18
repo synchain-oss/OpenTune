@@ -362,7 +362,7 @@ void checkSessionInfo(ApiSession& api)
     // Only the capabilities this build implements completely are reported.
     CONTROL_CHECK(
         toJsonString(memberOf(info, "capabilities"))
-        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","edit.v1","history.v1","timing.v1","project.io"])");
+        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","edit.v1","history.v1","timing.v1","transport.v1","tracks.v1","project.io"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");
@@ -1858,7 +1858,7 @@ void scenarioCompleteness()
     const auto& methods = memberOf(parsed.value, "methods");
     const auto reported = dispatcher->capabilities();
     for (const char* capability : {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "edit.v1",
-                                   "history.v1", "timing.v1", "project.io"})
+                                   "history.v1", "timing.v1", "transport.v1", "tracks.v1", "project.io"})
         CONTROL_CHECK(std::find(reported.begin(), reported.end(), capability) != reported.end());
 
     // The listener answers session.hello itself, so the dispatcher's method table has no entry for it.
@@ -1926,8 +1926,8 @@ void scenarioCompleteness()
         CONTROL_CHECK(capability == nullptr || std::string(capability) != "read.v1");
     }
     // session.info, the eight reads, job.get, job.cancel, import.start, export.start, the three methods of the
-    // undo history, the four of edit.v1 and the two of timing.v1.
-    CONTROL_CHECK(indexed.size() >= 22);
+    // undo history, the four of edit.v1, the two of timing.v1, the three of transport.v1 and the four of tracks.v1.
+    CONTROL_CHECK(indexed.size() >= 29);
     if (!kUnimplementedReportedMethods.empty())
         note("exempt methods remain; the list must be empty before dev is merged");
     note(std::to_string(indexed.size()) + " methods of the reported capabilities are registered");

@@ -19,8 +19,10 @@ namespace OpenTune {
  *   the editor's afterUndoRedo()). The result describes the effect from snapshots before and after the step
  *   (controlDescribeEffect); a step that changed nothing is a success with noOp and UNDO_NO_EFFECT.
  *
- * Track deletion barriers (possiblyStale, UNDO_CONFLICT(stale_entry), UNDO_ENTRY_POSSIBLY_STALE) arrive with
- * the track methods; until then no entry is possibly stale.
+ * Track deletion barrier (section 15.3 rule 6, ControlHistory::onTrackDeleted()): an entry recorded before a track
+ * deletion is possibly stale (edit.getHistory possiblyStale). Without force, an entry recorded through the API
+ * that addressed a moved track fails with UNDO_CONFLICT(stale_entry), and an entry of the UI is applied with the
+ * warning UNDO_ENTRY_POSSIBLY_STALE. A call with force applies either without that warning and confirms the entry.
  */
 void registerUndoOps(ControlMethodTable& table);
 

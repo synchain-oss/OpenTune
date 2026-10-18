@@ -578,8 +578,8 @@ void scenarioReferenceJobChecksImpl()
         CONTROL_CHECK(setReferenceFeatures(*f.processor, f.reference.key, ReferenceFeatureStatus::Extracting, {}));
         const auto jobId = f.startAutoRef();
         CONTROL_CHECK(!jobId.empty());
-        pumpMessagesFor(100);
-        CONTROL_CHECK(memberOf(f.jobOf(jobId), "state").text() == "running");
+        // The edit is made once the job runs (it waits for the reference's data), not after a fixed time.
+        CONTROL_CHECK(f.waitJobState(jobId, "running"));
         CONTROL_CHECK(f.editTargetNotesInUi(100.0));
         CONTROL_CHECK(f.targetMidiIs(65.0, 70.0) && f.historySize() == 1);
         CONTROL_CHECK(
@@ -599,7 +599,7 @@ void scenarioReferenceJobChecksImpl()
         const auto keyBefore = memberOf(freshTokens(f.api, f.targetContentId), "keyRevision").text();
         const auto jobId = f.startAutoRef(true);
         CONTROL_CHECK(!jobId.empty());
-        pumpMessagesFor(100);
+        CONTROL_CHECK(f.waitJobState(jobId, "running"));
         // A key chosen in the UI (PluginEditor::scaleChanged() calls setContentDetectedKey()): the key revision
         // changes, the revision does not.
         CONTROL_CHECK(f.processor->setContentDetectedKey(f.target.key, makeDetectedKeyFromUi(5, 1)));
@@ -626,8 +626,7 @@ void scenarioReferenceJobChecksImpl()
                       && memberOf(stored, "keyRevision").text() == memberOf(before, "keyRevision").text());
         const auto jobId = f.startAutoRef(true);
         CONTROL_CHECK(!jobId.empty());
-        pumpMessagesFor(100);
-        CONTROL_CHECK(memberOf(f.jobOf(jobId), "state").text() == "running");
+        CONTROL_CHECK(f.waitJobState(jobId, "running"));
         CONTROL_CHECK(
             setReferenceFeatures(*f.processor, f.reference.key, ReferenceFeatureStatus::Ready, referenceNotes()));
         if (!CONTROL_CHECK(f.waitJobState(jobId, "succeeded")))

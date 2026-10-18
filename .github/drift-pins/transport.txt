@@ -1,0 +1,9 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# group: transport
+# pinned-at: upstream/20261008-addb4f4
+# ported-to: Source/Control/Ops/TransportOps.cpp
+#
+# Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::playFromStartToggleRequested	L3457-L3473	fn-v1	b1e8d0baa669ea5b8ad41e3a02183dbe282a27a72655426d166afee30ac68370

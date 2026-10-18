@@ -930,12 +930,13 @@ void scenarioAutoTuneImpl()
             CONTROL_CHECK(toJsonString(memberOf(explicitKey, "keyUsed")) == R"({"root":0,"scale":"major"})");
         }
     }
-    // Mode reference needs reference.v1, which this build does not report.
+    // Mode reference checks the binding of the placement; this clip has none (the alignment itself is covered by
+    // ControlReferenceTests.cpp).
     CONTROL_CHECK(
         f.api.fails("content.autoTune",
                     jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + ",\"mode\":\"reference\",\"expectedRevision\":"
                            + jsonQuoted(f.revision()) + ",\"placementId\":" + jsonQuoted(f.placementId) + "}"),
-                    "UNSUPPORTED", "capability_missing"));
+                    "INVALID_ARGUMENT", "reference_not_bound"));
     const std::string base = "{\"contentId\":" + jsonQuoted(f.contentId) + ",\"expectedRevision\":\"r1\",";
     for (const std::string params :
          {base + R"("mode":"regenerate"})", base + R"("mode":"notesOnly","key":{"root":0,"scale":"major"}})",

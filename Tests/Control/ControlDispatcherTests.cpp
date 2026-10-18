@@ -362,7 +362,7 @@ void checkSessionInfo(ApiSession& api)
     // Only the capabilities this build implements completely are reported.
     CONTROL_CHECK(
         toJsonString(memberOf(info, "capabilities"))
-        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","edit.v1","history.v1","timing.v1","project.io"])");
+        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","edit.v1","history.v1","timing.v1","reference.v1","project.io"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");
@@ -881,7 +881,8 @@ void checkDetailsOfSung(ApiSession& api, OpenTuneAudioProcessor& processor, cons
     const auto& modes = memberOf(details, "autoModes");
     CONTROL_CHECK(memberOf(modes, "editingScheme").text() == "openTune"
                   && memberOf(modes, "uiButtonRuns").text() == "regenerate");
-    CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == R"(["regenerate","snapNotes","notesOnly"])");
+    CONTROL_CHECK(toJsonString(memberOf(modes, "available"))
+                  == R"(["regenerate","snapNotes","notesOnly","reference"])");
 
     // By placement: the same content, through that placement; every member besides the placement the same.
     const auto byPlacement =

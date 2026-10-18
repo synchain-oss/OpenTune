@@ -67,6 +67,11 @@ public:
     bool closeOnboarding() override;
     std::optional<UiScale> uiScale() const override;
 
+    // ---- Preferences and audio device (ControlEditorBridgePrefs.cpp) ----
+    void onPreferencesChanged() override;
+    std::optional<bool> editingSchemeApplied(bool notesPrimary) const override;
+    bool prepareAudioDeviceSwitch(const std::string& reason) override;
+
 private:
     /** The placement the arrangement selects on its active track, or 0. */
     std::uint64_t activeSelection() const;

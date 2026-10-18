@@ -2,6 +2,7 @@
 #include "OpsRegistry.h"
 
 #include "AppReadOps.h"
+#include "AudioDeviceOps.h"
 #include "ContentDetailsOps.h"
 #include "ContentEditOps.h"
 #include "ContentReadOps.h"
@@ -9,6 +10,7 @@
 #include "ExportOps.h"
 #include "ImportOps.h"
 #include "JobOps.h"
+#include "PrefsOps.h"
 #include "ProjectOps.h"
 #include "ProjectReadOps.h"
 #include "SessionOps.h"
@@ -98,10 +100,10 @@ void registerControlMethods(ControlMethodTable& table)
     registerTimingOps(table);      // content.shiftTiming, content.editTimeGrid
     registerTransportOps(table);   // transport.control, transport.setTempo, transport.setLoop
     // registerArrangementOps(table);  arrangement.edit, arrangement.copy, content.analyzeReference
-    registerTrackOps(table);   // track.set, track.add, track.duplicate, track.delete
-    registerProjectOps(table); // project.save, project.saveAs, project.open, project.clearRecent
-    // registerPrefsOps(table);        prefs.set
-    // registerAudioDeviceOps(table);  audio.get, audio.set
+    registerTrackOps(table);       // track.set, track.add, track.duplicate, track.delete
+    registerProjectOps(table);     // project.save, project.saveAs, project.open, project.clearRecent
+    registerPrefsOps(table);       // prefs.set
+    registerAudioDeviceOps(table); // audio.get, audio.set
 }
 
 ControlOpContext::ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiBridge* bridge,

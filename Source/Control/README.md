@@ -43,7 +43,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `Ops/OpsSupport.*` | What the operations share: parameter reader, handle resolution, the world revision vector and `asOf`, number and text output. |
 | `ControlJobs.*` | The jobs of the instance: registry, the tick that advances running jobs on the message thread, the long poll of `job.get`, cancellation, retention. |
 | `Ops/WriteEnvelope.*` | What every write shares: the busy checks, the dirty flag, revert recipes, the UI snapshot, `revisionDiff` and the write envelope builder. |
-| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*`, `Ops/ExportOps.*`, `Ops/UndoOps.*`, `Ops/ContentTuneOps.*`, `Ops/ContentEditOps.*`, `Ops/TimingOps.*`, `Ops/ProjectOps.*` | The methods, one file per group (see "Method table"). |
+| `Ops/SessionOps.*`, `Ops/ProjectReadOps.*`, `Ops/ContentReadOps.*`, `Ops/ContentDetailsOps.*`, `Ops/AppReadOps.*`, `Ops/JobOps.*`, `Ops/ImportOps.*`, `Ops/ExportOps.*`, `Ops/UndoOps.*`, `Ops/ContentTuneOps.*`, `Ops/ContentEditOps.*`, `Ops/TimingOps.*`, `Ops/ProjectOps.*`, `Ops/PrefsOps.*`, `Ops/AudioDeviceOps.*` | The methods, one file per group (see "Method table"). |
 | `Edit/TimeGridOps.*` | The handle moves of OpenTune's time tool without the piano roll: the two passes of its limits, and the commit of a grid as the piano roll commits one (see "Time grid"). |
 | `Ops/EditSupport.*` | What the content edits and the undo steps share: params forms of tokens and keys, the readiness gate, the expected-token checks, note references, `reRenderQueued`, and the description of an undo step's effect from two snapshots. |
 | `Edit/ControlOriginAction.*` | The undo entry of a change made through the API (upstream undo actions wrapped with an `undoId`), and `ControlHistory`: undoIds, the API's entries, the undoIds of UI entries, changes without an undo entry. |
@@ -54,7 +54,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `ControlFileIdentity.*` | File identity (volume and file id, `st_dev` and `st_ino`), "same file" by identity, and the final rename that never replaces (PROTOCOL.md sections 20.3 and 20.4); standard library and operating system only. |
 | `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme, the processing object of `session.info` and `prefs.get`). |
 | `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
-| `../Standalone/ControlEditorBridge.*`, `../Standalone/ControlEditorBridgeProject.cpp` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor (the project flows in the second file); compiled into the application wrapper only. |
+| `../Standalone/ControlEditorBridge.*`, `../Standalone/ControlEditorBridgeProject.cpp`, `../Standalone/ControlEditorBridgePrefs.cpp` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor (the project flows in the second file, the preferences and the audio device in the third); compiled into the application wrapper only. |
 
 The channel files (options to server) use only the standard library and the operating system; the
 unit tests (`Tests/Control/ControlUnitTests.cpp`) compile them on their own. The service files and every
@@ -516,7 +516,8 @@ an undo or redo (`afterUndoRedo()`), the refresh after a time-grid edit (`onTime
 piano roll clip, selection, visible track count), the focus of an imported clip
 (`applyPlacementSelectionContext`), revealing tracks, the note generation parameters of the piano roll,
 the project session and its worker pool, and the audio device manager. The project flows are in
-`ControlEditorBridgeProject.cpp` (see "Project files"). Dialogs, tracks and preferences follow in files of their own.
+`ControlEditorBridgeProject.cpp` (see "Project files"), the preferences and the audio device in
+`ControlEditorBridgePrefs.cpp` (see "Preferences and audio device"). Dialogs and tracks follow in files of their own.
 The headless tests use `Tests/Control/TestUiBridge.h`, which owns a real `ProjectSession` and a worker pool of one
 thread when a test asks for them.
 
@@ -793,6 +794,68 @@ Tests: `Tests/Control/ControlProjectTests.cpp` (`ProjectRoundTrip`, `ProjectJobs
 explicit list to pass; `project/get-ok` is a read and runs in `Vectors`, and `project/save-as-no-access` is skipped
 because the runner cannot make a file whose identity is unreadable on Windows.
 
+## Preferences and audio device
+
+`prefs.set` (`Ops/PrefsOps.cpp`, capability `prefs.write`) and `audio.get` / `audio.set` (`Ops/AudioDeviceOps.cpp`,
+capability `audio.device`). Each capability is reported because all its methods are registered. Both settings are
+user-global: results carry the warning `GLOBAL_PREFERENCE`, there is no undo entry (OpenTune has none; reason
+`ui_parity`), and the revert recipe is the same call with the previous values.
+
+**prefs.set** changes the four processing preferences that the schema lists: `tuningHz` (A4), `editingScheme`,
+`hybridMode` and `experimentalFeatures`. The vocoder weight, the rendering priority, the pitch model and the reference
+alignment mode cannot be set in this version, and no cosmetic preference can be; the params schema is closed, so
+they are `INVALID_ARGUMENT(invalid_params)`. Each change repeats what the preferences window does for its control
+(the `AppPreferences` setter, for the hybrid switch also `invalidateAllContentCaches()`, which is why the result
+carries `reRenderQueued`) and then calls `ControlUiBridge::onPreferencesChanged()`, which is the editor's
+`syncSharedAppPreferences()`. Values equal to the current ones change nothing (a no-op when none differs). The tuning
+does not recompute existing results (`NOT_RETROACTIVE`).
+
+- **Editing scheme: a job.** A call that changes the editing scheme changes nothing itself and returns a job of kind
+  `prefsApply` (not cancellable). The job's first step makes every change of the call, the following steps wait until
+  `ControlUiBridge::editingSchemeApplied()` says the editor applied the scheme (the editor does so synchronously when
+  it is told, and again on its heartbeat), and the last step ends the job with the write envelope. Switching to
+  openDyne makes the piano roll generate the notes of the clip it shows when none were ever generated
+  (`PianoRollComponent::ensureOpenDyneNotesIfNeeded`); the job compares the clip's note topology flag before and after and
+  reports `sideEffects.notesGenerated` with `SCHEME_GENERATED_NOTES` and `IRREVERSIBLE`, and marks the project as
+  changed. If the editor has not applied the scheme within the limit (10 s, `controlSetPrefsApplyTimeoutForTesting()`
+  in tests), the job puts every preference of the call back, tells the editor again and fails with `INTERNAL`
+  (`executed` false); a job that the registry destroys before it ended (the control API is stopping) puts them back as
+  well. No half-applied set of preferences stays.
+- **Everything else is applied at once** and returns the envelope.
+- **Busy.** Like every write, `prefs.set` answers `BUSY` first (`modal_open` while the preferences window is open).
+
+**audio.get / audio.set** work on the Standalone application's `juce::AudioDeviceManager`, which only the editor owns
+(`ControlUiBridge::audioDevice()`), and repeat the steps of the audio settings page (`AudioDeviceSettingsContent` in
+`StandalonePreferencePages.cpp`; the `audio-*` mirrors). Nothing but the manager and the device it opens is called.
+
+- `audio.get` reports the running device (a device that is open and playing) and what the page offers: the device
+  types, the output devices of the current type (after a scan, as the page's `refresh()`), and the sample rates, buffer
+  sizes and output channel pairs of the open device (the Standalone application is configured for at most two output
+  channels, so one pair). Without a running device the members of `device` other than `running` are null with
+  `no_audio_device`; without an editor (`no_editor`) or without a device manager (`unavailable`) nothing is
+  offered.
+- `audio.set` replaces the given members of the setup and opens the device again, in the order the page's selectors
+  work: the device type, the output device, then the sample rate, buffer size and output channel pair together (one
+  reopen). The type and the output device are checked against the lists before anything changes; the values of the device
+  are checked once the device that will run is open. A value that is not on offer is
+  `INVALID_ARGUMENT(audio_setting_unavailable)`.
+- **Rollback.** A step that fails to open the device puts the setup from before the whole call back (the device type
+  first, then the setup, as the page does for one change) and the call fails with `IO_ERROR(device_open_failed)` and
+  `executed` false. If the previous setup cannot be opened either, `executed` is true and no device runs
+  (`audio.get` reports it). If no device ran before the call, none runs after a failed one. The ASIO restore of the
+  system sample rate that the page makes before it closes an ASIO device for another type or output device is the
+  bridge's `prepareAudioDeviceSwitch()`; when it cannot be verified the current device stays.
+- Without an editor or a device manager `audio.set` answers `UNSUPPORTED(capability_missing)`. The revert recipe
+  needs a device that ran before the call (a setup cannot be set to "no device"); without one the result says
+  `IRREVERSIBLE`.
+
+Tests: `Tests/Control/ControlPrefsTests.cpp` (`PrefsRoundTrip`, `PrefsSchemeJob`, `PrefsVectors`, `AudioDevice`,
+`AudioVectors`). The audio tests never open, list or change a real device: the device manager has two fake device types
+whose devices open or fail to open on request, and they run only with the test's `OPENTUNE_DATA_DIR`. `PrefsVectors`
+runs `prefs/set-scheme-job` with the piano roll opened on the test bridge, because `ui.setSelection`, which the vector
+sends first, is not implemented yet. Behaviour on a real device (listing, switching type and output, ASIO) cannot be
+tested headless and is checked by hand on a real installation.
+
 ## Dirty flag and revision tokens
 
 The dirty flag belongs to the editor's `ProjectSession`; without an editor it is false. Revision tokens
@@ -993,7 +1056,7 @@ analysis with `allowDry`, an unvoiced one: `NOT_READY(export_dry_stretched)`), w
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
-`jobs.v1`, `import.v1`, `export.v1`, `edit.v1`, `history.v1`, `timing.v1` and `project.io`). The listener answers a method of an unreported capability itself with
+`jobs.v1`, `import.v1`, `export.v1`, `edit.v1`, `history.v1`, `timing.v1`, `project.io`, `prefs.write` and `audio.device`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
@@ -1037,3 +1100,6 @@ capabilities may be registered in more than one step.
 | `project.saveAs` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.saveAs.schema.json` |
 | `project.open` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.open.schema.json` |
 | `project.clearRecent` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors`, `.ProjectWithoutEditor` | `methods/project.clearRecent.schema.json` |
+| `prefs.set` | `prefs.write` | `Ops/PrefsOps.cpp` (a job of kind `prefsApply` for a change of the editing scheme) | `ControlProcessorTests.PrefsRoundTrip`, `.PrefsSchemeJob`, `.PrefsVectors` | `methods/prefs.set.schema.json` |
+| `audio.get` | `audio.device` | `Ops/AudioDeviceOps.cpp` | `ControlProcessorTests.AudioDevice`, `.AudioVectors` | `methods/audio.get.schema.json` |
+| `audio.set` | `audio.device` | `Ops/AudioDeviceOps.cpp` | `ControlProcessorTests.AudioDevice`, `.AudioVectors` | `methods/audio.set.schema.json` |

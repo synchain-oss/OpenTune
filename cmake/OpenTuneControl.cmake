@@ -121,6 +121,12 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # reached through the bridge) and project.clearRecent.
         Source/Control/Ops/ProjectOps.cpp
         Source/Control/Ops/ProjectOps.h
+        # Preferences and audio device: prefs.set (a job of kind prefsApply for a change of the editing scheme) and
+        # audio.get / audio.set (the steps of the audio settings page on the editor's device manager, with rollback).
+        Source/Control/Ops/PrefsOps.cpp
+        Source/Control/Ops/PrefsOps.h
+        Source/Control/Ops/AudioDeviceOps.cpp
+        Source/Control/Ops/AudioDeviceOps.h
     )
 
     target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_CONTROL_SOURCES})
@@ -130,6 +136,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Standalone/ControlEditorBridge.cpp
         Source/Standalone/ControlEditorBridge.h
         Source/Standalone/ControlEditorBridgeProject.cpp
+        # Preferences and audio device (the editor applies the preferences; the ASIO restore of a device switch).
+        Source/Standalone/ControlEditorBridgePrefs.cpp
     )
     # PUBLIC, so that every target that compiles or links the SharedCode sees the same class layouts.
     target_compile_definitions(OpenTuneStandalone PUBLIC OPENTUNE_ENABLE_CONTROL_API=1)
@@ -264,6 +272,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlTimingTests.cpp)
         # Project files: save, save as, open and clear recent, with a project session and a worker pool of the test.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlProjectTests.cpp)
+        # Preferences and audio device: prefs.set (with its job), audio.get and audio.set on a fake device manager.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlPrefsTests.cpp)
         if(MSVC)
             target_compile_options(OpenTuneControlProcessorTests PRIVATE /utf-8 /EHsc /bigobj)
         endif()
@@ -355,6 +365,14 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ProjectWithoutEditor|--control-api"
             "ProjectVectors|--control-api"
         )
+        # Preferences and audio device (Tests/Control/ControlPrefsTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "PrefsRoundTrip|--control-api"
+            "PrefsSchemeJob|--control-api"
+            "PrefsVectors|--control-api"
+            "AudioDevice|--control-api"
+            "AudioVectors|--control-api"
+        )
         set(_opentune_control_tests)
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
             string(REPLACE "|" ";" _opentune_control_scenario "${_opentune_control_scenario}")
@@ -396,6 +414,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.EditVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.TimingVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ProjectVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.PrefsVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.AudioVectors PROPERTIES TIMEOUT 300)
         # Each scenario process gets its own test's TIMEOUT, from which its watchdog takes its bound (a margin before;
         # ScenarioWatchdog in Tests/Control/ControlProcessorTests.cpp). Keep this after every TIMEOUT of the scenarios.
         foreach(_opentune_control_test IN LISTS _opentune_control_tests)

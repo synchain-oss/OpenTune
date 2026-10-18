@@ -573,6 +573,9 @@ const Scenario kScenarios[] = {
     {"ProjectJobs", scenarioProjectJobs, false},
     {"ProjectWithoutEditor", scenarioProjectWithoutEditor, false},
     {"ProjectVectors", scenarioProjectVectors, false},
+    {"Reference", scenarioReference, false},
+    {"ReferenceAnalysisLimit", scenarioReferenceAnalysisLimit, false},
+    {"ReferenceVectors", scenarioReferenceVectors, false},
 };
 
 /** How much earlier than the ctest TIMEOUT of its test the watchdog of a scenario ends it. */

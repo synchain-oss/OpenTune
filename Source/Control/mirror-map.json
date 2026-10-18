@@ -1140,6 +1140,31 @@
       ],
       "note": "AlreadyReady means a ready timing analysis of the current producer and audio; with hasTimingAnchors() it is the seed's featuresReady, so the job calls ensureTimeToolAnchorSeed() only when that seeds at once.",
       "noteZh": "AlreadyReady 表示计时分析已就绪且 producer 与音频匹配；加上 hasTimingAnchors() 即种子的 featuresReady，因此 job 只在能立即种子时调用 ensureTimeToolAnchorSeed()。"
+    },
+    {
+      "id": "reference-align-commit",
+      "group": "reference",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "711ecb99018d5e3c882de86ccd837586ac40a0e331da99b9bbd888c7900df7b7"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Edit/ReferenceAlignment.cpp",
+          "symbols": [
+            "controlAlignToReference"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Reference",
+        "ControlProcessorTests.ReferenceVectors"
+      ],
+      "note": "AUTO with a reference clip: the overlap of the two clips, ReferenceAutoAlign::align(), the affected frame range, the corrected pitch curve, the commit and the PianoRollEditAction described \"AUTO (Ref)\"; the API hands the action back to put it in its own undo entry.",
+      "noteZh": "带参考片段的 AUTO：两个片段的重叠、ReferenceAutoAlign::align()、受影响的帧范围、修正后的音高曲线、提交，以及描述为 \"AUTO (Ref)\" 的 PianoRollEditAction；接口把该动作取回，放进自己的撤销条目。"
     }
   ]
 }

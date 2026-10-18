@@ -907,10 +907,10 @@ void checkDetailsOfSung(ApiSession& api, OpenTuneAudioProcessor& processor, cons
                   != desiredBefore);
 }
 
-/** content.getDetails run on the message thread with the facts of an instance that reports reference.v1,
-    as an instance with the reference methods would answer (this build does not report it). */
+/** content.getDetails run on the message thread with the facts of an instance that reports reference.v1 (or, with
+    withReference false, of one that does not), as such an instance would answer. */
 JsonValue detailsAsInstanceWithReference(OpenTuneAudioProcessor& processor, const std::string& instanceId,
-                                         const std::string& contentId)
+                                         const std::string& contentId, bool withReference = true)
 {
     ControlMethodTable table;
     registerControlMethods(table);
@@ -923,7 +923,9 @@ JsonValue detailsAsInstanceWithReference(OpenTuneAudioProcessor& processor, cons
         return JsonValue();
     ControlInstanceFacts facts;
     facts.instanceId = instanceId;
-    facts.capabilities = {"session.v1", "read.v1", "reference.v1"};
+    facts.capabilities = {"session.v1", "read.v1"};
+    if (withReference)
+        facts.capabilities.push_back("reference.v1");
     ControlThreadProbe probe;
     ControlOpContext context(processor, nullptr, facts, probe);
     auto result = method->run(context, parsed.get());
@@ -955,15 +957,24 @@ void checkAutoModes(ApiSession& api, OpenTuneAudioProcessor& processor, const De
     CONTROL_CHECK(
         !memberOf(memberOf(api.result("content.getDetails", byContent), "reference"), "alignmentReady").asBoolean());
 
-    // This instance does not report reference.v1, so content.autoTune cannot run reference alignment: the
-    // button's mode is named regenerate, with the binding and the experimental features as they are.
+    // This instance reports reference.v1, so the button's mode is named reference, with the binding and the
+    // experimental features as they are.
     auto& preferences = processor.getAppPreferences();
     preferences.setExperimentalFeaturesEnabled(true);
     auto modes = memberOf(api.result("content.getDetails", byContent), "autoModes");
-    CONTROL_CHECK(memberOf(modes, "uiButtonRuns").text() == "regenerate");
-    CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == R"(["regenerate","snapNotes","notesOnly"])");
+    CONTROL_CHECK(memberOf(modes, "uiButtonRuns").text() == "reference");
+    CONTROL_CHECK(toJsonString(memberOf(modes, "available"))
+                  == R"(["regenerate","snapNotes","notesOnly","reference"])");
 
-    // An instance that reports reference.v1 (the details run directly, with the facts of such an instance).
+    // An instance without reference.v1 names regenerate instead (the details run directly, with the facts of such an
+    // instance).
+    {
+        const auto instance = memberOf(api.discovery(), "instanceId").text();
+        const auto without =
+            memberOf(detailsAsInstanceWithReference(processor, instance, handles.contentId, false), "autoModes");
+        CONTROL_CHECK(memberOf(without, "uiButtonRuns").text() == "regenerate");
+        CONTROL_CHECK(toJsonString(memberOf(without, "available")) == R"(["regenerate","snapNotes","notesOnly"])");
+    }
     const auto instanceId = memberOf(api.discovery(), "instanceId").text();
     const auto modesOf = [&] {
         return memberOf(detailsAsInstanceWithReference(processor, instanceId, handles.contentId), "autoModes");

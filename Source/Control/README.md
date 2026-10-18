@@ -49,6 +49,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `Edit/ControlOriginAction.*` | The undo entry of a change made through the API (upstream undo actions wrapped with an `undoId`), and `ControlHistory`: undoIds, the API's entries, the undoIds of UI entries, changes without an undo entry. |
 | `Edit/ContentEditTransaction.*` | Undo entries built from snapshots around a commit of the content commands, as the piano roll builds them (see "ContentEditTransaction"). |
 | `Edit/NoteCorrection.*` | The correction segments the piano roll rebuilds after an edit of notes, and SNAP (AUTO in the openDyne scheme), computed as the piano roll computes them and committed into a ContentEditTransaction (see "Note edits and the pitch shift"). |
+| `Ops/ReferenceOps.*`, `Edit/ReferenceAlignment.*` | `content.analyzeReference` and the job of `content.autoTune` in mode `reference`; the alignment of OpenTune's AUTO button with its undo action handed back instead of pushed (see "Reference alignment"). |
 | `Edit/PitchShiftLedger.*` | The steps of OpenTune's pitch shifts that the `revision` token leaves out (see "Note edits and the pitch shift"). |
 | `mirror-map.json`, `MIRRORS.md` | The upstream functions that the API mirrors, with a hash of each (machine-readable source of truth and the table generated from it); checked by `Tests/Control/ControlMirrorDriftTests.cpp` (see "Mirrors"). |
 | `ControlFileIdentity.*` | File identity (volume and file id, `st_dev` and `st_ino`), "same file" by identity, and the final rename that never replaces (PROTOCOL.md sections 20.3 and 20.4); standard library and operating system only. |
@@ -747,6 +748,44 @@ Known OpenTune behaviours, reported as they are:
   `NOT_READY(timing_analysis_timeout)` after its wait limit, or when it is cancelled, and never seeds without the
   analysis. `TimeGridSeed` shows it.
 
+## Reference alignment
+
+`content.analyzeReference` and `content.autoTune` in mode `reference` (capability `reference.v1`, `Ops/ReferenceOps.cpp`).
+The capability is reported because its one method is registered; the `arrangement.edit` op that binds a clip to a
+reference clip belongs to another part, so a binding is made in the editor's menu (or, in tests,
+`StandaloneArrangement::setPlacementReferencePlacement()`).
+
+- **Analysis** (`content.analyzeReference`): a job of kind `referenceAnalysis`. The call resolves the placement
+  (`NOT_FOUND`), its binding (`INVALID_ARGUMENT(reference_not_bound)`) and the readiness of both pitch analyses
+  (`NOT_READY`), and a call for a placement whose analysis job is not terminal returns that job (never the job of
+  `content.autoTune`, which has another result). The job asks OpenTune for the alignment features of both contents with
+  `preheatReferenceAlignmentFeatures()` (what the editor asks for when such a clip is selected), waits, and reports
+  `{placementId, referencePlacementId, alignmentReady}`. It changes no edit: no undo entry, no dirty mark.
+- **Alignment** (`content.autoTune` mode `reference`): the call checks the capability, the content, the busy state, the
+  readiness gate, the tokens, that the placement shows the content (`placement_content_mismatch`) and the binding, then
+  hands the work to the same kind of job. The job computes the data the binding lacks, then aligns the whole content
+  (`controlAlignToReference()`) and returns the write envelope. The alignment is one undo step: a
+  `PianoRollEditAction` described `AUTO (Ref)` in one `ControlOriginAction`. The project is marked as changed, as the
+  editor does after AUTO. When the reference gives nothing to change (`AlignmentPatch::ErrorCode::NoMutation`) the job
+  succeeds as a no-op, without an undo entry.
+- **Checks made again**: every step resolves the binding again (placement exists, same binding, both analyses ready); the
+  first step and the commit of the aligning job also check the busy state. A job that fails writes nothing. They are
+  cancellable until the alignment is committed; cancelling stops the wait and cannot withdraw an analysis OpenTune has
+  already started (its result is stored, as when the editor asks for it).
+- **Wait limit**: 120 s (`controlSetReferenceWaitLimitForTesting`), then `NOT_READY` without a reason (the registry has
+  none for this wait; `timing_analysis_timeout` is the seed job's), retryable. An analysis that failed ends the job with
+  `INTERNAL`.
+- **Mirror**: `controlAlignToReference()` follows `OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement()`
+  (`reference-align-commit`) step by step, because that function pushes its undo action itself and the API needs the
+  action inside its own entry. It starts no analysis (the job did) and returns the action instead of pushing it.
+
+Known OpenTune behaviour, reported as it is: `ReferenceAnalysisService::workerLoop` moves its finished synchronous job
+out of `activeJob` with `std::move`, which leaves the optional engaged, so the worker never takes the next job. The
+standard producer therefore completes one analysis per session, while a binding needs two (the clip and its reference
+clip). With alignment data for one of them already there (a time-tool seed of the content, an earlier call) the job
+completes; with neither, the second analysis never finishes and the job ends at its wait limit with `NOT_READY`. The
+analysis with the GAME producer is asynchronous and unaffected. `ReferenceAnalysisLimit` shows both cases.
+
 ## Project files
 
 `project.save`, `project.saveAs`, `project.open` and `project.clearRecent` (`Ops/ProjectOps.cpp`, capability
@@ -989,11 +1028,22 @@ also covers a job whose every rebuild is dropped (`NOT_READY(export_stretch_drop
 `kControlExportMaxStretchRequests` requests) and contents to export dry with a stretched grid and no render (a failed
 analysis with `allowDry`, an unvoiced one: `NOT_READY(export_dry_stretched)`), which end at once without a file.
 
+`Tests/Control/ControlReferenceTests.cpp` holds the scenarios of the reference alignment. The alignment data of the reference
+clip is given to its content as the processor stores a finished analysis, with notes two semitones above the target's;
+the target's own analysis runs through OpenTune's service. `Reference` runs the analysis job, the alignment (hand-checked
+pitches, the write envelope, one undo step, undo and redo, dirty) and the no-op of a second alignment; `ReferenceAnalysisLimit`
+shows the wait limit with a reference analysis that never finishes, the one job per placement, cancellation, the
+failures the jobs find when they check again (binding removed, analysis running again, clip deleted, a dialog opened,
+all without a change), the checks of the call, and the upstream service that completes one analysis per session;
+`ReferenceVectors` runs the vectors `content/analyze-reference-*`, `content/auto-tune-reference*`,
+`content/auto-tune-placement-content-mismatch` and `content/get-details-reference-binding` (the refusal without `reference.v1`
+runs against the facts of an instance without it).
+
 ## Capabilities and protocol versions
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
-`jobs.v1`, `import.v1`, `export.v1`, `edit.v1`, `history.v1`, `timing.v1` and `project.io`). The listener answers a method of an unreported capability itself with
+`jobs.v1`, `import.v1`, `export.v1`, `edit.v1`, `history.v1`, `timing.v1`, `project.io` and `reference.v1`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
@@ -1028,11 +1078,12 @@ capabilities may be registered in more than one step.
 | `edit.undo` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.AutoTune`, `.EditVectors` | `methods/edit.undo.schema.json` |
 | `edit.redo` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.EditVectors` | `methods/edit.redo.schema.json` |
 | `content.setKey` | `edit.v1` | `Ops/ContentTuneOps.cpp` | `ControlProcessorTests.SetKey`, `.Undo`, `.EditVectors` | `methods/content.setKey.schema.json` |
-| `content.autoTune` (modes `regenerate`, `snapNotes`, `notesOnly`) | `edit.v1` | `Ops/ContentTuneOps.cpp` (undo entries in `Edit/ContentEditTransaction.cpp`, SNAP in `Edit/NoteCorrection.cpp`) | `ControlProcessorTests.AutoTune`, `.SnapNotes`, `.Undo`, `.EditVectors` | `methods/content.autoTune.schema.json` |
+| `content.autoTune` (modes `regenerate`, `snapNotes`, `notesOnly`, `reference`) | `edit.v1` (`reference.v1` for mode `reference`) | `Ops/ContentTuneOps.cpp` (undo entries in `Edit/ContentEditTransaction.cpp`, SNAP in `Edit/NoteCorrection.cpp`; mode `reference` in `Ops/ReferenceOps.cpp`, `Edit/ReferenceAlignment.cpp`) | `ControlProcessorTests.AutoTune`, `.SnapNotes`, `.Undo`, `.EditVectors`, `.Reference`, `.ReferenceVectors` | `methods/content.autoTune.schema.json` |
 | `content.editNotes` | `edit.v1` | `Ops/ContentEditOps.cpp` (correction rebuild in `Edit/NoteCorrection.cpp`) | `ControlProcessorTests.EditNotes`, `.EditVectors` | `methods/content.editNotes.schema.json` |
 | `content.setPitchShift` | `edit.v1` | `Ops/ContentEditOps.cpp` (tokens: `Edit/PitchShiftLedger.cpp`) | `ControlProcessorTests.SetPitchShift`, `.EditVectors` | `methods/content.setPitchShift.schema.json` |
 | `content.shiftTiming` | `timing.v1` | `Ops/TimingOps.cpp` (moves in `Edit/TimeGridOps.cpp`) | `ControlProcessorTests.Timing`, `.TimingVectors` | `methods/content.shiftTiming.schema.json` |
 | `content.editTimeGrid` (ops `seed`, `moveHandles`) | `timing.v1` | `Ops/TimingOps.cpp` (moves in `Edit/TimeGridOps.cpp`) | `ControlProcessorTests.Timing`, `.TimeGridSeed`, `.TimingVectors` | `methods/content.editTimeGrid.schema.json` |
+| `content.analyzeReference` | `reference.v1` | `Ops/ReferenceOps.cpp` | `ControlProcessorTests.Reference`, `.ReferenceAnalysisLimit`, `.ReferenceVectors` | `methods/content.analyzeReference.schema.json` |
 | `project.save` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.save.schema.json` |
 | `project.saveAs` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.saveAs.schema.json` |
 | `project.open` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.open.schema.json` |

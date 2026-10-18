@@ -2360,7 +2360,6 @@ const char* const kMustRunEditVectors[] = {
     "content/auto-tune-not-found",
     "content/auto-tune-not-ready",
     "content/auto-tune-notes-only",
-    "content/auto-tune-reference-capability-missing",
     "content/auto-tune-regenerate",
     "content/auto-tune-snap-notes",
     "content/edit-notes-busy-export",
@@ -2434,12 +2433,9 @@ std::string editVectorSkipReason(const JsonValue& vector)
         const auto method = memberOf(*request, "method").text();
         if (kEditVectorMethods.count(method) == 0)
             return "uses " + method + ", which a later part implements";
-        // Mode reference runs only where the instance lacks reference.v1 (its refusal).
-        const auto mode = memberOf(memberOf(*request, "params"), "mode").text();
-        const auto& without = memberOf(memberOf(vector, "given"), "withoutCapabilities");
-        const bool withoutReference = without.size() == 1 && without.at(0).text() == "reference.v1";
-        if (method == "content.autoTune" && mode == "reference" && !withoutReference)
-            return "uses content.autoTune mode reference, which a later part implements";
+        // Mode reference needs reference.v1 and the jobs of the reference alignment: ReferenceVectors runs it.
+        if (method == "content.autoTune" && memberOf(memberOf(*request, "params"), "mode").text() == "reference")
+            return "mode reference runs in the runner of the reference alignment (ControlReferenceTests.cpp)";
     }
     const auto& given = memberOf(vector, "given");
     for (std::size_t i = 0; i < given.size(); ++i) {

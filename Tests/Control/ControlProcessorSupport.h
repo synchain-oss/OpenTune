@@ -547,6 +547,23 @@ void scenarioProjectWithoutEditor();
     real dispatcher with a real project session and a worker pool. */
 void scenarioProjectVectors();
 
+// Scenarios of the transport and the tracks (ControlTracksTests.cpp).
+
+/** transport.control, transport.setTempo and transport.setLoop: every action, the position that play from start
+    returns to, no-ops, the warnings of a missing audio device and of the loop flag, the revert recipe of the tempo,
+    the checks, busy and the editor's notifications. */
+void scenarioTransport();
+/** track.set, track.add, track.duplicate and track.delete: values, clamping, solo and audibility, the revert recipe,
+    the limits, the clip copies of both modes, the removal of a content with its last clip, the dangling reference
+    bindings, the checks and the answer without an editor. */
+void scenarioTracks();
+/** The barrier of a track deletion in the undo history: entries recorded through the API that address a moved track,
+    entries of the UI, force, the warnings, and an entry whose content left the project. */
+void scenarioTrackBarrier();
+/** The specification's vectors of the transport and the tracks, and those of the undo history that need the barrier,
+    against the real dispatcher with a test bridge and a fake audio device. */
+void scenarioTrackVectors();
+
 // Scenarios of the dialogs and the onboarding (ControlUiTests.cpp).
 
 /** ui.getState: the capability (incomplete until ui.setSelection), the busy flags, the dialogs from the bottom without

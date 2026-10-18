@@ -2466,7 +2466,7 @@ std::string editVectorSkipReason(const JsonValue& vector)
                 const auto action = memberOf(entry, "action").text();
                 if (memberOf(entry, "trackDeletedAfter").asBoolean()
                     || memberOf(entry, "laterTrackDeletedAfter").asBoolean())
-                    return "track deletion barriers arrive with the track methods";
+                    return "a track deletion's barrier is established by ControlProcessorTests.TrackVectors";
                 if (action != "noteEdit" && action != "pitchShift" && action != "clipSplit")
                     return "history action " + action + " is not established by this runner";
                 if (action == "clipSplit" && memberOf(entry, "origin").text() != "ui")

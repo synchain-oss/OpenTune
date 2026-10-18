@@ -228,7 +228,7 @@ void scenarioStartAndHello()
         // session.v1 and the capabilities of the methods the dispatcher implements.
         CONTROL_CHECK(
             toJsonString(memberOf(*hello, "capabilities"))
-            == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","edit.v1","history.v1","timing.v1","reference.v1","project.io","prefs.write","audio.device"])");
+            == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","edit.v1","history.v1","timing.v1","transport.v1","reference.v1","tracks.v1","project.io","prefs.write","audio.device"])");
     }
     // The runtime was initialised before the listener started: the logger writes under the data dir.
     checkLogInsideDataDirectory();
@@ -573,6 +573,10 @@ const Scenario kScenarios[] = {
     {"ProjectJobs", scenarioProjectJobs, false},
     {"ProjectWithoutEditor", scenarioProjectWithoutEditor, false},
     {"ProjectVectors", scenarioProjectVectors, false},
+    {"Transport", scenarioTransport, false},
+    {"Tracks", scenarioTracks, false},
+    {"TrackBarrier", scenarioTrackBarrier, false},
+    {"TrackVectors", scenarioTrackVectors, false},
     {"UiState", scenarioUiState, false},
     {"UiDismiss", scenarioUiDismiss, false},
     {"UiOnboardingWithheld", scenarioUiOnboardingWithheld, false},

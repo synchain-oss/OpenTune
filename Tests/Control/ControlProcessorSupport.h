@@ -560,5 +560,22 @@ void scenarioUiOnboardingWithheld();
 /** The specification's vectors of ui/ (those of ui.setSelection are pending). */
 void scenarioUiVectors();
 
+// Scenarios of preferences and the audio device (ControlPrefsTests.cpp).
+
+/** prefs.set for each setting: changes, warnings, the revert recipe sent back unchanged, no-ops, several changes in one
+    call, the closed params and BUSY. */
+void scenarioPrefsRoundTrip();
+/** A change of the editing scheme as a job: the call changes nothing, the job waits for the editor, the notes the
+   editor generates, the revert recipe, the wait that ends without the editor and puts every preference back, and a job
+   that the stopping control API destroys. */
+void scenarioPrefsSchemeJob();
+/** The specification's vectors of prefs.set, against the real dispatcher. */
+void scenarioPrefsVectors();
+/** audio.get and audio.set on a fake device manager: what is on offer, values that are not, every step of a change, the
+    rollback when the device does not open (also when the previous setup does not), no device, ASIO transitions. */
+void scenarioAudioDevice();
+/** The specification's vectors of audio.get and audio.set, against the real dispatcher. */
+void scenarioAudioVectors();
+
 } // namespace ControlTest
 } // namespace OpenTune

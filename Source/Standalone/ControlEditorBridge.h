@@ -55,6 +55,13 @@ public:
     juce::ThreadPool* projectWorkerPool() override;
     juce::AudioDeviceManager* audioDevice() override;
 
+    // ---- Dialogs and onboarding (ControlEditorBridgeModals.cpp) ----
+    std::optional<std::vector<DialogInfo>> openDialogs() const override;
+    bool closeTopDialog() override;
+    std::optional<bool> onboardingShowing() const override;
+    bool closeOnboarding() override;
+    std::optional<UiScale> uiScale() const override;
+
     // ---- Preferences and audio device (ControlEditorBridgePrefs.cpp) ----
     void onPreferencesChanged() override;
     std::optional<bool> editingSchemeApplied(bool notesPrimary) const override;

@@ -157,6 +157,53 @@ public:
     /** The Standalone application's audio device manager; nullptr when not supported. */
     virtual juce::AudioDeviceManager* audioDevice() { return nullptr; }
 
+    // ---- Dialogs and onboarding ---------------------------------------------------------------
+
+    /** One modal window of the editor (methods/ui.getState.schema.json $defs.dialog). */
+    struct DialogInfo
+    {
+        /** trackColour, confirm, pitchShift, preferences, message or unknown. */
+        std::string kind = "unknown";
+        /** The title the window shows (UTF-8); empty for a dialog that draws its title itself. */
+        std::string title;
+        /** Closing the dialog, also with Escape, commits the value it shows (trackColour; unknown, whose behaviour
+            the bridge cannot tell). */
+        bool closeCommits = true;
+        /** The track of a track-colour dialog; -1 for the other kinds. */
+        int trackId = -1;
+        /** A file chooser of the operating system: modal, but neither listed by ui.getState nor closed by
+            ui.dismiss. */
+        bool systemFileChooser = false;
+    };
+
+    /** The modal windows that are open, from the bottom of the stack to the top; nullopt when not supported. */
+    virtual std::optional<std::vector<DialogInfo>> openDialogs() const { return std::nullopt; }
+
+    /** Closes the topmost modal window as Escape does, when it is a dialog and not a file chooser of the operating
+        system. What the dialog does when it closes has happened when the call returns: a track-colour dialog has
+        committed its colour, a confirmation dialog has cancelled its action. Returns false, closing nothing, when
+        no dialog is on top or when not supported. */
+    virtual bool closeTopDialog() { return false; }
+
+    /** True while the first-run onboarding overlay is on screen; nullopt when not supported. */
+    virtual std::optional<bool> onboardingShowing() const { return std::nullopt; }
+
+    /** Closes the onboarding overlay as Escape does (the overlay finishes, as its exit button finishes it). The
+        caller closes the dialogs above it first. Returns false when no overlay is showing or when not supported. */
+    virtual bool closeOnboarding() { return false; }
+
+    /** The scale that the AUTO button, SNAP and the pitch tool of the UI use: the scale the transport bar shows. */
+    struct UiScale
+    {
+        /** 0 (C) to 11 (B). */
+        int rootNote = 0;
+        /** The UI's scale type of Utils/ScaleUiMapping.h: 1 major to 8 minor pentatonic. */
+        int scaleType = 1;
+    };
+
+    /** The scale of the UI; nullopt when not supported. */
+    virtual std::optional<UiScale> uiScale() const { return std::nullopt; }
+
     // ---- Preferences and audio device ---------------------------------------------------------
 
     /** The shared preferences were changed through the control API (prefs.set): the editor applies them the way it

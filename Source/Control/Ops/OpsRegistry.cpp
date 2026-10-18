@@ -15,6 +15,7 @@
 #include "TimingOps.h"
 #include "TrackOps.h"
 #include "TransportOps.h"
+#include "UiOps.h"
 #include "UndoOps.h"
 
 #include "Control/ContentHandles.h"
@@ -22,6 +23,7 @@
 #include <juce_events/juce_events.h>
 
 #include <algorithm>
+#include <mutex>
 
 namespace OpenTune {
 
@@ -36,6 +38,32 @@ std::atomic<bool>& reportIncompleteCapabilities()
     static std::atomic<bool> report{false};
     return report;
 }
+
+/** The capabilities controlSetWithheldCapabilitiesForTesting() leaves out, under their mutex. */
+struct WithheldCapabilities
+{
+    std::mutex mutex;
+    std::vector<std::string> names;
+};
+
+WithheldCapabilities& withheldCapabilities()
+{
+    static WithheldCapabilities withheld;
+    return withheld;
+}
+
+/** A capability without methods of its own, which an instance reports together with the capability it extends
+    (PROTOCOL.md section 22): ui.onboardingClose says that ui.dismiss can close an onboarding overlay that is already
+    showing, which UiOps does wherever it can reach the editor. */
+struct FeatureCapability
+{
+    const char* capability;
+    const char* extends;
+};
+
+constexpr FeatureCapability kFeatureCapabilities[] = {
+    {"ui.onboardingClose", "ui.bridge"},
+};
 
 Error makeOpError(std::string_view prefix, std::string_view kind, std::string_view reason, std::string detail)
 {
@@ -62,7 +90,8 @@ void registerControlMethods(ControlMethodTable& table)
     registerJobOps(table);            // job.get, job.cancel
     registerImportOps(table);         // import.start
     registerExportOps(table);         // export.start
-    // registerUiOps(table);           ui.getState, ui.dismiss, ui.setSelection
+    registerUiOps(table);             // ui.getState, ui.dismiss
+    // ui.setSelection, the third method of ui.bridge, is registered with the selection part (ui.bridge incomplete).
     registerContentTuneOps(table); // content.setKey, content.autoTune
     registerContentEditOps(table); // content.editNotes, content.setPitchShift
     registerUndoOps(table);        // edit.getHistory, edit.undo, edit.redo
@@ -233,20 +262,34 @@ std::vector<std::string> ControlMethodTable::capabilities() const
             && (reportIncomplete || !controlCapabilityIsIncomplete(capability)))
             out.emplace_back(capability);
     }
+    for (const auto& feature : kFeatureCapabilities) {
+        const auto extended = std::find(out.begin(), out.end(), feature.extends);
+        if (extended != out.end())
+            out.insert(extended + 1, feature.capability);
+    }
+    auto& withheld = withheldCapabilities();
+    const std::lock_guard<std::mutex> lock(withheld.mutex);
+    for (const auto& name : withheld.names)
+        out.erase(std::remove(out.begin(), out.end(), name), out.end());
     return out;
 }
 
 bool controlCapabilityIsIncomplete(std::string_view capability)
 {
-    // No capability of this build is incomplete: edit.v1 is reported since content.editNotes and
-    // content.setPitchShift are registered.
-    juce::ignoreUnused(capability);
-    return false;
+    // ui.bridge: ui.getState and ui.dismiss are registered, ui.setSelection follows with the selection part.
+    return capability == "ui.bridge";
 }
 
 void controlSetReportIncompleteCapabilitiesForTesting(bool report)
 {
     reportIncompleteCapabilities() = report;
+}
+
+void controlSetWithheldCapabilitiesForTesting(std::vector<std::string> capabilities)
+{
+    auto& withheld = withheldCapabilities();
+    const std::lock_guard<std::mutex> lock(withheld.mutex);
+    withheld.names = std::move(capabilities);
 }
 
 } // namespace OpenTune

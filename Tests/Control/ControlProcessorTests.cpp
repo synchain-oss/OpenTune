@@ -577,6 +577,10 @@ const Scenario kScenarios[] = {
     {"Tracks", scenarioTracks, false},
     {"TrackBarrier", scenarioTrackBarrier, false},
     {"TrackVectors", scenarioTrackVectors, false},
+    {"UiState", scenarioUiState, false},
+    {"UiDismiss", scenarioUiDismiss, false},
+    {"UiOnboardingWithheld", scenarioUiOnboardingWithheld, false},
+    {"UiVectors", scenarioUiVectors, false},
 };
 
 /** How much earlier than the ctest TIMEOUT of its test the watchdog of a scenario ends it. */

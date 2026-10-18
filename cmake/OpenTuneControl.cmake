@@ -129,6 +129,10 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/TransportOps.h
         Source/Control/Ops/TrackOps.cpp
         Source/Control/Ops/TrackOps.h
+        # Dialogs and onboarding: ui.getState and ui.dismiss (ui.bridge; ui.setSelection follows with the selection
+        # part), on the editor's modal windows and onboarding overlay reached through the bridge.
+        Source/Control/Ops/UiOps.cpp
+        Source/Control/Ops/UiOps.h
     )
 
     target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_CONTROL_SOURCES})
@@ -139,6 +143,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Standalone/ControlEditorBridge.h
         Source/Standalone/ControlEditorBridgeProject.cpp
         Source/Standalone/ControlEditorBridgeTracks.cpp
+        # Dialogs and onboarding: the modal windows, closing them as Escape does, the overlay, the scale of the UI.
+        Source/Standalone/ControlEditorBridgeModals.cpp
     )
     # PUBLIC, so that every target that compiles or links the SharedCode sees the same class layouts.
     target_compile_definitions(OpenTuneStandalone PUBLIC OPENTUNE_ENABLE_CONTROL_API=1)
@@ -275,6 +281,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlProjectTests.cpp)
         # Transport and tracks: the play state, the tempo, the track panel and the barrier of a track deletion.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlTracksTests.cpp)
+        # Dialogs and onboarding: ui.getState and ui.dismiss with dialogs and an overlay of the test bridge.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlUiTests.cpp)
         if(MSVC)
             target_compile_options(OpenTuneControlProcessorTests PRIVATE /utf-8 /EHsc /bigobj)
         endif()
@@ -373,6 +381,13 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "TrackBarrier|--control-api"
             "TrackVectors|--control-api"
         )
+        # Dialogs and onboarding (Tests/Control/ControlUiTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "UiState|--control-api"
+            "UiDismiss|--control-api"
+            "UiOnboardingWithheld|--control-api"
+            "UiVectors|--control-api"
+        )
         set(_opentune_control_tests)
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
             string(REPLACE "|" ";" _opentune_control_scenario "${_opentune_control_scenario}")
@@ -415,6 +430,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.TimingVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ProjectVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.TrackVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.UiVectors PROPERTIES TIMEOUT 300)
         # Each scenario process gets its own test's TIMEOUT, from which its watchdog takes its bound (a margin before;
         # ScenarioWatchdog in Tests/Control/ControlProcessorTests.cpp). Keep this after every TIMEOUT of the scenarios.
         foreach(_opentune_control_test IN LISTS _opentune_control_tests)

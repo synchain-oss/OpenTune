@@ -60,6 +60,12 @@ public:
     void onTrackMixChanged() override;
     void onTransportChanged() override;
     void onTempoChanged() override;
+    // ---- Dialogs and onboarding (ControlEditorBridgeModals.cpp) ----
+    std::optional<std::vector<DialogInfo>> openDialogs() const override;
+    bool closeTopDialog() override;
+    std::optional<bool> onboardingShowing() const override;
+    bool closeOnboarding() override;
+    std::optional<UiScale> uiScale() const override;
 
 private:
     /** The placement the arrangement selects on its active track, or 0. */

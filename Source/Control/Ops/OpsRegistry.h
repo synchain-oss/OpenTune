@@ -288,7 +288,8 @@ public:
     /** The method, or nullptr when this build does not implement it. Thread-safe once filled. */
     const ControlMethod* find(std::string_view name) const;
     /** session.v1 and the capabilities of the methods added, in the order they were first added, without the
-        incomplete ones (controlCapabilityIsIncomplete). */
+        incomplete ones (controlCapabilityIsIncomplete); ui.onboardingClose, a capability without methods of its own,
+        right after ui.bridge. */
     std::vector<std::string> capabilities() const;
 
 private:
@@ -298,18 +299,22 @@ private:
 /**
  * True for a capability of which this build registers some methods but not all yet. The instance does not
  * report it, because an instance implements every method of a capability it reports (PROTOCOL.md section 3.3
- * rule 5 case 10); the listener therefore answers its methods with UNSUPPORTED(capability_missing). No
- * capability is incomplete now, so it returns false for every capability. It stays, with the test seam below,
- * for the method groups that are still placeholder lines in registerControlMethods(): a part that registers
- * only some methods of a capability lists it here until its last method is registered, so that the instance
- * never reports a capability it implements only in part.
+ * rule 5 case 10); the listener therefore answers its methods with UNSUPPORTED(capability_missing). Now only
+ * ui.bridge is incomplete: ui.getState and ui.dismiss are registered, ui.setSelection follows with the selection
+ * part. A part that registers only some methods of a capability lists it here until its last method is
+ * registered, so that the instance never reports a capability it implements only in part.
  */
 bool controlCapabilityIsIncomplete(std::string_view capability);
 
 /** Test seam: dispatchers created from now on report the incomplete capabilities as well, so that the
-    headless tests can call their methods. Never used by OpenTune itself. Any thread. No test switches it on
-    while no capability is incomplete; it stays for the parts described at controlCapabilityIsIncomplete(). */
+    headless tests can call their methods. Never used by OpenTune itself. Any thread. The tests of ui.getState
+    and ui.dismiss switch it on while ui.bridge is incomplete. */
 void controlSetReportIncompleteCapabilitiesForTesting(bool report);
+
+/** Test seam: dispatchers created from now on leave these capabilities out of what they report, as the
+    precondition withoutCapabilities of the specification's vectors asks (an instance that does not report
+    ui.onboardingClose). Empty by default; never used by OpenTune itself. Any thread. */
+void controlSetWithheldCapabilitiesForTesting(std::vector<std::string> capabilities);
 
 /**
  * Registers every method this build implements, one group per line (Ops/OpsRegistry.cpp). Groups that

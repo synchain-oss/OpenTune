@@ -11,7 +11,9 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <functional>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -96,6 +98,54 @@ public:
     int revealCalls = 0;
     /** The placements focusPlacement() was called with, in order. */
     std::vector<std::pair<int, std::uint64_t>> focused;
+
+    // ---- Dialogs and onboarding ----
+
+    std::optional<std::vector<DialogInfo>> openDialogs() const override
+    {
+        if (!reportsDialogs)
+            return std::nullopt;
+        return dialogs;
+    }
+    /** Closes the topmost dialog, as the editor's bridge does, and runs onDialogClosed for it (what closing it
+        commits, which the test decides); the modal flag of busy follows the remaining dialogs. */
+    bool closeTopDialog() override
+    {
+        if (dialogs.empty() || dialogs.back().systemFileChooser || refuseClose)
+            return false;
+        const auto closed = dialogs.back();
+        dialogs.pop_back();
+        busy.modalOpen = !dialogs.empty();
+        closedDialogs.push_back(closed.kind);
+        if (onDialogClosed)
+            onDialogClosed(closed);
+        return true;
+    }
+    std::optional<bool> onboardingShowing() const override { return onboarding; }
+    bool closeOnboarding() override
+    {
+        if (!onboarding.value_or(false) || !onboardingClosable)
+            return false;
+        onboarding = false;
+        ++onboardingCloses;
+        return true;
+    }
+    std::optional<UiScale> uiScale() const override { return scale; }
+
+    /** Injected dialogs, from the bottom of the stack to the top; reportsDialogs false is a bridge without them. */
+    std::vector<DialogInfo> dialogs;
+    bool reportsDialogs = true;
+    /** closeTopDialog() fails, as a dialog that would not close. */
+    bool refuseClose = false;
+    /** What closing a dialog does in the test (a track-colour dialog: set the track's colour, mark dirty). */
+    std::function<void(const DialogInfo&)> onDialogClosed;
+    /** The onboarding overlay: showing, not showing, or nullopt for a bridge without it. */
+    std::optional<bool> onboarding = false;
+    bool onboardingClosable = true;
+    std::optional<UiScale> scale = UiScale{};
+    /** The kinds closeTopDialog() closed, in order, and the number of closeOnboarding() calls that closed it. */
+    std::vector<std::string> closedDialogs;
+    int onboardingCloses = 0;
 };
 
 } // namespace ControlTest

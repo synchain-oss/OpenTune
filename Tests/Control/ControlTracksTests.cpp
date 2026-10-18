@@ -1033,8 +1033,8 @@ void checkRemovedContentRevivedByUndo(Fixture& f)
     if (!CONTROL_CHECK(source.has_value()))
         return;
     // Track 2 gets a second clip (B) that shows the same content as the clip A of track 0.
-    CONTROL_CHECK(near(memberOf(f.api.result("track.duplicate", json(R"({"trackId":0,"mode":"share"})")), "newTrackId"),
-                       2.0));
+    CONTROL_CHECK(
+        near(memberOf(f.api.result("track.duplicate", json(R"({"trackId":0,"mode":"share"})")), "newTrackId"), 2.0));
     // The UI deletes A (an undo entry of the UI), then the API deletes track 2: the content has no clip left.
     if (!CONTROL_CHECK(placementsOn(f.project(), 0).size() == 1))
         return;

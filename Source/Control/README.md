@@ -769,7 +769,13 @@ reference clip belongs to another part, so a binding is made in the editor's men
   editor does after AUTO. When the reference gives nothing to change (`AlignmentPatch::ErrorCode::NoMutation`) the job
   succeeds as a no-op, without an undo entry.
 - **Checks made again**: every step resolves the binding again (placement exists, same binding, both analyses ready); the
-  first step and the commit of the aligning job also check the busy state. A job that fails writes nothing. They are
+  first step and the commit of the aligning job also check the busy state. The tokens are compared twice: by the call,
+  and again in the message-thread step of the commit, just before the alignment (PROTOCOL.md section 10 rule 3), with
+  the `expectedRevision` and, when given, the `expectedKeyRevision` the call checked. A change of the notes, pitch,
+  audio or key made while the job waited fails it with `REVISION_CONFLICT(content_changed)` or `(key_changed)`. The
+  alignment data the job waits for is no such change: OpenTune stores it in the content's `referenceFeatures` alone
+  (`setContentReferenceFeatures()` advances no notes, pitch or audio revision and leaves the key), which only the
+  `reference` component of the revision vector covers. A job that fails writes nothing. They are
   cancellable until the alignment is committed; cancelling stops the wait and cannot withdraw an analysis OpenTune has
   already started (its result is stored, as when the editor asks for it).
 - **Wait limit**: 120 s (`controlSetReferenceWaitLimitForTesting`), then `NOT_READY` without a reason (the registry has
@@ -1034,7 +1040,8 @@ the target's own analysis runs through OpenTune's service. `Reference` runs the 
 pitches, the write envelope, one undo step, undo and redo, dirty) and the no-op of a second alignment; `ReferenceAnalysisLimit`
 shows the wait limit with a reference analysis that never finishes, the one job per placement, cancellation, the
 failures the jobs find when they check again (binding removed, analysis running again, clip deleted, a dialog opened,
-all without a change), the checks of the call, and the upstream service that completes one analysis per session;
+the notes or the key changed while the job waited, all without a change), the checks of the call, and the upstream
+service that completes one analysis per session;
 `ReferenceVectors` runs the vectors `content/analyze-reference-*`, `content/auto-tune-reference*`,
 `content/auto-tune-placement-content-mismatch` and `content/get-details-reference-binding` (the refusal without `reference.v1`
 runs against the facts of an instance without it).

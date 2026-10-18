@@ -15,11 +15,13 @@
 #include "Content/StandaloneContentRepository.h"
 #include "Control/ControlDispatcher.h"
 #include "Control/ControlJobs.h"
+#include "Control/Edit/ContentEditTransaction.h"
 #include "Control/Ops/OpsRegistry.h"
 #include "Control/Ops/OpsSupport.h"
 #include "Control/Ops/ReferenceOps.h"
 #include "PluginProcessor.h"
 #include "Utils/AppPreferences.h"
+#include "Utils/ScaleUiMapping.h"
 
 #include <algorithm>
 #include <array>
@@ -242,12 +244,43 @@ struct ReferenceFixture
         return memberOf(memberOf(details, "reference"), "alignmentReady").asBoolean();
     }
 
-    /** The params of content.autoTune mode reference at the content's current revision. */
-    JsonValue autoRefParams()
+    /** The params of content.autoTune mode reference at the content's current revision, and with its current key
+        revision when withKeyRevision is set. */
+    JsonValue autoRefParams(bool withKeyRevision = false)
     {
+        const auto tokens = freshTokens(api, targetContentId);
+        std::string keyRevision;
+        if (withKeyRevision)
+            keyRevision = ",\"expectedKeyRevision\":" + jsonQuoted(memberOf(tokens, "keyRevision").text());
         return jsonOf("{\"contentId\":" + jsonQuoted(targetContentId) + ",\"mode\":\"reference\",\"expectedRevision\":"
-                      + jsonQuoted(memberOf(freshTokens(api, targetContentId), "revision").text())
+                      + jsonQuoted(memberOf(tokens, "revision").text()) + keyRevision
                       + ",\"placementId\":" + jsonQuoted(targetPlacementId) + "}");
+    }
+
+    /** A note edit of the target as the piano roll makes it: every note shifted by cents through the content commands
+        over the whole content, recorded as one PianoRollEditAction on OpenTune's history. */
+    bool editTargetNotesInUi(double cents)
+    {
+        ContentEditTransaction transaction(*processor, target.key);
+        if (!CONTROL_CHECK(transaction.captureBefore()))
+            return false;
+        const auto snapshot = processor->getContentSnapshot(target.key);
+        auto notes = snapshot->notes;
+        for (auto& note : notes)
+            note.pitch *= static_cast<float>(std::pow(2.0, cents / 1200.0));
+        const int frames = static_cast<int>(snapshot->pitchCurve->size());
+        if (!CONTROL_CHECK(processor->commitContentNotesAndSegments(target.key, notes,
+                                                                    snapshot->pitchCurve->getCorrectionSegments(),
+                                                                    ContentEditRangeFrames{0, frames})
+                           != nullptr))
+            return false;
+        if (!CONTROL_CHECK(transaction.recordRange(TRANS("编辑"), F0FrameRange{0, frames})))
+            return false;
+        auto actions = transaction.takeActions();
+        if (!CONTROL_CHECK(actions.size() == 1))
+            return false;
+        processor->getUndoManager().addAction(std::move(actions.front().action));
+        return true;
     }
 
     JsonValue analyzeParams() { return jsonOf("{\"placementId\":" + jsonQuoted(targetPlacementId) + "}"); }
@@ -263,9 +296,9 @@ struct ReferenceFixture
     }
 
     /** Starts content.autoTune mode reference; the job id, or empty when the call did not hand the work to a job. */
-    std::string startAutoRef()
+    std::string startAutoRef(bool withKeyRevision = false)
     {
-        const auto result = api.result("content.autoTune", autoRefParams());
+        const auto result = api.result("content.autoTune", autoRefParams(withKeyRevision));
         const auto& job = memberOf(result, "job");
         if (!CONTROL_CHECK(job.isObject() && memberOf(job, "kind").text() == "referenceAnalysis"))
             return {};
@@ -332,9 +365,17 @@ void scenarioReferenceImpl()
     // content.analyzeReference: the target's alignment data comes from OpenTune's analysis, the reference's was given.
     CONTROL_CHECK(f.targetMidiIs(64.0, 69.0));
     CONTROL_CHECK(!f.alignmentReady());
+    const auto tokensBeforeAnalysis = freshTokens(f.api, f.targetContentId);
     const auto analyzeId = f.startAnalyze();
     if (!CONTROL_CHECK(!analyzeId.empty()) || !CONTROL_CHECK(f.waitJobState(analyzeId, "succeeded")))
         return;
+    // The analysis that finished (ReferenceAnalysisService, then OpenTuneAudioProcessor::analysisFinished()) stored
+    // the alignment data alone: the revision and the key revision, which an aligning job compares before it writes,
+    // are those of before.
+    const auto tokensAfterAnalysis = freshTokens(f.api, f.targetContentId);
+    CONTROL_CHECK(memberOf(tokensAfterAnalysis, "revision").text() == memberOf(tokensBeforeAnalysis, "revision").text()
+                  && memberOf(tokensAfterAnalysis, "keyRevision").text()
+                         == memberOf(tokensBeforeAnalysis, "keyRevision").text());
     const auto analysis = f.jobOf(analyzeId);
     CONTROL_CHECK(memberOf(analysis, "kind").text() == "referenceAnalysis"
                   && !memberOf(analysis, "cancellable").asBoolean());
@@ -524,6 +565,75 @@ void scenarioReferenceJobChecksImpl()
             setReferenceFeatures(*f.processor, f.reference.key, ReferenceFeatureStatus::Ready, referenceNotes()));
         CONTROL_CHECK(f.failedWith(jobId, "BUSY", "modal_open", true));
         CONTROL_CHECK(f.targetMidiIs(64.0, 69.0) && f.historySize() == 0 && f.bridge.dirtyMarks == 0);
+    }
+    // The tokens the call checked are compared again just before the alignment (PROTOCOL.md section 10 rule 3). The
+    // user edits the target's notes while the aligning job waits for the reference's data: the job ends with
+    // REVISION_CONFLICT(content_changed) and writes nothing, so the notes and the history stay as the edit left them.
+    {
+        ReferenceFixture f;
+        if (!f.open(false))
+            return;
+        CONTROL_CHECK(
+            setReferenceFeatures(*f.processor, f.target.key, ReferenceFeatureStatus::Ready, referenceNotes()));
+        CONTROL_CHECK(setReferenceFeatures(*f.processor, f.reference.key, ReferenceFeatureStatus::Extracting, {}));
+        const auto jobId = f.startAutoRef();
+        CONTROL_CHECK(!jobId.empty());
+        pumpMessagesFor(100);
+        CONTROL_CHECK(memberOf(f.jobOf(jobId), "state").text() == "running");
+        CONTROL_CHECK(f.editTargetNotesInUi(100.0));
+        CONTROL_CHECK(f.targetMidiIs(65.0, 70.0) && f.historySize() == 1);
+        CONTROL_CHECK(
+            setReferenceFeatures(*f.processor, f.reference.key, ReferenceFeatureStatus::Ready, referenceNotes()));
+        CONTROL_CHECK(f.failedWith(jobId, "REVISION_CONFLICT", "content_changed", false));
+        CONTROL_CHECK(f.targetMidiIs(65.0, 70.0) && f.historySize() == 1 && f.bridge.dirtyMarks == 0);
+    }
+    // The same for the key, when the call gave expectedKeyRevision: REVISION_CONFLICT(key_changed), nothing written.
+    {
+        ReferenceFixture f;
+        if (!f.open(false))
+            return;
+        CONTROL_CHECK(
+            setReferenceFeatures(*f.processor, f.target.key, ReferenceFeatureStatus::Ready, referenceNotes()));
+        CONTROL_CHECK(setReferenceFeatures(*f.processor, f.reference.key, ReferenceFeatureStatus::Extracting, {}));
+        const auto revisionBefore = memberOf(freshTokens(f.api, f.targetContentId), "revision").text();
+        const auto keyBefore = memberOf(freshTokens(f.api, f.targetContentId), "keyRevision").text();
+        const auto jobId = f.startAutoRef(true);
+        CONTROL_CHECK(!jobId.empty());
+        pumpMessagesFor(100);
+        // A key chosen in the UI (PluginEditor::scaleChanged() calls setContentDetectedKey()): the key revision
+        // changes, the revision does not.
+        CONTROL_CHECK(f.processor->setContentDetectedKey(f.target.key, makeDetectedKeyFromUi(5, 1)));
+        CONTROL_CHECK(memberOf(freshTokens(f.api, f.targetContentId), "keyRevision").text() != keyBefore);
+        CONTROL_CHECK(memberOf(freshTokens(f.api, f.targetContentId), "revision").text() == revisionBefore);
+        CONTROL_CHECK(
+            setReferenceFeatures(*f.processor, f.reference.key, ReferenceFeatureStatus::Ready, referenceNotes()));
+        CONTROL_CHECK(f.failedWith(jobId, "REVISION_CONFLICT", "key_changed", false));
+        CONTROL_CHECK(f.targetMidiIs(64.0, 69.0) && f.historySize() == 0 && f.bridge.dirtyMarks == 0);
+    }
+    // Without a change the job aligns once the data it waited for is there: storing alignment data (what OpenTune does
+    // when its analysis finishes, OpenTuneAudioProcessor::setContentReferenceFeatures()) advances neither the revision
+    // nor the key revision, so the comparison before the alignment finds no conflict.
+    {
+        ReferenceFixture f;
+        if (!f.open(false))
+            return;
+        CONTROL_CHECK(setReferenceFeatures(*f.processor, f.reference.key, ReferenceFeatureStatus::Extracting, {}));
+        const auto before = freshTokens(f.api, f.targetContentId);
+        CONTROL_CHECK(
+            setReferenceFeatures(*f.processor, f.target.key, ReferenceFeatureStatus::Ready, referenceNotes()));
+        const auto stored = freshTokens(f.api, f.targetContentId);
+        CONTROL_CHECK(memberOf(stored, "revision").text() == memberOf(before, "revision").text()
+                      && memberOf(stored, "keyRevision").text() == memberOf(before, "keyRevision").text());
+        const auto jobId = f.startAutoRef(true);
+        CONTROL_CHECK(!jobId.empty());
+        pumpMessagesFor(100);
+        CONTROL_CHECK(memberOf(f.jobOf(jobId), "state").text() == "running");
+        CONTROL_CHECK(
+            setReferenceFeatures(*f.processor, f.reference.key, ReferenceFeatureStatus::Ready, referenceNotes()));
+        if (!CONTROL_CHECK(f.waitJobState(jobId, "succeeded")))
+            return;
+        CONTROL_CHECK(memberOf(memberOf(f.jobOf(jobId), "result"), "applied").asBoolean());
+        CONTROL_CHECK(f.targetMidiIs(66.0, 71.0) && f.historySize() == 1 && f.bridge.dirtyMarks == 1);
     }
     // The checks of the call itself.
     {

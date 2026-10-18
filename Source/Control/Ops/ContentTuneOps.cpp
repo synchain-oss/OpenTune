@@ -845,9 +845,10 @@ Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& 
 
 /**
  * Mode reference: the checks of the call, then the work goes to a job of kind referenceAnalysis (Ops/ReferenceOps.h),
- * which computes the alignment data the binding lacks and aligns the content in one undo step. The call changes
- * nothing; its result is the write envelope of the state "handed to a job", with the members of content.autoTune
- * that the job's result fills in (mode, no key and no params, no note count yet).
+ * which computes the alignment data the binding lacks and aligns the content in one undo step, after comparing the
+ * tokens this call checked with the content's current ones. The call changes nothing; its result is the write envelope
+ * of the state "handed to a job", with the members of content.autoTune that the job's result fills in (mode, no key
+ * and no params, no note count yet).
  */
 Result<JsonValue> runReferenceAutoTune(ControlOpContext& context, const AutoTuneParams& params,
                                        const ControlContentRef& ref)
@@ -865,7 +866,10 @@ Result<JsonValue> runReferenceAutoTune(ControlOpContext& context, const AutoTune
         return binding.error();
     ControlWriteEnvelope envelope(context);
     envelope.touchContent(ref.contentId);
-    auto job = controlStartReferenceAlignJob(context, binding.value());
+    // The tokens runAutoTune() has just checked; the job compares them again before it aligns (PROTOCOL.md section 10
+    // rule 3), since it commits later, after the alignment data is there.
+    auto job = controlStartReferenceAlignJob(context, binding.value(),
+                                             {ref.contentId, params.expectedRevision, params.expectedKeyRevision});
     if (!job.ok())
         return job.error();
     auto result = envelope.handedToJob(context, std::move(job).value());

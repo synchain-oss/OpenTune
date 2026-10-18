@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 
 namespace OpenTune {
 
@@ -22,6 +23,10 @@ namespace OpenTune {
  *
  * Both jobs check on every step that the placement still exists, that it still has the same reference binding and
  * that both pitch analyses are ready; a job that fails stores nothing it has not stored before and changes no note.
+ * The aligning job also compares the tokens the call checked (expectedRevision, and expectedKeyRevision when given)
+ * with the content's current ones in the step that commits, just before it aligns (PROTOCOL.md section 10 rule 3):
+ * a change made while the job waited fails it with REVISION_CONFLICT. The alignment data that the job waits for is
+ * no such change: OpenTune stores it in the content's referenceFeatures alone, which neither token covers.
  * They are cancellable until the alignment is committed; cancelling stops the wait, it cannot withdraw an analysis
  * that OpenTune already started (the data it produces is stored as it is when the editor asks for it).
  *
@@ -52,13 +57,25 @@ Result<ControlReferenceBinding>
 controlResolveReferenceBinding(ControlOpContext& context, std::uint64_t targetPlacementId,
                                std::optional<std::uint64_t> expectedReferencePlacementId);
 
+/** The tokens a content.autoTune call checked, which its job compares again before it commits: the content the call
+    named, its revision and, when the call gave one, its key revision. */
+struct ControlReferenceExpectedTokens
+{
+    std::string contentId;
+    std::string revision;
+    std::optional<std::string> keyRevision;
+};
+
 /**
  * Hands the work of content.autoTune in mode reference to a job of kind referenceAnalysis: computing the alignment data
- * the binding lacks, then aligning the content in one undo step. Returns the job reference ({jobId, kind, state}) for
- * the write envelope's handedToJob(); changes nothing itself. BUSY(job_limit) when every retained job is active.
- * Message thread.
+ * the binding lacks, then aligning the content in one undo step. expected holds the tokens the call has just checked;
+ * the job compares them again with the content's current tokens in the step that commits, and fails with
+ * REVISION_CONFLICT (content_changed, or key_changed) when they differ, changing nothing. Returns the job reference
+ * ({jobId, kind, state}) for the write envelope's handedToJob(); changes nothing itself. BUSY(job_limit) when every
+ * retained job is active. Message thread.
  */
-Result<JsonValue> controlStartReferenceAlignJob(ControlOpContext& context, const ControlReferenceBinding& binding);
+Result<JsonValue> controlStartReferenceAlignJob(ControlOpContext& context, const ControlReferenceBinding& binding,
+                                                ControlReferenceExpectedTokens expected);
 
 /** Test seam for the headless tests: the longest time a referenceAnalysis job waits for OpenTune's alignment
     analysis (120 s); 0 restores it. Read again at every wait step. Never used by OpenTune itself. Message thread. */

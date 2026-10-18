@@ -82,20 +82,22 @@ JsonValue analysisResultJson(ControlOpContext& context, const ControlReferenceBi
  * - it asks for the alignment data of both contents (OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(), which
  *   does nothing while the analysis runs or is ready) and waits for them; an analysis that failed ends the job with
  *   INTERNAL, and after the wait limit it ends with NOT_READY;
- * - an analysis job then reports the binding; an aligning job aligns the content (controlAlignToReference()) in one
- *   undo step and reports the write envelope.
+ * - an analysis job then reports the binding; an aligning job compares the tokens its call checked with the content's
+ *   current ones, then aligns the content (controlAlignToReference()) in one undo step and reports the write envelope.
  *
  * Cancellation is possible until the alignment is committed; nothing is written before that.
  */
 class ReferenceJob
 {
 public:
+    /** expected: the tokens of an aligning job's call; nullopt for an analysis job, which writes nothing. */
     ReferenceJob(ControlOpEnvironment environment, bool align, std::uint64_t placementId,
-                 std::uint64_t referencePlacementId)
+                 std::uint64_t referencePlacementId, std::optional<ControlReferenceExpectedTokens> expected)
         : environment_(std::move(environment))
         , align_(align)
         , placementId_(placementId)
         , referencePlacementId_(referencePlacementId)
+        , expected_(std::move(expected))
         , started_(std::chrono::steady_clock::now())
     {}
 
@@ -168,6 +170,25 @@ private:
         step.setProgress(std::nullopt, "analysing", ready, 2);
     }
 
+    /**
+     * REVISION_CONFLICT(content_changed) when the placement no longer shows the content the call named or that
+     * content's revision differs from the one the call checked, then REVISION_CONFLICT(key_changed) for the key
+     * revision when the call gave one (controlCheckExpectedTokens()); nullopt when they match, and for an analysis job.
+     * The tokens come from the snapshot this step read (controlContentVersions()). The alignment data the job waited
+     * for is no change: OpenTune stores it in the content's referenceFeatures alone, which only the reference
+     * component of the revision vector covers, not the revision or the key revision.
+     */
+    std::optional<Error> expectedTokensConflict(ControlOpContext& context, const ControlContentRef& content) const
+    {
+        if (!expected_)
+            return std::nullopt;
+        if (content.contentId != expected_->contentId)
+            return controlOpError("REVISION_CONFLICT", "content_changed",
+                                  "the placement shows another content than the one the call named; read it again");
+        return controlCheckExpectedTokens(controlContentVersions(context, content.contentId, *content.snapshot),
+                                          expected_->revision, expected_->keyRevision);
+    }
+
     static void appendMembers(JsonValue& result, std::size_t before, std::size_t after, std::size_t omittedChanges)
     {
         auto omittedCount = JsonValue::object();
@@ -203,6 +224,12 @@ private:
         }
         auto& processor = context.processor();
         const auto& content = binding.targetContent;
+        // PROTOCOL.md section 10 rule 3: the tokens the call checked, compared again in the message-thread step that
+        // aligns, just before the alignment. A change made while the job waited is a conflict; nothing is written.
+        if (const auto conflict = expectedTokensConflict(context, content)) {
+            step.fail(jobErrorOf(*conflict));
+            return;
+        }
         const auto beforeNotes = content.snapshot->notes;
         const auto beforeWorld = controlCaptureWorldVersions(context);
         ControlWriteEnvelope envelope(context);
@@ -265,6 +292,7 @@ private:
     bool align_;
     std::uint64_t placementId_;
     std::uint64_t referencePlacementId_;
+    std::optional<ControlReferenceExpectedTokens> expected_;
     std::chrono::steady_clock::time_point started_;
     bool firstStep_ = true;
 };
@@ -317,7 +345,7 @@ Result<JsonValue> runAnalyze(ControlOpContext& context, const AnalyzeParams& par
         return result;
     }
     auto job = std::make_shared<ReferenceJob>(context.environment(), false, target.placement.placementId,
-                                              binding.value().reference.placement.placementId);
+                                              binding.value().reference.placement.placementId, std::nullopt);
     auto ref = startJob(context, [job](ControlJobStep& step) { job->step(step); }, digest);
     if (!ref.ok())
         return ref.error();
@@ -379,10 +407,11 @@ controlResolveReferenceBinding(ControlOpContext& context, std::uint64_t targetPl
     return binding;
 }
 
-Result<JsonValue> controlStartReferenceAlignJob(ControlOpContext& context, const ControlReferenceBinding& binding)
+Result<JsonValue> controlStartReferenceAlignJob(ControlOpContext& context, const ControlReferenceBinding& binding,
+                                                ControlReferenceExpectedTokens expected)
 {
     auto job = std::make_shared<ReferenceJob>(context.environment(), true, binding.target.placement.placementId,
-                                              binding.reference.placement.placementId);
+                                              binding.reference.placement.placementId, std::move(expected));
     return startJob(context, [job](ControlJobStep& step) { job->step(step); }, {});
 }
 

@@ -203,6 +203,23 @@ public:
 
     /** The scale of the UI; nullopt when not supported. */
     virtual std::optional<UiScale> uiScale() const { return std::nullopt; }
+
+    // ---- Preferences and audio device ---------------------------------------------------------
+
+    /** The shared preferences were changed through the control API (prefs.set): the editor applies them the way it
+        does after its own preferences window changed one (OpenTuneAudioProcessorEditor::syncSharedAppPreferences),
+        which it also does on its heartbeat. Default: nothing. */
+    virtual void onPreferencesChanged() {}
+
+    /** Whether the editor has applied the editing scheme to its views (the piano roll, the parameter panel, the
+        layout): the notes-primary scheme (openDyne) when notesPrimary is true. nullopt when not supported, in
+        which case the control API takes the scheme as applied once the preference is set. */
+    virtual std::optional<bool> editingSchemeApplied(bool /*notesPrimary*/) const { return std::nullopt; }
+
+    /** What the audio settings page does before it closes an ASIO device for another device type or output
+        device (restoreAsioSampleRateToSystem): returns false when a required restore could not be verified, in
+        which case the change must not go on and the current device stays. Default: true (nothing to restore). */
+    virtual bool prepareAudioDeviceSwitch(const std::string& /*reason*/) { return true; }
 };
 
 } // namespace OpenTune

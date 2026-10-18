@@ -24,8 +24,10 @@ ControlOriginAction::ControlOriginAction(std::shared_ptr<ControlHistory> history
     , description_(std::move(description))
     , inner_(std::move(inner))
 {
-    if (history_ != nullptr)
+    if (history_ != nullptr) {
+        barrierGeneration_ = history_->barrierGeneration();
         history_->add(this);
+    }
 }
 
 ControlOriginAction::~ControlOriginAction()
@@ -40,6 +42,7 @@ void ControlOriginAction::undo()
     for (auto it = inner_.rbegin(); it != inner_.rend(); ++it)
         tookEffect = apply(*it, true) || tookEffect;
     lastStepTookEffect_ = tookEffect;
+    onRedoSide_ = true;
 }
 
 void ControlOriginAction::redo()
@@ -48,6 +51,7 @@ void ControlOriginAction::redo()
     for (auto& inner : inner_)
         tookEffect = apply(inner, false) || tookEffect;
     lastStepTookEffect_ = tookEffect;
+    onRedoSide_ = false;
 }
 
 bool ControlOriginAction::apply(Inner& inner, bool undo)
@@ -110,6 +114,21 @@ bool ControlOriginAction::masked(const ContentKey& content, ControlContentAspect
     return std::find(masked_.begin(), masked_.end(), std::make_pair(content, aspect)) != masked_.end();
 }
 
+bool ControlOriginAction::onTrackDeleted(int deletedTrack)
+{
+    // The deleted track's clips are gone and every later track moved down by one position, so an action keyed by
+    // one of these positions may now address another track. An action that addresses no track (a note edit
+    // addresses its content) or only earlier tracks is unaffected.
+    const bool addresses = std::any_of(inner_.begin(), inner_.end(), [deletedTrack](const Inner& inner) {
+        return std::any_of(inner.tracks.begin(), inner.tracks.end(),
+                           [deletedTrack](int track) { return track >= deletedTrack; });
+    });
+    if (!addresses || possiblyStale_)
+        return false;
+    possiblyStale_ = true;
+    return true;
+}
+
 // ---- ControlHistory ---------------------------------------------------------------------------------
 
 std::string ControlHistory::nextUndoId(const std::string& instanceShort)
@@ -130,6 +149,9 @@ void ControlHistory::prune(const UndoManager& manager, std::uint64_t epoch)
     if (epoch_ != epoch) {
         uiEntries_.clear();
         lastObserved_.reset();
+        // The history is empty, so no entry is left to be possibly stale (section 15.3 rule 6: opening a project
+        // clears both histories, and with them every barrier).
+        staleBelow_ = 0;
     }
     epoch_ = epoch;
     // A full history that changed since it was last observed may have dropped its oldest entry
@@ -140,6 +162,9 @@ void ControlHistory::prune(const UndoManager& manager, std::uint64_t epoch)
     if (now.size >= kUndoHistoryCapacity && lastObserved_ != now)
         uiEntries_.clear();
     lastObserved_ = now;
+    // A history that became shorter than the position the last deletion marked lost entries: a new entry may
+    // have taken over a position below the mark, which then counts as possibly stale (see onTrackDeleted()).
+    staleBelow_ = std::min(staleBelow_, now.size);
     uiEntries_.erase(std::remove_if(uiEntries_.begin(), uiEntries_.end(),
                                     [&manager](const UiEntry& entry) { return entry.index >= manager.size(); }),
                      uiEntries_.end());
@@ -169,11 +194,16 @@ ControlHistory::Entry ControlHistory::describe(const UndoManager& manager, const
         entry.undoId = origin->undoId();
         entry.control = true;
         entry.unsafe = origin->unsafe();
+        entry.possiblyStale = origin->possiblyStale();
         return entry;
     }
     entry.unsafe = controlIsUnsafeUndoAction(action);
-    if (const auto* known = findUiEntry(action, index))
+    const auto* known = findUiEntry(action, index);
+    if (known != nullptr)
         entry.undoId = known->undoId;
+    // The server cannot inspect an entry of the UI: one recorded before a track deletion is possibly stale until a
+    // call with force applied it.
+    entry.possiblyStale = index < staleBelow_ && !(known != nullptr && known->staleConfirmed);
     return entry;
 }
 
@@ -199,6 +229,83 @@ void ControlHistory::onChangeWithoutEntry(UndoManager& manager, const ContentKey
         action->mask(content, aspect);
     // UndoManager::clearRedo() (hook): discards the entries after the cursor, as addAction() does.
     manager.clearRedo();
+}
+
+ControlHistory::StaleCounts ControlHistory::onTrackDeleted(const UndoManager& manager, int deletedTrack,
+                                                           std::uint64_t epoch)
+{
+    prune(manager, epoch);
+    StaleCounts counts;
+    // UndoManager::cursor() and size() (read hook): the undo side holds the positions below the cursor.
+    const int cursor = manager.cursor();
+    const int size = manager.size();
+    int freshControlUndo = 0;
+    int freshControlRedo = 0;
+    for (auto* action : actions_) {
+        const bool redoSide = action->onRedoSide();
+        if (action->barrierGeneration() == barrierGeneration_)
+            ++(redoSide ? freshControlRedo : freshControlUndo);
+        if (action->onTrackDeleted(deletedTrack))
+            ++(redoSide ? counts.redo : counts.undo);
+    }
+    // Entries of the UI that were not possibly stale before: the positions at or above the last mark, except those
+    // taken by entries of the API made since the last deletion, and the entries a call with force confirmed.
+    int confirmedUndo = 0;
+    int confirmedRedo = 0;
+    for (const auto& entry : uiEntries_)
+        if (entry.staleConfirmed && entry.index < staleBelow_)
+            ++(entry.index < cursor ? confirmedUndo : confirmedRedo);
+    const int freshUndo = std::max(0, cursor - staleBelow_);
+    const int freshRedo = std::max(0, size - std::max(staleBelow_, cursor));
+    counts.undo += std::max(0, freshUndo - freshControlUndo) + confirmedUndo;
+    counts.redo += std::max(0, freshRedo - freshControlRedo) + confirmedRedo;
+
+    staleBelow_ = size;
+    for (auto& entry : uiEntries_)
+        entry.staleConfirmed = false;
+    ++barrierGeneration_;
+    return counts;
+}
+
+void ControlHistory::confirmStale(const UndoManager& manager, const UndoAction& action, int index, std::uint64_t epoch,
+                                  const std::string& instanceShort)
+{
+    for (auto* origin : actions_)
+        if (static_cast<const UndoAction*>(origin) == &action) {
+            origin->confirmStale();
+            return;
+        }
+    // An entry of the UI: it needs an undoId to be told apart from now on.
+    assignUndoId(manager, action, index, epoch, instanceShort);
+    for (auto& entry : uiEntries_)
+        if (entry.action == &action && entry.index == index)
+            entry.staleConfirmed = true;
+}
+
+void ControlHistory::markContentsRemoved(const std::vector<ContentKey>& contents, std::uint64_t epoch)
+{
+    if (removedContentsEpoch_ != epoch) {
+        removedContents_.clear();
+        removedContentsEpoch_ = epoch;
+    }
+    for (const auto& key : contents)
+        if (std::find(removedContents_.begin(), removedContents_.end(), key) == removedContents_.end())
+            removedContents_.push_back(key);
+}
+
+void ControlHistory::reviveShownContents(const std::vector<ContentKey>& shown)
+{
+    removedContents_.erase(std::remove_if(removedContents_.begin(), removedContents_.end(),
+                                          [&shown](const ContentKey& key) {
+                                              return std::find(shown.begin(), shown.end(), key) != shown.end();
+                                          }),
+                           removedContents_.end());
+}
+
+bool ControlHistory::isContentRemoved(const ContentKey& content, std::uint64_t epoch) const
+{
+    return removedContentsEpoch_ == epoch
+           && std::find(removedContents_.begin(), removedContents_.end(), content) != removedContents_.end();
 }
 
 void ControlHistory::add(ControlOriginAction* action)

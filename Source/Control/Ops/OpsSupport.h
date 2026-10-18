@@ -262,7 +262,10 @@ struct ControlAudioDeviceState
     known: running is false and the other members are null. Message thread. */
 ControlAudioDeviceState controlAudioDeviceState(ControlOpContext& context);
 
-/** The transport object (common.schema.json#/$defs/transport) from the processor's transport state. */
-JsonValue controlTransportJson(ControlOpContext& context);
+/** The transport object (common.schema.json#/$defs/transport) from the processor's transport state. With
+    positionOverrideSec the position member is that value instead of the processor's: transport.control reports
+    the position that a command it has just issued is about to give the audio thread (OpenTune's transport
+    commands are carried out by the audio callback, a block later). */
+JsonValue controlTransportJson(ControlOpContext& context, std::optional<double> positionOverrideSec = std::nullopt);
 
 } // namespace OpenTune

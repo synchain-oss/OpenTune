@@ -379,9 +379,10 @@ void scenarioUiDismiss()
     CONTROL_CHECK(
         f.api.fails("ui.dismiss", jsonOf(R"({"target":"dialogs"})"), "INVALID_ARGUMENT", "dialog_commits_on_close"));
     CONTROL_CHECK(f.bridge.dialogs.size() == 2 && f.bridge.closedDialogs.empty() && f.trackColour(1) == colourBefore);
-    // With confirm the colour is committed. tracks.v1 is not reported here, so no request can restore the colour: the
-    // revert recipe is null and the change carries IRREVERSIBLE besides DIALOG_CLOSE_COMMITTED.
-    CONTROL_CHECK(!reports(f.service().dispatcher()->capabilities(), "tracks.v1"));
+    // With confirm the colour is committed. Where tracks.v1 is reported the revert recipe is a track.set request that
+    // restores the colour; where it is not, no request can, so the recipe is null and the change carries IRREVERSIBLE
+    // besides DIALOG_CLOSE_COMMITTED.
+    const bool revertible = reports(f.service().dispatcher()->capabilities(), "tracks.v1");
     const auto committed = dismiss(f, R"({"target":"dialogs","confirm":true})");
     CONTROL_CHECK(f.bridge.dialogs.empty() && f.trackColour(1) == "#00FF00" && f.bridge.project.dirty);
     const auto& changes = memberOf(committed, "changes");
@@ -392,20 +393,26 @@ void scenarioUiDismiss()
                       && memberOf(colour, "before").text() == colourBefore
                       && memberOf(colour, "after").text() == "#00FF00");
     }
-    CONTROL_CHECK(memberOf(memberOf(committed, "undo"), "reason").text() == "ui_parity"
-                  && memberOf(memberOf(committed, "undo"), "revert").isNull());
+    CONTROL_CHECK(memberOf(memberOf(committed, "undo"), "reason").text() == "ui_parity");
+    const auto& revert = memberOf(memberOf(committed, "undo"), "revert");
+    if (revertible)
+        CONTROL_CHECK(memberOf(revert, "method").text() == "track.set");
+    else
+        CONTROL_CHECK(revert.isNull());
     const auto* commitWarning = findWarning(committed, "DIALOG_CLOSE_COMMITTED");
     const auto* irreversible = findWarning(committed, "IRREVERSIBLE");
-    CONTROL_CHECK(commitWarning != nullptr && irreversible != nullptr && memberOf(committed, "warnings").size() == 2);
-    if (commitWarning != nullptr && irreversible != nullptr)
+    CONTROL_CHECK(commitWarning != nullptr && (irreversible == nullptr) == revertible
+                  && memberOf(committed, "warnings").size() == (revertible ? 1u : 2u));
+    if (commitWarning != nullptr)
         CONTROL_CHECK(memberOf(memberOf(*commitWarning, "subject"), "trackId").asDouble() == 1.0
-                      && memberOf(memberOf(*commitWarning, "data"), "kind").text() == "trackColour"
-                      && memberOf(memberOf(*irreversible, "subject"), "trackId").asDouble() == 1.0);
+                      && memberOf(memberOf(*commitWarning, "data"), "kind").text() == "trackColour");
+    if (irreversible != nullptr)
+        CONTROL_CHECK(memberOf(memberOf(*irreversible, "subject"), "trackId").asDouble() == 1.0);
     const auto& effects = memberOf(committed, "sideEffects");
     const auto& dialogCommitted = memberOf(effects, "dialogCommitted");
     CONTROL_CHECK(memberOf(dialogCommitted, "colourBefore").text() == colourBefore
                   && memberOf(dialogCommitted, "colourAfter").text() == "#00FF00"
-                  && memberOf(dialogCommitted, "revert").isNull()
+                  && memberOf(dialogCommitted, "revert").isNull() == !revertible
                   && memberOf(memberOf(effects, "dialogClosed"), "dialogs").size() == 2);
     CONTROL_CHECK(memberOf(memberOf(committed, "dirty"), "after").asBoolean()
                   && memberOf(memberOf(committed, "revisionDiff"), "trackState").isObject());

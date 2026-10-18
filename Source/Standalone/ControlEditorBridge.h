@@ -55,6 +55,11 @@ public:
     juce::ThreadPool* projectWorkerPool() override;
     juce::AudioDeviceManager* audioDevice() override;
 
+    // ---- Tracks and transport (ControlEditorBridgeTracks.cpp) ----
+    bool setVisibleTrackCount(int count) override;
+    void onTrackMixChanged() override;
+    void onTransportChanged() override;
+    void onTempoChanged() override;
     // ---- Dialogs and onboarding (ControlEditorBridgeModals.cpp) ----
     std::optional<std::vector<DialogInfo>> openDialogs() const override;
     bool closeTopDialog() override;

@@ -294,6 +294,19 @@ std::string controlPlacementId(ControlOpContext& context, std::uint64_t placemen
                                placementId);
 }
 
+namespace {
+/** A content that a clip of the arrangement shows is in the project, whatever an earlier track deletion marked. */
+void reviveShownContents(ControlOpContext& context, ControlHistory& history)
+{
+    if (!history.hasRemovedContents())
+        return;
+    std::vector<ContentKey> shown;
+    for (const auto& ref : controlLivePlacements(context))
+        shown.push_back(ref.placement.contentKey);
+    history.reviveShownContents(shown);
+}
+} // namespace
+
 std::shared_ptr<const EditableContentSnapshot> controlLiveSnapshot(ControlOpContext& context, const ContentKey& key)
 {
     auto& processor = context.processor();
@@ -301,6 +314,12 @@ std::shared_ptr<const EditableContentSnapshot> controlLiveSnapshot(ControlOpCont
     const auto* clip = repository != nullptr ? repository->findClip(key) : nullptr;
     if (clip == nullptr || clip->isRetired())
         return nullptr;
+    // A content that a track deletion took out of the project is not live, although OpenTune leaks its clip.
+    if (const auto history = context.history()) {
+        reviveShownContents(context, *history);
+        if (history->isContentRemoved(key, controlContentEpoch(context)))
+            return nullptr;
+    }
     return processor.getContentSnapshot(key);
 }
 
@@ -366,8 +385,12 @@ std::vector<ContentKey> controlLiveContents(ControlOpContext& context)
     const auto* repository = context.processor().getStandaloneContentRepository();
     if (repository == nullptr)
         return out;
+    const auto history = context.history();
+    if (history != nullptr)
+        reviveShownContents(context, *history);
+    const auto epoch = controlContentEpoch(context);
     for (const auto& key : repository->getAllClips())
-        if (!repository->isRetired(key))
+        if (!repository->isRetired(key) && !(history != nullptr && history->isContentRemoved(key, epoch)))
             out.push_back(key);
     return out;
 }
@@ -574,13 +597,15 @@ ControlAudioDeviceState controlAudioDeviceState(ControlOpContext& context)
     return state;
 }
 
-JsonValue controlTransportJson(ControlOpContext& context)
+JsonValue controlTransportJson(ControlOpContext& context, std::optional<double> positionOverrideSec)
 {
     auto& processor = context.processor();
     auto json = JsonValue::object();
     // The Standalone transport accessors of the processor (canonical PlayHeadState, BPM, time signature).
     json.appendMember("playing", JsonValue::boolean(processor.isPlaying()));
-    json.appendMember("positionTimelineSec", controlJsonSeconds(std::max(0.0, processor.getPosition())));
+    json.appendMember(
+        "positionTimelineSec",
+        controlJsonSeconds(std::max(0.0, positionOverrideSec ? *positionOverrideSec : processor.getPosition())));
     json.appendMember("playStartTimelineSec", controlJsonSeconds(std::max(0.0, processor.getPlayStartPosition())));
     json.appendMember("loopEnabled", JsonValue::boolean(processor.isLoopEnabled()));
     json.appendMember("bpm", controlJsonNumber(processor.getBpm(), 3));

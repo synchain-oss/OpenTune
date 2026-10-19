@@ -1,0 +1,37 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: PR Agent Code Review
+
+# pr-agent（describe / review / improve），DeepSeek V4.1 Flash 经 OpenCode Go，按量计费。
+# 只在 PR → dev 上跑（含 feature/control-api → dev 的波次合入），PR 每次 push 都重跑；
+# base 为 feature/control-api 的子 PR 由 claude-review 与 pr-agent-claude 审。
+# 跳过 draft、外部 fork 与 bot 发起的 PR；模型（单一模型、无 fallback）、上限、超时、锁定的 pr-agent 镜像
+# 都在 Synchain-oss/ci-workflows 的 pr-agent.yml 里统一维护；这里只放本仓专属的 ignore 列表。
+# 任何 workflow 一律不得使用 pull_request_target（CLAUDE.md §0 第 4 条）。
+
+on:
+  pull_request:
+    branches: [dev]
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions: {}
+
+jobs:
+  pr-agent:
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    uses: Synchain-oss/ci-workflows/.github/workflows/pr-agent.yml@8028e34628bc2276ca978d87ccfc364432742820 # v1.3.1
+    with:
+      provider: opencode-go
+      # PR → dev 上 pr-agent-claude.yml 也在发评论。持久模式会改写最新一条带 pr-agent 标记的评论，
+      # 不管是哪个 pr-agent 写的，会盖掉 Haiku 的结果；所以这里 review / improve 每次都发新评论。
+      persistent_comments: false
+      # 不看的路径：上游资源与文档、第三方代码、许可文本、模型权重、规范副本与其 lock（正本在 MCP 仓库审）。
+      # 改这里时同步改 pr-agent-claude.yml
+      ignore_globs: '["Resources/**", "assets/**", "ThirdParty/**", "userguide/**", "LICENSES/**", "NOTICE*.txt", ".github/release/licenses/**", "models/**", "**/*.onnx", "Tests/Control/spec/**", ".github/spec.lock"]'
+    secrets:
+      api_key: ${{ secrets.OPENCODE_GO_API_KEY_FOR_REVIEW }}

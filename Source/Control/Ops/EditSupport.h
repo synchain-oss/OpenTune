@@ -86,6 +86,16 @@ std::size_t controlListNoteChanges(ControlWriteEnvelope& envelope, const std::st
                                    const std::vector<Note>& before, const std::vector<Note>& after,
                                    const std::string& revision, std::size_t maxListed);
 
+/**
+ * The members of a clip that differ between two captures of it (PROTOCOL.md section 14.3), named as project.get
+ * names them: trackId, startTimelineSec, endTimelineSec, durationSec, clipInContentSec, gainDb, gainLinear, fadeInSec,
+ * fadeOutSec and referencePlacementId (wasReference and nowReference are the placementIds of the bindings, empty for
+ * none). Each member is {before, after, unit}; an empty object when nothing differs. Shared by the effect of an undo
+ * step and by arrangement.edit, so that both report a clip change alike. Pure.
+ */
+JsonValue controlPlacementChangeFields(const ControlPlacementRef& was, const ControlPlacementRef& now,
+                                       const std::string& wasReference, const std::string& nowReference);
+
 /** The notes of a content as a write committed them, and the content's revision then. */
 struct ControlCommittedNotes
 {

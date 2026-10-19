@@ -141,28 +141,6 @@ void describeContents(const ControlEditState& before, const ControlEditState& af
     }
 }
 
-JsonValue placementFields(const ControlPlacementRef* was, const ControlPlacementRef& now,
-                          const std::string& wasReference, const std::string& nowReference)
-{
-    auto fields = JsonValue::object();
-    if (was == nullptr)
-        return fields;
-    const auto& a = was->placement;
-    const auto& b = now.placement;
-    addField(fields, "trackId", JsonValue::integer(was->trackId), JsonValue::integer(now.trackId), nullptr);
-    addField(fields, "startTimelineSec", controlJsonSeconds(a.timelineStartSeconds),
-             controlJsonSeconds(b.timelineStartSeconds), "sec");
-    addField(fields, "durationSec", controlJsonSeconds(a.durationSeconds), controlJsonSeconds(b.durationSeconds),
-             "sec");
-    addField(fields, "clipInSec", controlJsonSeconds(a.clipInSeconds), controlJsonSeconds(b.clipInSeconds), "sec");
-    addField(fields, "gainLinear", controlJsonNumber(a.gain, 6), controlJsonNumber(b.gain, 6), "linear");
-    addField(fields, "fadeInSec", controlJsonSeconds(a.fadeInDuration), controlJsonSeconds(b.fadeInDuration), "sec");
-    addField(fields, "fadeOutSec", controlJsonSeconds(a.fadeOutDuration), controlJsonSeconds(b.fadeOutDuration), "sec");
-    addField(fields, "referencePlacementId", wasReference.empty() ? JsonValue() : JsonValue::string(wasReference),
-             nowReference.empty() ? JsonValue() : JsonValue::string(nowReference), nullptr);
-    return fields;
-}
-
 void describePlacements(ControlOpContext& context, const ControlEditState& before, const ControlEditState& after,
                         ControlWriteEnvelope& envelope)
 {
@@ -176,8 +154,8 @@ void describePlacements(ControlOpContext& context, const ControlEditState& befor
             envelope.touchPlacement(now.placement.placementId);
             continue;
         }
-        auto fields = placementFields(was, now, reference(was->placement.referencePlacementId),
-                                      reference(now.placement.referencePlacementId));
+        auto fields = controlPlacementChangeFields(*was, now, reference(was->placement.referencePlacementId),
+                                                   reference(now.placement.referencePlacementId));
         if (fields.size() == 0)
             continue;
         envelope.addChange("placement", placementRef(now.placementId), JsonValue(), std::move(fields));
@@ -211,6 +189,37 @@ void describeTracks(const ControlEditState& before, const ControlEditState& afte
 }
 
 } // namespace
+
+// ---- Placement changes ------------------------------------------------------------------------------
+
+JsonValue controlPlacementChangeFields(const ControlPlacementRef& was, const ControlPlacementRef& now,
+                                       const std::string& wasReference, const std::string& nowReference)
+{
+    const auto gainDb = [](float gain) {
+        const auto db = controlLinearToDb(gain);
+        return db ? controlJsonNumber(*db, 3) : JsonValue();
+    };
+    auto fields = JsonValue::object();
+    const auto& a = was.placement;
+    const auto& b = now.placement;
+    addField(fields, "trackId", JsonValue::integer(was.trackId), JsonValue::integer(now.trackId), nullptr);
+    addField(fields, "startTimelineSec", controlJsonSeconds(a.timelineStartSeconds),
+             controlJsonSeconds(b.timelineStartSeconds), "sec");
+    addField(fields, "endTimelineSec", controlJsonSeconds(a.timelineEndSeconds()),
+             controlJsonSeconds(b.timelineEndSeconds()), "sec");
+    addField(fields, "durationSec", controlJsonSeconds(a.durationSeconds), controlJsonSeconds(b.durationSeconds),
+             "sec");
+    addField(fields, "clipInContentSec", controlJsonSeconds(a.clipInSeconds), controlJsonSeconds(b.clipInSeconds),
+             "sec");
+    addField(fields, "gainDb", gainDb(a.gain), gainDb(b.gain), "db");
+    addField(fields, "gainLinear", controlJsonNumber(std::max(0.0f, a.gain), 6),
+             controlJsonNumber(std::max(0.0f, b.gain), 6), "linear");
+    addField(fields, "fadeInSec", controlJsonSeconds(a.fadeInDuration), controlJsonSeconds(b.fadeInDuration), "sec");
+    addField(fields, "fadeOutSec", controlJsonSeconds(a.fadeOutDuration), controlJsonSeconds(b.fadeOutDuration), "sec");
+    addField(fields, "referencePlacementId", wasReference.empty() ? JsonValue() : JsonValue::string(wasReference),
+             nowReference.empty() ? JsonValue() : JsonValue::string(nowReference), nullptr);
+    return fields;
+}
 
 // ---- Params ---------------------------------------------------------------------------------------
 

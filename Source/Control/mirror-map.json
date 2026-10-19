@@ -2075,6 +2075,157 @@
       ],
       "note": "The track volume knob covers the linear range 0 to 4; track.set limits a larger volume to it (CLAMPED).",
       "noteZh": "轨道音量旋钮的线性范围是 0 到 4；track.set 把更大的音量限制到该范围（CLAMPED）。"
+    },
+    {
+      "id": "arrangement-trim-left",
+      "group": "arrangement",
+      "upstream": {
+        "file": "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "symbol": "const double outputCut = outputStart + (trimStartDurationSeconds_ - newDuration)",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "10495adb5acec842c4089baaf592b559f982632e700861baa125cfb92143bfc8"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ArrangementOps.cpp",
+          "symbols": [
+            "planTrim"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Arrangement",
+        "ControlProcessorTests.ArrangementVectors"
+      ],
+      "note": "Dragging the left edge of a clip moves the content window by the same output time through the time grid (tauForward, then tauInverse); op trim with edge start computes the new clipIn the same way.",
+      "noteZh": "拖动片段左边缘时，内容窗口经时间网格（先 tauForward 再 tauInverse）移动同样的输出时长；op trim 的 edge start 用同样的算法求新的 clipIn。"
+    },
+    {
+      "id": "arrangement-trim-fades",
+      "group": "arrangement",
+      "upstream": {
+        "file": "Source/StandaloneArrangement.cpp",
+        "symbol": "StandaloneArrangement::setPlacementTrim",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "45d0122fe8dca4d8f5f602f2ccd78841840d0a76b0c47e919985a3425fc91261"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ArrangementOps.cpp",
+          "symbols": [
+            "planTrim"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Arrangement",
+        "ControlProcessorTests.ArrangementUndo"
+      ],
+      "note": "A trim shortens fades longer than 90 % of the new length; op trim predicts that, reports FADES_RECLAMPED and records the old fades so that undo restores them.",
+      "noteZh": "裁剪会把超过新长度 90% 的淡入淡出缩短；op trim 预先算出结果、报告 FADES_RECLAMPED，并记录原来的淡入淡出，撤销时一并恢复。"
+    },
+    {
+      "id": "arrangement-fade-limit",
+      "group": "arrangement",
+      "upstream": {
+        "file": "Source/StandaloneArrangement.cpp",
+        "symbol": "StandaloneArrangement::setPlacementFade",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "dc8c04657ef6fc5edbb7d5038a3c7c879184e6c39f828de12fbedd9d0b7a728d"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ArrangementOps.cpp",
+          "symbols": [
+            "kMaxFadeShare"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Arrangement",
+        "ControlProcessorTests.ArrangementVectors"
+      ],
+      "note": "A fade is at most 90 % of the clip; op setFade predicts the limit and reports CLAMPED with the applied value.",
+      "noteZh": "淡入淡出最长为片段长度的 90%；op setFade 预先算出限制，并以 CLAMPED 报告实际值。"
+    },
+    {
+      "id": "arrangement-split",
+      "group": "arrangement",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::splitPlacementAtSeconds",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "7c01f5e8a1bb7fb159ea602495a246c1c960ac8bf1dd0fec29f2da25b1c9692e"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ArrangementOps.cpp",
+          "symbols": [
+            "checkSplit"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Arrangement",
+        "ControlProcessorTests.ArrangementVectors"
+      ],
+      "note": "OpenTune splits only a clip with a ready analysis and an unedited time grid, at the nearest analysis frame boundary, with both parts longer than 0.1 s, and refuses the rest silently; op split checks the same conditions first and names the reason.",
+      "noteZh": "OpenTune 只切分分析已就绪、时间网格未编辑的片段，切点吸附到最近的分析帧边界，且两段都要长于 0.1 秒，其余情况静默拒绝；op split 预先检查同样的条件并给出原因。"
+    },
+    {
+      "id": "arrangement-merge",
+      "group": "arrangement",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::mergePlacements",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b881a16f7d7c7e60e9e37ad71510080ff5fefc509b700217ea42b9253d70ca97"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ArrangementOps.cpp",
+          "symbols": [
+            "checkMerge"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Arrangement",
+        "ControlProcessorTests.ArrangementVectors"
+      ],
+      "note": "OpenTune merges two adjacent clips of one track that show adjacent parts of one source with equal gain and name; op merge checks those conditions first (merge_not_possible) and reports a later refusal with the same reason.",
+      "noteZh": "OpenTune 合并同一轨道上相邻、显示同一音源相邻部分且增益与名称相同的两个片段；op merge 预先检查这些条件（merge_not_possible），之后的拒绝也用同一原因报告。"
+    },
+    {
+      "id": "arrangement-reference-binding",
+      "group": "arrangement",
+      "upstream": {
+        "file": "Source/StandaloneArrangement.cpp",
+        "symbol": "StandaloneArrangement::validateReferenceBindingUnlocked",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "49e5e10056f7931b919b8e051cebc7fc6e76ec20f3d6b3c0c7529701f494d16a"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ArrangementOps.cpp",
+          "symbols": [
+            "referenceEligible",
+            "formsCycle"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Arrangement",
+        "ControlProcessorTests.ArrangementVectors"
+      ],
+      "note": "A clip may take as reference another live clip that overlaps it in time and does not lead back to it; op setReference checks that on the arrangement as the earlier ops of the call leave it (reference_ineligible).",
+      "noteZh": "片段只能以另一个时间上重叠、且不会绕回自身的在用片段为参考；op setReference 按本次调用中前面各 op 执行后的编排做同样的检查（reference_ineligible）。"
     }
   ]
 }

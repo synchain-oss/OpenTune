@@ -555,7 +555,26 @@ void scenarioArrangementUndoImpl()
     const auto redone = f.api.result("edit.redo", json(undoParams(trim)));
     CONTROL_CHECK(near(f.locate(a.placementId).placement.fadeOutDuration, 1.8)
                   && near(f.locate(a.placementId).placement.durationSeconds, 2.0) && redone.isObject());
+    CONTROL_CHECK(near(memberOf(fieldOf(changeOf(redone, f.pid(a)), "endTimelineSec"), "after"), 4.0)
+                  && memberOf(memberOf(changeOf(redone, f.pid(a)), "fields"), "clipInSec").isNull());
+    CONTROL_CHECK(memberOf(memberOf(change, "fields"), "clipInSec").isNull());
     CONTROL_CHECK(f.api.result("edit.undo", json(undoParams(trim))).isObject());
+
+    // The placement changes of edit.undo and edit.redo use the field names of project.get: clipInContentSec, gainDb
+    // and endTimelineSec (checked with the trim above), never the former clipInSec.
+    const auto windowed = f.edit(f.op("trim", a, "\"edge\":\"start\",\"toTimelineSec\":3") + ","
+                                 + f.op("setGain", a, "\"gainLinear\":0.5"));
+    const auto windowId = memberOf(memberOf(windowed, "undo"), "undoId").text();
+    const auto checkFieldNames = [&](const JsonValue& answer, double clipIn, double gainDb) {
+        const auto placement = changeOf(answer, f.pid(a));
+        CONTROL_CHECK(memberOf(placement, "fields").find("clipInSec") == nullptr);
+        CONTROL_CHECK(near(memberOf(fieldOf(placement, "clipInContentSec"), "after"), clipIn));
+        CONTROL_CHECK(near(memberOf(fieldOf(placement, "gainDb"), "after"), gainDb, 0.01));
+        CONTROL_CHECK(near(memberOf(fieldOf(placement, "gainLinear"), "after"), gainDb == 0.0 ? 1.0 : 0.5, 1e-3));
+    };
+    checkFieldNames(f.api.result("edit.undo", json(undoParams(windowId))), 0.0, 0.0);
+    checkFieldNames(f.api.result("edit.redo", json(undoParams(windowId))), 1.0, -6.02);
+    CONTROL_CHECK(f.api.result("edit.undo", json(undoParams(windowId))).isObject());
 
     // A call of several ops is undone in one step.
     result = f.edit(f.op("move", a, "\"toTrackId\":1,\"startTimelineSec\":9") + ","

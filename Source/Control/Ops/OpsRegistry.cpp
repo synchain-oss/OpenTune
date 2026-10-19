@@ -103,11 +103,11 @@ void registerControlMethods(ControlMethodTable& table)
     registerTimingOps(table);         // content.shiftTiming, content.editTimeGrid
     registerTransportOps(table);      // transport.control, transport.setTempo, transport.setLoop
     registerArrangementOps(table);    // arrangement.edit, arrangement.copy
-    registerReferenceOps(table);   // content.analyzeReference
-    registerTrackOps(table);       // track.set, track.add, track.duplicate, track.delete
-    registerProjectOps(table);     // project.save, project.saveAs, project.open, project.clearRecent
-    registerPrefsOps(table);       // prefs.set
-    registerAudioDeviceOps(table); // audio.get, audio.set
+    registerReferenceOps(table);      // content.analyzeReference
+    registerTrackOps(table);          // track.set, track.add, track.duplicate, track.delete
+    registerProjectOps(table);        // project.save, project.saveAs, project.open, project.clearRecent
+    registerPrefsOps(table);          // prefs.set
+    registerAudioDeviceOps(table);    // audio.get, audio.set
 }
 
 ControlOpContext::ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiBridge* bridge,

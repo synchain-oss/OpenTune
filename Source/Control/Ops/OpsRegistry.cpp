@@ -2,6 +2,7 @@
 #include "OpsRegistry.h"
 
 #include "AppReadOps.h"
+#include "ArrangementOps.h"
 #include "AudioDeviceOps.h"
 #include "ContentDetailsOps.h"
 #include "ContentEditOps.h"
@@ -101,12 +102,12 @@ void registerControlMethods(ControlMethodTable& table)
     registerUndoOps(table);           // edit.getHistory, edit.undo, edit.redo
     registerTimingOps(table);         // content.shiftTiming, content.editTimeGrid
     registerTransportOps(table);      // transport.control, transport.setTempo, transport.setLoop
-    // registerArrangementOps(table);  arrangement.edit, arrangement.copy
-    registerReferenceOps(table);   // content.analyzeReference
-    registerTrackOps(table);       // track.set, track.add, track.duplicate, track.delete
-    registerProjectOps(table);     // project.save, project.saveAs, project.open, project.clearRecent
-    registerPrefsOps(table);       // prefs.set
-    registerAudioDeviceOps(table); // audio.get, audio.set
+    registerArrangementOps(table);    // arrangement.edit, arrangement.copy
+    registerReferenceOps(table);      // content.analyzeReference
+    registerTrackOps(table);          // track.set, track.add, track.duplicate, track.delete
+    registerProjectOps(table);        // project.save, project.saveAs, project.open, project.clearRecent
+    registerPrefsOps(table);          // prefs.set
+    registerAudioDeviceOps(table);    // audio.get, audio.set
 }
 
 ControlOpContext::ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiBridge* bridge,

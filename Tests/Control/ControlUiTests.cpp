@@ -3,9 +3,9 @@
 // Scenarios of ui.getState and ui.dismiss against the real processor without a window or an audio device. The test
 // bridge reports the dialogs, the onboarding overlay and the scale that the editor's bridge reads from the editor
 // (Source/Standalone/ControlEditorBridgeModals.cpp), and closing a track-colour dialog commits its colour as the
-// editor's dialog does in its destructor: the track's colour, then the dirty flag. ui.bridge is incomplete until
-// ui.setSelection is registered, so these scenarios report it through the test seam. Registered with the other
-// processor scenarios in ControlProcessorTests.cpp.
+// editor's dialog does in its destructor: the track's colour, then the dirty flag. ui.setSelection, the third method of
+// ui.bridge, has scenarios of its own (ControlSelectionTests.cpp). Registered with the other processor scenarios in
+// ControlProcessorTests.cpp.
 
 #include "ControlProcessorSupport.h"
 #include "TestUiBridge.h"
@@ -41,8 +41,8 @@ JsonValue jsonOf(const std::string& text)
     return parsed.value;
 }
 
-/** Reports the incomplete ui.bridge, and leaves out the withheld capabilities, for the dispatchers created during its
-    life; restores the defaults afterwards. */
+/** Reports the incomplete capabilities (none now), and leaves out the withheld capabilities, for the dispatchers
+   created during its life; restores the defaults afterwards. */
 class ScopedCapabilities
 {
 public:
@@ -216,31 +216,28 @@ void scenarioUiState()
     CONTROL_CHECK(!defaults.openDialogs() && !defaults.closeTopDialog() && !defaults.onboardingShowing()
                   && !defaults.closeOnboarding() && !defaults.uiScale());
 
-    // ui.bridge is incomplete: without the seam the instance reports neither it nor ui.onboardingClose, which extends
-    // it, and the listener refuses its methods.
+    // ui.bridge is complete: without the seam the instance reports it with ui.onboardingClose, which extends it, right
+    // after it, and every method of it is registered. Without an editor its methods answer UNSUPPORTED.
     const auto plain = tableCapabilities();
-    CONTROL_CHECK(!reports(plain, "ui.bridge") && !reports(plain, "ui.onboardingClose"));
-    CONTROL_CHECK(controlCapabilityIsIncomplete("ui.bridge"));
+    CONTROL_CHECK(!controlCapabilityIsIncomplete("ui.bridge"));
+    {
+        const auto bridgeAt = std::find(plain.begin(), plain.end(), "ui.bridge");
+        CONTROL_CHECK(bridgeAt != plain.end() && bridgeAt + 1 != plain.end()
+                      && *(bridgeAt + 1) == "ui.onboardingClose");
+    }
     {
         auto processor = startedProcessor();
         auto& service = processor->getControlService();
         if (!service.isRunning())
             return;
-        CONTROL_CHECK(!reports(service.dispatcher()->capabilities(), "ui.bridge"));
+        CONTROL_CHECK(reports(service.dispatcher()->capabilities(), "ui.bridge"));
         CONTROL_CHECK(service.dispatcher()->implements("ui.getState") && service.dispatcher()->implements("ui.dismiss")
-                      && !service.dispatcher()->implements("ui.setSelection"));
+                      && service.dispatcher()->implements("ui.setSelection"));
         ApiSession api;
         if (!api.open(service))
             return;
         CONTROL_CHECK(api.fails("ui.getState", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
         CONTROL_CHECK(api.fails("ui.dismiss", jsonOf(R"({"target":"dialogs"})"), "UNSUPPORTED", "capability_missing"));
-    }
-    {
-        ScopedCapabilities seam;
-        const auto reported = tableCapabilities();
-        const auto bridgeAt = std::find(reported.begin(), reported.end(), "ui.bridge");
-        CONTROL_CHECK(bridgeAt != reported.end() && bridgeAt + 1 != reported.end()
-                      && *(bridgeAt + 1) == "ui.onboardingClose");
     }
     {
         ScopedCapabilities seam({"ui.onboardingClose"});
@@ -538,7 +535,7 @@ UiVectorSkip uiVectorSkip(const JsonValue& vector, const std::vector<std::string
     if (memberOf(vector, "type").text() != "request" || memberOf(vector, "session").text() != "authenticated")
         return {"only authenticated request vectors are run here"};
     if (memberOf(memberOf(vector, "request"), "method").text() == "ui.setSelection")
-        return {"ui.setSelection is registered with the selection part", true};
+        return {"runs in the selection runner (scenarioSelectionVectors)"};
     const auto& extra = memberOf(vector, "extraCapabilities");
     for (std::size_t i = 0; i < extra.size(); ++i)
         if (!reports(reported, extra.at(i).text()))
@@ -616,9 +613,9 @@ std::string runUiVector(const JsonValue& vector)
     return failure;
 }
 
-/** The vectors of ui/ that must run and pass headless; the vectors of ui.setSelection are pending until it is
-    registered, and ui/dismiss-confirm-commit needs tracks.v1 for its revert recipe (scenarioUiDismiss covers the
-    commit without it). */
+/** The vectors of ui/ that must run and pass headless; the vectors of ui.setSelection run in scenarioSelectionVectors,
+    and ui/dismiss-confirm-commit needs tracks.v1 for its revert recipe (scenarioUiDismiss covers the commit without
+    it). */
 const char* const kMustRunUiVectors[] = {
     "ui/dismiss-commits-on-close",
     "ui/dismiss-dialog",

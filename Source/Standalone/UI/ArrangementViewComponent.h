@@ -143,6 +143,11 @@ public:
     double viewportXToAbsoluteTime(int x) const;
     int getRulerHeight() const noexcept { return rulerHeight_; }
 
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: public selection commit, see Source/Control/README.md#hooks
+    void commitControlSelection(int trackId, uint64_t placementId);
+#endif
+
 private:
     enum class DragOperation { None, Move, Gain, TrimLeft, TrimRight, FadeIn, FadeOut };
 

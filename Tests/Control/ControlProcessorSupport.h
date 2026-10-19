@@ -566,15 +566,15 @@ void scenarioTrackVectors();
 
 // Scenarios of the dialogs and the onboarding (ControlUiTests.cpp).
 
-/** ui.getState: the capability (incomplete until ui.setSelection), the busy flags, the dialogs from the bottom without
-    file choosers, titles, the onboarding, the scale, without an editor. */
+/** ui.getState: the capability with ui.onboardingClose, the busy flags, the dialogs from the bottom without file
+    choosers, titles, the onboarding, the scale, without an editor. */
 void scenarioUiState();
 /** ui.dismiss: params, busy, closing from the top, dialog_commits_on_close, a committed colour without tracks.v1, file
     choosers, a dialog that does not close or opens another, and target onboarding (prevent, close, choice dialog). */
 void scenarioUiDismiss();
 /** target onboarding on an instance without ui.onboardingClose: prevents, does not close. */
 void scenarioUiOnboardingWithheld();
-/** The specification's vectors of ui/ (those of ui.setSelection are pending). */
+/** The specification's vectors of ui/ (those of ui.setSelection run in scenarioSelectionVectors). */
 void scenarioUiVectors();
 
 // Scenarios of preferences and the audio device (ControlPrefsTests.cpp).
@@ -622,6 +622,18 @@ void scenarioArrangementCopy();
 /** The specification's vectors of arrangement.edit and arrangement.copy (and the track deletion that needs a move),
     against the real dispatcher. */
 void scenarioArrangementVectors();
+
+// Scenarios of the selection (ControlSelectionTests.cpp).
+
+/** ui.setSelection: the capability and its methods, the params, NOT_FOUND, UNSUPPORTED without an editor, BUSY, a clip,
+    a track, openEditor, the scale, the no-op, the revert recipe sent back, dryRun changing nothing. */
+void scenarioSelection();
+/** Both editing schemes, a clip with and without notes, with and without a reference binding: the prediction of dryRun
+    equals the committed result, and dryRun leaves every field of the state as it was. */
+void scenarioSelectionMatrix();
+/** The specification's vectors of ui.setSelection, against the real dispatcher with a test bridge that selects as the
+    editor does. */
+void scenarioSelectionVectors();
 
 } // namespace ControlTest
 } // namespace OpenTune

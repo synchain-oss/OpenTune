@@ -15,6 +15,7 @@
 #include "ProjectOps.h"
 #include "ProjectReadOps.h"
 #include "ReferenceOps.h"
+#include "SelectionOps.h"
 #include "SessionOps.h"
 #include "TimingOps.h"
 #include "TrackOps.h"
@@ -95,13 +96,13 @@ void registerControlMethods(ControlMethodTable& table)
     registerImportOps(table);         // import.start
     registerExportOps(table);         // export.start
     registerUiOps(table);             // ui.getState, ui.dismiss
-    // ui.setSelection, the third method of ui.bridge, is registered with the selection part (ui.bridge incomplete).
-    registerContentTuneOps(table); // content.setKey, content.autoTune
-    registerContentEditOps(table); // content.editNotes, content.setPitchShift
-    registerUndoOps(table);        // edit.getHistory, edit.undo, edit.redo
-    registerTimingOps(table);      // content.shiftTiming, content.editTimeGrid
-    registerTransportOps(table);   // transport.control, transport.setTempo, transport.setLoop
-    registerArrangementOps(table); // arrangement.edit, arrangement.copy
+    registerSelectionOps(table);      // ui.setSelection
+    registerContentTuneOps(table);    // content.setKey, content.autoTune
+    registerContentEditOps(table);    // content.editNotes, content.setPitchShift
+    registerUndoOps(table);           // edit.getHistory, edit.undo, edit.redo
+    registerTimingOps(table);         // content.shiftTiming, content.editTimeGrid
+    registerTransportOps(table);      // transport.control, transport.setTempo, transport.setLoop
+    registerArrangementOps(table);    // arrangement.edit, arrangement.copy
     registerReferenceOps(table);   // content.analyzeReference
     registerTrackOps(table);       // track.set, track.add, track.duplicate, track.delete
     registerProjectOps(table);     // project.save, project.saveAs, project.open, project.clearRecent
@@ -281,8 +282,10 @@ std::vector<std::string> ControlMethodTable::capabilities() const
 
 bool controlCapabilityIsIncomplete(std::string_view capability)
 {
-    // ui.bridge: ui.getState and ui.dismiss are registered, ui.setSelection follows with the selection part.
-    return capability == "ui.bridge";
+    // Every capability of which this build registers a method has all its methods registered (ui.bridge since
+    // ui.setSelection). A part that registers only some methods of a capability names it here.
+    juce::ignoreUnused(capability);
+    return false;
 }
 
 void controlSetReportIncompleteCapabilitiesForTesting(bool report)

@@ -129,8 +129,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/TransportOps.h
         Source/Control/Ops/TrackOps.cpp
         Source/Control/Ops/TrackOps.h
-        # Dialogs and onboarding: ui.getState and ui.dismiss (ui.bridge; ui.setSelection follows with the selection
-        # part), on the editor's modal windows and onboarding overlay reached through the bridge.
+        # Dialogs and onboarding: ui.getState and ui.dismiss (ui.bridge; ui.setSelection is in the selection block),
+        # on the editor's modal windows and onboarding overlay reached through the bridge.
         Source/Control/Ops/UiOps.cpp
         Source/Control/Ops/UiOps.h
         # Preferences and audio device: prefs.set (a job of kind prefsApply for a change of the editing scheme) and
@@ -145,6 +145,9 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Edit/ReferenceAlignment.h
         Source/Control/Ops/ReferenceOps.cpp
         Source/Control/Ops/ReferenceOps.h
+        # Selection: ui.setSelection, through the editor's bridge, with the effects it predicts and observes.
+        Source/Control/Ops/SelectionOps.cpp
+        Source/Control/Ops/SelectionOps.h
     )
 
     target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_CONTROL_SOURCES})
@@ -159,6 +162,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Standalone/ControlEditorBridgeModals.cpp
         # Preferences and audio device (the editor applies the preferences; the ASIO restore of a device switch).
         Source/Standalone/ControlEditorBridgePrefs.cpp
+        # Selection: a click and a double click on a clip, through the arrangement view's hook.
+        Source/Standalone/ControlEditorBridgeSelection.cpp
     )
     # PUBLIC, so that every target that compiles or links the SharedCode sees the same class layouts.
     target_compile_definitions(OpenTuneStandalone PUBLIC OPENTUNE_ENABLE_CONTROL_API=1)
@@ -301,6 +306,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlPrefsTests.cpp)
         # Reference alignment: content.analyzeReference and content.autoTune mode reference.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlReferenceTests.cpp)
+        # Selection: ui.setSelection with a test bridge that does what the editor does when a clip is clicked.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlSelectionTests.cpp)
         if(MSVC)
             target_compile_options(OpenTuneControlProcessorTests PRIVATE /utf-8 /EHsc /bigobj)
         endif()
@@ -420,6 +427,12 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ReferenceAnalysisLimit|--control-api"
             "ReferenceVectors|--control-api"
         )
+        # Selection (Tests/Control/ControlSelectionTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "Selection|--control-api"
+            "SelectionMatrix|--control-api"
+            "SelectionVectors|--control-api"
+        )
         set(_opentune_control_tests)
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
             string(REPLACE "|" ";" _opentune_control_scenario "${_opentune_control_scenario}")
@@ -466,6 +479,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.PrefsVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.AudioVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ReferenceVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.SelectionMatrix PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.SelectionVectors PROPERTIES TIMEOUT 300)
         # Each scenario process gets its own test's TIMEOUT, from which its watchdog takes its bound (a margin before;
         # ScenarioWatchdog in Tests/Control/ControlProcessorTests.cpp). Keep this after every TIMEOUT of the scenarios.
         foreach(_opentune_control_test IN LISTS _opentune_control_tests)

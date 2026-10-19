@@ -150,6 +150,11 @@ public:
     double viewportXToAbsoluteTime(int x) const;
     int getRulerHeight() const noexcept { return rulerHeight_; }
 
+#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
+    // OpenTune Control API hook: public selection commit, see Source/Control/README.md#hooks
+    void commitControlSelection(int trackId, uint64_t placementId);
+#endif
+
 private:
     bool matchesShortcut(KeyShortcutConfig::ShortcutId id, const juce::KeyPress& key) const;
     bool handlePointerShortcut(const KeyShortcutConfig::KeyBinding& binding);

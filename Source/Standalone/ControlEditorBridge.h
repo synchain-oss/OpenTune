@@ -67,6 +67,11 @@ public:
     bool closeOnboarding() override;
     std::optional<UiScale> uiScale() const override;
 
+    // ---- Selection (ControlEditorBridgeSelection.cpp) ----
+    bool canSelect() const override;
+    bool select(int trackId, std::uint64_t placementId, bool openEditor) override;
+    std::optional<UiScale> scaleForSelection(int trackId, std::uint64_t placementId) const override;
+
     // ---- Preferences and audio device (ControlEditorBridgePrefs.cpp) ----
     void onPreferencesChanged() override;
     std::optional<bool> editingSchemeApplied(bool notesPrimary) const override;

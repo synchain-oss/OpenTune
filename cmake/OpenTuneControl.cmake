@@ -145,6 +145,10 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Edit/ReferenceAlignment.h
         Source/Control/Ops/ReferenceOps.cpp
         Source/Control/Ops/ReferenceOps.h
+        # Arrangement: arrangement.edit (move, trim, gain, fades, split, merge, delete, reference binding) and
+        # arrangement.copy, through the arrangement view's setters, processor functions and undo actions.
+        Source/Control/Ops/ArrangementOps.cpp
+        Source/Control/Ops/ArrangementOps.h
     )
 
     target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_CONTROL_SOURCES})
@@ -301,6 +305,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlPrefsTests.cpp)
         # Reference alignment: content.analyzeReference and content.autoTune mode reference.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlReferenceTests.cpp)
+        # Arrangement: arrangement.edit and arrangement.copy, their undo entries and revert recipes.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlArrangementTests.cpp)
         if(MSVC)
             target_compile_options(OpenTuneControlProcessorTests PRIVATE /utf-8 /EHsc /bigobj)
         endif()
@@ -420,6 +426,13 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ReferenceAnalysisLimit|--control-api"
             "ReferenceVectors|--control-api"
         )
+        # Arrangement (Tests/Control/ControlArrangementTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "Arrangement|--control-api"
+            "ArrangementUndo|--control-api"
+            "ArrangementCopy|--control-api"
+            "ArrangementVectors|--control-api"
+        )
         set(_opentune_control_tests)
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
             string(REPLACE "|" ";" _opentune_control_scenario "${_opentune_control_scenario}")
@@ -466,6 +479,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.PrefsVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.AudioVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ReferenceVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.ArrangementVectors PROPERTIES TIMEOUT 300)
         # Each scenario process gets its own test's TIMEOUT, from which its watchdog takes its bound (a margin before;
         # ScenarioWatchdog in Tests/Control/ControlProcessorTests.cpp). Keep this after every TIMEOUT of the scenarios.
         foreach(_opentune_control_test IN LISTS _opentune_control_tests)

@@ -607,5 +607,21 @@ void scenarioReferenceAnalysisLimit();
     clip with a reference binding, against the real dispatcher. */
 void scenarioReferenceVectors();
 
+// Scenarios of the arrangement (ControlArrangementTests.cpp).
+
+/** arrangement.edit: every op with its result, its checks and their order, clamping, FADES_RECLAMPED, overlaps, a
+    hidden track shown, several ops in one call and one undo entry, dryRun, the closed params, busy and a stale
+    arrangement revision. */
+void scenarioArrangement();
+/** The undo entries of arrangement.edit: a trim's undo restores the fades it shortened, undo and redo of the in-place
+    ops, the entries of split, merge and delete that edit.undo refuses, and their revert recipes. */
+void scenarioArrangementUndo();
+/** arrangement.copy: both modes, several sources, the warnings, a hidden track, the revert recipe sent back, the token
+    conflicts and a change elsewhere that keeps a token valid. */
+void scenarioArrangementCopy();
+/** The specification's vectors of arrangement.edit and arrangement.copy (and the track deletion that needs a move),
+    against the real dispatcher. */
+void scenarioArrangementVectors();
+
 } // namespace ControlTest
 } // namespace OpenTune

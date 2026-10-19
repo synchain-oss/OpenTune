@@ -157,7 +157,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 ## 9. Review 规则
 
-- 所有 PR 都跑 Claude review（`claude-review.yml`）。控制接口相关改动以 `Source/Control/REVIEW-CHECKLIST.md` 为权威清单。C++ 专项检查：主线程编组、生命周期与 CompletionGate、socket 安全、CSPRNG、关闭合同、等待时不持 lease、与所在文件风格一致、不顺手重排格式。
+- 审查类 workflow 都是调用 `Synchain-oss/ci-workflows` 共享 reusable workflow（pin 到 40 位 SHA，见 §0 第 3 条）的薄调用方：模型、工具边界、超时与跳过规则在共享仓库统一维护，本仓只放审查重点、补充说明与 ignore 列表。三者都跳过 draft、外部 fork 与 dependabot 的 PR（pr-agent 跳过所有 bot）。
+  - 所有 PR 都跑 Claude review（`claude-review.yml`，Opus，维护者订阅）。
+  - PR → `dev`（含 `feature/*` → `dev` 的波次合入）另跑 pr-agent（`pr-agent.yml`，DeepSeek V4.1 Flash 经 OpenCode Go，按量计费）：改写 PR 描述（保留原正文）；review / improve 每次 push 都发新评论、不改写旧评论（`persistent_comments: false`，否则会盖掉同一 PR 上 Haiku 的评论）。
+  - 所有 PR 还跑 Claude Haiku 版 pr-agent（`pr-agent-claude.yml`，Claude API credit，按量计费）交叉验证：PR → `dev` 上只发 review / improve 新评论、不改 PR 描述；其他 PR（包括 base 为 `feature/control-api` 的子 PR）上三项全开。
+- 控制接口相关改动以 `Source/Control/REVIEW-CHECKLIST.md` 为权威清单。C++ 专项检查：主线程编组、生命周期与 CompletionGate、socket 安全、CSPRNG、关闭合同、等待时不持 lease、与所在文件风格一致、不顺手重排格式。
 - **处理完所有评论**，包括 bot 与人工、所有 SHA 上的评论、总结条目与 review 正文：
   - manager 逐条裁决，分级为【红旗】/【重要】/【建议】；
   - 每个线程在最后一条 bot 评论之后，都要有 org 身份的处置回复并标记 Resolve；
@@ -165,7 +169,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - 修复只改被接受的条目，跑 gates 后只推一次，不夹带无关改动。
 - 首轮之后最多再审 2 轮，最后一轮只有【红旗】阻塞。超出轮数仍有【红旗】的，交维护者决定。
 - **合并前置条件**（全部满足才能合并）：
-  - head SHA 上的 review 成功并发出总结（跳过、取消、失败、额度耗尽都不算）；
+  - head SHA 上的 Claude review 成功并发出总结（跳过、取消、失败、额度耗尽都不算）；
   - 未解决线程为 0；
   - 没有未处理的【红旗】；
   - 不在线程里的评论都已登记处置；

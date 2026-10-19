@@ -107,6 +107,11 @@ export const ALLOWED_ACTIONS = [
   'softprops/action-gh-release',
   'oven-sh/setup-bun',
 ];
+/**
+ * The organisation's shared CI repository. Only its reusable workflows may be called (job-level
+ * `uses: <repo>/.github/workflows/<file>.yml@<40-hex SHA> # v<version>`), pinned like every other action.
+ */
+export const ALLOWED_REUSABLE_WORKFLOW_REPOS = ['Synchain-oss/ci-workflows'];
 
 export const LAYERS = ['L0', 'L2', 'L3', 'L4', 'L5', 'L6', 'L7', 'L8'];
 export const DEFERRED_LAYERS = ['L7'];

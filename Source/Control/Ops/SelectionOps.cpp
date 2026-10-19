@@ -216,6 +216,11 @@ bool openDyneApplied(ControlOpContext& context, ControlUiBridge& bridge)
  * ready pitch analysis; setEditedContentAndProjection() calls it only when the piano roll gets another clip. The
  * count is that of OpenTuneAudioProcessor::generateNotesOnlyByContentKey() with the editor's parameters
  * (getCurrentAutoTuneParams): LegacyNoteGenerator over the whole analysis, merged into the content's notes.
+ *
+ * Known approximation: whether the piano roll returns early is judged by the placementId it shows alone, which is
+ * coarser than setEditedContentAndProjection() (it compares the content key, the projection, the curve pointer and the
+ * audio buffer). In the narrow window where the clip's F0 has just become ready and the piano roll still shows the clip
+ * without the new curve, a dryRun can under-report notesGenerated; the committed path reports what it observed.
  */
 std::optional<std::size_t> predictNotes(ControlOpContext& context, ControlUiBridge& bridge, const Target& target,
                                         const Before& before)

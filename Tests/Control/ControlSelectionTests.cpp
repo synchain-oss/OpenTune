@@ -9,6 +9,10 @@
 // and of the clip it is bound to (OpenTuneAudioProcessorEditor::refreshReferenceContext); shows the clip's key as the
 // scale of the UI; and switches to the piano roll for openEditor. Contents get synthetic F0 (ControlContentFixtures.h).
 // Registered with the other processor scenarios in ControlProcessorTests.cpp.
+//
+// What SelectionMatrix proves: the test bridge and the prediction in SelectionOps.cpp follow the same rules, so a
+// passing matrix shows that the two copies agree, not that the prediction agrees with the real editor. Drift of the
+// real editor is caught by the drift pins (Source/Control/mirror-map.json) and by checks in the real Standalone.
 
 #include "ControlContentFixtures.h"
 #include "ControlProcessorSupport.h"

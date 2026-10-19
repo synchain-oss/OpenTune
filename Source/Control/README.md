@@ -1070,9 +1070,11 @@ processor (`generateNotesOnlyByContentKey` for the piano roll's notes, `preheatR
 reference context). `Selection` checks the capability, the params, `NOT_FOUND`, `UNSUPPORTED`, busy, dryRun leaving the
 state as it was, a clip, `openEditor`, the scale with `ui.getState`, the no-op, the revert recipe sent back and a
 track. `SelectionMatrix` runs both schemes with a clip with and without notes and with and without a reference binding:
-the prediction of dryRun equals the committed result, and dryRun leaves every field of the state as it was.
-`SelectionVectors` runs the vectors `ui/set-selection-*` (adjusted as above). The view's highlight and keyboard target,
-and the real piano roll, run only in the Standalone application.
+the prediction of dryRun equals the committed result, and dryRun leaves every field of the state as it was. The test
+bridge and the prediction follow the same rules, so this shows that the two copies agree, not that the prediction agrees
+with the real editor; drift of the real editor is caught by the drift pins ("Mirrors") and by checks in the real
+Standalone. `SelectionVectors` runs the vectors `ui/set-selection-*` (adjusted as above). The view's highlight and
+keyboard target, and the real piano roll, run only in the Standalone application.
 
 ## Preferences and audio device
 

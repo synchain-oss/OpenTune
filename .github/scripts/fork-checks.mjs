@@ -36,8 +36,8 @@ import {
   ALLOWED_ACTIONS,
   ALLOWED_ACTION_OWNERS,
   ALLOWED_AUTHOR_EMAILS,
-  ALLOWED_REUSABLE_WORKFLOW_REPOS,
   ALLOWED_COMMITTER_EMAILS,
+  ALLOWED_REUSABLE_WORKFLOW_REPOS,
   CLANG_FORMAT_EXCLUDE,
   CLANG_FORMAT_PATTERNS,
   CLANG_FORMAT_STYLE_PATH,
@@ -837,7 +837,9 @@ export function actionRefProblem(ref, rawLine) {
   const reusable = ALLOWED_REUSABLE_WORKFLOW_REPOS.includes(repo);
   if (!reusable && !ALLOWED_ACTION_OWNERS.some((o) => repo.startsWith(o)) && !ALLOWED_ACTIONS.includes(repo)) return `${repo} 不在组织允许的 action 清单内`;
   // The shared CI repository: only its reusable workflows, pinned like any other action (below).
-  if (reusable && !/^[^/]+\/[^/]+\/\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/.test(name)) return `${ref}：${repo} 只能以 job 级 uses: 调用 .github/workflows/ 下的 reusable workflow`;
+  // Only the reference is checked, not whether the `uses:` is job-level: a reusable workflow cannot be
+  // a step, and GitHub rejects a step-level `uses:` of one before the run starts.
+  if (reusable && !/^[^/]+\/[^/]+\/\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/.test(name)) return `${ref}：${repo} 只能调用 .github/workflows/ 下的 reusable workflow`;
   if (!/^[0-9a-f]{40}$/.test(version)) return `${ref}：必须固定到 40 位 commit SHA`;
   if (!/#\s*v?\d+(\.\d+)*/.test(rawLine)) return `${ref}：SHA 后面要用注释写明版本号（如 # v7.0.1）`;
   return null;

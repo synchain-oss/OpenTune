@@ -50,6 +50,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `Edit/ContentEditTransaction.*` | Undo entries built from snapshots around a commit of the content commands, as the piano roll builds them (see "ContentEditTransaction"). |
 | `Edit/NoteCorrection.*` | The correction segments the piano roll rebuilds after an edit of notes, and SNAP (AUTO in the openDyne scheme), computed as the piano roll computes them and committed into a ContentEditTransaction (see "Note edits and the pitch shift"). |
 | `Ops/ReferenceOps.*`, `Edit/ReferenceAlignment.*` | `content.analyzeReference` and the job of `content.autoTune` in mode `reference`; the alignment of OpenTune's AUTO button with its undo action handed back instead of pushed (see "Reference alignment"). |
+| `Ops/SelectionOps.*`, `../Standalone/ControlEditorBridgeSelection.cpp` | `ui.setSelection`: the effects of a click on a clip predicted, then the click and double click through the arrangement view's hook, and the effects observed (see "Selection"). |
 | `Edit/PitchShiftLedger.*` | The steps of OpenTune's pitch shifts that the `revision` token leaves out (see "Note edits and the pitch shift"). |
 | `mirror-map.json`, `MIRRORS.md` | The upstream functions that the API mirrors, with a hash of each (machine-readable source of truth and the table generated from it); checked by `Tests/Control/ControlMirrorDriftTests.cpp` (see "Mirrors"). |
 | `ControlFileIdentity.*` | File identity (volume and file id, `st_dev` and `st_ino`), "same file" by identity, and the final rename that never replaces (PROTOCOL.md sections 20.3 and 20.4); standard library and operating system only. |
@@ -158,6 +159,8 @@ option, so a build with the option OFF compiles exactly the upstream code.
 | `Source/Standalone/PluginEditor.cpp` (includes) | `#include "ControlEditorBridge.h"` | Complete type for the constructor and destructor. | Does not compile with the option ON. |
 | `Source/Standalone/PluginEditor.cpp` (end of the constructor) | Create the bridge, which registers itself with `ControlService::setUiBridge()` | The API reaches the editor only once it is complete. | No bridge is registered. |
 | `Source/Standalone/PluginEditor.cpp` (first statement of the destructor) | `controlEditorBridge_.reset()`, which unregisters it | The API never reaches an editor that is being torn down. | Requests could reach a half-destroyed editor. |
+| `Source/Standalone/UI/ArrangementViewComponent.h` (end of the public section; 4 lines: `#if`, marker, declaration, `#endif`) | Public `commitControlSelection(trackId, placementId)` | The editor bridge selects a clip (`ui.setSelection`) as a plain click on it does, so that the view's own selection (the highlight and the target of its keyboard commands, private members) follows. No data member, so the class layout is the same with the option OFF. | A selection through the API would leave the view highlighting, and its Delete, split and nudge keys acting on, the clips selected before. |
+| `Source/Standalone/UI/ArrangementViewComponent.cpp` (after `commitEmptyPlacementSelection()`; 17 lines) | The definition: with a clip, the steps of `mouseDown` for a click on a clip that is not selected (only that clip in the view's selection, the shift anchor, `commitPlacementSelection()`); with 0, `commitEmptyPlacementSelection()`, as a click on an empty area | Calls only the view's own private functions in the order its mouse handler calls them; the listener (the editor) is told as after a click. | As above. |
 | `Source/PluginProcessor.h` (the control block at the end of the class; 5 lines: one marker comment, `tryAcquireExportLock()`, `releaseExportLock()`, `isExportLockHeld()`, member `exportLockHeld_`) | The export lock that the editor's export and `export.start` share (an atomic flag; any thread) | One export at a time, whoever starts it: `export.start` and every other write answer `BUSY(export_in_progress)` while it is held, also without an editor. | The API could export while the UI exports (both write through `OpenTuneAudioProcessor::export*Audio` and its `lastExportError_`), and writes would not see an export of the other side. |
 | `Source/Standalone/PluginEditor.cpp` (`exportAudioRequested`: 11 lines before `exportInProgress_` is set, 4 lines in the export thread before the result is posted) | The editor takes the lock when it starts its export thread, with its own "An export task is already in progress" message when the lock is taken, and releases it once the file is written | The UI and the API share the lock; the UI shows what it always shows when an export runs. | As above. |
 | `Source/Utils/UndoManager.h` (public section; 8 lines: `#if`, marker, five inline functions, `#endif`) | `peekUndo()`, `peekRedo()`, `size()`, `cursor()` and `clearRedo()` | Reads the tops and the counts of OpenTune's history (`edit.getHistory`, the entry checks of `edit.undo` and `edit.redo`); `clearRedo()` discards the redo history after a change without an undo entry (PROTOCOL.md section 15.3 rule 9), as `addAction()` discards it. No data member, so the class layout is the same with the option OFF. | The API cannot tell which entry is on top, so it cannot refuse a step the client did not expect; a change without an undo entry leaves older redo steps that would write over it. |
@@ -927,9 +930,7 @@ Tests: `Tests/Control/ControlTracksTests.cpp` (`Transport`, `Tracks`, `TrackBarr
 ## Dialogs and onboarding
 
 `ui.getState` and `ui.dismiss` (`Ops/UiOps.cpp`, capability `ui.bridge`). The third method of `ui.bridge`,
-`ui.setSelection`, follows with the selection part. Until it is registered `ui.bridge` is incomplete
-(`controlCapabilityIsIncomplete`): the instance does not report it, the listener refuses both methods with
-`UNSUPPORTED(capability_missing)`, and only the headless tests reach them, through the test seam.
+`ui.setSelection`, is described in "Selection"; with it registered the instance reports `ui.bridge`.
 `ui.onboardingClose`, a capability without methods of its own, is reported right after `ui.bridge`
 (`kFeatureCapabilities` in `Ops/OpsRegistry.cpp`), because every build with the editor bridge can close an overlay that
 is showing. Both methods describe the editor window and answer `UNSUPPORTED(capability_missing)` without an editor.
@@ -1013,8 +1014,67 @@ and is skipped until that capability is reported; `UiDismiss` covers the same co
 
 Tests: `Tests/Control/ControlUiTests.cpp` (`UiState`, `UiDismiss`, `UiOnboardingWithheld`, `UiVectors`) against the
 test bridge's dialogs and overlay (`TestUiBridge`); `UiVectors` requires an explicit list of `ui/*` vectors to pass and
-lists the vectors of `ui.setSelection` as pending. The classification and the closing of the real windows run only in
-the Standalone application.
+leaves the vectors of `ui.setSelection` to `SelectionVectors`. The classification and the closing of the real windows
+run only in the Standalone application.
+
+## Selection
+
+`ui.setSelection` (`Ops/SelectionOps.cpp`, capability `ui.bridge`) selects a clip (`placementId`) or a track
+(`trackId`) through `ControlUiBridge::select()`. The editor's side, `Source/Standalone/ControlEditorBridgeSelection.cpp`,
+does what the arrangement view does when the user clicks:
+
+- a clip: `ArrangementViewComponent::commitControlSelection()` (the view's hook, see "Hooks"), the steps of a plain click
+  on a clip that is not selected: the clip alone in the view's selection, which it highlights and which its keyboard
+  commands act on, then `commitPlacementSelection()`, which selects it in the arrangement and tells the editor
+  (`placementSelectionChanged`: `applyPlacementSelectionContext`, which makes its track the active track, shows the clip
+  in the piano roll and the clip's key in the transport bar, then `refreshReferenceContext`). With `openEditor`
+  `placementDoubleClicked()` follows, as with a double click, which switches to the piano roll when the arrangement is
+  shown. The clip becomes the only selected clip even when it was part of a multi-selection (a click there keeps the
+  others for a drag).
+- a track: `applyPlacementSelectionContext(trackId, 0)` (the active track, no clip selected on it, the piano roll
+  empty), then the hook with no clip, which runs `commitEmptyPlacementSelection()` as a click on an empty area does (the
+  view drops its selection; the editor refreshes its reference context for no clip). The scale of the transport bar
+  stays. The track panel's own click (`trackSelected`) would select the track's remembered clip instead; the schema
+  asks for no clip.
+
+Selecting can change more than the selection (PROTOCOL.md section 21 rule 3). The method predicts these effects from
+the state before (dryRun returns the prediction and changes nothing, the selection included), then selects and reports
+what it observed; a difference from the prediction is logged (`AppLogger`), and the result says what happened:
+
+| Effect | Predicted from (mirrored) | Observed as |
+|---|---|---|
+| `notesGenerated`, warnings `SELECTION_GENERATED_NOTES` and `IRREVERSIBLE`, project marked as changed | The openDyne scheme applied (`editingSchemeApplied`), the piano roll getting another clip (`setEditedContentAndProjection` returns early otherwise), notes never generated (`noteTopologyInitialized` false) and a ready pitch analysis (`ensureOpenDyneNotesIfNeeded`); the count from `LegacyNoteGenerator` with the editor's parameters, merged as `generateNotesOnlyByContentKey` merges | `noteTopologyInitialized` false before, true after; the count of the content's notes |
+| `referenceAnalysisQueued` (the clip's content and the bound clip's), warning `REFERENCE_ANALYSIS_QUEUED` | A reference binding that resolves, experimental features on, not openDyne (`evaluateAutoRefUiState` reports no binding there), then per content what `preheatReferenceAlignmentFeatures` would do: request the pitch analysis when it was never requested, or start the alignment analysis unless data of the current producer and audio are ready, failed or being made | The pitch analysis requested, or the alignment data set to `Extracting` with a new analysis revision |
+| `uiScaleChanged {before, after}` (`{root, scale}`, as `ui.getState` reports `uiScale`) | `ControlUiBridge::scaleForSelection()`: the editor's own `resolveScaleForPlacementContent()` | `uiScale()` before and after |
+| `workspaceSwitched {from, to}` | `openEditor` with the arrangement shown | the workspace of `viewState()` before and after |
+
+The selection itself is the change `{entity: "selection", ref: {singleton: "selection"}}` with `activeTrackId` and
+`selectedPlacementIds` (the selected clip of the active track, as the UI snapshot reports it), each only when it
+changed. It is view state: the undo reason is `not_persisted_state`, and the revert recipe is `ui.setSelection` with the
+clip that was selected on the active track before, or with that track when none was; it never takes back notes or
+switches the window back. Generated notes have no undo entry (as in OpenTune), so they carry `IRREVERSIBLE` themselves.
+Selecting what is selected, with no other effect, is a no-op. The order of the checks: the editor (`UNSUPPORTED`
+without one), the handle (`NOT_FOUND`), busy (also for dryRun).
+
+**Deviations from the vectors.** OpenTune always has an active track (track 0 in a new project), so where the vectors
+start with "no track active" the runner starts with track 0 active and no clip selected: selecting a clip on track 0
+lists no `activeTrackId` (it did not change), and the revert recipe selects track 0 where the vectors expect null. In
+the openDyne scheme OpenTune's reference context reports no binding, so `ui/set-selection-generates-notes` (openDyne, a
+binding, experimental features on) queues no reference analysis; the runner leaves `referenceAnalysisQueued` and
+`REFERENCE_ANALYSIS_QUEUED` out of that vector's expectation. A selection that queues reference analysis lists the
+`reference` component (and the `content` component when the pitch analysis was requested) of both contents in
+`revisionDiff`.
+
+Tests: `Tests/Control/ControlSelectionTests.cpp` with a test bridge that selects as the editor does on the real
+processor (`generateNotesOnlyByContentKey` for the piano roll's notes, `preheatReferenceAlignmentFeatures` for the
+reference context). `Selection` checks the capability, the params, `NOT_FOUND`, `UNSUPPORTED`, busy, dryRun leaving the
+state as it was, a clip, `openEditor`, the scale with `ui.getState`, the no-op, the revert recipe sent back and a
+track. `SelectionMatrix` runs both schemes with a clip with and without notes and with and without a reference binding:
+the prediction of dryRun equals the committed result, and dryRun leaves every field of the state as it was. The test
+bridge and the prediction follow the same rules, so this shows that the two copies agree, not that the prediction agrees
+with the real editor; drift of the real editor is caught by the drift pins ("Mirrors") and by checks in the real
+Standalone. `SelectionVectors` runs the vectors `ui/set-selection-*` (adjusted as above). The view's highlight and
+keyboard target, and the real piano roll, run only in the Standalone application.
 
 ## Preferences and audio device
 
@@ -1079,8 +1139,8 @@ does not recompute existing results (`NOT_RETROACTIVE`).
 Tests: `Tests/Control/ControlPrefsTests.cpp` (`PrefsRoundTrip`, `PrefsSchemeJob`, `PrefsVectors`, `AudioDevice`,
 `AudioVectors`). The audio tests never open, list or change a real device: the device manager has two fake device types
 whose devices open or fail to open on request, and they run only with the test's `OPENTUNE_DATA_DIR`. `PrefsVectors`
-runs `prefs/set-scheme-job` with the piano roll opened on the test bridge, because `ui.setSelection`, which the vector
-sends first, is not implemented yet. Behaviour on a real device (listing, switching type and output, ASIO) cannot be
+runs `prefs/set-scheme-job` with the piano roll opened on the test bridge instead of sending the vector's first request,
+`ui.setSelection`, whose test bridge is in `ControlSelectionTests.cpp`. Behaviour on a real device (listing, switching type and output, ASIO) cannot be
 tested headless and is checked by hand on a real installation.
 
 ## Dirty flag and revision tokens
@@ -1294,15 +1354,14 @@ content left the project (`UNDO_NO_EFFECT`). `TrackVectors` runs the specificati
 vectors and the six `edit/` vectors that need a deletion's barrier (`given.history` with clip moves is established with
 the same actions); `track/delete-arrangement-changed` needs `arrangement.edit` and is skipped.
 `Tests/Control/ControlUiTests.cpp` holds the scenarios of `ui.getState` and `ui.dismiss`, against the dialogs and the
-onboarding overlay of `TestUiBridge`, with the incomplete `ui.bridge` reported through the test seam. `UiState` checks
-the capabilities (neither `ui.bridge` nor `ui.onboardingClose` without the seam, `ui.onboardingClose` right after
-`ui.bridge` with it), the busy flags, the dialog stack from the bottom without file choosers, the onboarding, the UI
+onboarding overlay of `TestUiBridge`. `UiState` checks the capabilities (`ui.onboardingClose` right after `ui.bridge`,
+every method of `ui.bridge` registered, `UNSUPPORTED` without an editor), the busy flags, the dialog stack from the bottom without file choosers, the onboarding, the UI
 snapshot, the scale and a bridge without dialogs. `UiDismiss` closes view-state dialogs (`not_persisted_state`), a
 track colour without and with `confirm` (the colour, `dialogCommitted`, `DIALOG_CLOSE_COMMITTED`, the revert recipe,
 dirty, an unchanged colour), a stack with a file chooser on top or in the middle, a dialog that opens another or will
 not close, prevents and closes the onboarding (with the dialogs above it), the no-ops, busy and the params.
 `UiOnboardingWithheld` runs an instance without `ui.onboardingClose`. `UiVectors` runs the specification's `ui/*`
-vectors; a fixed list of them must pass, and those of `ui.setSelection` are reported as pending.
+vectors; a fixed list of them must pass, and those of `ui.setSelection` run in `SelectionVectors` (see "Selection").
 
 `Tests/Control/ControlReferenceTests.cpp` holds the scenarios of the reference alignment. The alignment data of the reference
 clip is given to its content as the processor stores a finished analysis, with notes two semitones above the target's;
@@ -1320,7 +1379,7 @@ runs against the facts of an instance without it).
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
-`jobs.v1`, `import.v1`, `export.v1`, `edit.v1`, `history.v1`, `timing.v1`, `transport.v1`, `tracks.v1`, `project.io`, `prefs.write`, `audio.device` and `reference.v1`). The listener answers a method of an unreported capability itself with
+`jobs.v1`, `import.v1`, `export.v1`, `ui.bridge` with `ui.onboardingClose`, `edit.v1`, `history.v1`, `timing.v1`, `transport.v1`, `tracks.v1`, `project.io`, `prefs.write`, `audio.device` and `reference.v1`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
@@ -1329,10 +1388,9 @@ method of a capability it reports: `read.v1` is complete (all eight reads are re
 A capability of which only some methods are registered is not reported (`controlCapabilityIsIncomplete`); its
 methods are refused by the listener until the last one is registered, and the headless tests report it with the
 test seam `controlSetReportIncompleteCapabilitiesForTesting()` to run them. `edit.v1` is reported since all four of
-its methods are registered. `ui.bridge` is incomplete now: `ui.getState` and `ui.dismiss` are registered and
-`ui.setSelection` is not yet, so the instance reports neither `ui.bridge` nor `ui.onboardingClose`, which extends it,
-and the scenarios of `ControlUiTests.cpp` switch the seam on (`controlSetWithheldCapabilitiesForTesting()` leaves a
-reported capability out, for the vectors' precondition `withoutCapabilities`). The mechanism stays for the method
+its methods are registered, and `ui.bridge` since `ui.setSelection` joined `ui.getState` and `ui.dismiss`; none is
+incomplete now (`controlSetWithheldCapabilitiesForTesting()` leaves a reported capability out, for the vectors'
+precondition `withoutCapabilities`). The mechanism stays for the method
 groups that are still placeholder lines in `registerControlMethods()`, whose capabilities may be registered in more
 than one step.
 
@@ -1354,8 +1412,9 @@ than one step.
 | `job.cancel` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.ImportCancel`, `.JobVectors` | `methods/job.cancel.schema.json` |
 | `import.start` | `import.v1` | `Ops/ImportOps.cpp` | `ControlProcessorTests.Import`, `.ImportAfterOpen`, `.ImportCancel`, `.JobVectors` | `methods/import.start.schema.json` |
 | `export.start` | `export.v1` | `Ops/ExportOps.cpp` (identity and rename in `ControlFileIdentity.cpp`) | `ControlProcessorTests.Export`, `.ExportFailures`, `.ExportVectors`, `.ExportTimeStretch` | `methods/export.start.schema.json` |
-| `ui.getState` | `ui.bridge` (incomplete, not reported yet) | `Ops/UiOps.cpp` (editor side in `../Standalone/ControlEditorBridgeModals.cpp`) | `ControlProcessorTests.UiState`, `.UiVectors` | `methods/ui.getState.schema.json` |
-| `ui.dismiss` | `ui.bridge` (incomplete, not reported yet); closing a showing overlay also `ui.onboardingClose` | `Ops/UiOps.cpp` (editor side in `../Standalone/ControlEditorBridgeModals.cpp`) | `ControlProcessorTests.UiDismiss`, `.UiOnboardingWithheld`, `.UiVectors` | `methods/ui.dismiss.schema.json` |
+| `ui.getState` | `ui.bridge` | `Ops/UiOps.cpp` (editor side in `../Standalone/ControlEditorBridgeModals.cpp`) | `ControlProcessorTests.UiState`, `.UiVectors` | `methods/ui.getState.schema.json` |
+| `ui.dismiss` | `ui.bridge`; closing a showing overlay also `ui.onboardingClose` | `Ops/UiOps.cpp` (editor side in `../Standalone/ControlEditorBridgeModals.cpp`) | `ControlProcessorTests.UiDismiss`, `.UiOnboardingWithheld`, `.UiVectors` | `methods/ui.dismiss.schema.json` |
+| `ui.setSelection` | `ui.bridge` | `Ops/SelectionOps.cpp` (editor side in `../Standalone/ControlEditorBridgeSelection.cpp`, hook in `../Standalone/UI/ArrangementViewComponent.*`) | `ControlProcessorTests.Selection`, `.SelectionMatrix`, `.SelectionVectors` | `methods/ui.setSelection.schema.json` |
 | `edit.getHistory` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.EditVectors` | `methods/edit.getHistory.schema.json` |
 | `edit.undo` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.AutoTune`, `.EditVectors` | `methods/edit.undo.schema.json` |
 | `edit.redo` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.EditVectors` | `methods/edit.redo.schema.json` |

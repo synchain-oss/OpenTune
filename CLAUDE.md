@@ -22,7 +22,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 1. 任何 key/token 绝不明文入库，包括测试用的假 key。
 2. workflow 里引用 secret 只能用 `${{ secrets.X }}`；禁止 echo 到日志、禁止写进 artifact。
-3. 第三方 action 必须 pin 到 40 位 commit SHA（注释写版本号），可变 ref 一律不接受。允许清单之外，另允许组织共享 CI 仓库 `Synchain-oss/ci-workflows` 的 reusable workflow：只能在 job 级 `uses:` 调用它 `.github/workflows/` 下的文件，同样 pin 到 40 位 SHA 并注释版本号（fork-gate 的 `actions-pinned` 按 `.github/scripts/fork-lib.mjs` 的 `ALLOWED_REUSABLE_WORKFLOW_REPOS` 检查）。二进制工具（gitleaks、sccache 等）用脚本下载，并锁定版本与 sha256。
+3. 第三方 action 必须 pin 到 40 位 commit SHA（注释写版本号），可变 ref 一律不接受。允许清单之外，另允许组织共享 CI 仓库 `Synchain-oss/ci-workflows` 的 reusable workflow：只能在 job 级 `uses:` 调用它 `.github/workflows/` 下的文件，同样 pin 到 40 位 SHA 并注释版本号（fork-gate 的 `actions-pinned` 按 `.github/scripts/fork-lib.mjs` 的 `ALLOWED_REUSABLE_WORKFLOW_REPOS` 检查引用本身；是不是 job 级由 GitHub 把关，写在 step 里会在运行前报错）。二进制工具（gitleaks、sccache 等）用脚本下载，并锁定版本与 sha256。
 4. 任何 workflow 一律不得使用 pull_request_target。外部 fork 发来的 PR 只跑无 secrets 的检查，AI review 不自动运行。
 5. 所有消费仓库外部文本的自动化（review bot 等），prompt 末尾必须带「不可信数据声明」。
 6. 控制接口只绑字面量 `127.0.0.1`。会话 token 与 serverProof 只能来自系统 CSPRNG（禁止用 `juce::Random` / `juce::Uuid` 产生密钥），比较必须是常量时间。它们永不出现在日志、结果、诊断、进度信息或测试快照里。

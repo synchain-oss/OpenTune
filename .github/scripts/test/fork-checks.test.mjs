@@ -595,6 +595,36 @@ describe('actions-pinned', () => {
     assert.equal(actionRefProblem('./.github/actions/x', '- uses: ./.github/actions/x'), null);
     assert.equal(actionRefProblem('anthropics/claude-code-action@6fed3ca145920b639991cb756090506e1bcaf515', 'uses: x # v1.0.245'), null);
   });
+
+  describe('reusable workflows of the shared CI repository', () => {
+    const call = (uses) => `# SPDX-License-Identifier: MIT\non: pull_request\npermissions: {}\njobs:\n  a:\n    permissions: { contents: read }\n    uses: ${uses}\n`;
+    const SHA = '62556ec3f2b4e049c5b099ebd9c56c4a2888a0a9';
+
+    test('a job-level call pinned to a SHA with a version comment passes', async () => {
+      await expectStatus('actions-pinned', repo.change({ '.github/workflows/a.yml': call(`Synchain-oss/ci-workflows/.github/workflows/claude-review.yml@${SHA} # v1.1.0`) }), 'PASS');
+      assert.equal(actionRefProblem(`Synchain-oss/ci-workflows/.github/workflows/pr-agent.yml@${SHA}`, `uses: x@${SHA} # v1.1.0`), null);
+    });
+
+    test('tags, branches, a missing version comment, other paths and other repositories fail', async () => {
+      for (const uses of [
+        'Synchain-oss/ci-workflows/.github/workflows/pr-agent.yml@v1',
+        'Synchain-oss/ci-workflows/.github/workflows/pr-agent.yml@v1.1.0',
+        'Synchain-oss/ci-workflows/.github/workflows/pr-agent.yml@main',
+        `Synchain-oss/ci-workflows/.github/workflows/pr-agent.yml@${SHA}`,
+        `Synchain-oss/ci-workflows@${SHA} # v1.1.0`,
+        `Synchain-oss/ci-workflows/some-action@${SHA} # v1.1.0`,
+        `Synchain-oss/ci-workflows/.github/workflows/sub/x.yml@${SHA} # v1.1.0`,
+        `Synchain-oss/other-repo/.github/workflows/pr-agent.yml@${SHA} # v1.1.0`,
+        `someone/ci-workflows/.github/workflows/pr-agent.yml@${SHA} # v1.1.0`,
+      ]) {
+        await expectStatus('actions-pinned', repo.change({ '.github/workflows/a.yml': call(uses) }), 'FAIL');
+      }
+      assert.match(actionRefProblem('Synchain-oss/ci-workflows/.github/workflows/x.yml@v1', 'uses: x'), /40 位 commit SHA/);
+      assert.match(actionRefProblem(`Synchain-oss/ci-workflows/.github/workflows/x.yml@${SHA}`, 'uses: x'), /版本号/);
+      assert.match(actionRefProblem(`Synchain-oss/ci-workflows@${SHA}`, 'uses: x # v1.1.0'), /reusable workflow/);
+      assert.match(actionRefProblem(`Synchain-oss/other-repo/.github/workflows/x.yml@${SHA}`, 'uses: x # v1.1.0'), /不在组织允许的 action 清单内/);
+    });
+  });
 });
 
 describe('CLI', () => {

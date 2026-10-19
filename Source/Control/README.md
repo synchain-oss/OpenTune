@@ -57,6 +57,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme, the processing object of `session.info` and `prefs.get`). |
 | `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
 | `Ops/TransportOps.*`, `Ops/TrackOps.*`, `Ops/TrackSupport.*` | `transport.control`, `transport.setTempo`, `transport.setLoop`; `track.set`, `track.add`, `track.duplicate`, `track.delete`; and what the track methods share (slot checks, the state of a track, the shown-track count; reusable by the clip methods). See "Transport and tracks". |
+| `Ops/ArrangementOps.*` | `arrangement.edit` (move, trim, gain, fades, split, merge, delete, reference binding) and `arrangement.copy`, through the arrangement's setters and the processor's split, merge, delete and copy functions with the arrangement view's undo actions. See "Arrangement". |
 | `../Standalone/ControlEditorBridgeTracks.cpp` | The steps of the bridge for the track panel, the arrangement and the transport bar (shown tracks, mix, play state, tempo). |
 | `../Standalone/ControlEditorBridge.*`, `../Standalone/ControlEditorBridgeProject.cpp`, `../Standalone/ControlEditorBridgeModals.cpp`, `../Standalone/ControlEditorBridgePrefs.cpp` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor (the project flows in the second file, the dialogs and the onboarding in the third, the preferences and the audio device in the fourth); compiled into the application wrapper only. |
 
@@ -927,6 +928,70 @@ OpenTune behaviours that the methods report and do not fix:
 Mirrors: `track-add`, `track-duplicate`, `track-delete`, `transport-play-from-start` and `track-volume-range`.
 
 Tests: `Tests/Control/ControlTracksTests.cpp` (`Transport`, `Tracks`, `TrackBarrier`, `TrackVectors`).
+
+## Arrangement
+
+`arrangement.edit` and `arrangement.copy` (`Ops/ArrangementOps.cpp`, capability `arrangement.v1`, reported since both
+methods are registered). They call the functions behind the arrangement view's mouse and key actions and push the undo
+actions the view pushes (`Utils/PlacementActions.h`), wrapped in one `ControlOriginAction` per call.
+
+**arrangement.edit.** The checks run in the order of PROTOCOL.md section 9: every handle (the clips, the reference clip,
+the trailing clip of a merge, the slot of `toTrackId`), then busy, then `expectedArrangementRevision`, then the ops.
+`split`, `merge` and `delete` stand alone in a call; `confirm` is accepted only with `delete`.
+
+- `move`, `trim`, `setGain`, `setFade` and `setReference` are planned in order on a copy of the arrangement first, so a
+  call whose later op fails changes nothing; then each is applied through the arrangement's setter
+  (`applyPlacementMoves()`, `setPlacementTrimAndTimelineStart()` / `setPlacementTrim()`, `setPlacementGain()`,
+  `setPlacementFade()`, `setPlacementReferencePlacement()`) and recorded with the view's action
+  (`MultiMovePlacementAction`, `TrimPlacementAction`, `GainChangeAction`, `FadeChangeAction`, `ReferenceBindingAction`).
+  The whole call is one undo entry; `changes` holds one entry per clip with every field that changed.
+- `trim` computes the start edge as the edge drag does, through the content's time grid (mirror
+  `arrangement-trim-left`), and refuses an edge beyond the content's audio, past the other edge or shorter than 0.01 s
+  (`trim_out_of_range`); the drag clamps instead. Fades that the new length cuts are reported with `FADES_RECLAMPED`, and
+  a `FadeChangeAction` before the `TrimPlacementAction` keeps the old fades, so undo restores them.
+- `setFade` limits a fade to 90 % of the clip, as `setPlacementFade()` does, and reports `CLAMPED`. `setGain` takes dB or
+  a linear factor; OpenTune has no upper limit for the clip gain, only the range of a float, beyond which the gain is
+  limited with `CLAMPED`.
+- `setReference` accepts what `validateReferenceBindingUnlocked()` accepts, checked on the arrangement as the earlier
+  ops of the call leave it (`reference_ineligible`), and warns `EXPERIMENTAL_FEATURE`.
+- A clip moved to a hidden track shows the hidden tracks up to it (`ControlUiBridge::revealTracks()`,
+  `TRACK_AUTO_REVEALED`, side effect `tracksRevealed`); a clip that ends up overlapping another on its track carries
+  `OVERLAPS_CLIP`.
+- `split` checks what `splitPlacementAtSeconds()` checks, in its order (mirror `arrangement-split`): a position more
+  than 0.1 s inside the clip (`split_out_of_range`), a ready analysis (`NOT_READY`), an unedited time grid and an
+  analysis frame boundary on the sample grid (OpenTune refuses the other cases silently: `UNSUPPORTED(upstream_absent)`).
+  The cut snaps to the nearest frame boundary (`SPLIT_SNAPPED`). `merge` checks what `mergePlacements()` checks before
+  it changes anything (`merge_not_possible`, `NOT_READY` while an analysis runs) and reports its later refusals the same
+  way. `delete` needs `confirm` (`confirm_required`) and removes the clips with `deletePlacement()`, in one undo entry.
+- `dryRun` predicts the changes and warnings without changing anything; a split or merge prediction names the clips it
+  replaces, since the new clips get their placementIds when they are made.
+
+**arrangement.copy.** Mode `window` is the view's paste (`copyContentRange()`: a new content of the part the clip
+shows, a clip that shows all of it), mode `full` is its duplicate (`cloneContent()`: a copy of the whole content, the
+clip as it is). The contents are made first, so a failure leaves the arrangement as it was. Several sources keep their
+distances from the earliest one. As in the UI there is no undo entry (`ui_parity`); the revert recipe deletes the
+copies with `arrangement.edit` and `requiresConsent`. A copy at the source's own start carries `STACKED_ON_SOURCE`.
+
+OpenTune behaviours that the methods report and do not fix:
+
+- The undo actions of split, merge and delete (`SplitPlacementAction`, `MergePlacementAction`,
+  `DeletePlacementAction`) do not bring the clips back: the clips they would restore are reclaimed on the next message
+  turn. The API marks these entries unsafe (`edit.undo` refuses them with `UNSUPPORTED(undo_unsafe_build)`), reports
+  `UPSTREAM_UNDO_DEFECT` and gives a revert recipe instead: merge the two parts of a split, split a merged clip at the
+  former boundary. A delete has no revert recipe (`IRREVERSIBLE`).
+- `deletePlacement()` retires the content of a deleted clip even when another clip still shows it; `removed` lists the
+  contents that left the project.
+- A copy keeps the source's reference binding without checking it; a window copy elsewhere on the timeline may name a
+  reference clip it does not overlap.
+- The editor's reference context and piano roll are not refreshed after a binding changes through the API; the
+  arrangement view redraws (`onStructureChanged()`).
+
+Mirrors: `arrangement-trim-left`, `arrangement-trim-fades`, `arrangement-fade-limit`, `arrangement-split`,
+`arrangement-merge` and `arrangement-reference-binding`.
+
+Tests: `Tests/Control/ControlArrangementTests.cpp` (`Arrangement`, `ArrangementUndo`, `ArrangementCopy`,
+`ArrangementVectors`).
+
 ## Dialogs and onboarding
 
 `ui.getState` and `ui.dismiss` (`Ops/UiOps.cpp`, capability `ui.bridge`). The third method of `ui.bridge`,
@@ -1352,7 +1417,20 @@ track deletion with undo entries of the API that address tracks (OpenTune's `Mul
 `ControlOriginAction`), entries of the UI, `force` and its confirmation, the second deletion, and a note edit whose
 content left the project (`UNDO_NO_EFFECT`). `TrackVectors` runs the specification's `transport/*` and `track/*`
 vectors and the six `edit/` vectors that need a deletion's barrier (`given.history` with clip moves is established with
-the same actions); `track/delete-arrangement-changed` needs `arrangement.edit` and is skipped.
+the same actions); `track/delete-arrangement-changed` needs `arrangement.edit` and runs in `ArrangementVectors`.
+
+`Tests/Control/ControlArrangementTests.cpp` holds the scenarios of the arrangement methods, with the test bridge (shown
+tracks, busy flags, dirty flag, notifications). `Arrangement` runs every op of `arrangement.edit`: moves (overlap, a
+hidden track, a no-op), trims (both edges, the refusals, `FADES_RECLAMPED`), gain and fades (`CLAMPED`), reference
+bindings (the refusals, a move earlier in the call), several ops in one undo entry, a failing later op that changes
+nothing, `dryRun`, the order of the checks, an unrelated change that keeps the revision, the params, split (the
+refusals, `SPLIT_SNAPPED`) with its revert recipe and the merge's, the merge refusals, and delete (`confirm`, the
+removed contents, a binding that goes with the clip, the refused undo). `ArrangementUndo` undoes and redoes a trim that
+shortened the fades, undoes a call of several ops and a binding, and checks the refused undo of a split and its revert
+recipe. `ArrangementCopy` runs both modes (gain, fades and binding copied, the revert recipe sent with consent, a hidden
+track, several sources), the tokens and the checks. `ArrangementVectors` runs every `arrangement/*` vector and
+`track/delete-arrangement-changed`; all of them must pass.
+
 `Tests/Control/ControlUiTests.cpp` holds the scenarios of `ui.getState` and `ui.dismiss`, against the dialogs and the
 onboarding overlay of `TestUiBridge`. `UiState` checks the capabilities (`ui.onboardingClose` right after `ui.bridge`,
 every method of `ui.bridge` registered, `UNSUPPORTED` without an editor), the busy flags, the dialog stack from the bottom without file choosers, the onboarding, the UI
@@ -1379,7 +1457,7 @@ runs against the facts of an instance without it).
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
-`jobs.v1`, `import.v1`, `export.v1`, `ui.bridge` with `ui.onboardingClose`, `edit.v1`, `history.v1`, `timing.v1`, `transport.v1`, `tracks.v1`, `project.io`, `prefs.write`, `audio.device` and `reference.v1`). The listener answers a method of an unreported capability itself with
+`jobs.v1`, `import.v1`, `export.v1`, `ui.bridge` with `ui.onboardingClose`, `edit.v1`, `history.v1`, `timing.v1`, `transport.v1`, `arrangement.v1`, `tracks.v1`, `project.io`, `prefs.write`, `audio.device` and `reference.v1`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
@@ -1435,6 +1513,8 @@ than one step.
 | `transport.control` | `transport.v1` | `Ops/TransportOps.cpp` | `ControlProcessorTests.Transport`, `.TrackVectors` | `methods/transport.control.schema.json` |
 | `transport.setTempo` | `transport.v1` | `Ops/TransportOps.cpp` | `ControlProcessorTests.Transport`, `.TrackVectors` | `methods/transport.setTempo.schema.json` |
 | `transport.setLoop` | `transport.v1` | `Ops/TransportOps.cpp` | `ControlProcessorTests.Transport`, `.TrackVectors` | `methods/transport.setLoop.schema.json` |
+| `arrangement.edit` (ops `move`, `trim`, `setGain`, `setFade`, `split`, `merge`, `delete`, `setReference`) | `arrangement.v1` | `Ops/ArrangementOps.cpp` | `ControlProcessorTests.Arrangement`, `.ArrangementUndo`, `.ArrangementVectors` | `methods/arrangement.edit.schema.json` |
+| `arrangement.copy` (modes `window`, `full`) | `arrangement.v1` | `Ops/ArrangementOps.cpp` | `ControlProcessorTests.ArrangementCopy`, `.ArrangementVectors` | `methods/arrangement.copy.schema.json` |
 | `track.set` | `tracks.v1` | `Ops/TrackOps.cpp` | `ControlProcessorTests.Tracks`, `.TrackVectors` | `methods/track.set.schema.json` |
 | `track.add` | `tracks.v1` | `Ops/TrackOps.cpp` | `ControlProcessorTests.Tracks`, `.TrackVectors` | `methods/track.add.schema.json` |
 | `track.duplicate` | `tracks.v1` | `Ops/TrackOps.cpp` | `ControlProcessorTests.Tracks`, `.TrackVectors` | `methods/track.duplicate.schema.json` |

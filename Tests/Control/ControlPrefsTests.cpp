@@ -1239,9 +1239,9 @@ std::string vectorSkipReason(const JsonValue& vector, const std::string& capabil
 /**
  * Runs one vector against a fresh processor, a test bridge with a fake device
  * manager and the preferences of the vector's preconditions. ui.setSelection
- * (which a later part implements) is not sent: its effect in the vectors of
- * prefs.set, the clip being open in the piano roll, is made on the test bridge
- * and its response is not expected. Empty on success.
+ * (whose scenarios are in ControlSelectionTests.cpp) is not sent: its effect in
+ * the vectors of prefs.set, the clip being open in the piano roll, is made on
+ * the test bridge and its response is not expected. Empty on success.
  */
 std::string runVector(const JsonValue& vector, bool withClips)
 {

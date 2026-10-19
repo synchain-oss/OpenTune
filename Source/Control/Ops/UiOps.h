@@ -7,9 +7,7 @@ class ControlMethodTable;
 
 /**
  * Registers ui.getState and ui.dismiss (capability ui.bridge; methods/ui.getState.schema.json and
- * methods/ui.dismiss.schema.json). ui.setSelection, the third method of ui.bridge, follows with the selection part;
- * until it is registered the capability is incomplete and not reported (controlCapabilityIsIncomplete), so the
- * listener refuses both methods and only the headless tests reach them through the test seam.
+ * methods/ui.dismiss.schema.json). ui.setSelection, the third method of ui.bridge, is in SelectionOps.h.
  *
  * - ui.getState reports the busy conditions of PROTOCOL.md section 13.2, the editor's modal dialogs from the bottom of
  *   the stack to the top (without the file choosers of the operating system), the first-run onboarding, the generic UI

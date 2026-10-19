@@ -299,16 +299,15 @@ private:
 /**
  * True for a capability of which this build registers some methods but not all yet. The instance does not
  * report it, because an instance implements every method of a capability it reports (PROTOCOL.md section 3.3
- * rule 5 case 10); the listener therefore answers its methods with UNSUPPORTED(capability_missing). Now only
- * ui.bridge is incomplete: ui.getState and ui.dismiss are registered, ui.setSelection follows with the selection
- * part. A part that registers only some methods of a capability lists it here until its last method is
- * registered, so that the instance never reports a capability it implements only in part.
+ * rule 5 case 10); the listener therefore answers its methods with UNSUPPORTED(capability_missing). None is
+ * incomplete now (ui.bridge was until ui.setSelection was registered). A part that registers only some methods of a
+ * capability lists it here until its last method is registered, so that the instance never reports a capability it
+ * implements only in part.
  */
 bool controlCapabilityIsIncomplete(std::string_view capability);
 
 /** Test seam: dispatchers created from now on report the incomplete capabilities as well, so that the
-    headless tests can call their methods. Never used by OpenTune itself. Any thread. The tests of ui.getState
-    and ui.dismiss switch it on while ui.bridge is incomplete. */
+    headless tests can call their methods. Never used by OpenTune itself. Any thread. */
 void controlSetReportIncompleteCapabilitiesForTesting(bool report);
 
 /** Test seam: dispatchers created from now on leave these capabilities out of what they report, as the

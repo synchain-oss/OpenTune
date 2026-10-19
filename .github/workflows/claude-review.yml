@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
-name: Claude PR Review
+name: Claude PR Review (Opus 5.5)
 
 # Claude（Opus 5.5）代码审查，走维护者订阅 OAuth token（非按量计费 API key）。只审不改。
 # 触发所有 base 分支 —— 子 PR（base = feature/*）上只有 review bot 一定会跑。

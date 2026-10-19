@@ -1311,6 +1311,179 @@
       "noteZh": "lastResolvedScaleRootNote_ 与 lastResolvedScaleType_（界面调式类型 1..8）是编辑器最近为所选片段应用的调式；ui.getState 把它们报告为 uiScale。"
     },
     {
+      "id": "selection-click",
+      "group": "selection",
+      "upstream": {
+        "file": "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "symbol": "ArrangementViewComponent::mouseDown",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "6be27ec917759871b5d36e72ffe645dad10b38c59369244c22b50bdc9605fbb7"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/UI/ArrangementViewComponent.cpp",
+          "symbols": [
+            "commitControlSelection"
+          ]
+        },
+        {
+          "file": "Source/Standalone/ControlEditorBridgeSelection.cpp",
+          "symbols": [
+            "ControlEditorBridge::select"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Selection"
+      ],
+      "note": "A plain click on a clip that is not selected: only that clip in the view's selection, the shift anchor, then commitPlacementSelection(); a click on an empty area: commitEmptyPlacementSelection(). The view's hook repeats these steps for ui.setSelection.",
+      "noteZh": "单击未选中的片段：视图选择中只留该片段，设置 Shift 锚点，再 commitPlacementSelection()；单击空白处：commitEmptyPlacementSelection()。视图的钩子为 ui.setSelection 重复这些步骤。"
+    },
+    {
+      "id": "selection-context",
+      "group": "selection",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::applyPlacementSelectionContext",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "984647e426604e7052cc472ce2cbb5571efc08e7f1e17879344f69732cff4680"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/SelectionOps.cpp",
+          "symbols": [
+            "predict",
+            "observe"
+          ]
+        },
+        {
+          "file": "Source/Standalone/ControlEditorBridgeSelection.cpp",
+          "symbols": [
+            "ControlEditorBridge::select"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Selection",
+        "ControlProcessorTests.SelectionMatrix",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "What selecting a clip or a track sets: the active track, the selected clip (none for a track), the piano roll's content and the scale of the transport bar (only for a clip). The prediction of the selection, the scale and the piano roll follows it.",
+      "noteZh": "选中片段或轨道会设置什么：活动轨道、所选片段（选轨道时为无）、钢琴卷帘的内容与走带栏的调式（只在选片段时）。对选择、调式与钢琴卷帘的预测照此进行。"
+    },
+    {
+      "id": "selection-piano-roll-sync",
+      "group": "selection",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::setEditedContentAndProjection",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "5f98d0d64ccbb32d9a187b41aab028b0fca72adbdb5ba78d2b57054c309ee299"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/SelectionOps.cpp",
+          "symbols": [
+            "predictNotes"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Selection",
+        "ControlProcessorTests.SelectionMatrix"
+      ],
+      "note": "The piano roll returns early when nothing changed (the same content, projection, curve and audio), so selecting the clip it already shows generates no notes.",
+      "noteZh": "没有任何变化时（同一内容、投影、曲线与音频）钢琴卷帘提前返回，所以选中它正在显示的片段不会生成音符。"
+    },
+    {
+      "id": "selection-opendyne-notes",
+      "group": "selection",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::ensureOpenDyneNotesIfNeeded",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "abcaee920c4b1fec8bb4928f07fb5223f148de15856d7aaf6e5bce8a094412f0"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/SelectionOps.cpp",
+          "symbols": [
+            "predictNotes",
+            "observe"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Selection",
+        "ControlProcessorTests.SelectionMatrix",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "In the openDyne scheme, showing a content whose notes were never generated and whose pitch analysis is ready generates its notes (generateNotesOnly with the editor's parameters) and marks the project as changed. The merge of the generated notes is pinned in auto-notes-only.",
+      "noteZh": "openDyne 方案下，显示一个从未生成音符且音高分析已就绪的内容时会生成音符（用编辑器的参数调用 generateNotesOnly），并把工程标记为已修改。生成音符的合并由 auto-notes-only 锁定。"
+    },
+    {
+      "id": "selection-reference-context",
+      "group": "selection",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::refreshReferenceContext",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "33e612c69ed09783083878291bd2f299e3a55b728baa576806b5533ea03d565e"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/SelectionOps.cpp",
+          "symbols": [
+            "captureReference",
+            "predictReference",
+            "preheatWouldQueue"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.SelectionMatrix",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "After a selection the editor preheats the reference alignment of the clip and its bound reference, when a binding resolves and experimental features are on. The binding (evaluateAutoRefUiState, none in the openDyne scheme) is pinned in auto-button-mode, the preheat (preheatReferenceAlignmentFeatures) in time-seed-preheat.",
+      "noteZh": "选择之后，若参考绑定可解析且实验功能已开启，编辑器会预热该片段及其绑定参考的对齐分析。绑定（evaluateAutoRefUiState，openDyne 方案下没有）由 auto-button-mode 锁定，预热（preheatReferenceAlignmentFeatures）由 time-seed-preheat 锁定。"
+    },
+    {
+      "id": "selection-double-click",
+      "group": "selection",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::placementDoubleClicked",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "f2a155a6ad6b179a18d781c63ac5570d6bba691683ac5c7d5b11411f628b785c"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/SelectionOps.cpp",
+          "symbols": [
+            "predict"
+          ]
+        },
+        {
+          "file": "Source/Standalone/ControlEditorBridgeSelection.cpp",
+          "symbols": [
+            "ControlEditorBridge::select"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Selection",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "A double click selects the clip again and switches to the piano roll when the arrangement is shown; openEditor calls it and predicts workspaceSwitched from the shown workspace.",
+      "noteZh": "双击会再次选中片段，并在显示编排视图时切换到钢琴卷帘；openEditor 调用它，并按当前显示的工作区预测 workspaceSwitched。"
+    },
+    {
       "id": "prefs-tuning",
       "group": "prefs",
       "upstream": {

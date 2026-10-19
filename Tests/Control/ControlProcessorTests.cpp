@@ -589,6 +589,9 @@ const Scenario kScenarios[] = {
     {"Reference", scenarioReference, false},
     {"ReferenceAnalysisLimit", scenarioReferenceAnalysisLimit, false},
     {"ReferenceVectors", scenarioReferenceVectors, false},
+    {"Selection", scenarioSelection, false},
+    {"SelectionMatrix", scenarioSelectionMatrix, false},
+    {"SelectionVectors", scenarioSelectionVectors, false},
 };
 
 /** How much earlier than the ctest TIMEOUT of its test the watchdog of a scenario ends it. */

@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# group: arrangement
+# pinned-at: upstream/20261008-addb4f4
+# ported-to: Source/Control/Ops/ArrangementOps.cpp
+#
+# Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
+Source/Standalone/UI/ArrangementViewComponent.cpp	const double outputCut = outputStart + (trimStartDurationSeconds_ - newDuration)	L2381-L2381	stmt-v1	10495adb5acec842c4089baaf592b559f982632e700861baa125cfb92143bfc8
+Source/StandaloneArrangement.cpp	StandaloneArrangement::setPlacementTrim	L532-L555	fn-v1	45d0122fe8dca4d8f5f602f2ccd78841840d0a76b0c47e919985a3425fc91261
+Source/StandaloneArrangement.cpp	StandaloneArrangement::setPlacementFade	L557-L578	fn-v1	dc8c04657ef6fc5edbb7d5038a3c7c879184e6c39f828de12fbedd9d0b7a728d
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::splitPlacementAtSeconds	L2637-L2819	fn-v1	7c01f5e8a1bb7fb159ea602495a246c1c960ac8bf1dd0fec29f2da25b1c9692e
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::mergePlacements	L2821-L2987	fn-v1	b881a16f7d7c7e60e9e37ad71510080ff5fefc509b700217ea42b9253d70ca97
+Source/StandaloneArrangement.cpp	StandaloneArrangement::validateReferenceBindingUnlocked	L855-L891	fn-v1	49e5e10056f7931b919b8e051cebc7fc6e76ec20f3d6b3c0c7529701f494d16a

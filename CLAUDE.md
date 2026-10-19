@@ -22,7 +22,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 1. 任何 key/token 绝不明文入库，包括测试用的假 key。
 2. workflow 里引用 secret 只能用 `${{ secrets.X }}`；禁止 echo 到日志、禁止写进 artifact。
-3. 第三方 action 必须 pin 到 40 位 commit SHA（注释写版本号），可变 ref 一律不接受。允许清单之外，另允许组织共享 CI 仓库 `Synchain-oss/ci-workflows` 的 reusable workflow：只能在 job 级 `uses:` 调用它 `.github/workflows/` 下的文件，同样 pin 到 40 位 SHA 并注释版本号（fork-gate 的 `actions-pinned` 按 `.github/scripts/fork-lib.mjs` 的 `ALLOWED_REUSABLE_WORKFLOW_REPOS` 检查引用本身；是不是 job 级由 GitHub 把关，写在 step 里会在运行前报错）。二进制工具（gitleaks、sccache 等）用脚本下载，并锁定版本与 sha256。
+3. 第三方 action 必须 pin 到 40 位 commit SHA（注释写版本号），可变 ref 一律不接受。允许清单之外，另允许组织共享 CI 仓库 `Synchain-oss/ci-workflows` 的 reusable workflow：只能在 job 级 `uses:` 调用它 `.github/workflows/` 下的文件，同样 pin 到 40 位 SHA 并注释版本号（fork-gate 的 `actions-pinned` 按 `.github/scripts/fork-lib.mjs` 的 `ALLOWED_REUSABLE_WORKFLOW_REPOS` 检查）。二进制工具（gitleaks、sccache 等）用脚本下载，并锁定版本与 sha256。
 4. 任何 workflow 一律不得使用 pull_request_target。外部 fork 发来的 PR 只跑无 secrets 的检查，AI review 不自动运行。
 5. 所有消费仓库外部文本的自动化（review bot 等），prompt 末尾必须带「不可信数据声明」。
 6. 控制接口只绑字面量 `127.0.0.1`。会话 token 与 serverProof 只能来自系统 CSPRNG（禁止用 `juce::Random` / `juce::Uuid` 产生密钥），比较必须是常量时间。它们永不出现在日志、结果、诊断、进度信息或测试快照里。
@@ -44,16 +44,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 | 导出锁（UI 与 API 共用；被占用时接口回 `BUSY(export_in_progress)`，界面照旧提示）。master 导出错误信息与按 placementId 导出不加钩子：接口错误的 detail 只用固定文本，按 placementId 导出调用已公开的 `findPlacementIndexById()` | `Source/PluginProcessor.h`、`Source/Standalone/PluginEditor.cpp` | `.h` 约 5、`.cpp` 约 15 |
 | 抽出 `afterUndoRedo()`（纯重构；选项关闭时 `performUndoRedoAction` 与上游逐字相同）+ bridge 调用 | `Source/Standalone/PluginEditor.h/.cpp` | `.h` 约 2、`.cpp` 约 8 |
 | `peekUndo` / `peekRedo` / `size` / `cursor`（只读）；`clearRedo()`（**改动型，会改写历史**：清空重做栈，只在接口的写入没有撤销条目时调用，唯一调用方是 `Source/Control/Edit/ControlOriginAction.cpp`，对应规范 rc.3 第 15.3 节第 9 条，且在撤销/重做进行中不动；若规范后续版本改为「重做时只屏蔽被改动的方面」即删除，钩子回到只读） | `Source/Utils/UndoManager.h`（仅头文件，类内内联，新增行全部在 `#if`/`#endif` 之内） | 约 8（含 `#if`/`#endif`） |
-| 公开 `commitControlSelection()`，包装私有选择提交（与单击片段或空白处相同：只选中该片段，或清空选择） | `Source/Standalone/UI/ArrangementViewComponent.h/.cpp` | `.h` 约 4、`.cpp` 约 17（全部在选项宏内） |
-| 记录每个内容最近一次 F0 失败原因（`requestContentRefresh` 里 6 处记录调用，加两个成员函数的定义） | `Source/PluginProcessor.*` | `.h` 约 5、`.cpp` 约 43（全部在选项宏内） |
+| （预留，尚未接入）公开 `dismiss()`，包装私有 `finish()`（只关闭已显示的首次引导） | `Source/Editor/OnboardingOverlayComponent.*` | ~3 |
+| （预留，尚未接入）公开包装私有选择提交 | `Source/Standalone/UI/ArrangementViewComponent.*` | ~8 |
+| 参考特征生产者 getter；记录每个内容最近一次 F0 失败原因（`requestContentRefresh` 里 6 处记录调用，加两个成员函数的定义） | `Source/PluginProcessor.*` | `.h` 约 6、`.cpp` 约 43（全部在选项宏内） |
 | `option()` + `include(cmake/OpenTuneControl.cmake)` | `CMakeLists.txt` | 2–5 |
 
 - **表外的上游文件一律不改。** 确需新钩子时先停下，在 PR 或返回结果的问题列表里提出。由 manager 更新本表与 `Source/Control/README.md` 的钩子清单后再做。
-- `PianoRollComponent` / `PianoRollToolHandler` 零改动。遵守上游 `docs/code-architecture-review.md` 的约束：`PluginProcessor` 不再承担新的数据模型或通用 Router 职责。因此 processor 只增加以下内容：服务成员、启停与 getter、`ensureRuntimeInitialized`、导出锁、F0 失败原因的只读 getter 与记录函数。`ProjectSession` 留在编辑器内，经 `ControlUiBridge` 暴露窄接口。
+- `PianoRollComponent` / `PianoRollToolHandler` 零改动。遵守上游 `docs/code-architecture-review.md` 的约束：`PluginProcessor` 不再承担新的数据模型或通用 Router 职责。因此 processor 只增加以下内容：服务成员、启停与 getter、`ensureRuntimeInitialized`、导出锁、两个只读 getter。`ProjectSession` 留在编辑器内，经 `ControlUiBridge` 暴露窄接口。
 - **不修上游 bug。** 接口如实报告（告警与原因码，结果里标明不可撤销等），并在 PR 的「上游行为发现」里记录。是否给作者提 issue 由 manager 决定；任何对外内容都先给维护者过目。
 - **界面里才有的计算**：在接口层照 UI 的步骤另写一份，只调用上游现成的底层函数。有意镜像的上游函数要登记到镜像锁清单 `.github/drift-pins/<group>.txt`，并同步 `Source/Control/MIRRORS.md` 与 `Source/Control/mirror-map.json`（`ControlMirrorDriftTests` 比对规范化哈希）。
-- **范围**：只做波次 A（修音主流程）与波次 B（编排与工程）。波次 C 推迟，包括画、拉伸、切分、合并音符，单音符 EQ，包络，手绘曲线，锚点，橡皮擦，以及插入/删除时间手柄。不做界面里没有的「接口扩展」，也不做纯外观/视图设置。例外：工作区切换 `ui.setWorkspace`。它等同于走带栏的两个视图按钮，而 agent 要照界面的步骤工作，需要在编排视图与钢琴卷帘之间来回切换；它也是关闭钢琴卷帘的唯一途径。维护者要求加入。上游本来就没有的功能，统一返回 `UNSUPPORTED`。
-- **一次性例外：临时挑入的上游修复。** 维护者 2026-10-26 批准把上游提交 `0afb6c8`（重新打开工程时保留修正后的音高线）作为标注清楚的临时提交挑进 fork：原样不改，提交信息以 `fix(upstream-backport):` 开头，改动 `Source/PluginProcessor.cpp`、`Source/Utils/PitchCurve.cpp`、`Source/Utils/PitchCurve.h`、`Source/Utils/ProjectSession.cpp`。这是对「表外的上游文件一律不改」与「不修上游 bug」两条的例外，只限这一个提交；它不进上游 PR（上游已有），最终 rebase 到含它的上游时因补丁相同而自动消失；测试版的「对上游的修改」清单（`.github/release/templates/MODIFICATIONS.md`）里为它登记了一条，届时一并去掉。门禁（fork-gate 的 `scope` 与 `layer`）按 `.github/upstream-backports.json` 放行：该登记表记下每个表外文件的补丁 `git patch-id --stable` 与挑入后文件的 git blob SHA。三条都满足才算「原样挑入」：文件已登记；文件的改动与登记的 patch-id 相等；文件的 blob SHA 与登记值相等（逐字节一致，因为 patch-id 不比较空白，只比 patch-id 挡不住挑入之外多改的空白或缩进）。在挑入之外又改了这个文件、或没有登记，仍然失败。门禁在 PR 里从目标分支读登记表，不读 PR 自己的那一份，所以 PR 不能一边改上游文件、一边在登记表里给自己放行；登记表只从 `dev` 与 `feature/control-api` 读，这两条分支受保护，目标分支是别的名字（如 `feature/x`、`review-base/<n>`）时，一律按没有登记表处理。新增或修改登记要维护者书面批准，review 一律按【红旗】处理；改动登记表的 PR，门禁在 `layer` 结果里报 WARN（不阻塞）。**合入顺序**：CI 跑的门禁脚本与登记表都取自目标分支，所以主线（`feature/control-api`）合入 `dev` 之前，要先用一个单独的 L0 PR（只改 `.github/**` 与 CLAUDE.md）把新的门禁脚本与登记表送进 `dev`，合入后再合波次；否则那次合入的 `scope` 对挑入的文件必然判 FAIL（`dev` 上既没有新脚本也没有登记表），这是「PR 不能自批」的预期结果，不是门禁的缺陷。`Source/PluginProcessor.cpp` 在钩子表内，本来就放行；这次挑入在那里加的一行（`requestContentRefresh` 里 `replaceCorrectionSegments(segments)` 之后的 `pitchCurve->retainVoicedCorrectionSegments();`）也属于这次挑入，最终 rebase 时随它一起消失。最终 rebase 丢掉这个提交时，把登记条目一并删掉。再有别的挑入，需要维护者另行批准。
+- **范围**：只做波次 A（修音主流程）与波次 B（编排与工程）。波次 C 推迟，包括画、拉伸、切分、合并音符，单音符 EQ，包络，手绘曲线，锚点，橡皮擦，以及插入/删除时间手柄。不做界面里没有的「接口扩展」，也不做纯外观/视图设置。上游本来就没有的功能，统一返回 `UNSUPPORTED`。
 - `.gitignore` 与其他上游文件保持原样。不在任何产出里改写、摘录或另行打包上游的说明与声明类文件（测试版只按白名单打包）。
 
 ## 2. 上游代码约定（从上游现有代码归纳，新代码照此写）
@@ -62,7 +62,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - 错误用 `Source/Utils/Error.h` 的 `Result<T>` / `Error`，只在 `ControlDispatcher` 里映射为 OTCP 错误 kind。
 - 日志只用 `AppLogger`，不得记录 token、serverProof 或完整请求体。
 - 实时（音频）路径上不加锁、不分配内存、不做 I/O。
-- 内容修改只在消息线程进行，唯一入口是 `ControlMessageThread::call()`。网络线程等待主线程时，绝不持有 `CompletionCallbackLease`。关闭合同见 `Source/Control/README.md`。
+- 内容修改只在消息线程进行，唯一入口是 `ControlDispatcher::runOnMessageThread`。网络线程等待主线程时，绝不持有 `CompletionCallbackLease`。关闭合同见 `Source/Control/README.md`。
 - 测试：每个文件一个 `main()`，用 CMake `add_test` 注册，不用 gtest / Catch2。生命周期测试沿用上游 `Tests/LifecycleWatchdog.h`。超时不够时用命名常量。
 - 新文件首行写 SPDX：`// SPDX-License-Identifier: AGPL-3.0-or-later`（规范副本目录除外）。豁免与 fork-gate 的 `spdx` 检查一致：无法加注释头的文件（`.json`、`.txt`、`.sha256` 等数据文件；`CMakeLists.txt` 不豁免）、规范副本目录 `Tests/Control/spec/**`，以及与维护者正本逐字节一致的署名规则副本（`.github/scripts/check-attribution.mjs`、`attribution-patterns.txt`）。Markdown 用 HTML 注释形式写 SPDX。
 - `Source/Control/**`、`Tests/Control/**`、`ControlEditorBridge*` 的新文件用 clang-format 18.1.8 格式化（fork 专用配置）。
@@ -146,7 +146,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - 一键运行 `pwsh .github/scripts/gates.ps1 -Layer <层>`（在 lane 内；只改文档或脚本时加 `-SkipBuild`）。它输出带 SHA 的 PASS/FAIL/SKIP 汇总表，原样贴进 PR。依次执行：
   1. LFS 设置检查：`lfs.fetchexclude=*`，模型文件仍是未 smudge 的指针。
   2. configure / build / ctest / 真机启动，全部经 `.github/scripts/with-build-slot.ps1`：全机默认 2 个构建槽（环境变量 `OPENTUNE_BUILD_SLOTS` 或 `gates.ps1 -BuildSlots` 可调，范围 1–8），命名互斥锁，每个槽拿到后检查空闲内存，每个槽显式 `--parallel 8`。
-  3. `ctest -R Control`，再加上游已有测试，用 `-E ARALifecycleContractTests` 排除一项。该测试依赖 ARA_DRAFT 的 `persistentID`，在锁定的 ARA SDK 2.3.0 下编不过，属于上游问题。`-Layer` 为 L2 及以上时，gates 还会在 `<构建目录>\control-on` 用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` 再 configure / build / ctest 一遍（单独一行，Control 测试数为 0 即 FAIL），因为 lane 默认构建目录的控制接口是关闭的。这一轮与 CI 的 control-api ON 任务一致：构建 Standalone、VST3 与全部已注册测试，跑全部测试（仅排除 ARALifecycleContractTests），每个测试各有独立的 `OPENTUNE_DATA_DIR`（先跑 Control 测试，再跑其余）。Control 一轮前后会对真实 `%APPDATA%OpenTune` 各做一次快照：设置文件有新建、修改或删除即 FAIL；只有 `Logs` 目录有变化记 WARN（多条 lane 并发时别的进程的测试也会写真实日志）。其余上游测试会写真实目录而 gates 隔离不了（JUCE 向系统取 AppData 目录，改 `APPDATA` 变量重定向不了），gates 在该行里标明「上游测试不隔离」（「测试数据隔离（control-on 一轮）」一行）；L0 与 `-SkipBuild` 时这两行 SKIP。构建时 gates 与 `with-build-slot.ps1` 为 MSVC 设私有的 `_MSPDBSRV_ENDPOINT_`（`ot-<lane>-build`，已设置则沿用），避免与机器上别的项目共用 mspdbsrv 而 C1041；不结束任何进程。
+  3. `ctest -R Control`，再加上游已有测试，用 `-E ARALifecycleContractTests` 排除一项。该测试依赖 ARA_DRAFT 的 `persistentID`，在锁定的 ARA SDK 2.3.0 下编不过，属于上游问题。`-Layer` 为 L2 及以上时，gates 还会在 `<构建目录>\control-on` 用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` 再 configure / build / `ctest -R Control` 一遍（单独一行，Control 测试数为 0 即 FAIL），因为 lane 默认构建目录的控制接口是关闭的；这一轮 ctest 前后还会对真实 `%APPDATA%OpenTune` 各做一次快照，有新建、修改或删除即 FAIL（「测试数据隔离（control-on 一轮）」一行）；L0 与 `-SkipBuild` 时这两行 SKIP。
   4. 所有测试都使用临时 `OPENTUNE_DATA_DIR`，因为上游 ctest 会写真实的 `%APPDATA%\OpenTune`。
   5. 真 Standalone 测试环境就绪后：改到 Dispatcher / Jobs / Ops / Edit / bridge 或 `spec.lock` 的 PR，还要跑真 Standalone 的契约与场景测试。这一步持 E2E 互斥锁，并先快照、再恢复 `OpenTune.settings` 与 AppPreferences。
   6. 署名与身份检查（`.github/scripts/fork-checks.mjs`，与 fork-gate 同一份实现）。
@@ -157,11 +157,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 ## 9. Review 规则
 
-- 审查类 workflow 都是调用 `Synchain-oss/ci-workflows` 共享 reusable workflow（pin 到 40 位 SHA，见 §0 第 3 条）的薄调用方：模型、工具边界、超时与跳过规则在共享仓库统一维护，本仓只放审查重点、补充说明与 ignore 列表。三者都跳过 draft、外部 fork 与 dependabot 的 PR（pr-agent 跳过所有 bot）。
-  - 所有 PR 都跑 Claude review（`claude-review.yml`，Opus，维护者订阅）。
-  - PR → `dev`（含 `feature/*` → `dev` 的波次合入）另跑 pr-agent（`pr-agent.yml`，DeepSeek V4.1 Flash 经 OpenCode Go，按量计费）：改写 PR 描述（保留原正文）；review / improve 每次 push 都发新评论、不改写旧评论（`persistent_comments: false`，否则会盖掉同一 PR 上 Haiku 的评论）。
-  - 所有 PR 还跑 Claude Haiku 版 pr-agent（`pr-agent-claude.yml`，Claude API credit，按量计费）交叉验证：PR → `dev` 上只发 review / improve 新评论、不改 PR 描述；其他 PR（包括 base 为 `feature/control-api` 的子 PR）上三项全开。
-- 控制接口相关改动以 `Source/Control/REVIEW-CHECKLIST.md` 为权威清单。C++ 专项检查：主线程编组、生命周期与 CompletionGate、socket 安全、CSPRNG、关闭合同、等待时不持 lease、与所在文件风格一致、不顺手重排格式。
+- 所有 PR 都跑 Claude review（`claude-review.yml`）。控制接口相关改动以 `Source/Control/REVIEW-CHECKLIST.md` 为权威清单。C++ 专项检查：主线程编组、生命周期与 CompletionGate、socket 安全、CSPRNG、关闭合同、等待时不持 lease、与所在文件风格一致、不顺手重排格式。
 - **处理完所有评论**，包括 bot 与人工、所有 SHA 上的评论、总结条目与 review 正文：
   - manager 逐条裁决，分级为【红旗】/【重要】/【建议】；
   - 每个线程在最后一条 bot 评论之后，都要有 org 身份的处置回复并标记 Resolve；
@@ -169,7 +165,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - 修复只改被接受的条目，跑 gates 后只推一次，不夹带无关改动。
 - 首轮之后最多再审 2 轮，最后一轮只有【红旗】阻塞。超出轮数仍有【红旗】的，交维护者决定。
 - **合并前置条件**（全部满足才能合并）：
-  - head SHA 上的 Claude review 成功并发出总结（跳过、取消、失败、额度耗尽都不算）；
+  - head SHA 上的 review 成功并发出总结（跳过、取消、失败、额度耗尽都不算）；
   - 未解决线程为 0；
   - 没有未处理的【红旗】；
   - 不在线程里的评论都已登记处置；

@@ -45,7 +45,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 | 抽出 `afterUndoRedo()`（纯重构；选项关闭时 `performUndoRedoAction` 与上游逐字相同）+ bridge 调用 | `Source/Standalone/PluginEditor.h/.cpp` | `.h` 约 2、`.cpp` 约 8 |
 | `peekUndo` / `peekRedo` / `size` / `cursor`（只读）；`clearRedo()`（**改动型，会改写历史**：清空重做栈，只在接口的写入没有撤销条目时调用，唯一调用方是 `Source/Control/Edit/ControlOriginAction.cpp`，对应规范 rc.3 第 15.3 节第 9 条，且在撤销/重做进行中不动；若规范后续版本改为「重做时只屏蔽被改动的方面」即删除，钩子回到只读） | `Source/Utils/UndoManager.h`（仅头文件，类内内联，新增行全部在 `#if`/`#endif` 之内） | 约 8（含 `#if`/`#endif`） |
 | （预留，尚未接入）公开 `dismiss()`，包装私有 `finish()`（只关闭已显示的首次引导） | `Source/Editor/OnboardingOverlayComponent.*` | ~3 |
-| （预留，尚未接入）公开包装私有选择提交 | `Source/Standalone/UI/ArrangementViewComponent.*` | ~8 |
+| 公开 `commitControlSelection()`，包装私有选择提交（与单击片段或空白处相同：只选中该片段，或清空选择） | `Source/Standalone/UI/ArrangementViewComponent.h/.cpp` | `.h` 约 4、`.cpp` 约 17（全部在选项宏内） |
 | 参考特征生产者 getter；记录每个内容最近一次 F0 失败原因（`requestContentRefresh` 里 6 处记录调用，加两个成员函数的定义） | `Source/PluginProcessor.*` | `.h` 约 6、`.cpp` 约 43（全部在选项宏内） |
 | `option()` + `include(cmake/OpenTuneControl.cmake)` | `CMakeLists.txt` | 2–5 |
 

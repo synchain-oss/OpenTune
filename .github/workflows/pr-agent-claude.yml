@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: PR Agent (Claude Haiku)
+
+# 交叉验证用的第二个 pr-agent：Claude Haiku 5.5（effort max），走 Claude API credit，按量计费。
+# 所有 PR 都跑，PR 每次 push 都重跑；跳过 draft、外部 fork 与 bot 发起的 PR。
+# PR → dev 上主审是 OpenCode Go 那个 pr-agent（pr-agent.yml），这里只发 review / improve 新评论、不改 PR 描述
+# （两个 pr-agent 共用同一个评论标记，否则会互相覆盖）；其他 PR（包括 base 为 feature/control-api 的子 PR）上
+# describe / review / improve 全开。describe 保留 PR 原有正文（含「层」勾选），只在后面追加。
+# 任何 workflow 一律不得使用 pull_request_target（CLAUDE.md §0 第 4 条）。
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review, synchronize]
+
+permissions: {}
+
+jobs:
+  pr-agent-claude:
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    uses: Synchain-oss/ci-workflows/.github/workflows/pr-agent.yml@3b2ba21a872a2ff05771e37be22614ba7a715312 # v1.2.0
+    with:
+      provider: anthropic
+      base_branches: '["*"]'
+      secondary_on_bases: '["dev"]'
+      # 与 pr-agent.yml 保持一致
+      ignore_globs: '["Resources/**", "assets/**", "ThirdParty/**", "userguide/**", "LICENSES/**", "NOTICE*.txt", ".github/release/licenses/**", "models/**", "**/*.onnx", "Tests/Control/spec/**", ".github/spec.lock"]'
+    secrets:
+      api_key: ${{ secrets.CLAUDE_API_KEY_FOR_PR_REVIEW }}

@@ -25,7 +25,7 @@ jobs:
       pull-requests: write
       issues: write
       actions: read
-    uses: Synchain-oss/ci-workflows/.github/workflows/claude-review.yml@3b2ba21a872a2ff05771e37be22614ba7a715312 # v1.2.0
+    uses: Synchain-oss/ci-workflows/.github/workflows/claude-review.yml@5822d740b0b60aafa14474ac3f04faae0cea7e90 # v1.3.0
     with:
       # 按优先级排列。
       focus: |

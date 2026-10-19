@@ -4,7 +4,7 @@
 # fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
 name: PR Agent (Claude Haiku)
 
-# 交叉验证用的第二个 pr-agent：Claude Haiku 5.5（effort max），走 Claude API credit，按量计费。
+# 交叉验证用的第二个 pr-agent：Claude Haiku 5.5（effort xhigh），走 Claude API credit，按量计费。
 # 所有 PR 都跑，PR 每次 push 都重跑；跳过 draft、外部 fork 与 bot 发起的 PR。
 # PR → dev 上主审是 OpenCode Go 那个 pr-agent（pr-agent.yml），这里只发 review / improve 新评论、不改 PR 描述
 # （两个 pr-agent 共用同一个评论标记，否则会互相覆盖）；其他 PR（包括 base 为 feature/control-api 的子 PR）上
@@ -23,7 +23,7 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
-    uses: Synchain-oss/ci-workflows/.github/workflows/pr-agent.yml@3b2ba21a872a2ff05771e37be22614ba7a715312 # v1.2.0
+    uses: Synchain-oss/ci-workflows/.github/workflows/pr-agent.yml@5822d740b0b60aafa14474ac3f04faae0cea7e90 # v1.3.0
     with:
       provider: anthropic
       base_branches: '["*"]'

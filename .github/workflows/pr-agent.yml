@@ -24,7 +24,7 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
-    uses: Synchain-oss/ci-workflows/.github/workflows/pr-agent.yml@3b2ba21a872a2ff05771e37be22614ba7a715312 # v1.2.0
+    uses: Synchain-oss/ci-workflows/.github/workflows/pr-agent.yml@5822d740b0b60aafa14474ac3f04faae0cea7e90 # v1.3.0
     with:
       provider: opencode-go
       # PR → dev 上 pr-agent-claude.yml 也在发评论。持久模式会改写最新一条带 pr-agent 标记的评论，

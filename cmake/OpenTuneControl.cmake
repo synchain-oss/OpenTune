@@ -145,6 +145,10 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Edit/ReferenceAlignment.h
         Source/Control/Ops/ReferenceOps.cpp
         Source/Control/Ops/ReferenceOps.h
+        # Arrangement: arrangement.edit (move, trim, gain, fades, split, merge, delete, reference binding) and
+        # arrangement.copy, through the arrangement view's setters, processor functions and undo actions.
+        Source/Control/Ops/ArrangementOps.cpp
+        Source/Control/Ops/ArrangementOps.h
         # Selection: ui.setSelection, through the editor's bridge, with the effects it predicts and observes.
         Source/Control/Ops/SelectionOps.cpp
         Source/Control/Ops/SelectionOps.h
@@ -306,6 +310,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlPrefsTests.cpp)
         # Reference alignment: content.analyzeReference and content.autoTune mode reference.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlReferenceTests.cpp)
+        # Arrangement: arrangement.edit and arrangement.copy, their undo entries and revert recipes.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlArrangementTests.cpp)
         # Selection: ui.setSelection with a test bridge that does what the editor does when a clip is clicked.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlSelectionTests.cpp)
         if(MSVC)
@@ -427,6 +433,13 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ReferenceAnalysisLimit|--control-api"
             "ReferenceVectors|--control-api"
         )
+        # Arrangement (Tests/Control/ControlArrangementTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "Arrangement|--control-api"
+            "ArrangementUndo|--control-api"
+            "ArrangementCopy|--control-api"
+            "ArrangementVectors|--control-api"
+        )
         # Selection (Tests/Control/ControlSelectionTests.cpp).
         list(APPEND _opentune_control_scenarios
             "Selection|--control-api"
@@ -479,6 +492,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.PrefsVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.AudioVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ReferenceVectors PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.ArrangementVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.SelectionMatrix PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.SelectionVectors PROPERTIES TIMEOUT 300)
         # Each scenario process gets its own test's TIMEOUT, from which its watchdog takes its bound (a margin before;

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
-name: PR Agent (Claude Haiku)
+name: PR Agent (Claude Haiku 5.5)
 
 # 交叉验证用的第二个 pr-agent：Claude Haiku 5.5（effort high），走 Claude API credit，按量计费。
 # 所有 PR 都跑，PR 每次 push 都重跑；跳过 draft、外部 fork 与 bot 发起的 PR。

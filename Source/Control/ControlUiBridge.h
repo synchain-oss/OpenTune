@@ -226,6 +226,27 @@ public:
     /** The scale of the UI; nullopt when not supported. */
     virtual std::optional<UiScale> uiScale() const { return std::nullopt; }
 
+    // ---- Selection ----------------------------------------------------------------------------
+
+    /** True when select() and scaleForSelection() are supported. Default: false. */
+    virtual bool canSelect() const { return false; }
+
+    /** Selects as the arrangement view does when the user clicks. With a placementId, the clip on trackId becomes the
+        only selected clip and trackId the active track, as a click on the clip does: the piano roll shows the clip
+        (in the openDyne scheme it generates the notes of a clip whose notes were never generated), the editor
+        refreshes its reference context (which can queue reference alignment analysis) and the transport bar shows the
+        clip's key; with openEditor also as a double click, which switches to the piano roll. With placementId 0,
+        trackId becomes the active track with no clip selected and the piano roll shows nothing. Returns false,
+        changing nothing, when not supported. */
+    virtual bool select(int /*trackId*/, std::uint64_t /*placementId*/, bool /*openEditor*/) { return false; }
+
+    /** The scale the transport bar would show once the clip is selected (the content's detected key, or the
+        editor's default); nullopt when not supported. */
+    virtual std::optional<UiScale> scaleForSelection(int /*trackId*/, std::uint64_t /*placementId*/) const
+    {
+        return std::nullopt;
+    }
+
     // ---- Preferences and audio device ---------------------------------------------------------
 
     /** The shared preferences were changed through the control API (prefs.set): the editor applies them the way it

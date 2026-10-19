@@ -36,6 +36,7 @@ import {
   ALLOWED_ACTIONS,
   ALLOWED_ACTION_OWNERS,
   ALLOWED_AUTHOR_EMAILS,
+  ALLOWED_REUSABLE_WORKFLOW_REPOS,
   ALLOWED_COMMITTER_EMAILS,
   CLANG_FORMAT_EXCLUDE,
   CLANG_FORMAT_PATTERNS,
@@ -833,7 +834,10 @@ export function actionRefProblem(ref, rawLine) {
   if (!m) return `${ref}：无法识别的 action 引用`;
   const [, name, version] = m;
   const repo = name.split('/').slice(0, 2).join('/');
-  if (!ALLOWED_ACTION_OWNERS.some((o) => repo.startsWith(o)) && !ALLOWED_ACTIONS.includes(repo)) return `${repo} 不在组织允许的 action 清单内`;
+  const reusable = ALLOWED_REUSABLE_WORKFLOW_REPOS.includes(repo);
+  if (!reusable && !ALLOWED_ACTION_OWNERS.some((o) => repo.startsWith(o)) && !ALLOWED_ACTIONS.includes(repo)) return `${repo} 不在组织允许的 action 清单内`;
+  // The shared CI repository: only its reusable workflows, pinned like any other action (below).
+  if (reusable && !/^[^/]+\/[^/]+\/\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/.test(name)) return `${ref}：${repo} 只能以 job 级 uses: 调用 .github/workflows/ 下的 reusable workflow`;
   if (!/^[0-9a-f]{40}$/.test(version)) return `${ref}：必须固定到 40 位 commit SHA`;
   if (!/#\s*v?\d+(\.\d+)*/.test(rawLine)) return `${ref}：SHA 后面要用注释写明版本号（如 # v7.0.1）`;
   return null;

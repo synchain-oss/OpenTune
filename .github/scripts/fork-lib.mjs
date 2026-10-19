@@ -108,8 +108,10 @@ export const ALLOWED_ACTIONS = [
   'oven-sh/setup-bun',
 ];
 /**
- * The organisation's shared CI repository. Only its reusable workflows may be called (job-level
- * `uses: <repo>/.github/workflows/<file>.yml@<40-hex SHA> # v<version>`), pinned like every other action.
+ * The organisation's shared CI repository. Only its reusable workflows may be called
+ * (`<repo>/.github/workflows/<file>.yml@<40-hex SHA> # v<version>`), pinned like every other action.
+ * actions-pinned checks the reference only; that the `uses:` is job-level is left to GitHub, which
+ * rejects a reusable workflow called from a step before the run starts.
  */
 export const ALLOWED_REUSABLE_WORKFLOW_REPOS = ['Synchain-oss/ci-workflows'];
 

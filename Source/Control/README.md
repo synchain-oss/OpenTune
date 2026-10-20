@@ -167,6 +167,8 @@ option, so a build with the option OFF compiles exactly the upstream code.
 | `Source/Utils/UndoManager.h` (public section; 8 lines: `#if`, marker, five inline functions, `#endif`) | `peekUndo()`, `peekRedo()`, `size()`, `cursor()` and `clearRedo()` | Reads the tops and the counts of OpenTune's history (`edit.getHistory`, the entry checks of `edit.undo` and `edit.redo`); `clearRedo()` discards the redo history after a change without an undo entry (PROTOCOL.md section 15.3 rule 9), as `addAction()` discards it. No data member, so the class layout is the same with the option OFF. | The API cannot tell which entry is on top, so it cannot refuse a step the client did not expect; a change without an undo entry leaves older redo steps that would write over it. |
 | `Source/Standalone/PluginEditor.cpp` (`performUndoRedoAction`; 8 lines) | The steps after an undo or redo moved into `afterUndoRedo()` (a pure refactor: with the option OFF the function reads as upstream) | The editor bridge runs the same steps after an undo or redo applied through the API (`ControlUiBridge::onUndoRedoApplied()`): mark the project as changed, redraw the arrangement, refresh the reference context. | After an API undo the editor would not redraw or refresh until the next user action. |
 | `Source/Standalone/PluginEditor.h` (the control block at the end of the class; 2 lines: marker and declaration) | Private `afterUndoRedo()`, reached by the friend `ControlEditorBridge` | As above. | As above. |
+| `Source/PluginProcessor.h` (the control block at the end of the class; 8 lines: marker comment, the comment and getter `isReferenceAnalysisWorkerStalled()`, the member `referenceAnalysisWorkerStalled_` and its comment) | Read-only stall state of OpenTune's reference analysis worker (message thread) | The reference jobs end at once with `NOT_READY(reference_analysis_stalled)` when a content still lacks alignment data and the worker will take no further synchronous analysis; see "Reference alignment". | A stalled job would wait its 120 s limit and report `NOT_READY(reference_analysis_timeout)`, hiding that only a restart helps. |
+| `Source/PluginProcessor.cpp` (the completion lambda of `preheatReferenceAlignmentFeatures()`; 7 lines inside the control option) | Set `referenceAnalysisWorkerStalled_` when a synchronous reference analysis completes | `ReferenceAnalysisService::workerLoop()` leaves the finished job engaged in `activeJob` (a moved-from optional), so no second synchronous analysis runs; the completion is the moment that becomes true. An asynchronous GAME completion resets `activeJob` and does not set the flag. | The getter above would always say false. |
 
 ## Request handling
 
@@ -805,9 +807,21 @@ reference clip belongs to another part, so a binding is made in the editor's men
   `reference` component of the revision vector covers. A job that fails writes nothing. They are
   cancellable until the alignment is committed; cancelling stops the wait and cannot withdraw an analysis OpenTune has
   already started (its result is stored, as when the editor asks for it).
-- **Wait limit**: 120 s (`controlSetReferenceWaitLimitForTesting`), then `NOT_READY` without a reason (the registry has
-  none for this wait; `timing_analysis_timeout` is the seed job's), retryable. An analysis that failed ends the job with
-  `INTERNAL`.
+- **Wait limit and reasons**: a job that has to wait ends at once with `NOT_READY(reference_analysis_stalled)` (not
+  retryable) when OpenTune's reference analysis worker has already completed its one synchronous analysis of the
+  session and a content still lacks its data: no further analysis can finish without a restart of OpenTune. The
+  processor's read-only `isReferenceAnalysisWorkerStalled()` records that completion (see Hooks); a binding whose both
+  contents already have data is not affected. Otherwise the job waits 120 s
+  (`controlSetReferenceWaitLimitForTesting`), then ends with `NOT_READY(reference_analysis_timeout)` (retryable; the
+  analysis is still running). An analysis that failed ends the job with `ANALYSIS_FAILED(reference_analysis_failed)`,
+  and so does one that found no notes to align with. These three reasons are the rc.4 additions; the locked copy of
+  the specification in this fork is rc.3 and has none of them for this wait.
+
+  | Reason | Kind | retryable | Meaning |
+  |---|---|---|---|
+  | `reference_analysis_stalled` | `NOT_READY` | no | OpenTune's analysis worker will take no further synchronous analysis in this session; restart OpenTune. |
+  | `reference_analysis_timeout` | `NOT_READY` | yes | the analysis is still running; the job waited past its limit. |
+  | `reference_analysis_failed` | `ANALYSIS_FAILED` | no | OpenTune's analysis failed or found no notes to align with. |
 - **Mirror**: `controlAlignToReference()` follows `OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement()`
   (`reference-align-commit`) step by step, because that function pushes its undo action itself and the API needs the
   action inside its own entry. It starts no analysis (the job did) and returns the action instead of pushing it.
@@ -815,9 +829,14 @@ reference clip belongs to another part, so a binding is made in the editor's men
 Known OpenTune behaviour, reported as it is: `ReferenceAnalysisService::workerLoop` moves its finished synchronous job
 out of `activeJob` with `std::move`, which leaves the optional engaged, so the worker never takes the next job. The
 standard producer therefore completes one analysis per session, while a binding needs two (the clip and its reference
-clip). With alignment data for one of them already there (a time-tool seed of the content, an earlier call) the job
-completes; with neither, the second analysis never finishes and the job ends at its wait limit with `NOT_READY`. The
-analysis with the GAME producer is asynchronous and unaffected. `ReferenceAnalysisLimit` shows both cases.
+clip). The first `content.analyzeReference` job of a new binding itself uses that one completion for one of the two
+contents (the job preheats both; the worker picks the pending job with the lowest content key, not the submission
+order, and the other stays queued). If both contents already have their data (for example loaded with the project, or
+prepared before this session) the job completes without the worker. Once a synchronous analysis has finished in this
+session, a content that still lacks data cannot get it, so the job ends as soon as the completion is seen with
+`NOT_READY(reference_analysis_stalled)`, and the detail says that OpenTune has to be restarted. The analysis with the
+GAME producer is asynchronous and unaffected. `ReferenceAnalysisLimit` shows both cases. The API does not fix the
+defect.
 
 ## Project files
 
@@ -877,10 +896,13 @@ do, so `transport.get` reports it as `lastControl`. `playFromLastStart` and `pau
 the editor's play-from-start button (`playFromStartToggleRequested`). "Last start" is the position of the last play
 **or seek** (`getPlayStartPosition()`), not 0: `play` and `seek` set it, and so does a seek in the UI. A `play` during
 playback, a `pause` or `pauseAtLastStart` while stopped, and any call that leaves the play state, position and play
-start as they are, change nothing and are `noOp`. The audio callback carries the commands out a block later, so the
-result reports the position that `stop` (0) and `pauseAtLastStart` (the last start) are about to give it when an
-audio device runs; without one the position does not advance, nothing carries a command out, and `play` and
-`playFromLastStart` carry `NO_AUDIO_DEVICE`. The play state and the position are view state (`not_persisted_state`,
+start as they are, change nothing and are `noOp`. The audio callback carries the commands out a block later. `stop`
+freezes the presented position at once (`OpenTuneAudioProcessor::stop()`) and the callback fades the transport out and
+lands it on 0 when the fade completes (`kTransportRampDurationSeconds`, 0.2 s on the audio thread), so the result and
+`transport.get` right after the call report the frozen presented position, and a read after the fade reports 0; a
+`pauseAtLastStart` that runs while playing reports the last start it is about to land on. Without a device the position
+does not advance, nothing carries a command out, and `play` and `playFromLastStart` carry `NO_AUDIO_DEVICE`. The play
+state and the position are view state (`not_persisted_state`,
 no revert, no `IRREVERSIBLE`, the project is not marked as changed). `transport.setTempo` calls `setBpm()` and
 `setTimeSignature()` and marks the project as changed (the UI does too); there is no undo entry (`ui_parity`) and the
 revert recipe sets the previous values. Only a numerator up to 32 and a denominator that is a power of two up to 32
@@ -950,8 +972,10 @@ the trailing clip of a merge, the slot of `toTrackId`), then busy, then `expecte
   (`trim_out_of_range`); the drag clamps instead. Fades that the new length cuts are reported with `FADES_RECLAMPED`, and
   a `FadeChangeAction` before the `TrimPlacementAction` keeps the old fades, so undo restores them.
 - `setFade` limits a fade to 90 % of the clip, as `setPlacementFade()` does, and reports `CLAMPED`. `setGain` takes dB or
-  a linear factor; OpenTune has no upper limit for the clip gain, only the range of a float, beyond which the gain is
-  limited with `CLAMPED`.
+  a linear factor and limits it to the interface's gain range, linear 0 to 4 (the volume knob's
+  `setRange(0.0, 4.0, 0.001)`, `TrackPanelComponent.h`; the clip-gain drag itself has no bound,
+  `ArrangementViewComponent.cpp`), with `CLAMPED` in the unit the caller named and the limited value in `changes`;
+  `dryRun` predicts the same. Zero is the lower end.
 - `setReference` accepts what `validateReferenceBindingUnlocked()` accepts, checked on the arrangement as the earlier
   ops of the call leave it (`reference_ineligible`), and warns `EXPERIMENTAL_FEATURE`.
 - A clip moved to a hidden track shows the hidden tracks up to it (`ControlUiBridge::revealTracks()`,

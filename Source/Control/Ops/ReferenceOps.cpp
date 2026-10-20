@@ -39,6 +39,31 @@ ControlJobError jobErrorOf(const Error& error)
     return {reply.kind, reply.reason, reply.detail, reply.executed.value_or(false)};
 }
 
+/** The session cannot complete the analysis any more: OpenTune's reference analysis worker takes no second
+    synchronous job (its active job stays engaged after the first completion), so only a restart can analyze again. */
+ControlJobError stalledError()
+{
+    return {"NOT_READY", "reference_analysis_stalled",
+            "OpenTune's reference analysis service completed its one synchronous analysis of this session; restart "
+            "OpenTune to analyze again",
+            false};
+}
+
+/** The analysis is still running: the job waited past its limit while the worker could still take jobs. */
+ControlJobError analysisTimeoutError()
+{
+    return {"NOT_READY", "reference_analysis_timeout",
+            "OpenTune's reference analysis did not finish within the wait limit; it is still running, so the request "
+            "can be retried",
+            false};
+}
+
+/** OpenTune's reference analysis failed or found nothing to align with. */
+ControlJobError analysisFailedError(const char* detail)
+{
+    return {"ANALYSIS_FAILED", "reference_analysis_failed", detail, false};
+}
+
 Result<JsonValue> startJob(ControlOpContext& context, ControlJobWork work, const std::string& digest)
 {
     auto* jobs = context.jobs();
@@ -81,7 +106,14 @@ JsonValue analysisResultJson(ControlOpContext& context, const ControlReferenceBi
  *   check the busy state (that job writes);
  * - it asks for the alignment data of both contents (OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(), which
  *   does nothing while the analysis runs or is ready) and waits for them; an analysis that failed ends the job with
- *   INTERNAL, and after the wait limit it ends with NOT_READY;
+ *   ANALYSIS_FAILED(reference_analysis_failed), and after the wait limit it ends with
+ *   NOT_READY(reference_analysis_timeout);
+ * - OpenTune's reference analysis service completes only one synchronous analysis per session: workerLoop() moves its
+ *   finished job out of activeJob and leaves the optional engaged (ReferenceAnalysisService.cpp, the moved-from
+ *   activeJob), so it takes no second one. The processor's read-only isReferenceAnalysisWorkerStalled() records that
+ *   first completion. Once it is set and a content still lacks its data, no analysis can finish: the job ends at once
+ *   with NOT_READY(reference_analysis_stalled) instead of waiting for a result that never comes. A binding whose both
+ *   contents already have data is unaffected;
  * - an analysis job then reports the binding; an aligning job compares the tokens its call checked with the content's
  *   current ones, then aligns the content (controlAlignToReference()) in one undo step and reports the write envelope.
  *
@@ -124,6 +156,28 @@ public:
         firstStep_ = false;
 
         auto& processor = context.processor();
+        // Before asking for anything: a worker that completed its one synchronous analysis takes no other job, so a
+        // content that still lacks data can only be analyzed after a restart. A recorded failure of the analysis is
+        // reported as such; otherwise the wait is skipped instead of running to its limit.
+        const bool targetCurrent = alignmentDataCurrent(processor, *binding.targetContent.snapshot);
+        const bool referenceCurrent = alignmentDataCurrent(processor, *binding.referenceContent.snapshot);
+        if (!(targetCurrent && referenceCurrent)) {
+            const auto failed = [&processor](const ControlContentRef& content) {
+                const auto& features = content.snapshot->referenceFeatures;
+                return features.status == ReferenceFeatureStatus::Failed
+                       && features.producer == processor.getReferenceFeatureProducer()
+                       && features.inputFingerprint == static_cast<std::int64_t>(content.snapshot->audioRevision);
+            };
+            if (failed(binding.targetContent) || failed(binding.referenceContent)) {
+                step.fail(analysisFailedError("OpenTune's reference analysis of a content failed"));
+                return;
+            }
+            if (processor.isReferenceAnalysisWorkerStalled()) {
+                step.fail(stalledError());
+                return;
+            }
+        }
+
         int ready = 0;
         bool pending = false;
         for (const auto* content : {&binding.targetContent, &binding.referenceContent}) {
@@ -138,8 +192,12 @@ public:
                     pending = true;
                     break;
                 case OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus::InvalidContent:
+                    // The binding was resolved from the live arrangement just above; a content that is gone now is
+                    // the same unknown handle.
+                    step.fail({"NOT_FOUND", "unknown_handle", "the content of a clip does not exist any more", false});
+                    return;
                 case OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus::AnalysisFailed:
-                    step.fail({"INTERNAL", "", "OpenTune's reference analysis of a content failed", false});
+                    step.fail(analysisFailedError("OpenTune's reference analysis of a content failed"));
                     return;
             }
         }
@@ -159,12 +217,9 @@ private:
     {
         const int limitMs = waitLimitOverrideMs() > 0 ? waitLimitOverrideMs() : kReferenceWaitLimitMs;
         if (std::chrono::steady_clock::now() - started_ >= std::chrono::milliseconds(limitMs)) {
-            // Known OpenTune behaviour: its reference analysis service finishes only one synchronous analysis per
-            // session, so the second of two never completes (Source/Control/README.md).
-            step.fail({"NOT_READY", "",
-                       "OpenTune's reference analysis did not finish within the wait limit; its analysis service "
-                       "completes only one analysis per session",
-                       false});
+            // The worker can still take jobs (the stalled case was answered in step()), so the analysis is merely
+            // slower than the limit: waiting longer, or retrying, can still finish it.
+            step.fail(analysisTimeoutError());
             return;
         }
         step.setProgress(std::nullopt, "analysing", ready, 2);
@@ -251,13 +306,20 @@ private:
                            "the clip and its reference clip share no time to align", false});
                 return;
             case Status::InsufficientFeatures:
-                step.fail({"INTERNAL", "", "OpenTune's reference analysis found no pitch notes to align with", false});
+                step.fail(analysisFailedError("OpenTune's reference analysis found no pitch notes to align with"));
                 return;
             case Status::NotReady:
-                step.fail({"NOT_READY", "", "the alignment data of the binding is not current", false});
+                // The data the job waited for is not current any more. If the worker is stalled it can never be
+                // recomputed in this session; otherwise the analysis is still the one that can be retried.
+                if (processor.isReferenceAnalysisWorkerStalled())
+                    step.fail(stalledError());
+                else
+                    step.fail({"NOT_READY", "reference_analysis_timeout",
+                               "the alignment data of the binding is not current any more; the analysis can be retried",
+                               false});
                 return;
             case Status::Failed:
-                step.fail({"INTERNAL", "", "OpenTune did not commit the alignment", false});
+                step.fail(analysisFailedError("OpenTune did not commit the alignment"));
                 return;
             case Status::Committed:
                 break;

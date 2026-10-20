@@ -395,13 +395,42 @@ void checkTransportActions(Fixture& f)
     CONTROL_CHECK(near(memberOf(memberOf(atStart, "transport"), "positionTimelineSec"), 4.0));
     CONTROL_CHECK(memberOf(f.control("pauseAtLastStart"), "noOp").asBoolean());
 
-    // stop: with a running device the audio callback rewinds to 0, which the result already shows.
+    // stop: the audio callback lands the transport on 0 when its fade-out completes (0.2 s). The result reports the
+    // transport state right after the call, which is what transport.get returns now; a read after the fade returns 0.
     f.control("play");
     const auto stop = f.control("stop");
     CONTROL_CHECK(!memberOf(memberOf(stop, "transport"), "playing").asBoolean());
-    CONTROL_CHECK(near(memberOf(memberOf(stop, "transport"), "positionTimelineSec"), 0.0));
+    const auto stoppedAt = f.transport();
+    CONTROL_CHECK(near(memberOf(memberOf(stop, "transport"), "positionTimelineSec"),
+                       memberOf(stoppedAt, "positionTimelineSec").asDouble()));
+    CONTROL_CHECK(near(memberOf(memberOf(stop, "transport"), "playStartTimelineSec"), 4.0));
     CONTROL_CHECK(memberOf(memberOf(memberOf(stop, "transport"), "lastControl"), "call").text() == "stop");
     CONTROL_CHECK(f.bridge.dirtyMarks == 0);
+}
+
+/** The result of stop and the transport.get that follows it agree, 50 times in a row: the position is the presented
+    one the stop froze, not a landing value constructed before the read. */
+void checkStopMatchesRead(Fixture& f)
+{
+    for (int i = 0; i < 50; ++i) {
+        const double seekTo = 0.25 + static_cast<double>(i) * 0.01;
+        f.control("seek", ",\"positionTimelineSec\":" + std::to_string(seekTo));
+        const auto play = f.control("play");
+        CONTROL_CHECK(memberOf(memberOf(play, "transport"), "playing").asBoolean());
+        const auto stop = f.control("stop");
+        const auto read = f.transport();
+        CONTROL_CHECK(!memberOf(read, "playing").asBoolean());
+        CONTROL_CHECK(near(memberOf(memberOf(stop, "transport"), "positionTimelineSec"),
+                           memberOf(read, "positionTimelineSec").asDouble()));
+        CONTROL_CHECK(near(memberOf(memberOf(stop, "transport"), "playStartTimelineSec"),
+                           memberOf(read, "playStartTimelineSec").asDouble()));
+        const auto change = changeOf(stop, "transport", "singleton", JsonValue::string("transport"));
+        const auto& fields = memberOf(change, "fields");
+        if (memberOf(fields, "positionTimelineSec").isObject()) {
+            CONTROL_CHECK(near(memberOf(memberOf(fields, "positionTimelineSec"), "after"),
+                               memberOf(read, "positionTimelineSec").asDouble()));
+        }
+    }
 }
 
 void checkTransportChecks(Fixture& f)
@@ -482,6 +511,7 @@ void scenarioTransportImpl()
             return;
         checkTransportActions(f);
         checkTransportChecks(f);
+        checkStopMatchesRead(f);
         checkTempo(f);
         checkLoop(f);
     }

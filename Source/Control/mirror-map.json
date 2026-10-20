@@ -1125,7 +1125,7 @@
         "symbol": "OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "aad66fcc5ba8434bcb6b52865f0820145b8fb259a62e6b6b4d81902ddb908b92"
+        "sha256": "ef8eff2ffe75f5e1f5571b8c726643d172c63b7c22cc5be06773ba1ec3a803f3"
       },
       "control": [
         {
@@ -2067,14 +2067,22 @@
             "kMaxVolumeLinear",
             "requestedVolume"
           ]
+        },
+        {
+          "file": "Source/Control/Ops/ArrangementOps.cpp",
+          "symbols": [
+            "kMaxClipGainLinear",
+            "runInPlace"
+          ]
         }
       ],
       "tests": [
         "ControlProcessorTests.Tracks",
-        "ControlProcessorTests.TrackVectors"
+        "ControlProcessorTests.TrackVectors",
+        "ControlProcessorTests.Arrangement"
       ],
-      "note": "The track volume knob covers the linear range 0 to 4; track.set limits a larger volume to it (CLAMPED).",
-      "noteZh": "轨道音量旋钮的线性范围是 0 到 4；track.set 把更大的音量限制到该范围（CLAMPED）。"
+      "note": "The volume knob of the interface covers the linear range 0 to 4; track.set limits a larger volume to it and arrangement.edit op setGain limits a larger clip gain to it (CLAMPED).",
+      "noteZh": "界面的音量旋钮覆盖 0 到 4 的线性范围；track.set 把更大的轨道音量限制到该范围，arrangement.edit 的 setGain 把更大的片段增益也限制到该范围（CLAMPED）。"
     },
     {
       "id": "arrangement-trim-left",

@@ -1868,10 +1868,9 @@ void scenarioCompleteness()
         return;
     const auto& methods = memberOf(parsed.value, "methods");
     const auto reported = dispatcher->capabilities();
-    for (const char* capability :
-         {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "ui.bridge", "edit.v1", "history.v1",
-          "timing.v1", "transport.v1", "arrangement.v1", "reference.v1", "tracks.v1", "project.io", "prefs.write",
-          "audio.device"})
+    for (const char* capability : {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "ui.bridge", "edit.v1",
+                                   "history.v1", "timing.v1", "transport.v1", "arrangement.v1", "reference.v1",
+                                   "tracks.v1", "project.io", "prefs.write", "audio.device"})
         CONTROL_CHECK(std::find(reported.begin(), reported.end(), capability) != reported.end());
 
     // The listener answers session.hello itself, so the dispatcher's method table has no entry for it.

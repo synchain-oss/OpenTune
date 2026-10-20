@@ -444,8 +444,7 @@ void checkSplitAndMerge(Fixture& f, const Clip& a, const Clip& c, const Clip& pe
     CONTROL_CHECK(settleBackgroundWork(*f.processor));
     CONTROL_CHECK(f.arrangement().setPlacementReferencePlacement(3, splitBound.placementId, c.placementId));
     result = f.edit(f.op("split", c, "\"atTimelineSec\":23"), ",\"dryRun\":true");
-    CONTROL_CHECK(
-        memberOf(fieldOf(changeOf(result, f.pid(splitBound)), "referencePlacementId"), "after").isNull());
+    CONTROL_CHECK(memberOf(fieldOf(changeOf(result, f.pid(splitBound)), "referencePlacementId"), "after").isNull());
     CONTROL_CHECK(f.locate(splitBound.placementId).placement.referencePlacementId == c.placementId);
 
     // Between two analysis frames: the cut snaps to the nearest one (SPLIT_SNAPPED).

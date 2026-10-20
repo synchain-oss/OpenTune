@@ -464,7 +464,8 @@ void checkTempo(Fixture& f)
     const auto& keepsRevert = memberOf(memberOf(keeps, "undo"), "revert");
     CONTROL_CHECK(!hasWarning(keeps, "IRREVERSIBLE") && memberOf(keepsRevert, "params").find("timeSignature") == nullptr
                   && near(memberOf(memberOf(keepsRevert, "params"), "bpm"), 87.5));
-    const auto changes = f.api.result("transport.setTempo", json(R"({"timeSignature":{"numerator":3,"denominator":4}})"));
+    const auto changes =
+        f.api.result("transport.setTempo", json(R"({"timeSignature":{"numerator":3,"denominator":4}})"));
     CONTROL_CHECK(memberOf(changes, "applied").asBoolean() && memberOf(memberOf(changes, "undo"), "revert").isNull()
                   && hasWarning(changes, "IRREVERSIBLE"));
     CONTROL_CHECK(f.processor->getTimeSigNumerator() == 3 && f.processor->getTimeSigDenominator() == 4);

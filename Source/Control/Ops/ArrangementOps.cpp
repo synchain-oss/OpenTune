@@ -111,18 +111,19 @@ void describeChanges(ControlOpContext& context, ControlWriteEnvelope& envelope,
     }
 }
 
-/** The arrangement as it is once the clips of removedIds are gone: they are not in the list, and a clip that was bound to
-    one of them has no binding any more (StandaloneArrangement::retirePlacement() clears them). Used to predict
-    delete and split. */
+/** The arrangement as it is once the clips of removedIds are gone: they are not in the list, and a clip that was bound
+   to one of them has no binding any more (StandaloneArrangement::retirePlacement() clears them). Used to predict delete
+   and split. */
 std::vector<ControlPlacementRef> withoutClips(std::vector<ControlPlacementRef> model,
                                               const std::vector<std::uint64_t>& removedIds)
 {
     const auto removed = [&removedIds](std::uint64_t id) {
         return std::find(removedIds.begin(), removedIds.end(), id) != removedIds.end();
     };
-    model.erase(std::remove_if(model.begin(), model.end(),
-                               [&removed](const ControlPlacementRef& ref) { return removed(ref.placement.placementId); }),
-                model.end());
+    model.erase(
+        std::remove_if(model.begin(), model.end(),
+                       [&removed](const ControlPlacementRef& ref) { return removed(ref.placement.placementId); }),
+        model.end());
     for (auto& ref : model)
         if (removed(ref.placement.referencePlacementId))
             ref.placement.referencePlacementId = 0;

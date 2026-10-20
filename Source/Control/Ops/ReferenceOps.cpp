@@ -59,8 +59,9 @@ JsonValue analysisResultJson(ControlOpContext& context, const ControlReferenceBi
     result.appendMember("referencePlacementId", JsonValue::string(binding.reference.placementId));
     result.appendMember(
         "alignmentReady",
-        JsonValue::boolean(controlReferenceFeaturesCurrent(context.processor(), *binding.targetContent.snapshot)
-                           && controlReferenceFeaturesCurrent(context.processor(), *binding.referenceContent.snapshot)));
+        JsonValue::boolean(
+            controlReferenceFeaturesCurrent(context.processor(), *binding.targetContent.snapshot)
+            && controlReferenceFeaturesCurrent(context.processor(), *binding.referenceContent.snapshot)));
     return result;
 }
 
@@ -254,7 +255,8 @@ private:
                 // The notes changed but no undo entry exists: as any change without an entry, it masks the entries
                 // of the API that put these notes back and discards the redo history (PROTOCOL.md section 15.3
                 // rule 9), and the project is marked as changed.
-                history->onChangeWithoutEntry(processor.getUndoManager(), content.key, ControlContentAspect::NotesAndPitch);
+                history->onChangeWithoutEntry(processor.getUndoManager(), content.key,
+                                              ControlContentAspect::NotesAndPitch);
                 controlMarkDirty(context);
                 step.fail({"INTERNAL", "",
                            "OpenTune committed the alignment but returned no pitch curve; the notes changed and there "

@@ -1224,7 +1224,8 @@ void scenarioBusyMatrix()
         return;
     const auto& contentId = handles->contentId;
     const auto& placementId = handles->placementId;
-    const auto arrangementRevision = memberOf(memberOf(api.result("project.get"), "asOf"), "arrangementRevision").text();
+    const auto arrangementRevision =
+        memberOf(memberOf(api.result("project.get"), "asOf"), "arrangementRevision").text();
     const auto revision = memberOf(handles->tokens, "revision").text();
     const auto gridRevision = memberOf(handles->tokens, "gridRevision").text();
     CONTROL_CHECK(!revision.empty() && !gridRevision.empty());

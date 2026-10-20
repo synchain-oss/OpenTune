@@ -486,8 +486,7 @@ void scenarioUpstreamServiceLimit()
     // still commits (the worker is not needed). Either content may be the one the worker completed (pendingJobs is
     // ordered by content key, not by submission), so both sets are written.
     CONTROL_CHECK(setReferenceFeatures(*f.processor, f.target.key, ReferenceFeatureStatus::Ready, targetNotes()));
-    CONTROL_CHECK(
-        setReferenceFeatures(*f.processor, f.reference.key, ReferenceFeatureStatus::Ready, referenceNotes()));
+    CONTROL_CHECK(setReferenceFeatures(*f.processor, f.reference.key, ReferenceFeatureStatus::Ready, referenceNotes()));
     const auto readyJob = f.startAnalyze();
     CONTROL_CHECK(!readyJob.empty() && f.waitJobState(readyJob, "succeeded"));
     CONTROL_CHECK(memberOf(memberOf(f.jobOf(readyJob), "result"), "alignmentReady").asBoolean());

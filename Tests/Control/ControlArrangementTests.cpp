@@ -251,6 +251,10 @@ void checkMoves(Fixture& f, const Clip& a, const Clip& b)
     change = changeOf(result, f.pid(a));
     CONTROL_CHECK(near(memberOf(fieldOf(change, "trackId"), "after"), 1.0) && warningCodes(result) == "OVERLAPS_CLIP");
     CONTROL_CHECK(f.locate(a.placementId).trackId == 1 && f.locate(b.placementId).trackId == 1);
+    // The warning names the clip it overlaps.
+    const auto overlapWarning = warningOf(result, "OVERLAPS_CLIP");
+    const auto& overlaps = memberOf(memberOf(overlapWarning, "data"), "overlaps");
+    CONTROL_CHECK(overlaps.size() == 1 && overlaps.at(0).text() == f.pid(b));
 
     // Onto a hidden track: the tracks up to it are shown, each with TRACK_AUTO_REVEALED.
     result = f.edit(f.op("move", a, "\"toTrackId\":3,\"startTimelineSec\":2"));
@@ -435,6 +439,15 @@ void checkSplitAndMerge(Fixture& f, const Clip& a, const Clip& c, const Clip& pe
     CONTROL_CHECK(entities(result, "removed") == "placement" && entities(result, "created").empty()
                   && f.revision() == before);
 
+    // A clip bound to the split clip loses its binding, and the prediction says so.
+    const auto splitBound = f.addClip("split-bound", 3, 21.0);
+    CONTROL_CHECK(settleBackgroundWork(*f.processor));
+    CONTROL_CHECK(f.arrangement().setPlacementReferencePlacement(3, splitBound.placementId, c.placementId));
+    result = f.edit(f.op("split", c, "\"atTimelineSec\":23"), ",\"dryRun\":true");
+    CONTROL_CHECK(
+        memberOf(fieldOf(changeOf(result, f.pid(splitBound)), "referencePlacementId"), "after").isNull());
+    CONTROL_CHECK(f.locate(splitBound.placementId).placement.referencePlacementId == c.placementId);
+
     // Between two analysis frames: the cut snaps to the nearest one (SPLIT_SNAPPED).
     result = f.edit(f.op("split", c, "\"atTimelineSec\":23.004"));
     CONTROL_CHECK(warningCodes(result) == "SPLIT_SNAPPED,UPSTREAM_UNDO_DEFECT");
@@ -490,10 +503,13 @@ void checkDelete(Fixture& f, const Clip& a, const Clip& b)
     auto result = f.edit(ids, ",\"dryRun\":true");
     CONTROL_CHECK(entities(result, "removed") == "placement,placement,content,content" && f.revision() == before);
 
-    // A third clip bound to b loses the binding with it.
+    // A third clip bound to b loses the binding with it; a prediction says so as well.
     const auto bound = f.addClip("bound", 2, 3.0);
     CONTROL_CHECK(settleBackgroundWork(*f.processor));
     CONTROL_CHECK(f.arrangement().setPlacementReferencePlacement(2, bound.placementId, b.placementId));
+    result = f.edit(ids, ",\"dryRun\":true");
+    CONTROL_CHECK(memberOf(fieldOf(changeOf(result, f.pid(bound)), "referencePlacementId"), "after").isNull());
+    CONTROL_CHECK(f.locate(bound.placementId).placement.referencePlacementId == b.placementId);
     result = f.edit(ids, ",\"confirm\":true");
     CONTROL_CHECK(entities(result, "removed") == "placement,placement,content,content");
     CONTROL_CHECK(refAt(result, "removed", 2, "contentId").rfind("c:", 0) == 0);

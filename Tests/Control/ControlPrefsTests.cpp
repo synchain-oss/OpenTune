@@ -242,7 +242,7 @@ public:
         return appliedNotesPrimary == notesPrimary;
     }
 
-    bool prepareAudioDeviceSwitch(const std::string& reason) override
+    bool prepareAudioDeviceSwitch(juce::AudioDeviceManager&, const std::string& reason) override
     {
         switchReasons.push_back(reason);
         return asioRestoreSucceeds;

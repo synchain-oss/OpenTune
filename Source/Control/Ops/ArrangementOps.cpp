@@ -111,6 +111,24 @@ void describeChanges(ControlOpContext& context, ControlWriteEnvelope& envelope,
     }
 }
 
+/** The arrangement as it is once the clips of removedIds are gone: they are not in the list, and a clip that was bound to
+    one of them has no binding any more (StandaloneArrangement::retirePlacement() clears them). Used to predict
+    delete and split. */
+std::vector<ControlPlacementRef> withoutClips(std::vector<ControlPlacementRef> model,
+                                              const std::vector<std::uint64_t>& removedIds)
+{
+    const auto removed = [&removedIds](std::uint64_t id) {
+        return std::find(removedIds.begin(), removedIds.end(), id) != removedIds.end();
+    };
+    model.erase(std::remove_if(model.begin(), model.end(),
+                               [&removed](const ControlPlacementRef& ref) { return removed(ref.placement.placementId); }),
+                model.end());
+    for (auto& ref : model)
+        if (removed(ref.placement.referencePlacementId))
+            ref.placement.referencePlacementId = 0;
+    return model;
+}
+
 /** Records a new clip of the arrangement in created and touches it; its label once it is found. */
 std::string addCreatedClip(ControlWriteEnvelope& envelope, const std::vector<ControlPlacementRef>& placements,
                            std::uint64_t placementId)
@@ -149,7 +167,8 @@ bool overlapsOnTrack(const ControlPlacementRef& a, const ControlPlacementRef& b)
                   > kTimelineEpsilon;
 }
 
-/** OVERLAPS_CLIP for every clip of ids that overlaps another clip on its track in placements. */
+/** OVERLAPS_CLIP for every clip of ids that overlaps another clip on its track in placements; data.overlaps lists the
+    clips it overlaps (placementIds). */
 void warnOverlaps(ControlWriteEnvelope& envelope, const std::vector<ControlPlacementRef>& placements,
                   const std::vector<std::uint64_t>& ids)
 {
@@ -157,11 +176,15 @@ void warnOverlaps(ControlWriteEnvelope& envelope, const std::vector<ControlPlace
         const auto* ref = findIn(placements, id);
         if (ref == nullptr)
             continue;
-        const bool overlaps =
-            std::any_of(placements.begin(), placements.end(),
-                        [ref](const ControlPlacementRef& other) { return overlapsOnTrack(*ref, other); });
-        if (overlaps)
-            envelope.addWarning("OVERLAPS_CLIP", placementRef(ref->placementId));
+        auto overlapped = JsonValue::array();
+        for (const auto& other : placements)
+            if (overlapsOnTrack(*ref, other))
+                overlapped.append(JsonValue::string(other.placementId));
+        if (overlapped.size() == 0)
+            continue;
+        auto data = JsonValue::object();
+        data.appendMember("overlaps", std::move(overlapped));
+        envelope.addWarning("OVERLAPS_CLIP", placementRef(ref->placementId), std::move(data));
     }
 }
 
@@ -224,7 +247,7 @@ PushedEntry pushEntry(ControlOpContext& context, const std::shared_ptr<ControlHi
     pushed.description = description.toStdString();
     auto action = std::make_unique<ControlOriginAction>(history, pushed.undoId, description, std::move(inner));
     pushed.names = action->innerActionNames();
-    context.processor().getUndoManager().addAction(std::move(action));
+    history->record(context.processor().getUndoManager(), std::move(action));
     return pushed;
 }
 
@@ -634,6 +657,8 @@ Result<double> checkSplit(ControlOpContext& context, const ControlPlacementRef& 
     const double sampleRate = snapshot->audioSampleRate;
     if (!std::isfinite(sampleRate) || sampleRate <= 0.0)
         return controlOpError("UNSUPPORTED", "upstream_absent", "the audio of the clip has no sample rate");
+    if (snapshot->pitchCurve == nullptr)
+        return controlOpError("NOT_READY", "f0_not_ready", "the clip has no pitch analysis yet");
     const auto& curve = *snapshot->pitchCurve;
     const int frames = static_cast<int>(curve.getOriginalF0().size());
     const F0Timeline timeline(curve.getHopSize(), curve.getSampleRate(), frames);
@@ -720,6 +745,9 @@ Result<JsonValue> runSplit(ControlOpContext& context, const EditParams& params, 
     if (params.dryRun) {
         // The two new clips get their placementIds when they are made; the prediction names the clip they replace.
         envelope.addRemoved("placement", placementRef(clip.placementId), JsonValue::string(label));
+        // Clips bound to the split clip lose their binding (StandaloneArrangement::retirePlacement()).
+        describeChanges(context, envelope, controlLivePlacements(context),
+                        withoutClips(controlLivePlacements(context), {clip.placement.placementId}));
         addWarnings();
         return envelope.predicted(context);
     }
@@ -801,12 +829,28 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
     addIdMapEntry(envelope, "merge", {leading.placementId, trailing.placementId}, {merged});
     describeChanges(context, envelope, before, after);
     envelope.addWarning("UPSTREAM_UNDO_DEFECT", placementRef(leading.placementId));
-    // Splitting the merged clip at the former boundary takes it back, with new placementIds.
-    auto split = JsonValue::object();
-    split.appendMember("op", JsonValue::string("split"));
-    split.appendMember("placementId", JsonValue::string(merged));
-    split.appendMember("atTimelineSec", controlJsonSeconds(trailing.placement.timelineStartSeconds));
-    envelope.setNotUndoable("upstream_undo_defect", editRecipe(context, std::move(split), false));
+    // Splitting the merged clip at the former boundary takes it back, with new placementIds, but a split snaps to an
+    // analysis frame boundary: when the boundary is not one (checkSplit() on the merged clip), the split cuts elsewhere
+    // and no request restores the former clips (PROTOCOL.md section 15.2).
+    const double boundary = trailing.placement.timelineStartSeconds;
+    const auto* mergedClip = findIn(after, outcome->mergedPlacementId);
+    bool restorable = false;
+    if (mergedClip != nullptr) {
+        const auto cut = checkSplit(context, *mergedClip, boundary);
+        restorable = cut.ok() && std::abs(cut.value() - boundary) <= kSampleGridTolerance;
+    }
+    if (restorable) {
+        auto split = JsonValue::object();
+        split.appendMember("op", JsonValue::string("split"));
+        split.appendMember("placementId", JsonValue::string(merged));
+        split.appendMember("atTimelineSec", controlJsonSeconds(boundary));
+        envelope.setNotUndoable("upstream_undo_defect", editRecipe(context, std::move(split), false));
+    } else {
+        auto data = JsonValue::object();
+        data.appendMember("reason", JsonValue::string("split_cannot_restore_boundary"));
+        envelope.addWarning("IRREVERSIBLE", placementRef(merged), std::move(data));
+        envelope.setNotUndoable("upstream_undo_defect");
+    }
     return envelope.committed(context);
 }
 
@@ -866,8 +910,15 @@ Result<JsonValue> runDelete(ControlOpContext& context, const EditParams& params,
         envelope.addRemoved("content", contentRef(controlContentId(context, key)),
                             JsonValue::string("Content of " + placementLabel(*clip)));
     }
-    if (!params.dryRun)
+    if (params.dryRun) {
+        // Clips bound to a deleted clip lose their binding (StandaloneArrangement::retirePlacement()).
+        std::vector<std::uint64_t> ids;
+        for (const auto& clip : item.clips)
+            ids.push_back(clip.placement.placementId);
+        describeChanges(context, envelope, before, withoutClips(before, ids));
+    } else {
         describeChanges(context, envelope, before, controlLivePlacements(context));
+    }
     for (const auto& clip : item.clips) {
         envelope.addWarning("UPSTREAM_UNDO_DEFECT", placementRef(clip.placementId));
         envelope.addWarning("IRREVERSIBLE", placementRef(clip.placementId));
@@ -999,6 +1050,8 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
     auto model = before;
     std::vector<Planned> plan;
     std::vector<std::uint64_t> reshaped;
+    // The tracks that clips move to: all of the plan for a prediction, only the steps OpenTune applied for a commit.
+    std::vector<int> plannedReceiving;
     std::vector<int> receivingTracks;
     for (const auto& item : ops) {
         const auto& op = *item.op;
@@ -1083,14 +1136,14 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
         if (geometryChanged && std::find(reshaped.begin(), reshaped.end(), p.placementId) == reshaped.end())
             reshaped.push_back(p.placementId);
         if (step.trackBefore != step.trackAfter)
-            receivingTracks.push_back(step.trackAfter);
+            plannedReceiving.push_back(step.trackAfter);
         plan.push_back(step);
     }
 
     if (params.dryRun) {
         describeChanges(context, envelope, before, model);
         warnOverlaps(envelope, model, reshaped);
-        revealTracks(context, envelope, receivingTracks, true);
+        revealTracks(context, envelope, plannedReceiving, true);
         return envelope.predicted(context);
     }
 
@@ -1099,12 +1152,17 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
     // the record of its fades).
     std::optional<juce::String> description;
     bool refused = false;
+    bool referenceChanged = false;
     for (const auto& step : plan) {
         const auto count = inner.size();
         if (!applyPlanned(processor, *arrangement, step, inner)) {
             refused = true;
             break;
         }
+        if (step.trackBefore != step.trackAfter)
+            receivingTracks.push_back(step.trackAfter);
+        if (step.kind == OpKind::SetReference && step.before.referencePlacementId != step.after.referencePlacementId)
+            referenceChanged = true;
         if (!description && inner.size() > count)
             description = inner.back().action->getDescription();
     }
@@ -1113,6 +1171,10 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
     if (changed) {
         pushed = pushEntry(context, history, std::move(inner), description);
         afterChange(context);
+        // The binding menu of the editor refreshes the reference context after every binding it makes.
+        if (referenceChanged)
+            if (auto* bridge = context.bridge())
+                bridge->onReferenceBindingChanged();
         revealTracks(context, envelope, receivingTracks, false);
     }
     if (refused) {

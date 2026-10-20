@@ -453,6 +453,11 @@ Result<JsonValue> runDuplicate(ControlOpContext& context, const DuplicateParams&
     const auto visible = controlEditorVisibleTrackCount(context);
     if (!visible.ok())
         return visible.error();
+    // OpenTune's Duplicate Track is offered on a shown track only, so a hidden source is refused. The registry has
+    // no reason for a duplicate of a hidden track; track_hidden, which track.delete uses for the same case, is
+    // the closest.
+    if (params.trackId >= visible.value())
+        return controlOpError("INVALID_ARGUMENT", "track_hidden", "a hidden track cannot be duplicated");
     if (visible.value() >= controlTrackSlotCount(context))
         return controlOpError("INVALID_ARGUMENT", "track_limit",
                               "every track slot is shown; there is no slot for the copy");

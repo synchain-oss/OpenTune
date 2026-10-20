@@ -452,6 +452,12 @@
             "predictNotesOnly",
             "runNotesOnly"
           ]
+        },
+        {
+          "file": "Source/Control/Ops/SelectionOps.cpp",
+          "symbols": [
+            "predictNotes"
+          ]
         }
       ],
       "tests": [
@@ -500,6 +506,12 @@
           "file": "Source/Control/Ops/ContentDetailsOps.cpp",
           "symbols": [
             "runGetDetails"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/SelectionOps.cpp",
+          "symbols": [
+            "predictReference"
           ]
         }
       ],
@@ -1132,6 +1144,12 @@
           "file": "Source/Control/Ops/TimingOps.cpp",
           "symbols": [
             "SeedJob::step"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/SelectionOps.cpp",
+          "symbols": [
+            "preheatWouldQueue"
           ]
         }
       ],

@@ -41,6 +41,7 @@ public:
     void onStructureChanged() override;
     void onUndoRedoApplied() override;
     void onTimeGridChanged() override;
+    void onReferenceBindingChanged() override;
     void onProjectReloaded() override;
     void onProjectSaved() override;
     void onRecentProjectsChanged() override;
@@ -75,7 +76,7 @@ public:
     // ---- Preferences and audio device (ControlEditorBridgePrefs.cpp) ----
     void onPreferencesChanged() override;
     std::optional<bool> editingSchemeApplied(bool notesPrimary) const override;
-    bool prepareAudioDeviceSwitch(const std::string& reason) override;
+    bool prepareAudioDeviceSwitch(juce::AudioDeviceManager& manager, const std::string& reason) override;
 
 private:
     /** The placement the arrangement selects on its active track, or 0. */

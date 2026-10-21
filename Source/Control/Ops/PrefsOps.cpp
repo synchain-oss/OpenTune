@@ -393,8 +393,17 @@ public:
     void step(ControlJobStep& jobStep)
     {
         ControlOpContext context(environment_);
-        if (!started_)
+        if (!started_) {
+            // The call checked the busy state when it started the job, but the job's first step runs later: a modal
+            // dialog or an export may have begun meanwhile. Nothing was changed yet, so the job just fails.
+            if (const auto busy = controlCheckBusy(context)) {
+                const auto reply = controlMapError(*busy);
+                jobStep.fail(ControlJobError{reply.kind, reply.reason, reply.detail, false});
+                finished_ = true;
+                return;
+            }
             begin(context);
+        }
         auto* bridge = context.bridge();
         bool applied = true;
         if (delta_.scheme && bridge != nullptr)

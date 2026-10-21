@@ -326,15 +326,18 @@ Outcome applyRequest(juce::AudioDeviceManager& manager, ControlUiBridge& bridge,
 {
     // A step touched the device: a failure must put the previous setup back.
     bool changed = false;
-    const auto fail = [&](Outcome::Kind kind, const char* detail) {
-        if (changed && !restoreToPrior(manager, prior))
+    // The detail says what went wrong in this step; what became of the previous setup is added here, so that a value
+    // that is not on offer is not reported as a device that could not be opened.
+    const auto fail = [&](Outcome::Kind kind, const std::string& reason) {
+        if (!changed)
+            return Outcome{kind, reason + "; the current setup is unchanged"};
+        if (!restoreToPrior(manager, prior))
             return Outcome{Outcome::Kind::NotRestored,
-                           "the device could not be opened with the new setup, and the previous setup could not be "
-                           "restored; no device runs"};
-        return Outcome{kind, detail};
+                           reason + ", and the previous setup could not be restored; no device runs"};
+        return Outcome{kind, reason + "; the previous setup was restored"};
     };
-    constexpr const char* kOpenFailed = "the audio device could not be opened with the new setup; the previous setup "
-                                        "was restored";
+    const std::string kOpenFailed = "the audio device could not be opened with the new setup";
+    const std::string kAsioNotRestored = "the ASIO device could not be restored to the system sample rate";
 
     // typeChanged(): ASIO is restored to the system sample rate before it is closed for another type; the device
     // manager then switches type and opens that type's default device, and a type that does not take over, or a device
@@ -344,10 +347,8 @@ Outcome applyRequest(juce::AudioDeviceManager& manager, ControlUiBridge& bridge,
         const auto currentType = manager.getCurrentAudioDeviceType();
         if (requestedType != currentType) {
             const bool hadDevice = manager.getCurrentAudioDevice() != nullptr;
-            if (currentType == "ASIO" && !bridge.prepareAudioDeviceSwitch("audio type switch"))
-                return fail(Outcome::Kind::OpenFailed,
-                            "the ASIO device could not be restored to the system sample rate; the current device "
-                            "stays");
+            if (currentType == "ASIO" && !bridge.prepareAudioDeviceSwitch(manager, "audio type switch"))
+                return fail(Outcome::Kind::OpenFailed, kAsioNotRestored);
             manager.setCurrentAudioDeviceType(requestedType, true);
             changed = true;
             const bool typeMismatch = manager.getCurrentAudioDeviceType() != requestedType;
@@ -377,10 +378,8 @@ Outcome applyRequest(juce::AudioDeviceManager& manager, ControlUiBridge& bridge,
             if (type == nullptr || !type->hasSeparateInputsAndOutputs())
                 setup.inputDeviceName = setup.outputDeviceName;
             if (manager.getCurrentAudioDeviceType() == "ASIO" && setup.outputDeviceName != currentSetup.outputDeviceName
-                && !bridge.prepareAudioDeviceSwitch("audio output switch"))
-                return fail(Outcome::Kind::OpenFailed,
-                            "the ASIO device could not be restored to the system sample rate; the current device "
-                            "stays");
+                && !bridge.prepareAudioDeviceSwitch(manager, "audio output switch"))
+                return fail(Outcome::Kind::OpenFailed, kAsioNotRestored);
             changed = true;
             if (applySetup(manager, setup).isNotEmpty())
                 return fail(Outcome::Kind::OpenFailed, kOpenFailed);

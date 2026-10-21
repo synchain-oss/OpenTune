@@ -191,7 +191,7 @@ Result<JsonValue> applyPlan(ControlOpContext& context, const ControlContentRef& 
         auto action = std::make_unique<ControlOriginAction>(history, undoId, description, std::move(actions));
         const auto names = action->innerActionNames();
         // UndoManager::addAction(), as the piano roll's commitTimeGrid pushes its entry; it discards the redo history.
-        processor.getUndoManager().addAction(std::move(action));
+        history->record(processor.getUndoManager(), std::move(action));
         envelope.setUndoable(undoId, description.toStdString(), names);
         // The time grid is saved with the project; the UI does not mark the project after a time-grid edit.
         controlMarkDirty(context);

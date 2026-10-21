@@ -33,13 +33,12 @@ std::optional<bool> ControlEditorBridge::editingSchemeApplied(bool notesPrimary)
     return AudioEditingScheme::usesNotesPrimaryScheme(editor_.appliedAudioEditingScheme_) == notesPrimary;
 }
 
-bool ControlEditorBridge::prepareAudioDeviceSwitch(const std::string& reason)
+bool ControlEditorBridge::prepareAudioDeviceSwitch(juce::AudioDeviceManager& manager, const std::string& reason)
 {
     // restoreAsioSampleRateToSystem(): the audio settings page calls it before it
-    // closes an ASIO device for another type or output device. Without the
-    // Standalone holder there is no device manager to restore.
-    auto* holder = juce::StandalonePluginHolder::getInstance();
-    return holder == nullptr || restoreAsioSampleRateToSystem(holder->deviceManager, juce::String(reason));
+    // closes an ASIO device for another type or output device. It acts on the
+    // manager the call works on (audioDevice()).
+    return restoreAsioSampleRateToSystem(manager, juce::String(reason));
 }
 
 } // namespace OpenTune

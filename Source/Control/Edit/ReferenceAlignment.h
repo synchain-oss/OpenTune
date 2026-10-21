@@ -9,6 +9,7 @@
 namespace OpenTune {
 
 class OpenTuneAudioProcessor;
+struct EditableContentSnapshot;
 
 /** The outcome of controlAlignToReference(). */
 struct ControlReferenceAlignment
@@ -26,7 +27,10 @@ struct ControlReferenceAlignment
         /** A placement, a content or the alignment data of one of them is not there (any more). */
         NotReady,
         /** OpenTune did not commit the patch, or the request was invalid. */
-        Failed
+        Failed,
+        /** The notes and segments were committed, but the snapshot OpenTune returned has no pitch curve, so no undo
+            action could be built: the content changed and there is no undo entry. */
+        CommittedWithoutUndo
     };
 
     Status status = Status::Failed;
@@ -52,5 +56,14 @@ struct ControlReferenceAlignment
  * Threading: message thread only.
  */
 ControlReferenceAlignment controlAlignToReference(OpenTuneAudioProcessor& processor, std::uint64_t targetPlacementId);
+
+/**
+ * Whether a content has alignment data that the reference alignment can use: ready, of the producer this instance
+ * uses (OpenTuneAudioProcessor::getReferenceFeatureProducer()), and made from the audio as it is now (its input
+ * fingerprint is the content's audio revision). The one test behind controlAlignToReference() (Status::NotReady),
+ * content.analyzeReference's alignmentReady and the reference.alignmentReady of content.getDetails.
+ * Threading: message thread.
+ */
+bool controlReferenceFeaturesCurrent(const OpenTuneAudioProcessor& processor, const EditableContentSnapshot& snapshot);
 
 } // namespace OpenTune

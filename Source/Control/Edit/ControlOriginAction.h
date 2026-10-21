@@ -116,6 +116,13 @@ public:
     /** The value of ControlHistory::barrierGeneration() when the entry was made: an entry made after the last
         track deletion carries the current value. */
     std::uint64_t barrierGeneration() const noexcept { return barrierGeneration_; }
+    /** True when the entry sits at a position below the history's stale mark (ControlHistory::record() found
+        it so, or the history was full and positions moved): the entry is newer than the last track deletion, but
+        its position still counts among the positions recorded before it. A track deletion then must not take it
+        off the count of newer positions (see ControlHistory::onTrackDeleted()). */
+    bool belowStaleMark() const noexcept { return belowStaleMark_; }
+    /** Called by ControlHistory. */
+    void markBelowStaleMark() noexcept { belowStaleMark_ = true; }
 
 private:
     bool masked(const ContentKey& content, ControlContentAspect aspect) const;
@@ -131,6 +138,7 @@ private:
     bool lastStepTookEffect_ = true;
     bool possiblyStale_ = false;
     bool onRedoSide_ = false;
+    bool belowStaleMark_ = false;
     std::uint64_t barrierGeneration_ = 0;
 };
 
@@ -199,6 +207,15 @@ public:
         a step moves the cursor but no entry, so the history as it is now counts as observed. */
     void noteOwnStep(const UndoManager& manager);
 
+    /**
+     * Pushes the entry onto OpenTune's history (UndoManager::addAction(), which discards the redo history) and
+     * notes where it landed: UndoManager::cursor() minus one is its position. An entry that lands below the
+     * position a track deletion marked (the history was undone past the mark first) is flagged
+     * (ControlOriginAction::belowStaleMark()), so that the next deletion's count does not subtract it from the
+     * positions above the mark. Every push of the API goes through here.
+     */
+    void record(UndoManager& manager, std::unique_ptr<ControlOriginAction> action);
+
     /** Called by ControlOriginAction for its lifetime. */
     void add(ControlOriginAction* action);
     void remove(ControlOriginAction* action);
@@ -223,7 +240,8 @@ public:
      * its cursor, so an entry of the UI is told by its position: every position below the size the history had at
      * the deletion holds an entry recorded before it. A position that a later entry took over after an undo keeps
      * counting until prune() sees the history shorter; that can report too many entries as possibly stale, never
-     * too few. A deletion made in the UI itself is not observed (there is no hook for it).
+     * too few. An entry of the API that was made below the mark is not subtracted from those positions either
+     * (record()). A deletion made in the UI itself is not observed (there is no hook for it).
      * Returns how many entries on each side the deletion newly made possibly stale: an entry that already was
      * possibly stale is not counted again; one that a call with force had confirmed is.
      */

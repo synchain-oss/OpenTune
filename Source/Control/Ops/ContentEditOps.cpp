@@ -473,7 +473,7 @@ Result<JsonValue> runEditNotes(ControlOpContext& context, const EditNotesParams&
         auto action =
             std::make_unique<ControlOriginAction>(history.value(), undoId, description, transaction.takeActions());
         const auto names = action->innerActionNames();
-        manager.addAction(std::move(action));
+        history.value()->record(manager, std::move(action));
         envelope.setUndoable(undoId, description.toStdString(), names);
         // As the editor after an edit of the piano roll (pitchCurveEdited(), contentEdited()).
         controlMarkDirty(context);
@@ -580,7 +580,7 @@ Result<JsonValue> runSetPitchShift(ControlOpContext& context, const SetPitchShif
     const auto undoId = history.value()->nextUndoId(context.instanceShort());
     auto action = std::make_unique<ControlOriginAction>(history.value(), undoId, description, std::move(inner));
     const auto names = action->innerActionNames();
-    processor.getUndoManager().addAction(std::move(action));
+    history.value()->record(processor.getUndoManager(), std::move(action));
     controlMarkDirty(context);
 
     // The effect from two captures, as for an undo step: the pitchShift change and reRenderQueued; `revision`

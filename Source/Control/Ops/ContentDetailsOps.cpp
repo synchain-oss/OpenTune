@@ -5,6 +5,7 @@
 #include "OpsSupport.h"
 
 #include "Content/EditableContentSnapshot.h"
+#include "Control/Edit/ReferenceAlignment.h"
 #include "Inference/RenderCache.h"
 #include "PluginProcessor.h"
 #include "Render/ContentRenderService.h"
@@ -195,16 +196,13 @@ Result<JsonValue> runGetDetails(ControlOpContext& context, const DetailsParams& 
     const auto referenceId = via.placement.referencePlacementId;
     bool alignmentReady = false;
     if (referenceId != 0) {
-        const auto producer = processor.getReferenceFeatureProducer();
-        const auto isCurrent = [producer](const ReferenceFeatureSet& features) {
-            return features.isReady() && features.producer == producer;
-        };
         for (const auto& placement : livePlacements) {
             if (placement.placement.placementId != referenceId)
                 continue;
             const auto referenceSnapshot = controlLiveSnapshot(context, placement.placement.contentKey);
-            alignmentReady = referenceSnapshot != nullptr && isCurrent(snapshot.referenceFeatures)
-                             && isCurrent(referenceSnapshot->referenceFeatures);
+            // The one test content.analyzeReference and the alignment itself use.
+            alignmentReady = referenceSnapshot != nullptr && controlReferenceFeaturesCurrent(processor, snapshot)
+                             && controlReferenceFeaturesCurrent(processor, *referenceSnapshot);
             break;
         }
     }

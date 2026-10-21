@@ -86,6 +86,25 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 环境变量 `OPENTUNE_DATA_DIR` 会把首选项、日志与发现目录重定向到指定目录，仅供测试隔离使用。
 
+## 首选项与音频设备
+
+这两组方法改的是 OpenTune 安装的**全局设置**，不属于某个工程：它们在所有工程里生效，并且在会话结束后保留。与界面一样没有撤销条目；每次改动都带警告 `GLOBAL_PREFERENCE`，结果里同时给出把旧值设回去的还原方法（`prefs.set` / `audio.set`）。写操作遵守通用的忙碌规则（模态对话框、指针按下、导入/导出进行中时返回 `BUSY`）。
+
+| 方法 | 能力 | 作用 |
+|---|---|---|
+| `prefs.get` | `read.v1` | 读取处理设置（A4 频率、编辑方案、混合模式、实验功能）、是否已完成首次引导、界面语言（经本协议只读）与最近工程列表。无法确定的处理设置为 null，并在 `processing.nullReasons` 里说明原因。最近工程的路径是不可信数据。 |
+| `prefs.set` | `prefs.write` | 照首选项窗口的做法修改 `tuningHz`（400–500，A4 的频率）、`editingScheme`（`openTune` 或 `openDyne`）、`hybridMode` 与 `experimentalFeatures`（显示或隐藏参考绑定等实验功能）。与当前值相同的项不算改动。 |
+| `audio.get` | `audio.device` | 读取 Standalone 的音频设备：是否有设备在运行、设备类型、输出设备、采样率、缓冲区大小与输出声道对，以及当前设备类型与设备提供的可选值（`available`）。没有运行的设备时，其余成员为 null，原因是 `no_audio_device`。设备类型与设备名来自操作系统，是不可信数据。 |
+| `audio.set` | `audio.device` | 照音频设置页的做法修改 `deviceType`、`outputDevice`、`sampleRateHz`、`bufferSizeFrame`、`outputChannelPair`：给出的成员替换当前设置，设备随之重新打开，重新打开期间播放会停止。 |
+
+要点：
+
+- `tuningHz` 只影响此后的分析与渲染，不会重新计算已有结果（警告 `NOT_RETROACTIVE`）。`hybridMode` 的改动会让 OpenTune 重新渲染所有内容（`sideEffects.reRenderQueued`）。
+- OpenTune 异步地把新的编辑方案应用到编辑器，所以改动 `editingScheme` 的调用把全部改动交给一个 `prefsApply` 任务，任务在编辑器应用完方案后结束，不能取消。切换到 `openDyne` 可能让 OpenTune 为钢琴卷帘里打开的片段生成音符，这一步没有撤销条目，结果里有 `sideEffects.notesGenerated` 与警告 `SCHEME_GENERATED_NOTES`、`IRREVERSIBLE`，工程也会被标记为已修改。
+- 声码器权重、渲染优先级、音高模型与参考对齐模式在当前版本不能设置。
+- `audio.set` 只接受 `audio.get` 的 `available` 里列出的值，否则返回 `INVALID_ARGUMENT(audio_setting_unavailable)`，什么都不改。设备打不开时，服务端像设置页一样恢复原来的设置，调用以 `IO_ERROR(device_open_failed)` 失败，`executed` 为 false；原来的设置也打不开时，`executed` 为 true，且没有设备在运行（`audio.get` 会如实报告）。失败信息会说明是哪一步出了问题，以及原设置是否已恢复。
+- 在 ASIO 设备上切换设备类型或输出设备之前，服务端会像设置页一样先把 ASIO 采样率恢复为系统共享渲染率；恢复无法确认时调用失败，当前设备保持不变。
+
 ## 与 OpenTune MCP Server 的关系
 
 - [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server) 是一个 stdio MCP 服务，采用 MIT 许可。它连接本接口，让 Claude Code、Claude Desktop、Cursor 等 MCP 客户端操作 OpenTune。它的 npm 包 `@synchain/opentune-mcp`（命令 `opentune-mcp`）尚未发布。

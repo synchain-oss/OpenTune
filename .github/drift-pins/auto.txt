@@ -4,6 +4,7 @@
 # group: auto
 # pinned-at: upstream/20261008-addb4f4
 # ported-to: Source/Control/Ops/ContentTuneOps.cpp
+# ported-to: Source/Control/Ops/SelectionOps.cpp
 # ported-to: Source/Control/Ops/ContentDetailsOps.cpp
 # ported-to: Source/Control/Edit/NoteCorrection.cpp
 #

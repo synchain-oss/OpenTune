@@ -644,7 +644,7 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
         auto action = std::make_unique<ControlOriginAction>(history.value(), undoId, description, std::move(inner));
         const auto names = action->innerActionNames();
         // UndoManager::addAction(), as the piano roll pushes its entry; it discards the redo history.
-        manager.addAction(std::move(action));
+        history.value()->record(manager, std::move(action));
         envelope.setUndoable(undoId, description.toStdString(), names);
         controlMarkDirty(context);
         if (const auto now = controlLiveSnapshot(context, ref.key))
@@ -811,7 +811,7 @@ Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& 
         auto action = std::make_unique<ControlOriginAction>(history.value(), undoId, description, std::move(inner));
         const auto names = action->innerActionNames();
         // UndoManager::addAction(), as the piano roll pushes its entry; it discards the redo history.
-        manager.addAction(std::move(action));
+        history.value()->record(manager, std::move(action));
         envelope.setUndoable(undoId, description.toStdString(), names);
         // PluginEditor::autoTuneRequested() marks the project as changed after the button's SNAP.
         controlMarkDirty(context);

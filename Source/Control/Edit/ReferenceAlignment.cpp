@@ -60,6 +60,13 @@ ReferenceClipProjection projectionOf(const StandaloneArrangement::Placement& pla
 
 } // namespace
 
+bool controlReferenceFeaturesCurrent(const OpenTuneAudioProcessor& processor, const EditableContentSnapshot& snapshot)
+{
+    const auto& features = snapshot.referenceFeatures;
+    return features.isReady() && features.producer == processor.getReferenceFeatureProducer()
+           && features.inputFingerprint == static_cast<std::int64_t>(snapshot.audioRevision);
+}
+
 ControlReferenceAlignment controlAlignToReference(OpenTuneAudioProcessor& processor, std::uint64_t targetPlacementId)
 {
     ControlReferenceAlignment outcome;
@@ -105,15 +112,10 @@ ControlReferenceAlignment controlAlignToReference(OpenTuneAudioProcessor& proces
     // The alignment data must be the current producer's, made from the audio as it is now; the caller's job asks for
     // it first (OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures()), the AUTO button does it when it finds
     // the data missing.
-    const auto desiredProducer = processor.getReferenceFeatureProducer();
-    const auto featureIsCurrent = [desiredProducer](const ReferenceFeatureSet& features,
-                                                    const EditableContentSnapshot& snapshot) {
-        return features.isReady() && features.producer == desiredProducer
-               && features.inputFingerprint == static_cast<std::int64_t>(snapshot.audioRevision);
-    };
     const ReferenceFeatureSet targetFeatures = targetSnap->referenceFeatures;
     const ReferenceFeatureSet referenceFeatures = referenceSnap->referenceFeatures;
-    if (!featureIsCurrent(targetFeatures, *targetSnap) || !featureIsCurrent(referenceFeatures, *referenceSnap)) {
+    if (!controlReferenceFeaturesCurrent(processor, *targetSnap)
+        || !controlReferenceFeaturesCurrent(processor, *referenceSnap)) {
         outcome.status = Status::NotReady;
         return outcome;
     }
@@ -214,8 +216,13 @@ ControlReferenceAlignment controlAlignToReference(OpenTuneAudioProcessor& proces
     // OpenTuneAudioProcessor::commitContentNotesAndSegments(): the commit, which publishes the new notes and segments.
     const auto commitSnap = processor.commitContentNotesAndSegments(targetPlacement.contentKey, normalizedNotes,
                                                                     segmentsInRange, commitRange);
-    if (commitSnap == nullptr || commitSnap->pitchCurve == nullptr) {
+    if (commitSnap == nullptr) {
         outcome.status = Status::Failed;
+        return outcome;
+    }
+    if (commitSnap->pitchCurve == nullptr) {
+        // The commit went through, so the notes changed; only the undo action cannot be built from this snapshot.
+        outcome.status = Status::CommittedWithoutUndo;
         return outcome;
     }
 

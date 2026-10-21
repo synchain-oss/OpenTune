@@ -159,8 +159,13 @@ void ControlHistory::prune(const UndoManager& manager, std::uint64_t epoch)
     // position may now hold another entry, also one that took the memory of a dropped one. The positions of
     // UI entries can no longer be confirmed, so their undoIds are forgotten.
     const auto now = observe(manager);
-    if (now.size >= kUndoHistoryCapacity && lastObserved_ != now)
+    if (now.size >= kUndoHistoryCapacity && lastObserved_ != now) {
         uiEntries_.clear();
+        // The positions moved down by one, so no entry can be told to sit at or above the mark: the count of a
+        // later deletion then reports them as possibly stale, never too few.
+        for (auto* action : actions_)
+            action->markBelowStaleMark();
+    }
     lastObserved_ = now;
     // A history that became shorter than the position the last deletion marked lost entries: a new entry may
     // have taken over a position below the mark, which then counts as possibly stale (see onTrackDeleted()).
@@ -243,7 +248,7 @@ ControlHistory::StaleCounts ControlHistory::onTrackDeleted(const UndoManager& ma
     int freshControlRedo = 0;
     for (auto* action : actions_) {
         const bool redoSide = action->onRedoSide();
-        if (action->barrierGeneration() == barrierGeneration_)
+        if (action->barrierGeneration() == barrierGeneration_ && !action->belowStaleMark())
             ++(redoSide ? freshControlRedo : freshControlUndo);
         if (action->onTrackDeleted(deletedTrack))
             ++(redoSide ? counts.redo : counts.undo);
@@ -306,6 +311,19 @@ bool ControlHistory::isContentRemoved(const ContentKey& content, std::uint64_t e
 {
     return removedContentsEpoch_ == epoch
            && std::find(removedContents_.begin(), removedContents_.end(), content) != removedContents_.end();
+}
+
+void ControlHistory::record(UndoManager& manager, std::unique_ptr<ControlOriginAction> action)
+{
+    auto* const entry = action.get();
+    manager.addAction(std::move(action));
+    // UndoManager::addAction() drops the action during an undo or redo: mark only an entry that landed, compared
+    // by address (UndoManager::peekUndo(), read hook) without touching the possibly destroyed action.
+    if (manager.peekUndo() != entry)
+        return;
+    // UndoManager::cursor() (read hook): addAction() put the entry on the undo side, at cursor() - 1.
+    if (manager.cursor() - 1 < staleBelow_)
+        entry->markBelowStaleMark();
 }
 
 void ControlHistory::add(ControlOriginAction* action)

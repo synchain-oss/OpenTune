@@ -44,7 +44,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 | 导出锁（UI 与 API 共用；被占用时接口回 `BUSY(export_in_progress)`，界面照旧提示）。master 导出错误信息与按 placementId 导出不加钩子：接口错误的 detail 只用固定文本，按 placementId 导出调用已公开的 `findPlacementIndexById()` | `Source/PluginProcessor.h`、`Source/Standalone/PluginEditor.cpp` | `.h` 约 5、`.cpp` 约 15 |
 | 抽出 `afterUndoRedo()`（纯重构；选项关闭时 `performUndoRedoAction` 与上游逐字相同）+ bridge 调用 | `Source/Standalone/PluginEditor.h/.cpp` | `.h` 约 2、`.cpp` 约 8 |
 | `peekUndo` / `peekRedo` / `size` / `cursor`（只读）；`clearRedo()`（**改动型，会改写历史**：清空重做栈，只在接口的写入没有撤销条目时调用，唯一调用方是 `Source/Control/Edit/ControlOriginAction.cpp`，对应规范 rc.3 第 15.3 节第 9 条，且在撤销/重做进行中不动；若规范后续版本改为「重做时只屏蔽被改动的方面」即删除，钩子回到只读） | `Source/Utils/UndoManager.h`（仅头文件，类内内联，新增行全部在 `#if`/`#endif` 之内） | 约 8（含 `#if`/`#endif`） |
-| （预留，尚未接入）公开 `dismiss()`，包装私有 `finish()`（只关闭已显示的首次引导） | `Source/Editor/OnboardingOverlayComponent.*` | ~3 |
 | 公开 `commitControlSelection()`，包装私有选择提交（与单击片段或空白处相同：只选中该片段，或清空选择） | `Source/Standalone/UI/ArrangementViewComponent.h/.cpp` | `.h` 约 4、`.cpp` 约 17（全部在选项宏内） |
 | 参考特征生产者 getter；记录每个内容最近一次 F0 失败原因（`requestContentRefresh` 里 6 处记录调用，加两个成员函数的定义） | `Source/PluginProcessor.*` | `.h` 约 6、`.cpp` 约 43（全部在选项宏内） |
 | `option()` + `include(cmake/OpenTuneControl.cmake)` | `CMakeLists.txt` | 2–5 |
@@ -146,7 +145,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - 一键运行 `pwsh .github/scripts/gates.ps1 -Layer <层>`（在 lane 内；只改文档或脚本时加 `-SkipBuild`）。它输出带 SHA 的 PASS/FAIL/SKIP 汇总表，原样贴进 PR。依次执行：
   1. LFS 设置检查：`lfs.fetchexclude=*`，模型文件仍是未 smudge 的指针。
   2. configure / build / ctest / 真机启动，全部经 `.github/scripts/with-build-slot.ps1`：全机默认 2 个构建槽（环境变量 `OPENTUNE_BUILD_SLOTS` 或 `gates.ps1 -BuildSlots` 可调，范围 1–8），命名互斥锁，每个槽拿到后检查空闲内存，每个槽显式 `--parallel 8`。
-  3. `ctest -R Control`，再加上游已有测试，用 `-E ARALifecycleContractTests` 排除一项。该测试依赖 ARA_DRAFT 的 `persistentID`，在锁定的 ARA SDK 2.3.0 下编不过，属于上游问题。`-Layer` 为 L2 及以上时，gates 还会在 `<构建目录>\control-on` 用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` 再 configure / build / `ctest -R Control` 一遍（单独一行，Control 测试数为 0 即 FAIL），因为 lane 默认构建目录的控制接口是关闭的；这一轮 ctest 前后还会对真实 `%APPDATA%OpenTune` 各做一次快照，有新建、修改或删除即 FAIL（「测试数据隔离（control-on 一轮）」一行）；L0 与 `-SkipBuild` 时这两行 SKIP。
+  3. `ctest -R Control`，再加上游已有测试，用 `-E ARALifecycleContractTests` 排除一项。该测试依赖 ARA_DRAFT 的 `persistentID`，在锁定的 ARA SDK 2.3.0 下编不过，属于上游问题。`-Layer` 为 L2 及以上时，gates 还会在 `<构建目录>\control-on` 用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` 再 configure / build / ctest 一遍（单独一行，Control 测试数为 0 即 FAIL），因为 lane 默认构建目录的控制接口是关闭的。这一轮与 CI 的 control-api ON 任务一致：构建 Standalone、VST3 与全部已注册测试，跑全部测试（仅排除 ARALifecycleContractTests），每个测试各有独立的 `OPENTUNE_DATA_DIR`（先跑 Control 测试，再跑其余）。Control 一轮前后会对真实 `%APPDATA%OpenTune` 各做一次快照：设置文件有新建、修改或删除即 FAIL；只有 `Logs` 目录有变化记 WARN（多条 lane 并发时别的进程的测试也会写真实日志）。其余上游测试会写真实目录而 gates 隔离不了（JUCE 向系统取 AppData 目录，改 `APPDATA` 变量重定向不了），gates 在该行里标明「上游测试不隔离」（「测试数据隔离（control-on 一轮）」一行）；L0 与 `-SkipBuild` 时这两行 SKIP。构建时 gates 与 `with-build-slot.ps1` 为 MSVC 设私有的 `_MSPDBSRV_ENDPOINT_`（`ot-<lane>-build`，已设置则沿用），避免与机器上别的项目共用 mspdbsrv 而 C1041；不结束任何进程。
   4. 所有测试都使用临时 `OPENTUNE_DATA_DIR`，因为上游 ctest 会写真实的 `%APPDATA%\OpenTune`。
   5. 真 Standalone 测试环境就绪后：改到 Dispatcher / Jobs / Ops / Edit / bridge 或 `spec.lock` 的 PR，还要跑真 Standalone 的契约与场景测试。这一步持 E2E 互斥锁，并先快照、再恢复 `OpenTune.settings` 与 AppPreferences。
   6. 署名与身份检查（`.github/scripts/fork-checks.mjs`，与 fork-gate 同一份实现）。

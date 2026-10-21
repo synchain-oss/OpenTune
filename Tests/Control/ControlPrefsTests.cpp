@@ -242,7 +242,17 @@ public:
         return appliedNotesPrimary == notesPrimary;
     }
 
-    bool prepareAudioDeviceSwitch(const std::string& reason) override
+    /** With modalAfterQueries >= 0, the queries after that many report a modal dialog as open: a dialog that opens
+        between the call that starts a job and the job's first step. */
+    std::optional<BusyState> queryBusy() const override
+    {
+        auto state = TestUiBridge::queryBusy();
+        if (state && modalAfterQueries >= 0 && busyQueries++ >= modalAfterQueries)
+            state->modalOpen = true;
+        return state;
+    }
+
+    bool prepareAudioDeviceSwitch(juce::AudioDeviceManager&, const std::string& reason) override
     {
         switchReasons.push_back(reason);
         return asioRestoreSucceeds;
@@ -256,6 +266,8 @@ public:
     bool generateNotes = false;
     ContentKey pianoRollKey;
     bool asioRestoreSucceeds = true;
+    int modalAfterQueries = -1;
+    mutable int busyQueries = 0;
 
     int preferenceNotifications = 0;
     std::vector<std::string> switchReasons;
@@ -803,6 +815,26 @@ void checkWriteDuringWait(ApiSession& api, OpenTuneAudioProcessor& processor, Pr
     resetPreferences(processor);
 }
 
+/** A modal dialog opens after the call started the job and before its first step: the job fails with BUSY, nothing
+   executed and no preference changed. */
+void checkModalBeforeFirstStep(ApiSession& api, PrefsBridge& bridge)
+{
+    const auto baseline = api.result("prefs.get");
+    const auto notifications = bridge.preferenceNotifications;
+    bridge.apply = PrefsBridge::Apply::Immediate;
+    bridge.busyQueries = 0;
+    bridge.modalAfterQueries = 1; // the call's own check is the first query
+    const auto job = runAsJob(api, "prefs.set", json(R"({"editingScheme":"openDyne","tuningHz":433})"), "prefsApply");
+    bridge.modalAfterQueries = -1;
+    const auto& data = memberOf(memberOf(job, "error"), "data");
+    CONTROL_CHECK(memberOf(job, "state").text() == "failed" && memberOf(data, "kind").text() == "BUSY"
+                  && memberOf(data, "reason").text() == "modal_open" && memberOf(data, "executed").isBoolean()
+                  && !memberOf(data, "executed").asBoolean());
+    CONTROL_CHECK(bridge.preferenceNotifications == notifications);
+    CONTROL_CHECK(TuningConfig::currentTuningHz() == 440.0f);
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+}
+
 } // namespace
 
 void scenarioPrefsSchemeJob()
@@ -829,6 +861,7 @@ void scenarioPrefsSchemeJob()
     checkSchemeTimeout(api, *processor, bridge);
     checkOverlappingTimeouts(api, *processor, bridge);
     checkWriteDuringWait(api, *processor, bridge);
+    checkModalBeforeFirstStep(api, bridge);
 
     // Without an editor there is no one to wait for: the job applies the preference and ends.
     {

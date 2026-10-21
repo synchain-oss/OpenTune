@@ -1043,7 +1043,8 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
                 // API applies the interface's bounded range and reports CLAMPED in the unit the caller named. The
                 // lower end 0 is kept by the params schema (gainLinear minimum 0) and setPlacementGain()'s floor.
                 double linear = op.gainLinear ? *op.gainLinear : std::pow(10.0, *op.gainDb / 20.0);
-                if (linear > kMaxClipGainLinear) {
+                // The negated test also clamps NaN (a JSON number cannot be NaN; this only guards the arithmetic).
+                if (!(linear <= kMaxClipGainLinear)) {
                     linear = kMaxClipGainLinear;
                     if (op.gainDb)
                         warnClamped(envelope, *clip, "gainDb", controlJsonNumber(*op.gainDb, 3),

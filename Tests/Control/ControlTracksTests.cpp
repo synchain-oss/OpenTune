@@ -408,11 +408,13 @@ void checkTransportActions(Fixture& f)
     CONTROL_CHECK(f.bridge.dirtyMarks == 0);
 }
 
-/** The result of stop and the transport.get that follows it agree, 50 times in a row: the position is the presented
-    one the stop froze, not a landing value constructed before the read. */
+/** The result of stop and the transport.get that follows it agree, a few times in a row: the position is the presented
+    one the stop froze, not a landing value constructed before the read. The test device has no audio callback, so
+    this only guards against one regression: putting `positionAfter = 0.0` back for stop. That the position reads 0
+    after the 0.2 s fade is confirmed by the real-Standalone tour. */
 void checkStopMatchesRead(Fixture& f)
 {
-    for (int i = 0; i < 50; ++i) {
+    for (int i = 0; i < 5; ++i) {
         const double seekTo = 0.25 + static_cast<double>(i) * 0.01;
         f.control("seek", ",\"positionTimelineSec\":" + std::to_string(seekTo));
         const auto play = f.control("play");

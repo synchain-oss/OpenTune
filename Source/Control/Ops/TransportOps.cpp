@@ -134,7 +134,7 @@ Result<JsonValue> runControl(ControlOpContext& context, const ControlParams& par
     const auto device = controlAudioDeviceState(context);
     const auto before = readPlayState(processor);
     // Where the audio callback will put the position when it carries pauseAtLastStart out; the other actions report
-    // the position the processor presents right after the call (nullopt).
+    // the position the processor presents right after the call (nullopt: report the read at `after` below).
     std::optional<double> positionAfter;
     bool warnsNoDevice = false;
 

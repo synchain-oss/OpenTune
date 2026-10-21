@@ -932,9 +932,9 @@ public:
     ReferenceFeatureProducer getReferenceFeatureProducer() const { return resolveReferenceFeatureProducer(); }
     std::optional<std::string> getContentF0FailureReason(ContentKey key) const;
     void recordF0FailureReason(ContentKey key, const char* reason);
-    // OpenTune Control API hook: whether OpenTune's reference analysis worker can still take a job (message thread), see Source/Control/README.md#hooks
+    // OpenTune Control API hook: true when OpenTune's reference analysis worker can take no more jobs (message thread), see Source/Control/README.md#hooks
     // ReferenceAnalysisService::workerLoop() leaves its finished synchronous job engaged in activeJob (a moved-from
-    // optional), so it never takes another one. The completion below records the first finished synchronous job;
+    // optional), so it never takes another one. The completion in preheatReferenceAlignmentFeatures() (.cpp) records the first finished synchronous job;
     // from then on the producer's synchronous analyses cannot complete in this session (an asynchronous GAME
     // completion resets activeJob and does not set this).
     bool isReferenceAnalysisWorkerStalled() const noexcept { return referenceAnalysisWorkerStalled_; }

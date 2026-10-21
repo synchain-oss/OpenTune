@@ -308,18 +308,35 @@ private:
             case Status::InsufficientFeatures:
                 step.fail(analysisFailedError("OpenTune's reference analysis found no pitch notes to align with"));
                 return;
-            case Status::NotReady:
-                // The data the job waited for is not current any more. If the worker is stalled it can never be
-                // recomputed in this session; otherwise the analysis is still the one that can be retried.
-                if (processor.isReferenceAnalysisWorkerStalled())
-                    step.fail(stalledError());
-                else
-                    step.fail({"NOT_READY", "reference_analysis_timeout",
-                               "the alignment data of the binding is not current any more; the analysis can be retried",
-                               false});
+            case Status::NotReady: {
+                // Look again at why: the clips or contents may be gone, the data may have gone stale, or OpenTune
+                // found the pitch curve unusable.
+                const auto again = controlResolveReferenceBinding(context, placementId_, referencePlacementId_);
+                if (!again.ok()) {
+                    step.fail(jobErrorOf(again.error()));
+                    return;
+                }
+                const auto& now = again.value();
+                if (!alignmentDataCurrent(processor, *now.targetContent.snapshot)
+                    || !alignmentDataCurrent(processor, *now.referenceContent.snapshot)) {
+                    if (processor.isReferenceAnalysisWorkerStalled()) {
+                        step.fail(stalledError());
+                        return;
+                    }
+                    // The data went stale after the wait: nothing was written, so go back to the waiting phase (the
+                    // next step asks for the analysis again; the wait limit ends the job with
+                    // reference_analysis_timeout). The job stays uncancellable: its cancellability ended above.
+                    wait(step, 0);
+                    return;
+                }
+                step.fail({"NOT_READY", "",
+                           "OpenTune's alignment data is current, but the pitch curve of the clip is empty or invalid",
+                           false});
                 return;
+            }
             case Status::Failed:
-                step.fail(analysisFailedError("OpenTune did not commit the alignment"));
+                // OpenTune's alignment patch was rejected (invalid request) or produced no snapshot to commit.
+                step.fail({"INTERNAL", "", "OpenTune did not commit the alignment", false});
                 return;
             case Status::Committed:
                 break;

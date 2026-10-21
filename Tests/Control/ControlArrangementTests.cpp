@@ -335,7 +335,18 @@ void checkGainAndFades(Fixture& f, const Clip& a)
 
 void checkReferences(Fixture& f, const Clip& a, const Clip& b, const Clip& c)
 {
+    // The editor's binding menu refreshes the reference context after every binding it changes: the bridge is told
+    // once per call that changed a binding, never for a prediction, a refusal or a binding that stays.
+    int& notified = f.bridge.referenceBindingNotifications;
+    const int notifiedAtStart = notified;
+    CONTROL_CHECK(
+        f.edit(f.op("setReference", a, "\"referencePlacementId\":" + quoted(f.pid(b))), ",\"dryRun\":true").isObject());
+    CONTROL_CHECK(notified == notifiedAtStart);
     auto result = f.edit(f.op("setReference", a, "\"referencePlacementId\":" + quoted(f.pid(b))));
+    CONTROL_CHECK(notified == notifiedAtStart + 1);
+    // The same binding again changes nothing.
+    CONTROL_CHECK(f.edit(f.op("setReference", a, "\"referencePlacementId\":" + quoted(f.pid(b)))).isObject());
+    CONTROL_CHECK(notified == notifiedAtStart + 1);
     CONTROL_CHECK(memberOf(fieldOf(changeOf(result, f.pid(a)), "referencePlacementId"), "after").text() == f.pid(b));
     CONTROL_CHECK(warningCodes(result) == "EXPERIMENTAL_FEATURE" && innerActions(result) == "ReferenceBindingAction");
     // The clip itself, a cycle, a clip that does not overlap in time.
@@ -345,15 +356,19 @@ void checkReferences(Fixture& f, const Clip& a, const Clip& b, const Clip& c)
                               "INVALID_ARGUMENT", "reference_ineligible"));
     CONTROL_CHECK(f.editFails(f.op("setReference", c, "\"referencePlacementId\":" + quoted(f.pid(a))),
                               "INVALID_ARGUMENT", "reference_ineligible"));
+    CONTROL_CHECK(notified == notifiedAtStart + 1);
     // A move earlier in the same call decides: c moved over a may bind to it.
     result = f.edit(f.op("move", c, "\"startTimelineSec\":3") + ","
                     + f.op("setReference", c, "\"referencePlacementId\":" + quoted(f.pid(a))));
     CONTROL_CHECK(innerActions(result) == "MultiMovePlacementAction,ReferenceBindingAction");
     CONTROL_CHECK(f.locate(c.placementId).placement.referencePlacementId == a.placementId);
+    CONTROL_CHECK(notified == notifiedAtStart + 2);
     CONTROL_CHECK(f.edit(f.op("setReference", c, "\"referencePlacementId\":null") + ","
                          + f.op("move", c, "\"startTimelineSec\":20"))
                       .isObject());
+    CONTROL_CHECK(notified == notifiedAtStart + 3);
     result = f.edit(f.op("setReference", a, "\"referencePlacementId\":null"));
+    CONTROL_CHECK(notified == notifiedAtStart + 4);
     CONTROL_CHECK(memberOf(fieldOf(changeOf(result, f.pid(a)), "referencePlacementId"), "after").isNull());
 }
 
@@ -490,6 +505,19 @@ void checkSplitAndMerge(Fixture& f, const Clip& a, const Clip& c, const Clip& pe
     CONTROL_CHECK(f.editFails(merge(second, first), "INVALID_ARGUMENT", "merge_not_possible"));
     CONTROL_CHECK(f.editFails(merge(f.pid(a), first), "INVALID_ARGUMENT", "merge_not_possible"));
     CONTROL_CHECK(f.editFails(merge(first, first), "INVALID_ARGUMENT", "merge_not_possible"));
+
+    // A merge whose former boundary the merged clip cannot be split at again (the leading part is trimmed to 0.05 s,
+    // less than the 0.1 s a split leaves on each side): IRREVERSIBLE and no revert recipe.
+    CONTROL_CHECK(
+        f.edit("{\"op\":\"trim\",\"placementId\":" + quoted(first) + ",\"edge\":\"start\",\"toTimelineSec\":22.95}")
+            .isObject());
+    result = f.edit(merge(first, second));
+    CONTROL_CHECK(warningCodes(result) == "UPSTREAM_UNDO_DEFECT,IRREVERSIBLE");
+    const auto irreversible = memberOf(warningOf(result, "IRREVERSIBLE"), "data");
+    CONTROL_CHECK(memberOf(irreversible, "reason").text() == "split_cannot_restore_boundary"
+                  && memberOf(irreversible, "checkReason").text() == "split_out_of_range");
+    CONTROL_CHECK(!memberOf(memberOf(result, "undo"), "undoable").asBoolean()
+                  && memberOf(memberOf(result, "undo"), "revert").isNull());
 }
 
 void checkDelete(Fixture& f, const Clip& a, const Clip& b)

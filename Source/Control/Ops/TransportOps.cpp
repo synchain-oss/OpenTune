@@ -312,8 +312,11 @@ Result<JsonValue> runSetTempo(ControlOpContext& context, const TempoParams& para
     const int numeratorAfter = processor.getTimeSigNumerator();
     const int denominatorAfter = processor.getTimeSigDenominator();
 
+    // One judgement of "the bpm changed" for the reported field and for the revert recipe, so that a field reported
+    // as changed always has its value in revert.params (and the recipe is never an empty object).
+    const bool bpmChanged = std::abs(bpmAfter - bpmBefore) > 1e-9;
     auto fields = JsonValue::object();
-    if (std::abs(bpmAfter - bpmBefore) > 1e-9)
+    if (bpmChanged)
         fields.appendMember("bpm", fieldChange(controlJsonNumber(bpmBefore, 3), controlJsonNumber(bpmAfter, 3), "bpm"));
     if (numeratorAfter != numeratorBefore || denominatorAfter != denominatorBefore)
         fields.appendMember("timeSignature", fieldChange(signatureJson(numeratorBefore, denominatorBefore),
@@ -333,7 +336,7 @@ Result<JsonValue> runSetTempo(ControlOpContext& context, const TempoParams& para
             envelope.setNotUndoable("ui_parity");
         } else {
             auto revert = JsonValue::object();
-            if (std::abs(bpmAfter - bpmBefore) > 1e-9)
+            if (bpmChanged)
                 revert.appendMember("bpm", controlJsonNumber(bpmBefore, 3));
             if (signatureChanged)
                 revert.appendMember("timeSignature", signatureJson(numeratorBefore, denominatorBefore));

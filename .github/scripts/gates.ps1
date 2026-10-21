@@ -274,6 +274,14 @@ function Compare-DirSnapshot($Before, $After) {
     $logCount = @(@($created) + @($changed) + @($removed) | Where-Object { $_ -match '^Logs(\\|$)' }).Count
     return [pscustomobject]@{ Created = $created; Changed = $changed; Removed = $removed; Count = $count; LogCount = $logCount; SettingsCount = $count - $logCount }
 }
+# The names of the log files a snapshot comparison found created, changed or removed (at most 20, otherwise the total).
+# AppLogger names its files by date (juce::FileLogger::createDateStampedLogger), with no pid, so a log cannot be tied
+# to this run's ctest processes: the names are listed for a human to judge, the row stays WARN.
+function Get-LogNameList($Diff) {
+    $names = @(@($Diff.Created) + @($Diff.Changed) + @($Diff.Removed) | Where-Object { $_ -match '^Logs\\.' } | ForEach-Object { Split-Path -Leaf $_ } | Sort-Object -Unique)
+    if ($names.Count -le 20) { return "$($names -join '、')" }
+    return "共 $($names.Count) 个，前 20 个为 $(($names | Select-Object -First 20) -join '、')"
+}
 function Test-DataDirHook {
     $prefs = Join-Path $laneRoot 'Source\Utils\AppPreferences.cpp'
     return (Test-Path -LiteralPath $prefs) -and [bool](Select-String -LiteralPath $prefs -SimpleMatch 'OPENTUNE_DATA_DIR' -Quiet)
@@ -291,7 +299,7 @@ function Get-IsolationVerdict($Control, $Other, [bool]$Hook) {
         $examples = @(@($Control.Created) + @($Control.Changed) | Select-Object -First 3 | ForEach-Object { if ($_ -eq '.') { 'OpenTune' } else { "OpenTune\$_" } })
         $what = "控制层测试写入了真实的 %APPDATA%\OpenTune：新建 $(@($Control.Created).Count) 项、修改 $(@($Control.Changed).Count) 项、删除 $(@($Control.Removed).Count) 项$(if ($examples.Count) { "（如 $($examples -join '、')）" })"
         if ($Control.SettingsCount -eq 0) {
-            return [pscustomobject]@{ Status = 'WARN'; Note = "$what；变化只在 Logs 目录，设置文件未变：多条 lane 并发时别的进程的测试也会写真实日志，所以只记 WARN，不判 FAIL" }
+            return [pscustomobject]@{ Status = 'WARN'; Note = "$what；变化只在 Logs 目录，设置文件未变（新增或改动的日志文件：$(Get-LogNameList $Control)）：日志文件名只含日期、不含进程号，无法判断是否属于本轮 ctest；多条 lane 并发时别的进程的测试也会写真实日志，所以只记 WARN，不判 FAIL" }
         }
         if ($Hook) { return [pscustomobject]@{ Status = 'FAIL'; Note = "$what；OPENTUNE_DATA_DIR 钩子已在代码中，控制层测试仍未隔离" } }
         return [pscustomobject]@{ Status = 'SKIP'; Note = "OPENTUNE_DATA_DIR 钩子尚未合入：$what" }
@@ -558,7 +566,7 @@ try {
         $ex = @(@($d.Created) + @($d.Changed) | Select-Object -First 3 | ForEach-Object { if ($_ -eq '.') { 'OpenTune' } else { "OpenTune\$_" } })
         $what = "control-on 一轮的 Control 测试期间，真实的 %APPDATA%\OpenTune 有变化：新建 $(@($d.Created).Count) 项、修改 $(@($d.Changed).Count) 项、删除 $(@($d.Removed).Count) 项$(if ($ex.Count) { "（如 $($ex -join '、')）" })"
         # Only the settings decide: with several lanes at work, other processes write real logs in the same window.
-        if ($d.SettingsCount -eq 0) { Add-Row $isoControlOn 'WARN' "$what；变化只在 Logs 目录，设置文件未变：别的进程的测试也会写真实日志，只记 WARN，不判 FAIL" }
+        if ($d.SettingsCount -eq 0) { Add-Row $isoControlOn 'WARN' "$what；变化只在 Logs 目录，设置文件未变（新增或改动的日志文件：$(Get-LogNameList $d)）：日志文件名只含日期、不含进程号，无法判断是否属于本轮 ctest；别的进程的测试也会写真实日志，只记 WARN，不判 FAIL" }
         else { Add-Row $isoControlOn 'FAIL' $what }
     }
     else {

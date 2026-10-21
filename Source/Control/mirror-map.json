@@ -2244,6 +2244,54 @@
       ],
       "note": "A clip may take as reference another live clip that overlaps it in time and does not lead back to it; op setReference checks that on the arrangement as the earlier ops of the call leave it (reference_ineligible).",
       "noteZh": "片段只能以另一个时间上重叠、且不会绕回自身的在用片段为参考；op setReference 按本次调用中前面各 op 执行后的编排做同样的检查（reference_ineligible）。"
+    },
+    {
+      "id": "arrangement-reference-binding-clear",
+      "group": "arrangement",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "menu.addItem(juce::String::fromUTF8(u8\"\\u4E0D\\u4F7F\\u7528\\u53C2\\u8003Clip\")",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "9b6d98824824ae34a5a64242d3c133f755c45e229f2b61e81f3f15550d6c10b6"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridge.cpp",
+          "symbols": [
+            "ControlEditorBridge::onReferenceBindingChanged"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Arrangement"
+      ],
+      "note": "The reference binding menu's entry that removes a binding: after the binding and its undo entry are made and the project is marked changed, the arrangement is redrawn and the reference context is refreshed (referenceRefreshPending_, refreshReferenceContext). The bridge repeats the two trailing steps in onReferenceBindingChanged().",
+      "noteZh": "参考绑定菜单里移除绑定的菜单项：设置绑定、入撤销栈、标记工程已修改之后，重绘编排视图并刷新参考上下文（referenceRefreshPending_、refreshReferenceContext）。bridge 在 onReferenceBindingChanged() 里重复最后两步。"
+    },
+    {
+      "id": "arrangement-reference-binding-set",
+      "group": "arrangement",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "refMenu.addItem(label, [this, arrangement, trackId, targetPlacementId, candidate]()",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "ba369ebb56ec8ad2d54350829aed6e56961df8be48c015155aa84107befcae7d"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridge.cpp",
+          "symbols": [
+            "ControlEditorBridge::onReferenceBindingChanged"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Arrangement"
+      ],
+      "note": "The reference binding menu's entry that sets a binding to a candidate clip: the same trailing steps as the entry that removes it (redraw the arrangement, refresh the reference context), repeated by onReferenceBindingChanged().",
+      "noteZh": "参考绑定菜单里把绑定设为候选片段的菜单项：最后几步与移除绑定的菜单项相同（重绘编排视图、刷新参考上下文），由 onReferenceBindingChanged() 重复。"
     }
   ]
 }

@@ -448,6 +448,10 @@ void checkTempo(Fixture& f)
     const auto onlyBpm = f.api.result("transport.setTempo", json(R"({"bpm":87.5})"));
     CONTROL_CHECK(near(f.processor->getBpm(), 87.5) && f.processor->getTimeSigNumerator() == 4);
     CONTROL_CHECK(!memberOf(onlyBpm, "noOp").asBoolean());
+    // The bpm reported as changed is in the recipe (never an empty params), and the signature that did not change is
+    // not.
+    const auto& onlyBpmParams = memberOf(memberOf(memberOf(onlyBpm, "undo"), "revert"), "params");
+    CONTROL_CHECK(near(memberOf(onlyBpmParams, "bpm"), 120.0) && onlyBpmParams.find("timeSignature") == nullptr);
     CONTROL_CHECK(memberOf(f.api.result("transport.setTempo", json(R"({"bpm":87.5})")), "noOp").asBoolean());
     CONTROL_CHECK(f.bridge.dirtyMarks == marks + 1);
     for (const char* params :

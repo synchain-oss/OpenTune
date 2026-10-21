@@ -317,6 +317,10 @@ void ControlHistory::record(UndoManager& manager, std::unique_ptr<ControlOriginA
 {
     auto* const entry = action.get();
     manager.addAction(std::move(action));
+    // UndoManager::addAction() drops the action during an undo or redo: mark only an entry that landed, compared
+    // by address (UndoManager::peekUndo(), read hook) without touching the possibly destroyed action.
+    if (manager.peekUndo() != entry)
+        return;
     // UndoManager::cursor() (read hook): addAction() put the entry on the undo side, at cursor() - 1.
     if (manager.cursor() - 1 < staleBelow_)
         entry->markBelowStaleMark();

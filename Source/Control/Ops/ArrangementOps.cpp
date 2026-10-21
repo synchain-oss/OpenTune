@@ -831,16 +831,31 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
     describeChanges(context, envelope, before, after);
     envelope.addWarning("UPSTREAM_UNDO_DEFECT", placementRef(leading.placementId));
     // Splitting the merged clip at the former boundary takes it back, with new placementIds, but a split snaps to an
-    // analysis frame boundary: when the boundary is not one (checkSplit() on the merged clip), the split cuts elsewhere
-    // and no request restores the former clips (PROTOCOL.md section 15.2).
+    // analysis frame boundary. checkSplit() takes an absolute timeline position (as runSplit() passes it) and says
+    // where the cut would fall on the merged clip:
+    //  - it cuts elsewhere than the boundary: no request restores the former clips (PROTOCOL.md section 15.2), so
+    //    IRREVERSIBLE with no revert;
+    //  - the check fails for a lasting reason (time grid edited, boundary near an edge, ...): the split cannot be
+    //    done either, IRREVERSIBLE with the check's kind and reason in data;
+    //  - the check fails with NOT_READY (the pitch analysis of the merged content is still pending): a passing
+    //    state, so the split recipe is given as usual and answers NOT_READY itself until the analysis is done.
     const double boundary = trailing.placement.timelineStartSeconds;
     const auto* mergedClip = findIn(after, outcome->mergedPlacementId);
-    bool restorable = false;
+    bool giveRecipe = false;
+    std::string cutKind;
+    std::string cutReason;
     if (mergedClip != nullptr) {
         const auto cut = checkSplit(context, *mergedClip, boundary);
-        restorable = cut.ok() && std::abs(cut.value() - boundary) <= kSampleGridTolerance;
+        if (cut.ok()) {
+            giveRecipe = std::abs(cut.value() - boundary) <= kSampleGridTolerance;
+        } else {
+            const auto reply = controlMapError(cut.error());
+            cutKind = reply.kind;
+            cutReason = reply.reason;
+            giveRecipe = cutKind == "NOT_READY";
+        }
     }
-    if (restorable) {
+    if (giveRecipe) {
         auto split = JsonValue::object();
         split.appendMember("op", JsonValue::string("split"));
         split.appendMember("placementId", JsonValue::string(merged));
@@ -849,6 +864,10 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
     } else {
         auto data = JsonValue::object();
         data.appendMember("reason", JsonValue::string("split_cannot_restore_boundary"));
+        if (!cutKind.empty()) {
+            data.appendMember("checkKind", JsonValue::string(cutKind));
+            data.appendMember("checkReason", JsonValue::string(cutReason));
+        }
         envelope.addWarning("IRREVERSIBLE", placementRef(merged), std::move(data));
         envelope.setNotUndoable("upstream_undo_defect");
     }

@@ -275,6 +275,14 @@ JsonValue tempoJson(double bpm, int numerator, int denominator)
     return tempo;
 }
 
+/** True when transport.setTempo's schema accepts the time signature: a numerator from 1 to 32 and a denominator
+    that is a power of two from 1 to 32 (parseTempo() checks the same). */
+bool signatureCanBeSet(int numerator, int denominator)
+{
+    return numerator >= 1 && numerator <= kMaxTimeSignatureNumerator && denominator >= 1 && denominator <= 32
+           && (denominator & (denominator - 1)) == 0;
+}
+
 Result<JsonValue> runSetTempo(ControlOpContext& context, const TempoParams& params)
 {
     if (auto busy = controlCheckBusy(context))
@@ -304,18 +312,36 @@ Result<JsonValue> runSetTempo(ControlOpContext& context, const TempoParams& para
     const int numeratorAfter = processor.getTimeSigNumerator();
     const int denominatorAfter = processor.getTimeSigDenominator();
 
+    // One judgement of "the bpm changed" for the reported field and for the revert recipe, so that a field reported
+    // as changed always has its value in revert.params (and the recipe is never an empty object).
+    const bool bpmChanged = std::abs(bpmAfter - bpmBefore) > 1e-9;
     auto fields = JsonValue::object();
-    if (std::abs(bpmAfter - bpmBefore) > 1e-9)
+    if (bpmChanged)
         fields.appendMember("bpm", fieldChange(controlJsonNumber(bpmBefore, 3), controlJsonNumber(bpmAfter, 3), "bpm"));
     if (numeratorAfter != numeratorBefore || denominatorAfter != denominatorBefore)
         fields.appendMember("timeSignature", fieldChange(signatureJson(numeratorBefore, denominatorBefore),
                                                          signatureJson(numeratorAfter, denominatorAfter), nullptr));
     if (fields.size() != 0) {
         envelope.addChange("tempo", singletonRef("tempo"), JsonValue::string("Tempo"), std::move(fields));
-        // No undo entry, as in the UI (ui_parity); the previous tempo and time signature restore the state.
-        envelope.setNotUndoable(
-            "ui_parity",
-            controlRevertRecipe("transport.setTempo", tempoJson(bpmBefore, numeratorBefore, denominatorBefore)));
+        // No undo entry, as in the UI (ui_parity); the previous tempo and time signature restore the state. The
+        // recipe carries what the call changed: a time signature only when it changed, and a time signature that
+        // this method's schema cannot express (a denominator of 64, or a numerator above 32, which the project
+        // may hold from a file or from OpenTune's own fields) leaves no recipe that could restore it.
+        const bool signatureChanged = numeratorAfter != numeratorBefore || denominatorAfter != denominatorBefore;
+        if (signatureChanged && !signatureCanBeSet(numeratorBefore, denominatorBefore)) {
+            auto data = JsonValue::object();
+            data.appendMember("reason", JsonValue::string("previous_time_signature_not_settable"));
+            data.appendMember("timeSignature", signatureJson(numeratorBefore, denominatorBefore));
+            envelope.addWarning("IRREVERSIBLE", JsonValue(), std::move(data));
+            envelope.setNotUndoable("ui_parity");
+        } else {
+            auto revert = JsonValue::object();
+            if (bpmChanged)
+                revert.appendMember("bpm", controlJsonNumber(bpmBefore, 3));
+            if (signatureChanged)
+                revert.appendMember("timeSignature", signatureJson(numeratorBefore, denominatorBefore));
+            envelope.setNotUndoable("ui_parity", controlRevertRecipe("transport.setTempo", std::move(revert)));
+        }
     }
     auto result = envelope.committed(context);
     result.appendMember("tempo", tempoJson(bpmAfter, numeratorAfter, denominatorAfter));

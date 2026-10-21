@@ -6,6 +6,7 @@
 # ported-to: Source/Control/Edit/TimeGridOps.cpp
 # ported-to: Source/Control/Edit/TimeGridOps.h
 # ported-to: Source/Control/Ops/TimingOps.cpp
+# ported-to: Source/Control/Ops/SelectionOps.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
 Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	PianoRollToolHandler::handleTimeToolMouseDrag	L3462-L3565	fn-v1	380d9b4473071ad6956f47007d4be9e1f503d56e6c29ee95fab7d9301dfcd374

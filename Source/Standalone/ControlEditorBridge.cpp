@@ -85,6 +85,16 @@ void ControlEditorBridge::onTimeGridChanged()
     editor_.arrangementView_.requestContentRedraw();
 }
 
+void ControlEditorBridge::onReferenceBindingChanged()
+{
+    // The steps the editor's reference binding menu takes after a binding is set or removed (the lambdas in
+    // OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu): redraw the arrangement, then refresh the reference
+    // context.
+    editor_.arrangementView_.requestContentRedraw();
+    editor_.referenceRefreshPending_ = true;
+    editor_.refreshReferenceContext();
+}
+
 bool ControlEditorBridge::focusPlacement(int trackId, std::uint64_t placementId)
 {
     // The editor's steps after its own import commit (startPendingImport): redraw the arrangement and

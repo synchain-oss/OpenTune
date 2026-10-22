@@ -4,6 +4,7 @@
 # group: tracks
 # pinned-at: upstream/20261008-addb4f4
 # ported-to: Source/Control/Ops/TrackOps.cpp
+# ported-to: Source/Control/Ops/ArrangementOps.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
 Source/Standalone/UI/TrackPanelComponent.cpp	TrackPanelComponent::showMoreTracks	L827-L834	fn-v1	57d1c3ebe110ec17bb6e25a2f083baffb752bd467299f7ff122ea71e5da86924

@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "ui/get-state-ok",
   "type": "request",
-  "description": "ui.getState with no dialog open: no busy condition holds, the dialog list is empty, and the onboarding overlay is not showing.",
+  "description": "ui.getState with no dialog open: no busy condition holds, the dialog list is empty, the onboarding overlay is not showing, and track 0 is the active track (OpenTune always has an active track) with no clip selected.",
   "capability": "ui.bridge",
   "since": "1.0",
   "method": "ui.getState",
@@ -30,7 +30,7 @@
       "ui": {
         "workspace": "arrangement",
         "pianoRollContentId": null,
-        "activeTrackId": null,
+        "activeTrackId": 0,
         "selectedPlacementIds": [],
         "visibleTrackCount": { "$any": "integer" }
       },

@@ -364,9 +364,14 @@ API reads it through the hook `peekUndo` / `peekRedo` / `size` / `cursor` and ap
   records it.
 - **Track deletion barrier** (section 15.3 rule 6; `ControlHistory::onTrackDeleted()`, called by `track.delete`).
   OpenTune keys clip entries by track position, so an entry recorded before a deletion may address a track that
-  moved. An entry made through the API knows its tracks (`ControlOriginAction::Inner::tracks`, set by the methods
-  that record clip changes): it becomes `possiblyStale` when the deleted track or a later one is among them, and
-  an entry that addresses no track (a note edit addresses its content) or only earlier tracks does not.
+  moved. Only the shown tracks after the deleted one move (`removeTrackAndShift()` leaves the hidden slots, their
+  clips and their mix where they are). An entry made through the API knows two lists of tracks, set by the methods
+  that record clip changes: `ControlOriginAction::Inner::tracks`, the slots the wrapped OpenTune actions are keyed by
+  (they are fixed inside the actions, so undo and redo write to them whatever was deleted since; never changed), and
+  `Inner::followed`, where the clips are now, as an approximation (renumbered when a deletion moves their shown track down; after an undo or redo that took effect the slots of `tracks` are merged into it). The entry
+  becomes `possiblyStale` when the deleted track or a later shown track is in either list (the union: an entry is
+  reported too often rather than too rarely), and an entry that addresses no track (a note edit addresses its
+  content), only earlier tracks or only hidden tracks does not.
   `edit.getHistory` reports `possiblyStale`; `edit.undo` and `edit.redo` refuse such an entry with
   `UNDO_CONFLICT(stale_entry)` unless `force` is true, and a call with `force` applies it and confirms it
   (`ControlHistory::confirmStale()`: no warning, `possiblyStale` false) until another deletion makes it stale again. An
@@ -598,9 +603,16 @@ Known OpenTune behaviours, reported as they are:
   the instance's imports received since, and it never repeats a failure that the clip id cannot have caused. Otherwise
   it commits once without a copy, as the UI.
 - `commitPreparedImportAsPlacement()` selects every clip it commits and makes its track the active
-  track, also with `focus: false`. The job does not undo that; the result's `ui` snapshot
-  (`activeTrackId`, `selectedPlacementIds`) shows it. `focus` decides only whether the editor shows the
-  last clip, and with it whether the openDyne scheme generates its notes.
+  track, as the editor's import does. The job puts back the selection it found after each commit, so
+  that `focus` alone decides the selection: with `focus: false` the selection does not change, and
+  `focus: true` selects the last clip after the commits. Without that, the editor's heartbeat would
+  load the selected clip into the piano roll, which in the openDyne scheme generates the notes of a
+  content it shows: a request with `focus: false` would generate notes it does not report (section 21
+  rule 2). The result's `ui` snapshot shows the selection after the call. The job puts the selection back
+  also when a commit fails. With `focus: true` and `separateTracks` (several target tracks), only the track
+  of the last clip ends up with its new clip selected; the other target tracks keep the clip that was
+  selected before the import. The editor's own import differs: it leaves each target track on its new
+  clip. This is deliberate (the selection is decided by `focus` alone), not a regression.
 - The editor does not mark the project as changed after its own import; the job does (section 15.5).
 
 ## Export
@@ -1355,7 +1367,8 @@ while the session sends other requests, cancellation in every state, retention w
 monotonic clocks, `stop()` from a nested message loop inside a step, and `executed`; `JobShutdown`
 destroys the processor while a `job.get` waits for a job whose work owns a thread; `WriteEnvelope` the
 four states, the no-op rules, `IRREVERSIBLE`, the UI snapshot, the busy checks and the environment of a
-job's steps; `Import` both editing schemes, all layouts, focus and note generation,
+job's steps; `Import` both editing schemes, all layouts, focus and note generation (with `focus: false` leaving the
+selection as it was, also on the active track and its selected clip),
 revealed tracks, item failures, the checks before the job, busy, idempotency and commits without a copy
 of the audio; `ImportAfterOpen` the import after a project was opened and when its commit copies the
 audio; `ImportCancel` a cancellation after the first of three commits while the UI is busy;
@@ -1439,12 +1452,15 @@ the params, busy, and the answer without an editor. `Tracks` runs `track.set` (v
 the colour, the revert recipe, hidden tracks, the checks), `track.add` (the limit), `track.duplicate` (both modes, the
 mix and reference binding copied, `target_track_occupied`, `track_limit`), `track.delete` (the checks in order,
 `trackIdMap`, the removed clip and content, a content that another clip still shows, the dangling reference binding,
-the mix that moves down) and the three methods that need the editor without one. `TrackBarrier` runs the barrier of a
-track deletion with undo entries of the API that address tracks (OpenTune's `MultiMovePlacementAction` in a
-`ControlOriginAction`), entries of the UI, `force` and its confirmation, the second deletion, and a note edit whose
-content left the project (`UNDO_NO_EFFECT`). `TrackVectors` runs the specification's `transport/*` and `track/*`
-vectors and the six `edit/` vectors that need a deletion's barrier (`given.history` with clip moves is established with
-the same actions); `track/delete-arrangement-changed` needs `arrangement.edit` and runs in `ArrangementVectors`.
+the mix that moves down, a hidden track's mix and clip that stay) and the three methods that need the editor without
+one. `TrackBarrier` runs the barrier of a track deletion with undo entries of the API that address tracks (OpenTune's
+`MultiMovePlacementAction` in a `ControlOriginAction`), entries of the UI, `force` and its confirmation, the second
+deletion (the entry's clip was followed down by the first), a clip move across tracks followed by two deletions (the
+second removes the slot the action is keyed by, which the followed positions no longer name), the same move undone and redone with `force` between deletions (the merged slots keep `followed` covering the clip), an entry that addresses a
+hidden track (not stale), and a note edit whose content left the project (`UNDO_NO_EFFECT`). `TrackVectors` runs the
+specification's `transport/*` and `track/*` vectors and the six `edit/` vectors that need a deletion's barrier
+(`given.history` with clip moves is established with the same actions); `track/delete-arrangement-changed` needs
+`arrangement.edit` and runs in `ArrangementVectors`.
 
 `Tests/Control/ControlArrangementTests.cpp` holds the scenarios of the arrangement methods, with the test bridge (shown
 tracks, busy flags, dirty flag, notifications). `Arrangement` runs every op of `arrangement.edit`: moves (overlap, a

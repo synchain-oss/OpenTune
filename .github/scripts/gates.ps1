@@ -208,6 +208,20 @@ function Get-LogTail($Run, [int]$Lines = 12) {
     return ((($Run.Text -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -Last $Lines) -join ' / ')
 }
 
+# The failed test names of ctest summaries (run-ctest.ps1), in order. A summary that is $null, has no `failed`
+# member or a null one adds nothing: @($s.failed) of a null member is one $null element, which would be counted as a
+# failed test (and reading a missing member stops the script under strict mode).
+function Get-FailedTestNames([object[]]$Summaries) {
+    $names = [System.Collections.Generic.List[string]]::new()
+    foreach ($s in @($Summaries)) {
+        if ($null -eq $s -or $null -eq $s.PSObject.Properties['failed']) { continue }
+        foreach ($name in @($s.failed)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$name)) { $names.Add([string]$name) }
+        }
+    }
+    return , $names.ToArray()
+}
+
 function Find-Ninja {
     $cmd = Get-Command ninja -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
@@ -407,7 +421,7 @@ function Invoke-BuildSteps {
                 $ctestCodeControl = $ctestControl.Code
                 $summary = [pscustomobject]@{
                     passed = [int]$summary.passed + [int]$sc.passed; total = [int]$summary.total + [int]$sc.total
-                    failed = @(@($summary.failed) + @($sc.failed)); excluded = @(@($summary.excluded) | Where-Object { $ExcludedTests -contains $_ })
+                    failed = Get-FailedTestNames @($summary, $sc); excluded = @(@($summary.excluded) | Where-Object { $ExcludedTests -contains $_ })
                 }
                 if ($ctestCodeControl -ne 0) { $ctest = [pscustomobject]@{ Code = $ctestCodeControl; Log = $ctest.Log } }
             }
@@ -490,7 +504,7 @@ function Invoke-ControlOnSteps {
     } elseif ($ctestOther -and -not $so) {
         Add-Row $ControlOnStep 'FAIL' "其余测试 ctest exit $($ctestOther.Code)；日志 $($ctestOther.Log)：$(Get-LogTail $ctestOther)"
     } else {
-        $failed = @(@($sc.failed) + $(if ($so) { @($so.failed) } else { @() }))
+        $failed = Get-FailedTestNames @($sc, $so)
         $total = [int]$sc.total + $(if ($so) { [int]$so.total } else { 0 })
         $passed = [int]$sc.passed + $(if ($so) { [int]$so.passed } else { 0 })
         $timing = "$(Format-Timing $build)；ctest（Control）$(Format-Timing $ctestControl)$(if ($ctestOther) { "；ctest（其余）$(Format-Timing $ctestOther)" })"

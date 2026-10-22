@@ -12,7 +12,7 @@ class ControlMethodTable;
  * The call selects through the editor (ControlUiBridge::select()) as the arrangement view does when the user clicks: a
  * placementId makes that clip the only selected clip and its track the active track, as a click on it does; openEditor
  * also opens it in the piano roll, as a double click does; a trackId makes that track the active track with no clip
- * selected and the piano roll empty. Without an editor the call answers UNSUPPORTED(capability_missing).
+ * selected and the piano roll empty. Without an editor the call answers UNSUPPORTED(no_editor_window).
  *
  * Selecting can change more than the selection, as a click does, and the result reports what the call observed:
  * - notesGenerated (warnings SELECTION_GENERATED_NOTES and IRREVERSIBLE, the project marked as changed): in the

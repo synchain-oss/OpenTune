@@ -45,8 +45,8 @@ std::vector<ControlTrackState> controlCaptureTracks(ControlOpContext& context, i
 
 /**
  * The number of track slots the editor shows, for a method that changes it (track.add, track.duplicate,
- * track.delete). Without an editor, or with an editor that cannot tell, the number is not known and cannot be
- * changed: UNSUPPORTED(capability_missing), the answer of the methods that need the editor's parts.
+ * track.delete). Without an editor the method fails with UNSUPPORTED(no_editor_window) (PROTOCOL.md section 7 rule 6);
+ * with an editor that cannot tell, the number is not known and cannot be changed: UNSUPPORTED(capability_missing).
  */
 Result<int> controlEditorVisibleTrackCount(ControlOpContext& context);
 

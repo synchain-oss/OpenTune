@@ -96,6 +96,84 @@ inline std::string readFile(const std::filesystem::path& path)
     return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 }
 
+/** Per-vector results of one vector runner. The id of a vector is its file path relative to the `vectors` directory
+    without `.json`, which is the `id` member of every vector. When the environment variable OTCP_VECTOR_REPORT_DIR
+   names a directory (an absolute path), write() puts `<directory>/<testName>.json` there:
+    {"runner": "cpp-headless:<testName>", "commit": <OTCP_VECTOR_REPORT_COMMIT or "">,
+     "vectors": [{"id", "status": "PASS"|"FAIL"|"SKIP", "reason"}]}.
+    Without the variable nothing happens. A failure to write is reported in one line and never fails the test. Plain
+    standard-library file I/O, so that tests without JUCE use it as well. */
+class VectorReport
+{
+public:
+    explicit VectorReport(std::string testName) : testName_(std::move(testName)) {}
+
+    void pass(const std::string& id) { add(id, "PASS", ""); }
+    void fail(const std::string& id, const std::string& reason) { add(id, "FAIL", reason); }
+    void skip(const std::string& id, const std::string& reason) { add(id, "SKIP", reason); }
+
+    /** Records the outcome of a vector that ran: an empty failure text is a pass. */
+    void ran(const std::string& id, const std::string& failure)
+    {
+        if (failure.empty())
+            pass(id);
+        else
+            fail(id, failure);
+    }
+
+    void write() const
+    {
+        const auto directory = controlSystemEnvironment("OTCP_VECTOR_REPORT_DIR");
+        if (!directory || directory->empty())
+            return;
+        if (!std::filesystem::u8path(*directory).is_absolute()) {
+            std::cout << "    vector report for " << testName_
+                      << " could not be written: OTCP_VECTOR_REPORT_DIR is not absolute" << std::endl;
+            return;
+        }
+        auto vectors = JsonValue::array();
+        for (const auto& entry : entries_) {
+            auto item = JsonValue::object();
+            item.appendMember("id", JsonValue::string(entry.id));
+            item.appendMember("status", JsonValue::string(entry.status));
+            item.appendMember("reason", JsonValue::string(entry.reason));
+            vectors.append(std::move(item));
+        }
+        auto report = JsonValue::object();
+        report.appendMember("runner", JsonValue::string("cpp-headless:" + testName_));
+        const auto commit = controlSystemEnvironment("OTCP_VECTOR_REPORT_COMMIT");
+        report.appendMember("commit", JsonValue::string(commit ? *commit : std::string()));
+        report.appendMember("vectors", std::move(vectors));
+        try {
+            const auto folder = std::filesystem::u8path(*directory);
+            std::error_code ignored;
+            std::filesystem::create_directories(folder, ignored);
+            std::ofstream out(folder / std::filesystem::u8path(testName_ + ".json"), std::ios::binary);
+            out << toJsonString(report);
+            if (!out)
+                std::cout << "    vector report for " << testName_ << " could not be written" << std::endl;
+        } catch (const std::exception&) {
+            std::cout << "    vector report for " << testName_ << " could not be written" << std::endl;
+        }
+    }
+
+private:
+    struct Entry
+    {
+        std::string id;
+        std::string status;
+        std::string reason;
+    };
+
+    void add(const std::string& id, const char* status, const std::string& reason)
+    {
+        entries_.push_back({id, status, reason});
+    }
+
+    std::string testName_;
+    std::vector<Entry> entries_;
+};
+
 /** Root for test files: OPENTUNE_DATA_DIR when set (ctest through the gates), otherwise a directory
     under the build tree. Never the user's real data directories. */
 inline std::filesystem::path testDataRoot()

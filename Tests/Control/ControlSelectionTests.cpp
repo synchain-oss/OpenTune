@@ -59,16 +59,6 @@ std::string quoted(const std::string& text)
     return toJsonString(JsonValue::string(text));
 }
 
-/** The object without the member name. */
-JsonValue withoutMember(const JsonValue& object, const std::string& name)
-{
-    auto out = JsonValue::object();
-    for (std::size_t i = 0; i < object.size(); ++i)
-        if (object.keyAt(i) != name)
-            out.appendMember(object.keyAt(i), object.at(i));
-    return out;
-}
-
 /** The test bridge of the editor's selection (see the top of this file). Message thread only. */
 class SelectionBridge : public TestUiBridge
 {
@@ -414,7 +404,7 @@ void checkCapabilityAndRefusals(SelectionFixture& f, const std::string& placemen
     CONTROL_CHECK(f.api.fails("ui.setSelection", selectClip(placementA), "UNSUPPORTED", "capability_missing"));
     f.bridge->selects = true;
     f.service().setUiBridge(nullptr);
-    CONTROL_CHECK(f.api.fails("ui.setSelection", selectClip(placementA), "UNSUPPORTED", "capability_missing"));
+    CONTROL_CHECK(f.api.fails("ui.setSelection", selectClip(placementA), "UNSUPPORTED", "no_editor_window"));
     f.service().setUiBridge(f.bridge.get());
     CONTROL_CHECK(f.bridge->selectCalls == 0);
 }
@@ -580,51 +570,6 @@ const char* const kMustRunSelectionVectors[] = {
     "ui/set-selection-not-found", "ui/set-selection-open-editor",
 };
 
-/**
- * The expected response with what OpenTune does differently from the vectors' assumptions (Source/Control/README.md,
- * "Selection"):
- * - OpenTune always has an active track (track 0 in a new project), so selecting a clip on track 0 leaves it: changes
- *   list no activeTrackId (fields list only changed members), and the revert recipe selects track 0 instead of null;
- * - in the openDyne scheme the editor's reference context reports no binding (evaluateAutoRefUiState), so selecting a
- *   clip with one queues no reference alignment analysis.
- */
-JsonValue adjustedExpectation(const JsonValue& vector)
-{
-    auto response = memberOf(vector, "response");
-    const JsonValue* resultPointer = response.find("result");
-    if (resultPointer == nullptr)
-        return response;
-    auto result = *resultPointer;
-    auto changes = memberOf(result, "changes");
-    if (changes.size() == 1) {
-        auto change = changes.at(0);
-        const auto& active = memberOf(memberOf(change, "fields"), "activeTrackId");
-        if (memberOf(active, "before").isNull() && memberOf(active, "after").isNumber()
-            && memberOf(active, "after").asDouble() == 0.0)
-            change.set("fields", withoutMember(memberOf(change, "fields"), "activeTrackId"));
-        auto adjusted = JsonValue::array();
-        adjusted.append(std::move(change));
-        result.set("changes", std::move(adjusted));
-    }
-    auto undo = memberOf(result, "undo");
-    if (undo.isObject() && memberOf(undo, "revert").isNull()) {
-        undo.set("revert", revertTo("trackId", JsonValue::integer(0)));
-        result.set("undo", std::move(undo));
-    }
-    const auto& given = memberOf(vector, "given");
-    if (memberOf(given, "editingScheme").text() == "openDyne") {
-        result.set("sideEffects", withoutMember(memberOf(result, "sideEffects"), "referenceAnalysisQueued"));
-        auto warnings = JsonValue::array();
-        const auto& expected = memberOf(result, "warnings");
-        for (std::size_t i = 0; i < expected.size(); ++i)
-            if (memberOf(expected.at(i), "code").text() != "REFERENCE_ANALYSIS_QUEUED")
-                warnings.append(expected.at(i));
-        result.set("warnings", std::move(warnings));
-    }
-    response.set("result", std::move(result));
-    return response;
-}
-
 std::string runSelectionVector(const JsonValue& vector)
 {
     SelectionFixture f;
@@ -697,7 +642,9 @@ std::string runSelectionVector(const JsonValue& vector)
             matcher.bindings[item.bind + ".placementId"] = JsonValue::string(handles->placementId);
         }
     }
-    const auto expected = adjustedExpectation(vector);
+    // The vectors of rc.4 and later state what OpenTune does (an active track always exists, reference analysis is
+    // queued in the openTune scheme only), so the expected response is the vector's own, unchanged.
+    const auto& expected = memberOf(vector, "response");
 
     std::string failure;
     runWhilePumping(
@@ -745,6 +692,7 @@ void scenarioSelectionVectors()
     std::sort(files.begin(), files.end());
     std::set<std::string> passedIds;
     int passed = 0;
+    VectorReport report("ControlProcessorTests.SelectionVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -755,6 +703,7 @@ void scenarioSelectionVectors()
         const auto id = memberOf(vector, "id").text();
         const auto started = Clock::now();
         const auto failure = runSelectionVector(vector);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty())) {
             ++passed;
             passedIds.insert(id);
@@ -762,6 +711,7 @@ void scenarioSelectionVectors()
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     for (const char* id : kMustRunSelectionVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
     note(std::to_string(passed) + " vectors passed");

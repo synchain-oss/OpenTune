@@ -140,9 +140,13 @@ Result<ProjectParts> projectParts(ControlOpContext& context)
         parts.session = parts.bridge->projectSession();
         parts.pool = parts.bridge->projectWorkerPool();
     }
+    // PROTOCOL.md section 7 rule 6: without an editor window the method fails with no_editor_window.
+    if (parts.bridge == nullptr)
+        return controlOpError("UNSUPPORTED", "no_editor_window",
+                              "project.io acts through the editor window, and no editor exists");
     if (parts.session == nullptr || parts.pool == nullptr)
         return controlOpError("UNSUPPORTED", "capability_missing",
-                              "project.io needs the editor's project session, and no editor exists");
+                              "project.io needs the editor's project session, and the editor offers none");
     return parts;
 }
 

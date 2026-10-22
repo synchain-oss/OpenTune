@@ -9,6 +9,7 @@
 #include "ControlHeadlessSupport.h"
 
 #include "Content/StandaloneContentRepository.h"
+#include "Control/ControlJobs.h"
 #include "Control/ControlService.h"
 #include "Inference/RenderCache.h"
 #include "PluginProcessor.h"
@@ -190,6 +191,37 @@ bool runWhilePumping(Exchange&& exchange, int timeoutMs = kClientExchangeMs)
     const bool finished = pumpMessagesUntil([&done] { return done.load(); }, timeoutMs);
     client.join();
     return finished;
+}
+
+/**
+ * Establishes given.jobs of a vector whose jobs are all failed ({bind, kind, state "failed", cancellable false,
+ * error {kind, reason}}, vectors/README.md): each is started as a job of its kind that fails at once with its
+ * error (executed false), and its id is bound to the name `bind`. Pumps messages until every job has failed.
+ * Returns false when a job cannot be started or does not fail within kReadTimeoutMs.
+ */
+inline bool establishFailedJobs(ControlJobs& jobs, const JsonValue& given, VectorMatcher& matcher)
+{
+    for (std::size_t i = 0; i < given.size(); ++i) {
+        const auto& spec = given.at(i);
+        const auto& error = memberOf(spec, "error");
+        const ControlJobError failure{memberOf(error, "kind").text(), memberOf(error, "reason").text(),
+                                      "a failed job of the fixture", false};
+        const auto started =
+            jobs.start(memberOf(spec, "kind").text(), true, [failure](ControlJobStep& step) { step.fail(failure); });
+        if (started.jobId.empty())
+            return false;
+        matcher.bindings[memberOf(spec, "bind").text()] = JsonValue::string(started.jobId);
+        const std::string jobId = started.jobId;
+        if (!pumpMessagesUntil(
+                [&jobs, jobId] {
+                    JsonValue job;
+                    return jobs.get(jobId, job) == ControlJobs::Lookup::Found
+                           && memberOf(job, "state").text() == "failed";
+                },
+                kReadTimeoutMs))
+            return false;
+    }
+    return true;
 }
 
 /**

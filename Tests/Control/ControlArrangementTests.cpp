@@ -315,12 +315,36 @@ void checkGainAndFades(Fixture& f, const Clip& a)
                   && innerActions(result) == "GainChangeAction");
     result = f.edit(f.op("setGain", a, "\"gainLinear\":2"));
     CONTROL_CHECK(near(memberOf(fieldOf(changeOf(result, f.pid(a)), "gainDb"), "after"), 6.021, 1e-3));
-    // OpenTune keeps the gain as a float: a larger one is limited to its range (CLAMPED).
-    result = f.edit(f.op("setGain", a, "\"gainDb\":1000"));
+
+    // The clip gain is limited to the interface's linear range 0 to 4 (the volume knob's setRange(0.0, 4.0, 0.001)).
+    // The tour's 200 dB is applied as 4x, reported in the unit asked for; dryRun predicts the same value and warning
+    // without storing it.
+    result = f.edit(f.op("setGain", a, "\"gainDb\":200"), ",\"dryRun\":true");
+    const auto predicted = warningOf(result, "CLAMPED");
+    CONTROL_CHECK(memberOf(result, "dryRun").asBoolean()
+                  && memberOf(memberOf(predicted, "data"), "field").text() == "gainDb"
+                  && near(memberOf(memberOf(predicted, "data"), "requested"), 200.0)
+                  && near(memberOf(memberOf(predicted, "data"), "applied"), 12.041, 1e-3)
+                  && near(memberOf(fieldOf(changeOf(result, f.pid(a)), "gainDb"), "after"), 12.041, 1e-3)
+                  && near(f.locate(a.placementId).placement.gain, 2.0));
+    result = f.edit(f.op("setGain", a, "\"gainDb\":200"));
     const auto clamped = warningOf(result, "CLAMPED");
     CONTROL_CHECK(memberOf(memberOf(clamped, "data"), "field").text() == "gainDb"
-                  && near(memberOf(memberOf(clamped, "data"), "requested"), 1000.0)
-                  && near(memberOf(memberOf(clamped, "data"), "applied"), 770.63, 0.01));
+                  && near(memberOf(memberOf(clamped, "data"), "requested"), 200.0)
+                  && near(memberOf(memberOf(clamped, "data"), "applied"), 12.041, 1e-3)
+                  && near(memberOf(fieldOf(changeOf(result, f.pid(a)), "gainDb"), "after"), 12.041, 1e-3)
+                  && near(f.locate(a.placementId).placement.gain, 4.0));
+    // A linear factor above the range is limited too, with the applied value as a factor.
+    result = f.edit(f.op("setGain", a, "\"gainLinear\":5"));
+    const auto linearClamped = warningOf(result, "CLAMPED");
+    CONTROL_CHECK(memberOf(memberOf(linearClamped, "data"), "field").text() == "gainLinear"
+                  && near(memberOf(memberOf(linearClamped, "data"), "requested"), 5.0)
+                  && near(memberOf(memberOf(linearClamped, "data"), "applied"), 4.0)
+                  && near(f.locate(a.placementId).placement.gain, 4.0));
+    // The lower end is 0, which the params schema accepts (silence); a negative linear factor is not a schema value.
+    CONTROL_CHECK(f.edit(f.op("setGain", a, "\"gainLinear\":0")).isObject()
+                  && near(f.locate(a.placementId).placement.gain, 0.0));
+    CONTROL_CHECK(f.editFails(f.op("setGain", a, "\"gainLinear\":-1"), "INVALID_ARGUMENT", "invalid_params"));
     CONTROL_CHECK(f.edit(f.op("setGain", a, "\"gainLinear\":1")).isObject());
 
     // Fades longer than 90 % of the clip are limited (CLAMPED).

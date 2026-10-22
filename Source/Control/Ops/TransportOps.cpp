@@ -133,7 +133,8 @@ Result<JsonValue> runControl(ControlOpContext& context, const ControlParams& par
     ControlWriteEnvelope envelope(context);
     const auto device = controlAudioDeviceState(context);
     const auto before = readPlayState(processor);
-    // Where the audio callback will put the position when it carries the command out; nullopt keeps the processor's.
+    // Where the audio callback will put the position when it carries pauseAtLastStart out; the other actions report
+    // the position the processor presents right after the call (nullopt: report the read at `after` below).
     std::optional<double> positionAfter;
     bool warnsNoDevice = false;
 
@@ -154,11 +155,14 @@ Result<JsonValue> runControl(ControlOpContext& context, const ControlParams& par
             processor.recordControlCall(Call::Pause);
             break;
         case Action::Stop:
-            // stopRequested(): the audio callback stops and rewinds to 0.
+            // stopRequested(): OpenTuneAudioProcessor::stop() freezes the presented position and asks the audio
+            // callback to fade the running transport out and land it on 0 (processBlock's Stop case; stop() sets
+            // pendingCompletionTime_ to 0). The landing happens on the audio thread when that fade-out completes
+            // (kTransportRampDurationSeconds, 0.2 s on the audio thread), so a read right after the call still
+            // returns the frozen presented position. The result reports that read, exactly as transport.get does
+            // now; after the fade a read returns 0. There is no earlier value to wait for on this thread.
             processor.stop();
             processor.recordControlCall(Call::Stop);
-            if (device.running)
-                positionAfter = 0.0;
             break;
         case Action::Seek:
             // playheadPositionChangeRequested(): also the play start position of the next play-from-start.
@@ -212,7 +216,9 @@ Result<JsonValue> runControl(ControlOpContext& context, const ControlParams& par
         envelope.setNotUndoable("not_persisted_state");
     }
     auto result = envelope.committed(context);
-    result.appendMember("transport", controlTransportJson(context, positionAfter));
+    // The transport member reports the same position the change above reports: the read the call made, not a second
+    // read that the audio thread may already have moved on from (the stop landing).
+    result.appendMember("transport", controlTransportJson(context, afterPosition));
     return result;
 }
 

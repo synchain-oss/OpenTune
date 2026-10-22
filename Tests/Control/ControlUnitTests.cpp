@@ -399,6 +399,9 @@ void testProtocol()
     CONTROL_CHECK(controlErrorCode("INVALID_ARGUMENT", "invalid_params") == -32602);
     CONTROL_CHECK(controlErrorCode("UNSUPPORTED", "unknown_method") == -32601);
     CONTROL_CHECK(controlErrorCode("UNSUPPORTED", "capability_missing") == -32000);
+    // no_editor_window (rc.5): UNSUPPORTED is not retryable by default, and the registry says the same of this reason.
+    CONTROL_CHECK(controlErrorCode("UNSUPPORTED", "no_editor_window") == -32000);
+    CONTROL_CHECK(!controlErrorRetryable("UNSUPPORTED", "no_editor_window"));
     CONTROL_CHECK(controlErrorCode("INTERNAL", "") == -32603);
     // Retryability of the rc.3 reasons: a stretched grid is not cured by a retry, a dropped rebuild and a timed-out
     // timing analysis are, and a failed timing analysis is not.
@@ -1536,21 +1539,25 @@ void testSessionVectors()
     CONTROL_CHECK(files.size() >= 20);
     int passed = 0;
     int skipped = 0;
+    VectorReport report("ControlUnitTests");
     for (const auto& file : files) {
         const auto vector = parsed(readFile(file));
         const std::string id = vector.find("id")->text();
         if (const auto reason = skipReason(id, vector); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
         const auto started = Clock::now();
         const std::string failure = VectorRunner(vector).run();
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty()))
             ++passed;
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     note(std::to_string(passed) + " session vectors passed, " + std::to_string(skipped) + " skipped");
 }
 

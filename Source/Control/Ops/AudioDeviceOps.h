@@ -25,8 +25,8 @@ class ControlMethodTable;
  *   IO_ERROR(device_open_failed) and executed false; if the previous setup cannot be opened either, executed is true
  *   and no device runs. The setup is user-global: the result lists the change (entity audioDevice) with the warning
  *   GLOBAL_PREFERENCE, there is no undo entry (reason ui_parity), and the revert recipe is the same call with the
- *   previous values. A setup equal to the current one is a no-op. Without an editor or a device manager audio.set
- *   answers UNSUPPORTED(capability_missing).
+ *   previous values. A setup equal to the current one is a no-op. Without an editor audio.set answers
+ *   UNSUPPORTED(no_editor_window); with an editor that has no device manager, UNSUPPORTED(capability_missing).
  *
  * Threading: parse on the connection thread; run on the message thread, like the page.
  */

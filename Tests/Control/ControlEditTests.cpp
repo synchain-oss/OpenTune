@@ -2854,6 +2854,7 @@ void scenarioEditVectors()
     std::sort(files.begin(), files.end());
     std::set<std::string> passedIds;
     int skipped = 0;
+    VectorReport report("ControlProcessorTests.EditVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -2861,16 +2862,19 @@ void scenarioEditVectors()
         const auto id = memberOf(parsed.value, "id").text();
         if (const auto reason = editVectorSkipReason(parsed.value); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
         const auto started = Clock::now();
         const auto failure = runEditVector(parsed.value);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty()))
             passedIds.insert(id);
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     for (const char* id : kMustRunEditVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
     note(std::to_string(passedIds.size()) + " vectors passed, " + std::to_string(skipped) + " skipped");

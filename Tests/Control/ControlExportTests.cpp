@@ -1263,6 +1263,7 @@ void scenarioExportVectors()
     int passed = 0;
     int skipped = 0;
     std::set<std::string> passedIds;
+    VectorReport report("ControlProcessorTests.ExportVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -1271,6 +1272,7 @@ void scenarioExportVectors()
         const auto id = memberOf(vector, "id").text();
         if (const auto reason = exportVectorSkipReason(vector); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
@@ -1278,6 +1280,7 @@ void scenarioExportVectors()
         auto slug = id;
         std::replace(slug.begin(), slug.end(), '/', '-');
         const auto failure = runExportVector(vector, slug);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty())) {
             ++passed;
             passedIds.insert(id);
@@ -1285,6 +1288,7 @@ void scenarioExportVectors()
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     for (const char* id : kMustRunExportVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
     note(std::to_string(passed) + " vectors passed, " + std::to_string(skipped) + " skipped");

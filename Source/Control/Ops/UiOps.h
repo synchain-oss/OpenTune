@@ -24,7 +24,7 @@ class ControlMethodTable;
  *   needs the capability ui.onboardingClose, which the instance reports together with ui.bridge.
  *
  * ui.dismiss is the only write that a modal dialog does not refuse (ControlBusyScope::DialogDismiss). Both methods
- * describe the editor window: without an editor they answer UNSUPPORTED(capability_missing).
+ * describe the editor window: without an editor they answer UNSUPPORTED(no_editor_window).
  */
 void registerUiOps(ControlMethodTable& table);
 

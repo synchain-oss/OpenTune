@@ -591,12 +591,12 @@ void scenarioProjectWithoutEditor()
     ApiSession api;
     if (!api.open(service))
         return;
-    CONTROL_CHECK(api.fails("project.save", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
+    CONTROL_CHECK(api.fails("project.save", JsonValue::object(), "UNSUPPORTED", "no_editor_window"));
     const auto directory = projectDirectory("without-editor");
     CONTROL_CHECK(api.fails("project.saveAs", pathParams((directory / "a.otproj").u8string()), "UNSUPPORTED",
-                            "capability_missing"));
+                            "no_editor_window"));
     CONTROL_CHECK(api.fails("project.open", pathParams((directory / "a.otproj").u8string()), "UNSUPPORTED",
-                            "capability_missing"));
+                            "no_editor_window"));
     // The recent projects are a preference: they can be cleared.
     auto& preferences = processor->getAppPreferences();
     preferences.clearRecentProjects();
@@ -858,6 +858,7 @@ void scenarioProjectVectors()
     int passed = 0;
     int skipped = 0;
     std::set<std::string> passedIds;
+    VectorReport report("ControlProcessorTests.ProjectVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -866,6 +867,7 @@ void scenarioProjectVectors()
         const auto id = memberOf(vector, "id").text();
         if (const auto reason = projectVectorSkipReason(vector); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
@@ -873,6 +875,7 @@ void scenarioProjectVectors()
         auto slug = id;
         std::replace(slug.begin(), slug.end(), '/', '-');
         const auto failure = runProjectVector(vector, slug);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty())) {
             ++passed;
             passedIds.insert(id);
@@ -880,6 +883,7 @@ void scenarioProjectVectors()
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     for (const char* id : kMustRunProjectVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
     note(std::to_string(passed) + " vectors passed, " + std::to_string(skipped) + " skipped");

@@ -42,7 +42,7 @@ namespace OpenTune {
  *
  * Every write checks, in the order of PROTOCOL.md section 13.1: the trackId, the busy state, the expected arrangement
  * revision, then the method's own validation. The methods that change the number of shown tracks need the editor
- * (UNSUPPORTED(capability_missing) without one).
+ * (UNSUPPORTED(no_editor_window) without one).
  */
 void registerTrackOps(ControlMethodTable& table);
 

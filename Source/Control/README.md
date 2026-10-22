@@ -859,7 +859,7 @@ defect.
 `project.io`, reported only because all four are registered). The project session and its worker pool belong to the
 editor (`ProjectSession` stays inside it, as the processor takes over no project state), so the methods reach them
 through `ControlUiBridge::projectSession()` and `projectWorkerPool()`; without an editor the save and open methods
-answer `UNSUPPORTED(capability_missing)`, and `project.clearRecent`, which is a preference, still works.
+answer `UNSUPPORTED(no_editor_window)`, and `project.clearRecent`, which is a preference, still works.
 
 The editor's own flows (`saveProject`, `startOpenProject`) show a dialog when they fail and have no way to report
 their end, so the jobs do not call them. They run the same steps on `ProjectSession`'s two-phase calls and hand the
@@ -928,7 +928,7 @@ editor refreshes its transport bar and piano roll through `ControlUiBridge::onTr
 
 **Tracks.** OpenTune identifies a track by its position and has `MAX_TRACKS` slots; the editor shows the first few
 (`ControlUiBridge::visibleTrackCount()`, `setVisibleTrackCount()`), and a project that was opened can have clips in
-hidden slots. The methods that change the number of shown tracks need the editor (`UNSUPPORTED(capability_missing)`
+hidden slots. The methods that change the number of shown tracks need the editor (`UNSUPPORTED(no_editor_window)`
 without one); `track.set` works on the arrangement alone.
 
 - `track.set` sets mute, solo, volume and colour through the arrangement's setters (the ones behind the panel's
@@ -1037,7 +1037,7 @@ Tests: `Tests/Control/ControlArrangementTests.cpp` (`Arrangement`, `ArrangementU
 `ui.setSelection`, is described in "Selection"; with it registered the instance reports `ui.bridge`.
 `ui.onboardingClose`, a capability without methods of its own, is reported right after `ui.bridge`
 (`kFeatureCapabilities` in `Ops/OpsRegistry.cpp`), because every build with the editor bridge can close an overlay that
-is showing. Both methods describe the editor window and answer `UNSUPPORTED(capability_missing)` without an editor.
+is showing. Both methods describe the editor window and answer `UNSUPPORTED(no_editor_window)` without an editor.
 
 The editor's side is `Source/Standalone/ControlEditorBridgeModals.cpp`. It reads the open windows through JUCE's
 `ModalComponentManager` (index 0 is the window in front; `openDialogs()` lists them from the bottom) and calls only
@@ -1111,10 +1111,10 @@ Suppressing either for work the API started would need a hook in upstream logic,
 SNAP and the pitch tool use. A scale picked in the transport bar while no clip is selected changes only the UI and is
 not reflected.
 
-**Deviations from the vectors.** OpenTune always has an active track (track 0 in a new project), so the UI snapshot
-reports `activeTrackId` 0 where `ui/get-state-ok` expects null; its runner checks 0 instead. The titles of
-`ConfirmDialogContent` dialogs are empty (above). `ui/dismiss-confirm-commit` needs `tracks.v1` for its revert recipe
-and is skipped until that capability is reported; `UiDismiss` covers the same commit without it.
+**Deviations from the vectors.** The titles of `ConfirmDialogContent` dialogs are empty (above).
+`ui/dismiss-confirm-commit` needs `tracks.v1` for its revert recipe and is skipped until that capability is reported;
+`UiDismiss` covers the same commit without it. (OpenTune always has an active track, track 0 in a new project, so the
+UI snapshot reports `activeTrackId` 0; since spec rc.4 `ui/get-state-ok` expects this, and so does the runner.)
 
 Tests: `Tests/Control/ControlUiTests.cpp` (`UiState`, `UiDismiss`, `UiOnboardingWithheld`, `UiVectors`) against the
 test bridge's dialogs and overlay (`TestUiBridge`); `UiVectors` requires an explicit list of `ui/*` vectors to pass and
@@ -1160,14 +1160,12 @@ switches the window back. Generated notes have no undo entry (as in OpenTune), s
 Selecting what is selected, with no other effect, is a no-op. The order of the checks: the editor (`UNSUPPORTED`
 without one), the handle (`NOT_FOUND`), busy (also for dryRun).
 
-**Deviations from the vectors.** OpenTune always has an active track (track 0 in a new project), so where the vectors
-start with "no track active" the runner starts with track 0 active and no clip selected: selecting a clip on track 0
-lists no `activeTrackId` (it did not change), and the revert recipe selects track 0 where the vectors expect null. In
-the openDyne scheme OpenTune's reference context reports no binding, so `ui/set-selection-generates-notes` (openDyne, a
-binding, experimental features on) queues no reference analysis; the runner leaves `referenceAnalysisQueued` and
-`REFERENCE_ANALYSIS_QUEUED` out of that vector's expectation. A selection that queues reference analysis lists the
-`reference` component (and the `content` component when the pitch analysis was requested) of both contents in
-`revisionDiff`.
+**Vectors.** Since spec rc.4 the vectors state what OpenTune does, and the runner expects their responses unchanged.
+OpenTune always has an active track (track 0 in a new project), so a selection that leaves it lists no `activeTrackId`
+and the revert recipe selects the previous track (`{trackId: 0}` when no clip was selected). In the openDyne scheme
+OpenTune's reference context reports no binding, so selecting a clip queues reference analysis in the openTune scheme
+only. A selection that queues reference analysis lists the `reference` component (and the `content` component when the
+pitch analysis was requested) of both contents in `revisionDiff`.
 
 Tests: `Tests/Control/ControlSelectionTests.cpp` with a test bridge that selects as the editor does on the real
 processor (`generateNotesOnlyByContentKey` for the piano roll's notes, `preheatReferenceAlignmentFeatures` for the
@@ -1177,7 +1175,7 @@ track. `SelectionMatrix` runs both schemes with a clip with and without notes an
 the prediction of dryRun equals the committed result, and dryRun leaves every field of the state as it was. The test
 bridge and the prediction follow the same rules, so this shows that the two copies agree, not that the prediction agrees
 with the real editor; drift of the real editor is caught by the drift pins ("Mirrors") and by checks in the real
-Standalone. `SelectionVectors` runs the vectors `ui/set-selection-*` (adjusted as above). The view's highlight and
+Standalone. `SelectionVectors` runs the vectors `ui/set-selection-*`. The view's highlight and
 keyboard target, and the real piano roll, run only in the Standalone application.
 
 ## Preferences and audio device
@@ -1236,8 +1234,9 @@ does not recompute existing results (`NOT_RETROACTIVE`).
   (`audio.get` reports it). If no device ran before the call, none runs after a failed one. The ASIO restore of the
   system sample rate that the page makes before it closes an ASIO device for another type or output device is the
   bridge's `prepareAudioDeviceSwitch()`; when it cannot be verified the current device stays.
-- Without an editor or a device manager `audio.set` answers `UNSUPPORTED(capability_missing)`. The revert recipe
-  needs a device that ran before the call (a setup cannot be set to "no device"); without one the result says
+- Without an editor `audio.set` answers `UNSUPPORTED(no_editor_window)`; with an editor that has no device manager,
+  `UNSUPPORTED(capability_missing)`. The revert recipe needs a device that ran before the call (a setup cannot be set
+  to "no device"); without one the result says
   `IRREVERSIBLE`.
 
 Tests: `Tests/Control/ControlPrefsTests.cpp` (`PrefsRoundTrip`, `PrefsSchemeJob`, `PrefsVectors`, `AudioDevice`,
@@ -1315,6 +1314,18 @@ the upstream `Tests/LifecycleWatchdog.h`. Its target copies the SharedCode's com
 include directories, because `PluginProcessor.h` changes its class layout with them, and pumps messages
 with `juce::detail::dispatchNextMessageOnSystemQueue` rather than `runDispatchLoop()`, whose stop latches
 for the rest of the process in JUCE 9.0.3. Run them with `ctest -R Control`.
+
+Every runner of the specification's vectors (`Vectors`, `JobVectors`, `ExportVectors`, `EditVectors`, `TimingVectors`,
+`ProjectVectors`, `TrackVectors`, `UiVectors`, `PrefsVectors`, `AudioVectors`, `ReferenceVectors`,
+`ArrangementVectors`, `SelectionVectors` and the session vectors of `ControlUnitTests`) records the result of each
+vector it considers. When the environment variable `OTCP_VECTOR_REPORT_DIR` names a directory (an absolute path), a
+runner writes `<directory>/<test name>.json` there, e.g. `ControlProcessorTests.TrackVectors.json`:
+`{"runner": "cpp-headless:<test name>", "commit": "<OTCP_VECTOR_REPORT_COMMIT or empty>", "vectors": [{"id", "status":
+"PASS"|"FAIL"|"SKIP", "reason"}]}`, with `id` the path of the vector file below `vectors/` without `.json`. This lets a
+gate require that every vector passes in at least one runner. The writing is `VectorReport` in
+`Tests/Control/ControlTestSupport.h`; without the variable nothing changes, and a failure to write is one line of
+output and never fails a test. A failed job of a vector's `given.jobs[].error` is made by `establishFailedJobs()`
+(`ControlProcessorSupport.h`).
 
 A request of a scenario (`ApiSession::request`) waits `kReadTimeoutMs` for the line with its own id. One
 without a response in time fails the scenario with the longest single message dispatch on the message thread
@@ -1448,7 +1459,7 @@ analysis with `allowDry`, an unvoiced one: `NOT_READY(export_dry_stretched)`), w
 follows the editor in the number of shown tracks and the notifications, and a fake audio device in a real
 `juce::AudioDeviceManager` (running, or none open). `Transport` runs every `transport.control` action and the
 play-from-start rules, the no-ops, `NO_AUDIO_DEVICE`, the tempo (with its revert recipe sent unchanged), the loop flag,
-the params, busy, and the answer without an editor. `Tracks` runs `track.set` (values, `CLAMPED`, solo and `audible`,
+the params, busy, and the answer without an editor (`no_editor_window`). `Tracks` runs `track.set` (values, `CLAMPED`, solo and `audible`,
 the colour, the revert recipe, hidden tracks, the checks), `track.add` (the limit), `track.duplicate` (both modes, the
 mix and reference binding copied, `target_track_occupied`, `track_limit`), `track.delete` (the checks in order,
 `trackIdMap`, the removed clip and content, a content that another clip still shows, the dangling reference binding,
@@ -1476,7 +1487,7 @@ track, several sources), the tokens and the checks. `ArrangementVectors` runs ev
 
 `Tests/Control/ControlUiTests.cpp` holds the scenarios of `ui.getState` and `ui.dismiss`, against the dialogs and the
 onboarding overlay of `TestUiBridge`. `UiState` checks the capabilities (`ui.onboardingClose` right after `ui.bridge`,
-every method of `ui.bridge` registered, `UNSUPPORTED` without an editor), the busy flags, the dialog stack from the bottom without file choosers, the onboarding, the UI
+every method of `ui.bridge` registered, `UNSUPPORTED(no_editor_window)` without an editor), the busy flags, the dialog stack from the bottom without file choosers, the onboarding, the UI
 snapshot, the scale and a bridge without dialogs. `UiDismiss` closes view-state dialogs (`not_persisted_state`), a
 track colour without and with `confirm` (the colour, `dialogCommitted`, `DIALOG_CLOSE_COMMITTED`, the revert recipe,
 dirty, an unchanged colour), a stack with a file chooser on top or in the middle, a dialog that opens another or will

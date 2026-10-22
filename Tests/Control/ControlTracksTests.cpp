@@ -881,12 +881,12 @@ void scenarioTracksImpl()
             return;
         f.addClip(0);
         settleBackgroundWork(*f.processor);
-        CONTROL_CHECK(f.api.fails("track.add", json("{}"), "UNSUPPORTED", "capability_missing"));
-        CONTROL_CHECK(f.api.fails("track.duplicate", json(R"({"trackId":0})"), "UNSUPPORTED", "capability_missing"));
+        CONTROL_CHECK(f.api.fails("track.add", json("{}"), "UNSUPPORTED", "no_editor_window"));
+        CONTROL_CHECK(f.api.fails("track.duplicate", json(R"({"trackId":0})"), "UNSUPPORTED", "no_editor_window"));
         CONTROL_CHECK(f.api.fails("track.delete",
                                   json("{\"trackId\":0,\"expectedArrangementRevision\":"
                                        + quoted(f.arrangementRevision()) + ",\"confirm\":true}"),
-                                  "UNSUPPORTED", "capability_missing"));
+                                  "UNSUPPORTED", "no_editor_window"));
         CONTROL_CHECK(!memberOf(f.setTracks(R"([{"trackId":0,"muted":true}])"), "noOp").asBoolean());
         CONTROL_CHECK(f.arrangement().isTrackMuted(0));
     }
@@ -1322,6 +1322,7 @@ const char* const kMustRunVectors[] = {
     "track/duplicate-not-found",
     "track/duplicate-share",
     "track/duplicate-target-occupied",
+    "track/duplicate-track-hidden",
     "track/set-clamped",
     "track/set-colour",
     "track/set-duplicate-track",
@@ -1579,6 +1580,7 @@ void scenarioTrackVectorsImpl()
     std::sort(files.begin(), files.end());
     std::set<std::string> passedIds;
     int skipped = 0;
+    VectorReport report("ControlProcessorTests.TrackVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -1586,16 +1588,19 @@ void scenarioTrackVectorsImpl()
         const auto id = memberOf(parsed.value, "id").text();
         if (const auto reason = vectorSkipReason(parsed.value); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
         const auto started = Clock::now();
         const auto failure = runVector(parsed.value);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty()))
             passedIds.insert(id);
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     for (const char* id : kMustRunVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
     note(std::to_string(passedIds.size()) + " vectors passed, " + std::to_string(skipped) + " skipped");

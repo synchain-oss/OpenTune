@@ -1821,6 +1821,7 @@ void scenarioVectors()
     int passed = 0;
     int skipped = 0;
     std::set<std::string> passedIds;
+    VectorReport report("ControlProcessorTests.Vectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -1829,11 +1830,13 @@ void scenarioVectors()
         const auto id = memberOf(vector, "id").text();
         if (const auto reason = vectorSkipReason(vector); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
         const auto started = Clock::now();
         const auto failure = runVector(vector);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty())) {
             ++passed;
             passedIds.insert(id);
@@ -1841,6 +1844,7 @@ void scenarioVectors()
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     // Every vector of the list runs and passes: a vector that is skipped or gone fails here, instead of
     // a count that hides it. A newly runnable vector of the specification is added to the list on purpose.
     for (const char* id : kMustRunVectors)

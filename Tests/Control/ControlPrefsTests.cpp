@@ -976,7 +976,7 @@ void checkWithoutDevice(ApiSession& api, PrefsBridge& bridge, ControlService& se
     // No editor at all.
     service.setUiBridge(nullptr);
     readNullReason("no_editor");
-    CONTROL_CHECK(api.fails("audio.set", json(R"({"bufferSizeFrame":256})"), "UNSUPPORTED", "capability_missing"));
+    CONTROL_CHECK(api.fails("audio.set", json(R"({"bufferSizeFrame":256})"), "UNSUPPORTED", "no_editor_window"));
     service.setUiBridge(&bridge);
 }
 
@@ -1320,6 +1320,12 @@ std::string vectorSkipReason(const JsonValue& vector, const std::string& capabil
         const auto& name = given.keyAt(i);
         if (name == "dirty" || name == "preferences" || name == "editingScheme" || name == "audio")
             continue;
+        if (name == "jobs") {
+            for (std::size_t j = 0; j < given.at(i).size(); ++j)
+                if (memberOf(given.at(i).at(j), "state").text() != "failed")
+                    return "a job that has not failed is not established by this runner";
+            continue;
+        }
         if (name != "clips")
             return "precondition given." + name + " is not established by this runner";
         for (std::size_t c = 0; c < given.at(i).size(); ++c)
@@ -1384,6 +1390,11 @@ std::string runVector(const JsonValue& vector, bool withClips)
     ApiSession api;
     if (!api.open(service))
         return "session.hello failed";
+    if (const JsonValue* jobsGiven = given.find("jobs")) {
+        // Failed jobs of the vector (given.jobs[].error), made on the message thread like the jobs of a call.
+        if (service.jobs() == nullptr || !establishFailedJobs(*service.jobs(), *jobsGiven, matcher))
+            return "given.jobs could not be established";
+    }
     if (!created.empty()) {
         const auto project = api.result("project.get");
         for (std::size_t i = 0; i < created.size(); ++i) {
@@ -1446,9 +1457,10 @@ std::string runVector(const JsonValue& vector, bool withClips)
     return failure;
 }
 
-void runVectorsOf(const char* directory, const char* capability, const std::set<std::string>& methods,
-                  const std::vector<std::string>& mustRun, bool withClips)
+void runVectorsOf(const char* testName, const char* directory, const char* capability,
+                  const std::set<std::string>& methods, const std::vector<std::string>& mustRun, bool withClips)
 {
+    VectorReport report(testName);
     const auto root = std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR) / "vectors" / directory;
     std::vector<std::filesystem::path> files;
     for (const auto& entry : std::filesystem::directory_iterator(root))
@@ -1466,11 +1478,13 @@ void runVectorsOf(const char* directory, const char* capability, const std::set<
         const auto id = memberOf(vector, "id").text();
         if (const auto reason = vectorSkipReason(vector, capability, methods); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
         const auto started = Clock::now();
         const auto failure = runVector(vector, withClips);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty())) {
             ++passed;
             passedIds.insert(id);
@@ -1478,6 +1492,7 @@ void runVectorsOf(const char* directory, const char* capability, const std::set<
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     for (const auto& id : mustRun)
         CONTROL_CHECK(passedIds.count(id) == 1);
     note(std::to_string(passed) + " vectors passed, " + std::to_string(skipped) + " skipped");
@@ -1488,15 +1503,16 @@ void runVectorsOf(const char* directory, const char* capability, const std::set<
 void scenarioPrefsVectors()
 {
     // prefs/get-ok is a read, run by the Vectors scenario.
-    runVectorsOf("prefs", "prefs.write", kPrefsVectorMethods,
+    runVectorsOf("ControlProcessorTests.PrefsVectors", "prefs", "prefs.write", kPrefsVectorMethods,
                  {"prefs/set-hybrid", "prefs/set-no-op", "prefs/set-out-of-range", "prefs/set-scheme",
-                  "prefs/set-scheme-job", "prefs/set-tuning", "prefs/set-tuning-revert"},
+                  "prefs/set-scheme-job", "prefs/set-tuning", "prefs/set-tuning-revert",
+                  "prefs/set-job-failures"},
                  true);
 }
 
 void scenarioAudioVectors()
 {
-    runVectorsOf("audio", "audio.device", kAudioVectorMethods,
+    runVectorsOf("ControlProcessorTests.AudioVectors", "audio", "audio.device", kAudioVectorMethods,
                  {"audio/get-no-device", "audio/get-ok", "audio/set-ok", "audio/set-rollback", "audio/set-unavailable"},
                  false);
 }

@@ -74,7 +74,7 @@ ControlUiBridge* windowBridge(ControlOpContext& context)
 
 Error noEditor()
 {
-    return controlOpError("UNSUPPORTED", "capability_missing",
+    return controlOpError("UNSUPPORTED", "no_editor_window",
                           "ui.bridge describes the OpenTune editor window, and no editor exists");
 }
 

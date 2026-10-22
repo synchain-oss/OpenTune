@@ -1171,13 +1171,13 @@ pitch analysis was requested) of both contents in `revisionDiff`.
 Tests: `Tests/Control/ControlSelectionTests.cpp` with a test bridge that selects as the editor does on the real
 processor (`generateNotesOnlyByContentKey` for the piano roll's notes, `preheatReferenceAlignmentFeatures` for the
 reference context). `Selection` checks the capability, the params, `NOT_FOUND`, `UNSUPPORTED`, busy, dryRun leaving the
-state as it was, a clip, `openEditor`, the scale with `ui.getState`, the no-op, the revert recipe sent back and a
-track. `SelectionMatrix` runs both schemes with a clip with and without notes and with and without a reference binding:
-the prediction of dryRun equals the committed result, and dryRun leaves every field of the state as it was. The test
-bridge and the prediction follow the same rules, so this shows that the two copies agree, not that the prediction agrees
-with the real editor; drift of the real editor is caught by the drift pins ("Mirrors") and by checks in the real
-Standalone. `SelectionVectors` runs the vectors `ui/set-selection-*`. The view's highlight and
-keyboard target, and the real piano roll, run only in the Standalone application.
+state as it was, a clip, `openEditor`, the scale with `ui.getState`, the no-op, the revert recipe sent back and a track.
+`SelectionMatrix` runs both schemes with a clip with and without notes and with and without a reference binding: the
+prediction of dryRun equals the committed result, and dryRun leaves every field of the state as it was. The test bridge
+and the prediction follow the same rules, so this shows that the two copies agree, not that the prediction agrees with
+the real editor; drift of the real editor is caught by the drift pins ("Mirrors") and by checks in the real Standalone.
+`SelectionVectors` runs the vectors `ui/set-selection-*`. The view's highlight and keyboard target, and the real piano
+roll, run only in the Standalone application.
 
 ## Preferences and audio device
 
@@ -1461,18 +1461,19 @@ follows the editor in the number of shown tracks and the notifications, and a fa
 `juce::AudioDeviceManager` (running, or none open). `Transport` runs every `transport.control` action and the
 play-from-start rules, the no-ops, `NO_AUDIO_DEVICE`, the tempo (with its revert recipe sent unchanged), the loop flag,
 the params, busy, and the answer without an editor (`no_editor_window`). `Tracks` runs `track.set` (values, `CLAMPED`,
-solo and `audible`, the colour, the revert recipe, hidden tracks, the checks), `track.add` (the limit), `track.duplicate` (both modes, the
-mix and reference binding copied, `target_track_occupied`, `track_limit`), `track.delete` (the checks in order,
-`trackIdMap`, the removed clip and content, a content that another clip still shows, the dangling reference binding,
-the mix that moves down, a hidden track's mix and clip that stay) and the three methods that need the editor without
-one. `TrackBarrier` runs the barrier of a track deletion with undo entries of the API that address tracks (OpenTune's
-`MultiMovePlacementAction` in a `ControlOriginAction`), entries of the UI, `force` and its confirmation, the second
-deletion (the entry's clip was followed down by the first), a clip move across tracks followed by two deletions (the
-second removes the slot the action is keyed by, which the followed positions no longer name), the same move undone and redone with `force` between deletions (the merged slots keep `followed` covering the clip), an entry that addresses a
-hidden track (not stale), and a note edit whose content left the project (`UNDO_NO_EFFECT`). `TrackVectors` runs the
-specification's `transport/*` and `track/*` vectors and the six `edit/` vectors that need a deletion's barrier
-(`given.history` with clip moves is established with the same actions); `track/delete-arrangement-changed` needs
-`arrangement.edit` and runs in `ArrangementVectors`.
+solo and `audible`, the colour, the revert recipe, hidden tracks, the checks), `track.add` (the limit),
+`track.duplicate` (both modes, the mix and reference binding copied, `target_track_occupied`, `track_limit`),
+`track.delete` (the checks in order, `trackIdMap`, the removed clip and content, a content that another clip still
+shows, the dangling reference binding, the mix that moves down, a hidden track's mix and clip that stay) and the three
+methods that need the editor without one. `TrackBarrier` runs the barrier of a track deletion with undo entries of the
+API that address tracks (OpenTune's `MultiMovePlacementAction` in a `ControlOriginAction`), entries of the UI, `force`
+and its confirmation, the second deletion (the entry's clip was followed down by the first), a clip move across tracks
+followed by two deletions (the second removes the slot the action is keyed by, which the followed positions no longer
+name), the same move undone and redone with `force` between deletions (the merged slots keep `followed` covering the
+clip), an entry that addresses a hidden track (not stale), and a note edit whose content left the project
+(`UNDO_NO_EFFECT`). `TrackVectors` runs the specification's `transport/*` and `track/*` vectors and the six `edit/`
+vectors that need a deletion's barrier (`given.history` with clip moves is established with the same actions);
+`track/delete-arrangement-changed` needs `arrangement.edit` and runs in `ArrangementVectors`.
 
 `Tests/Control/ControlArrangementTests.cpp` holds the scenarios of the arrangement methods, with the test bridge (shown
 tracks, busy flags, dirty flag, notifications). `Arrangement` runs every op of `arrangement.edit`: moves (overlap, a
@@ -1488,14 +1489,14 @@ track, several sources), the tokens and the checks. `ArrangementVectors` runs ev
 
 `Tests/Control/ControlUiTests.cpp` holds the scenarios of `ui.getState` and `ui.dismiss`, against the dialogs and the
 onboarding overlay of `TestUiBridge`. `UiState` checks the capabilities (`ui.onboardingClose` right after `ui.bridge`,
-every method of `ui.bridge` registered, `UNSUPPORTED(no_editor_window)` without an editor), the busy flags, the
-dialog stack from the bottom without file choosers, the onboarding, the UI
-snapshot, the scale and a bridge without dialogs. `UiDismiss` closes view-state dialogs (`not_persisted_state`), a
-track colour without and with `confirm` (the colour, `dialogCommitted`, `DIALOG_CLOSE_COMMITTED`, the revert recipe,
-dirty, an unchanged colour), a stack with a file chooser on top or in the middle, a dialog that opens another or will
-not close, prevents and closes the onboarding (with the dialogs above it), the no-ops, busy and the params.
-`UiOnboardingWithheld` runs an instance without `ui.onboardingClose`. `UiVectors` runs the specification's `ui/*`
-vectors; a fixed list of them must pass, and those of `ui.setSelection` run in `SelectionVectors` (see "Selection").
+every method of `ui.bridge` registered, `UNSUPPORTED(no_editor_window)` without an editor), the busy flags, the dialog
+stack from the bottom without file choosers, the onboarding, the UI snapshot, the scale and a bridge without dialogs.
+`UiDismiss` closes view-state dialogs (`not_persisted_state`), a track colour without and with `confirm` (the colour,
+`dialogCommitted`, `DIALOG_CLOSE_COMMITTED`, the revert recipe, dirty, an unchanged colour), a stack with a file chooser
+on top or in the middle, a dialog that opens another or will not close, prevents and closes the onboarding (with the
+dialogs above it), the no-ops, busy and the params. `UiOnboardingWithheld` runs an instance without
+`ui.onboardingClose`. `UiVectors` runs the specification's `ui/*` vectors; a fixed list of them must pass, and those of
+`ui.setSelection` run in `SelectionVectors` (see "Selection").
 
 `Tests/Control/ControlReferenceTests.cpp` holds the scenarios of the reference alignment. The alignment data of the reference
 clip is given to its content as the processor stores a finished analysis, with notes two semitones above the target's;

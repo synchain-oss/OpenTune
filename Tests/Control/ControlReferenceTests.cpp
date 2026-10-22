@@ -134,6 +134,13 @@ const std::vector<FeatureNote>& referenceNotes()
     return notes;
 }
 
+/** The notes of the target clip's alignment data (targetSpec(), as its own analysis would produce them). */
+const std::vector<FeatureNote>& targetNotes()
+{
+    static const std::vector<FeatureNote> notes = {{0.5, 1.5, 64.0}, {2.0, 3.0, 69.0}};
+    return notes;
+}
+
 /** The target clip: 6 s on track 0 from 2 s with two notes at 64 and 69. */
 ClipSpec targetSpec()
 {
@@ -429,14 +436,16 @@ void scenarioReferenceImpl()
 
 // ---- Scenario: the wait limit, the one job per placement, cancellation -----------------------------------
 
-/** Upstream's analysis service finishes one analysis per session: with data for neither clip the job cannot end
-    with both, and it ends at its wait limit instead of waiting for ever. */
+/** Upstream's analysis service finishes one analysis per session: the first job itself consumes it for one of its two
+    contents (the other content's analysis is queued behind it and never taken), and the job ends as soon as the worker
+    is stuck, with NOT_READY(reference_analysis_stalled), not at its wait limit. */
 void scenarioUpstreamServiceLimit()
 {
     ReferenceFixture f;
     if (!f.open(false))
         return;
-    WaitLimitGuard limit(kTestWaitLimitMs * 3);
+    // Far longer than this test: a job that waits instead of detecting the stall does not end within the test.
+    WaitLimitGuard limit(60000);
     const auto jobId = f.startAnalyze();
     if (!CONTROL_CHECK(!jobId.empty())
         || !CONTROL_CHECK(pumpMessagesUntil(
@@ -456,15 +465,34 @@ void scenarioUpstreamServiceLimit()
         return ready;
     };
     if (memberOf(f.jobOf(jobId), "state").text() == "succeeded") {
-        // The service completes every analysis (it was fixed upstream): both contents have their data.
+        // The asynchronous (GAME) producer completes both analyses (its worker resets activeJob), so both contents
+        // have their data; the synchronous standard producer never takes the second job.
         note("the reference analysis service completed both analyses");
         CONTROL_CHECK(readyCount() == 2);
-    } else {
-        // ReferenceAnalysisService::workerLoop never takes a second synchronous job: exactly one content has its data.
-        note("the reference analysis service completed one analysis only (known upstream behaviour)");
-        CONTROL_CHECK(readyCount() == 1);
-        CONTROL_CHECK(f.failedWith(jobId, "NOT_READY", "", true));
+        return;
     }
+    // ReferenceAnalysisService::workerLoop never takes a second synchronous job: exactly one content has its data.
+    // Nothing before this job requested an analysis; the job's own preheat of the two contents used the one analysis.
+    note("the reference analysis service completed one analysis only (known upstream behaviour)");
+    CONTROL_CHECK(readyCount() == 1);
+    CONTROL_CHECK(f.failedWith(jobId, "NOT_READY", "reference_analysis_stalled", false));
+
+    // A later call for the same binding fails the same way at its first step, without waiting for the limit.
+    const auto later = f.startAnalyze();
+    CONTROL_CHECK(!later.empty() && later != jobId);
+    CONTROL_CHECK(f.failedWith(later, "NOT_READY", "reference_analysis_stalled", false));
+
+    // The stall is only about missing data: with both contents current the analysis reports ready and the aligning job
+    // still commits (the worker is not needed). Either content may be the one the worker completed (pendingJobs is
+    // ordered by content key, not by submission), so both sets are written.
+    CONTROL_CHECK(setReferenceFeatures(*f.processor, f.target.key, ReferenceFeatureStatus::Ready, targetNotes()));
+    CONTROL_CHECK(setReferenceFeatures(*f.processor, f.reference.key, ReferenceFeatureStatus::Ready, referenceNotes()));
+    const auto readyJob = f.startAnalyze();
+    CONTROL_CHECK(!readyJob.empty() && f.waitJobState(readyJob, "succeeded"));
+    CONTROL_CHECK(memberOf(memberOf(f.jobOf(readyJob), "result"), "alignmentReady").asBoolean());
+    const auto alignJob = f.startAutoRef();
+    CONTROL_CHECK(!alignJob.empty() && f.waitJobState(alignJob, "succeeded"));
+    CONTROL_CHECK(f.targetMidiIs(66.0, 71.0) && f.historySize() == 1);
 }
 
 void scenarioReferenceLimitImpl()
@@ -487,8 +515,8 @@ void scenarioReferenceLimitImpl()
     const auto autoId = f.startAutoRef();
     CONTROL_CHECK(!autoId.empty() && autoId != first);
     // The jobs report the wait, then end at the limit: retryable, nothing executed, no note and no history entry.
-    CONTROL_CHECK(f.failedWith(first, "NOT_READY", "", true));
-    CONTROL_CHECK(f.failedWith(autoId, "NOT_READY", "", true));
+    CONTROL_CHECK(f.failedWith(first, "NOT_READY", "reference_analysis_timeout", true));
+    CONTROL_CHECK(f.failedWith(autoId, "NOT_READY", "reference_analysis_timeout", true));
     CONTROL_CHECK(f.targetMidiIs(64.0, 69.0) && f.historySize() == 0 && f.bridge.dirtyMarks == 0);
     // Once the job is terminal, the next call starts a new job.
     const auto next = f.startAnalyze();
@@ -501,6 +529,25 @@ void scenarioReferenceLimitImpl()
     const auto job = f.jobOf(next);
     CONTROL_CHECK(memberOf(memberOf(memberOf(job, "error"), "data"), "kind").text() == "CANCELLED"
                   && !memberOf(memberOf(memberOf(job, "error"), "data"), "executed").asBoolean());
+
+    // An analysis that failed for the current audio is reported as failed, not waited out: ANALYSIS_FAILED with the
+    // reference analysis reason, not retryable, and nothing written.
+    {
+        ReferenceFixture failed;
+        if (!failed.open(false))
+            return;
+        CONTROL_CHECK(setReferenceFeatures(*failed.processor, failed.target.key, ReferenceFeatureStatus::Ready,
+                                           referenceNotes()));
+        CONTROL_CHECK(
+            setReferenceFeatures(*failed.processor, failed.reference.key, ReferenceFeatureStatus::Failed, {}));
+        const auto analyzeId = failed.startAnalyze();
+        CONTROL_CHECK(!analyzeId.empty());
+        CONTROL_CHECK(failed.failedWith(analyzeId, "ANALYSIS_FAILED", "reference_analysis_failed", false));
+        const auto alignId = failed.startAutoRef();
+        CONTROL_CHECK(!alignId.empty());
+        CONTROL_CHECK(failed.failedWith(alignId, "ANALYSIS_FAILED", "reference_analysis_failed", false));
+        CONTROL_CHECK(failed.targetMidiIs(64.0, 69.0) && failed.historySize() == 0 && failed.bridge.dirtyMarks == 0);
+    }
 }
 
 // ---- Scenario: the checks the jobs make again --------------------------------------------------------------

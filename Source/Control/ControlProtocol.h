@@ -104,8 +104,8 @@ int controlErrorCode(std::string_view kind, std::string_view reason);
 /** Default retryability of an error kind (registry/error-kinds.json). */
 bool controlErrorRetryableByDefault(std::string_view kind);
 /** Retryability of an error kind and reason: the kind's default, except the NOT_READY reasons that waiting
-    never ends (f0_failed, f0_empty, grid_not_seeded, export_dry_stretched; registry/reasons.json, PROTOCOL.md section
-   11). */
+    never ends (f0_failed, f0_empty, grid_not_seeded, export_dry_stretched, reference_analysis_stalled;
+    registry/reasons.json, PROTOCOL.md section 11). */
 bool controlErrorRetryable(std::string_view kind, std::string_view reason);
 
 /**

@@ -1281,8 +1281,8 @@ void checkRemovedContentRevivedByUndo(Fixture& f)
 void scenarioTrackBarrierImpl()
 {
     for (const auto check : {checkBarrierApiEntry, checkBarrierMoveAcrossTracks, checkBarrierFollowedCoversSlots,
-                             checkBarrierLaterTrack, checkBarrierHiddenTrack, checkBarrierUiEntry, checkBarrierUndoBelowMark,
-                             checkBarrierRemovedContent, checkRemovedContentRevivedByUndo}) {
+                             checkBarrierLaterTrack, checkBarrierHiddenTrack, checkBarrierUiEntry,
+                             checkBarrierUndoBelowMark, checkBarrierRemovedContent, checkRemovedContentRevivedByUndo}) {
         Fixture f;
         if (f.open())
             check(f);

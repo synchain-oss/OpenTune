@@ -844,6 +844,9 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
     //    done either, IRREVERSIBLE with the check's kind and reason in data;
     //  - the check fails with NOT_READY (the pitch analysis of the merged content is still pending): a passing
     //    state, so the split recipe is given as usual and answers NOT_READY itself until the analysis is done.
+    //    That recipe is optimistic: the cut point could not be checked yet, so once the analysis is ready the split
+    //    may snap to another frame than the former boundary (the split then reports SPLIT_SNAPPED) or be refused
+    //    (split_out_of_range). It is not guaranteed to restore the former clips' boundary.
     const double boundary = trailing.placement.timelineStartSeconds;
     const auto* mergedClip = findIn(after, outcome->mergedPlacementId);
     bool giveRecipe = false;

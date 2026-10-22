@@ -783,32 +783,6 @@ std::string referenceVectorSkipReason(const JsonValue& vector)
     return {};
 }
 
-/** Establishes given.jobs (failed jobs of the kinds they name, with their errors); binds their ids. */
-bool establishFailedJobs(ControlJobs& jobs, const JsonValue& given, VectorMatcher& matcher)
-{
-    for (std::size_t i = 0; i < given.size(); ++i) {
-        const auto& spec = given.at(i);
-        const auto& error = memberOf(spec, "error");
-        const ControlJobError failure{memberOf(error, "kind").text(), memberOf(error, "reason").text(),
-                                      "a failed job of the fixture", false};
-        const auto started =
-            jobs.start(memberOf(spec, "kind").text(), true, [failure](ControlJobStep& step) { step.fail(failure); });
-        if (started.jobId.empty())
-            return false;
-        matcher.bindings[memberOf(spec, "bind").text()] = JsonValue::string(started.jobId);
-        const std::string jobId = started.jobId;
-        if (!pumpMessagesUntil(
-                [&jobs, jobId] {
-                    JsonValue job;
-                    return jobs.get(jobId, job) == ControlJobs::Lookup::Found
-                           && memberOf(job, "state").text() == "failed";
-                },
-                kReadTimeoutMs))
-            return false;
-    }
-    return true;
-}
-
 /** An instance that does not report the capabilities in without: the request run directly with its facts, the way
     a client of such an instance would be answered; the error it gives, or nullopt when it did not fail. */
 std::optional<ControlErrorReply> runWithoutCapabilities(OpenTuneAudioProcessor& processor,
@@ -1016,6 +990,7 @@ void scenarioReferenceVectors()
     std::sort(files.begin(), files.end());
     std::set<std::string> passedIds;
     int skipped = 0;
+    VectorReport report("ControlProcessorTests.ReferenceVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -1025,16 +1000,19 @@ void scenarioReferenceVectors()
             continue;
         if (const auto reason = referenceVectorSkipReason(parsed.value); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
         const auto started = Clock::now();
         const auto failure = runReferenceVector(parsed.value);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty()))
             passedIds.insert(id);
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     for (const char* id : kMustRunReferenceVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
     note(std::to_string(passedIds.size()) + " vectors passed, " + std::to_string(skipped) + " skipped");

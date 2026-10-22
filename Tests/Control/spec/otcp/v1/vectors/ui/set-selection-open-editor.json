@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "ui/set-selection-open-editor",
   "type": "request",
-  "description": "With openEditor true the clip is also opened in the piano roll, as double-clicking it does; sideEffects.workspaceSwitched reports the switch, which is view state and has no revert recipe.",
+  "description": "With openEditor true the clip is also opened in the piano roll, as double-clicking it does; sideEffects.workspaceSwitched reports the switch, which is view state and has no revert recipe. The revert recipe of the call selects track 0, which was active, again. Precondition: no clip is selected and track 0 is the active track (OpenTune always has an active track), which is the state of a new project; import.start selects the last imported clip and activates its track, so a client that imported the clips resets the selection first.",
   "capability": "ui.bridge",
   "since": "1.0",
   "method": "ui.setSelection",
@@ -46,7 +46,6 @@
           "ref": { "singleton": "selection" },
           "label": { "$any": true },
           "fields": {
-            "activeTrackId": { "before": null, "after": 0, "unit": null },
             "selectedPlacementIds": {
               "before": [],
               "after": [{ "$ref": "clip.placementId" }],
@@ -71,7 +70,10 @@
       "undo": {
         "undoable": false,
         "reason": "not_persisted_state",
-        "revert": null
+        "revert": {
+          "method": "ui.setSelection",
+          "params": { "trackId": 0 }
+        }
       },
       "dirty": { "before": false, "after": false },
       "ui": { "$any": true },

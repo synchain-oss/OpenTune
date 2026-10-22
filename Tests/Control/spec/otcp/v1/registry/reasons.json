@@ -352,6 +352,12 @@
       "description": "The instance lacks the capability the request needs. detail names the capability."
     },
     {
+      "code": "no_editor_window",
+      "scope": "UNSUPPORTED",
+      "since": "1.0",
+      "description": "The method acts through the OpenTune editor window (PROTOCOL.md section 7 rule 6), and this instance has no editor window, for example in a window-less run. The request changes nothing (executed false). The method works when OpenTune Standalone is started with its window. Not retryable: the same request fails until OpenTune is started with a window."
+    },
+    {
       "code": "undo_unsafe_build",
       "scope": "UNSUPPORTED",
       "since": "1.0",
@@ -547,7 +553,7 @@
       "code": "track_hidden",
       "scope": "INVALID_ARGUMENT",
       "since": "1.0",
-      "description": "The track is hidden; OpenTune deletes only visible tracks."
+      "description": "The track is hidden. A hidden track cannot be deleted or duplicated: OpenTune deletes and duplicates only visible tracks (track.delete, track.duplicate)."
     },
     {
       "code": "no_project_path",
@@ -602,6 +608,24 @@
       "scope": "NOT_READY",
       "since": "1.0",
       "description": "OpenTune's timing analysis of the content did not finish within the wait limit of the timeGridSeed job, so no handle was placed. Retryable: a new seed waits for the analysis again."
+    },
+    {
+      "code": "reference_analysis_stalled",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "description": "The reference analysis of a clip cannot complete: OpenTune completes only one reference analysis in a session (a known defect of OpenTune, PROTOCOL.md section 15.4 rule 8), and a later analysis never finishes. Where the server already knows that the session cannot complete another analysis, the referenceAnalysis job ends at once instead of waiting for the wait limit; otherwise it ends with this reason when the wait limit passes and the analysis is queued but OpenTune is not processing it (an analysis that is still running ends with reference_analysis_timeout). Not retryable: the same request fails again until OpenTune is restarted, which also discards the unsaved state of the session."
+    },
+    {
+      "code": "reference_analysis_timeout",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "description": "The reference analysis of a clip did not finish within the wait limit of the referenceAnalysis job, so no alignment data was stored. The analysis may still be running in OpenTune. Retryable: a new request waits for the analysis again."
+    },
+    {
+      "code": "reference_analysis_failed",
+      "scope": "ANALYSIS_FAILED",
+      "since": "1.0",
+      "description": "OpenTune's reference analysis of the clip failed, so no alignment data was stored and nothing was written. Not retryable."
     }
   ]
 }

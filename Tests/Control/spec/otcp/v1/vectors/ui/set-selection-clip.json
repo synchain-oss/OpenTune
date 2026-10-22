@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "ui/set-selection-clip",
   "type": "request",
-  "description": "Selecting a clip in the openTune scheme makes its track the active track and changes nothing else that the result has to report. The selection is view state (PROTOCOL.md section 15.2 rule 6); no track was active before, so the revert recipe is null.",
+  "description": "Selecting a clip in the openTune scheme makes its track the active track and changes nothing else that the result has to report. The selection is view state (PROTOCOL.md section 15.2 rule 6); track 0 was already the active track, so the result lists only the clip, and the revert recipe selects track 0 again. Precondition: no clip is selected and track 0 is the active track (OpenTune always has an active track), which is the state of a new project; import.start selects the last imported clip and activates its track, so a client that imported the clips resets the selection first.",
   "capability": "ui.bridge",
   "since": "1.0",
   "method": "ui.setSelection",
@@ -43,7 +43,6 @@
           "ref": { "singleton": "selection" },
           "label": { "$any": true },
           "fields": {
-            "activeTrackId": { "before": null, "after": 0, "unit": null },
             "selectedPlacementIds": {
               "before": [],
               "after": [{ "$ref": "clip.placementId" }],
@@ -68,7 +67,10 @@
       "undo": {
         "undoable": false,
         "reason": "not_persisted_state",
-        "revert": null
+        "revert": {
+          "method": "ui.setSelection",
+          "params": { "trackId": 0 }
+        }
       },
       "dirty": { "before": false, "after": false },
       "ui": { "$any": true },

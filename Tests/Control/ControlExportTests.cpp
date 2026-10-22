@@ -39,6 +39,8 @@
 #include <set>
 #include <vector>
 
+#include "ControlWinAcl.h" // after the JUCE headers: needs windows.h
+
 namespace OpenTune {
 namespace ControlTest {
 
@@ -1003,10 +1005,7 @@ std::string exportVectorSkipReason(const JsonValue& vector)
         if (name == "files") {
             for (std::size_t f = 0; f < given.at(i).size(); ++f) {
                 const auto kind = memberOf(given.at(i).at(f), "kind").text();
-                if (kind == "noAccess")
-                    return "file kind noAccess is not established by this runner: on Windows the identity of a file "
-                           "stays readable through the rights of its parent directories";
-                if (kind != "absent" && kind != "existing" && kind != "audio")
+                if (kind != "absent" && kind != "existing" && kind != "audio" && kind != "noAccess")
                     return "file kind " + kind + " is not established by this runner";
             }
             continue;
@@ -1112,6 +1111,7 @@ std::string runExportVector(const JsonValue& vector, const std::string& slug)
     VectorMatcher matcher;
 
     const auto& files = memberOf(given, "files");
+    NoAccessFile noAccess; // restores the rights when the run ends
     for (std::size_t i = 0; i < files.size(); ++i) {
         const auto& file = files.at(i);
         const auto bind = memberOf(file, "bind").text();
@@ -1120,6 +1120,12 @@ std::string runExportVector(const JsonValue& vector, const std::string& slug)
         std::string path;
         if (kind == "audio") {
             path = writeWav(directory, bind, memberOf(file, "durationSec").asDouble());
+        } else if (kind == "noAccess") {
+            if (noAccess.isLocked())
+                return "the vector has a second noAccess file, which this runner cannot lock";
+            path = noAccess.create(directory, bind + extension);
+            if (path.empty())
+                return "the file " + bind + " could not be made unreadable for this user";
         } else {
             path = (directory / (bind + extension)).u8string();
             if (kind == "existing") {
@@ -1241,6 +1247,7 @@ const char* const kMustRunExportVectors[] = {
     "export/start-clip",
     "export/start-dry-contents",
     "export/start-handle-kind",
+    "export/start-identity-unreadable",
     "export/start-loaded-media",
     "export/start-master",
     "export/start-not-found",

@@ -29,6 +29,8 @@
 #include <string>
 #include <vector>
 
+#include "ControlWinAcl.h" // after the JUCE headers: needs windows.h
+
 namespace OpenTune {
 namespace ControlTest {
 
@@ -652,11 +654,8 @@ std::string projectVectorSkipReason(const JsonValue& vector)
         if (name == "files") {
             for (std::size_t f = 0; f < given.at(i).size(); ++f) {
                 const auto kind = memberOf(given.at(i).at(f), "kind").text();
-                if (kind == "noAccess")
-                    return "file kind noAccess is not established by this runner: on Windows the identity of a file "
-                           "stays readable through the rights of its parent directories";
                 if (kind != "absent" && kind != "existing" && kind != "project" && kind != "projectMissingMedia"
-                    && kind != "undecodable")
+                    && kind != "undecodable" && kind != "noAccess")
                     return "file kind " + kind + " is not established by this runner";
             }
             continue;
@@ -715,13 +714,20 @@ std::string runProjectVector(const JsonValue& vector, const std::string& slug)
     processor->getAppPreferences().clearRecentProjects();
 
     const auto& files = memberOf(given, "files");
+    NoAccessFile noAccess; // restores the rights when the run ends
     for (std::size_t i = 0; i < files.size(); ++i) {
         const auto& file = files.at(i);
         const auto bind = memberOf(file, "bind").text();
         const auto kind = memberOf(file, "kind").text();
         const auto extension = file.find("extension") != nullptr ? memberOf(file, "extension").text() : ".wav";
-        const auto path = (directory / (bind + extension)).u8string();
-        if (kind == "existing") {
+        std::string path = (directory / (bind + extension)).u8string();
+        if (kind == "noAccess") {
+            if (noAccess.isLocked())
+                return "the vector has a second noAccess file, which this runner cannot lock";
+            path = noAccess.create(directory, bind + extension);
+            if (path.empty())
+                return "the file " + bind + " could not be made unreadable for this user";
+        } else if (kind == "existing") {
             if (!juceFileOf(path).replaceWithText("an existing file"))
                 return "the file " + bind + " could not be written";
         } else if (kind == "undecodable") {
@@ -822,8 +828,7 @@ std::string runProjectVector(const JsonValue& vector, const std::string& slug)
 }
 
 /** The vectors of project/ for the project methods that must run and pass headless; the rest are listed as skipped
-    with the reason (project/get-ok is a read, run by the Vectors scenario; project/save-as-no-access needs a file
-    whose identity cannot be read, which Windows does not give to this runner). */
+    with the reason (project/get-ok is a read, run by the Vectors scenario). */
 const char* const kMustRunProjectVectors[] = {
     "project/clear-recent-empty",
     "project/clear-recent-ok",
@@ -839,6 +844,7 @@ const char* const kMustRunProjectVectors[] = {
     "project/save-as-confirm-required",
     "project/save-as-job",
     "project/save-as-new",
+    "project/save-as-no-access",
     "project/save-as-overwrite",
     "project/save-job",
     "project/save-no-path",

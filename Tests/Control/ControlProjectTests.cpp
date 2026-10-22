@@ -595,8 +595,8 @@ void scenarioProjectWithoutEditor()
     const auto directory = projectDirectory("without-editor");
     CONTROL_CHECK(api.fails("project.saveAs", pathParams((directory / "a.otproj").u8string()), "UNSUPPORTED",
                             "no_editor_window"));
-    CONTROL_CHECK(api.fails("project.open", pathParams((directory / "a.otproj").u8string()), "UNSUPPORTED",
-                            "no_editor_window"));
+    CONTROL_CHECK(
+        api.fails("project.open", pathParams((directory / "a.otproj").u8string()), "UNSUPPORTED", "no_editor_window"));
     // The recent projects are a preference: they can be cleared.
     auto& preferences = processor->getAppPreferences();
     preferences.clearRecentProjects();

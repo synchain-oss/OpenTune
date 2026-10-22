@@ -306,10 +306,10 @@ void scenarioUiState()
     CONTROL_CHECK(memberOf(memberOf(idle, "uiScale"), "scale").text() == "pentatonicMinor");
     CONTROL_CHECK(f.api.fails("ui.getState", jsonOf(R"({"x":1})"), "INVALID_ARGUMENT", "invalid_params"));
 
-    // A bridge that does not report its dialogs is no editor window for ui.bridge.
+    // A bridge that does not report its dialogs cannot serve ui.bridge (an editor exists, so not no_editor_window).
     f.bridge.reportsDialogs = false;
-    CONTROL_CHECK(f.api.fails("ui.getState", JsonValue::object(), "UNSUPPORTED", "no_editor_window"));
-    CONTROL_CHECK(f.api.fails("ui.dismiss", jsonOf(R"({"target":"onboarding"})"), "UNSUPPORTED", "no_editor_window"));
+    CONTROL_CHECK(f.api.fails("ui.getState", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
+    CONTROL_CHECK(f.api.fails("ui.dismiss", jsonOf(R"({"target":"onboarding"})"), "UNSUPPORTED", "capability_missing"));
     f.bridge.reportsDialogs = true;
     // Without an editor.
     f.registered.reset();

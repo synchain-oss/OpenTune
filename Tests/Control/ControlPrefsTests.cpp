@@ -1505,8 +1505,7 @@ void scenarioPrefsVectors()
     // prefs/get-ok is a read, run by the Vectors scenario.
     runVectorsOf("ControlProcessorTests.PrefsVectors", "prefs", "prefs.write", kPrefsVectorMethods,
                  {"prefs/set-hybrid", "prefs/set-no-op", "prefs/set-out-of-range", "prefs/set-scheme",
-                  "prefs/set-scheme-job", "prefs/set-tuning", "prefs/set-tuning-revert",
-                  "prefs/set-job-failures"},
+                  "prefs/set-scheme-job", "prefs/set-tuning", "prefs/set-tuning-revert", "prefs/set-job-failures"},
                  true);
 }
 

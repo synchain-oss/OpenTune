@@ -1037,7 +1037,8 @@ Tests: `Tests/Control/ControlArrangementTests.cpp` (`Arrangement`, `ArrangementU
 `ui.setSelection`, is described in "Selection"; with it registered the instance reports `ui.bridge`.
 `ui.onboardingClose`, a capability without methods of its own, is reported right after `ui.bridge`
 (`kFeatureCapabilities` in `Ops/OpsRegistry.cpp`), because every build with the editor bridge can close an overlay that
-is showing. Both methods describe the editor window and answer `UNSUPPORTED(no_editor_window)` without an editor.
+is showing. Both methods describe the editor window and answer `UNSUPPORTED(no_editor_window)` without an editor, and
+`UNSUPPORTED(capability_missing)` when the bridge does not report its dialogs.
 
 The editor's side is `Source/Standalone/ControlEditorBridgeModals.cpp`. It reads the open windows through JUCE's
 `ModalComponentManager` (index 0 is the window in front; `openDialogs()` lists them from the bottom) and calls only
@@ -1459,8 +1460,8 @@ analysis with `allowDry`, an unvoiced one: `NOT_READY(export_dry_stretched)`), w
 follows the editor in the number of shown tracks and the notifications, and a fake audio device in a real
 `juce::AudioDeviceManager` (running, or none open). `Transport` runs every `transport.control` action and the
 play-from-start rules, the no-ops, `NO_AUDIO_DEVICE`, the tempo (with its revert recipe sent unchanged), the loop flag,
-the params, busy, and the answer without an editor (`no_editor_window`). `Tracks` runs `track.set` (values, `CLAMPED`, solo and `audible`,
-the colour, the revert recipe, hidden tracks, the checks), `track.add` (the limit), `track.duplicate` (both modes, the
+the params, busy, and the answer without an editor (`no_editor_window`). `Tracks` runs `track.set` (values, `CLAMPED`,
+solo and `audible`, the colour, the revert recipe, hidden tracks, the checks), `track.add` (the limit), `track.duplicate` (both modes, the
 mix and reference binding copied, `target_track_occupied`, `track_limit`), `track.delete` (the checks in order,
 `trackIdMap`, the removed clip and content, a content that another clip still shows, the dangling reference binding,
 the mix that moves down, a hidden track's mix and clip that stay) and the three methods that need the editor without
@@ -1487,7 +1488,8 @@ track, several sources), the tokens and the checks. `ArrangementVectors` runs ev
 
 `Tests/Control/ControlUiTests.cpp` holds the scenarios of `ui.getState` and `ui.dismiss`, against the dialogs and the
 onboarding overlay of `TestUiBridge`. `UiState` checks the capabilities (`ui.onboardingClose` right after `ui.bridge`,
-every method of `ui.bridge` registered, `UNSUPPORTED(no_editor_window)` without an editor), the busy flags, the dialog stack from the bottom without file choosers, the onboarding, the UI
+every method of `ui.bridge` registered, `UNSUPPORTED(no_editor_window)` without an editor), the busy flags, the
+dialog stack from the bottom without file choosers, the onboarding, the UI
 snapshot, the scale and a bridge without dialogs. `UiDismiss` closes view-state dialogs (`not_persisted_state`), a
 track colour without and with `confirm` (the colour, `dialogCommitted`, `DIALOG_CLOSE_COMMITTED`, the revert recipe,
 dirty, an unchanged colour), a stack with a file chooser on top or in the middle, a dialog that opens another or will

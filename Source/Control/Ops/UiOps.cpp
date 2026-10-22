@@ -65,17 +65,22 @@ bool parseDismiss(const JsonValue& params, DismissParams& out, std::string& why)
 
 // ---- Pieces shared by the methods ----------------------------------------------------------------
 
-/** The editor's bridge when it reports its dialogs, or nullptr without an editor. */
-ControlUiBridge* windowBridge(ControlOpContext& context)
-{
-    auto* bridge = context.bridge();
-    return bridge != nullptr && bridge->openDialogs() ? bridge : nullptr;
-}
-
 Error noEditor()
 {
     return controlOpError("UNSUPPORTED", "no_editor_window",
                           "ui.bridge describes the OpenTune editor window, and no editor exists");
+}
+
+/** The error for a bridge that cannot serve ui.bridge: no_editor_window without a bridge, capability_missing for a
+    bridge that does not report its dialogs; nothing when the bridge serves. */
+std::optional<Error> windowError(ControlOpContext& context)
+{
+    const auto* bridge = context.bridge();
+    if (bridge == nullptr)
+        return noEditor();
+    if (!bridge->openDialogs())
+        return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not report its dialogs");
+    return std::nullopt;
 }
 
 /** The dialogs that ui.getState lists: every modal window but the file choosers of the operating system. */
@@ -258,9 +263,9 @@ JsonValue preferenceRef()
 
 Result<JsonValue> runGetState(ControlOpContext& context, const ControlNoParams&)
 {
-    auto* bridge = windowBridge(context);
-    if (bridge == nullptr)
-        return noEditor();
+    if (auto error = windowError(context))
+        return *error;
+    auto* bridge = context.bridge();
     const auto windows = *bridge->openDialogs();
     const auto scale = bridge->uiScale();
     std::string uiNullReason;
@@ -398,9 +403,9 @@ Result<JsonValue> dismissOnboarding(ControlOpContext& context, ControlUiBridge& 
 
 Result<JsonValue> runDismiss(ControlOpContext& context, const DismissParams& params)
 {
-    auto* bridge = windowBridge(context);
-    if (bridge == nullptr)
-        return noEditor();
+    if (auto error = windowError(context))
+        return *error;
+    auto* bridge = context.bridge();
     // Closing dialogs is the purpose of this method, so an open dialog does not refuse it; every other busy condition
     // does, as for every write (PROTOCOL.md section 13.2).
     if (auto busy = controlCheckBusy(context, ControlBusyScope::DialogDismiss))

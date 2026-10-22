@@ -97,8 +97,8 @@ inline std::string readFile(const std::filesystem::path& path)
 }
 
 /** Per-vector results of one vector runner. The id of a vector is its file path relative to the `vectors` directory
-    without `.json`, which is the `id` member of every vector. When the environment variable OTCP_VECTOR_REPORT_DIR names a directory
-    (an absolute path), write() puts `<directory>/<testName>.json` there:
+    without `.json`, which is the `id` member of every vector. When the environment variable OTCP_VECTOR_REPORT_DIR
+   names a directory (an absolute path), write() puts `<directory>/<testName>.json` there:
     {"runner": "cpp-headless:<testName>", "commit": <OTCP_VECTOR_REPORT_COMMIT or "">,
      "vectors": [{"id", "status": "PASS"|"FAIL"|"SKIP", "reason"}]}.
     Without the variable nothing happens. A failure to write is reported in one line and never fails the test. Plain
@@ -106,10 +106,7 @@ inline std::string readFile(const std::filesystem::path& path)
 class VectorReport
 {
 public:
-    explicit VectorReport(std::string testName)
-        : testName_(std::move(testName))
-    {
-    }
+    explicit VectorReport(std::string testName) : testName_(std::move(testName)) {}
 
     void pass(const std::string& id) { add(id, "PASS", ""); }
     void fail(const std::string& id, const std::string& reason) { add(id, "FAIL", reason); }
@@ -129,6 +126,11 @@ public:
         const auto directory = controlSystemEnvironment("OTCP_VECTOR_REPORT_DIR");
         if (!directory || directory->empty())
             return;
+        if (!std::filesystem::u8path(*directory).is_absolute()) {
+            std::cout << "    vector report for " << testName_
+                      << " could not be written: OTCP_VECTOR_REPORT_DIR is not absolute" << std::endl;
+            return;
+        }
         auto vectors = JsonValue::array();
         for (const auto& entry : entries_) {
             auto item = JsonValue::object();

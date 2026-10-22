@@ -1401,9 +1401,17 @@ public:
         // A vector of jobs.v1 here tests the channel (duplicate ids, the in-flight limit) with waiting job.get
         // requests; the stand-in handler reports the capability and answers a waiting job.get after its waitMs.
         const bool jobsVector = vector_.find("capability")->text() == "jobs.v1";
+        // The stand-in reports every capability the vector needs (the main one and the extra ones that
+        // skipReason lets through), so that what is let through and what is reported agree.
         std::vector<std::string> capabilities = {"session.v1"};
-        if (jobsVector)
-            capabilities.push_back("jobs.v1");
+        const auto need = [&capabilities](const std::string& capability) {
+            if (std::find(capabilities.begin(), capabilities.end(), capability) == capabilities.end())
+                capabilities.push_back(capability);
+        };
+        need(vector_.find("capability")->text());
+        if (const JsonValue* extra = vector_.find("extraCapabilities"))
+            for (std::size_t i = 0; i < extra->size(); ++i)
+                need(extra->at(i).text());
         if (!fixture_.start("vector", {}, capabilities))
             return "the server did not start";
         fixture_.handler->answerJobGetAfterWait = jobsVector;

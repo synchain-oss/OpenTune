@@ -39,6 +39,8 @@
 #include <set>
 #include <vector>
 
+#include "ControlWinAcl.h" // after the JUCE headers: needs windows.h
+
 namespace OpenTune {
 namespace ControlTest {
 
@@ -1119,6 +1121,8 @@ std::string runExportVector(const JsonValue& vector, const std::string& slug)
         if (kind == "audio") {
             path = writeWav(directory, bind, memberOf(file, "durationSec").asDouble());
         } else if (kind == "noAccess") {
+            if (noAccess.isLocked())
+                return "the vector has a second noAccess file, which this runner cannot lock";
             path = noAccess.create(directory, bind + extension);
             if (path.empty())
                 return "the file " + bind + " could not be made unreadable for this user";

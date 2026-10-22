@@ -210,10 +210,14 @@ inline std::string pathString(const std::filesystem::path& path)
  * caller gives, which is a test directory and never a user directory. The destructor restores the rights, so
  * that the test directory can be deleted.
  *
- * POSIX: the directory gets no permission bits at all. Windows: access control entries that deny the current
- * user the directory listing and the attributes of the file (icacls); the file's identity stays readable
- * through the rights of the parent directory if only one of them is denied. create() checks the effect and
- * returns an empty path when it was not reached (a user who ignores the rights, such as root).
+ * One instance manages one file: while it holds a locked file, create() refuses (returns an empty path) and
+ * isLocked() is true; call restore() first to reuse the instance.
+ *
+ * POSIX: the directory gets no permission bits at all. Windows: the Win32 ACL API adds entries that deny the
+ * current user (by SID, from the process token) the attributes of the file and the listing of the directory;
+ * the saved original DACLs are written back on restore. Nothing goes through a shell or an ANSI code page, and
+ * no step throws. create() checks the effect and returns an empty path when it was not reached (a user who
+ * ignores the rights, such as root).
  */
 class NoAccessFile
 {
@@ -223,10 +227,14 @@ public:
     NoAccessFile& operator=(const NoAccessFile&) = delete;
     ~NoAccessFile() { restore(); }
 
+    /** True while this instance holds a locked file. */
+    bool isLocked() const { return locked_; }
+
     /** The path of the file in its locked directory, or an empty string when none could be made. */
     std::string create(const std::filesystem::path& parent, const std::string& name)
     {
-        restore();
+        if (locked_)
+            return {};
         std::error_code ec;
         directory_ = parent / "locked-directory";
         std::filesystem::create_directories(directory_, ec);
@@ -238,7 +246,8 @@ public:
         locked_ = true;
 #if defined(_WIN32)
         file_ = file;
-        const bool denied = icacls(file, "/deny", "RA") && icacls(directory_, "/deny", "RD");
+        const bool denied = deny(file_, 0x80UL /* FILE_READ_ATTRIBUTES */, fileSaved_)
+                            && deny(directory_, 0x1UL /* FILE_LIST_DIRECTORY */, directorySaved_);
 #else
         std::filesystem::permissions(directory_, std::filesystem::perms::none, ec);
         const bool denied = !ec;
@@ -257,8 +266,8 @@ public:
             return;
         locked_ = false;
 #if defined(_WIN32)
-        icacls(directory_, "/remove:d", "");
-        icacls(file_, "/remove:d", "");
+        writeBack(directory_, directorySaved_);
+        writeBack(file_, fileSaved_);
 #else
         std::error_code ec;
         std::filesystem::permissions(directory_, std::filesystem::perms::owner_all, ec);
@@ -267,18 +276,24 @@ public:
 
 private:
 #if defined(_WIN32)
-    /** Runs icacls on a path inside the test directory for the current user (the name from the environment). */
-    static bool icacls(const std::filesystem::path& path, const char* action, const char* right)
+    /** The original DACL of a path; dacl points into descriptor. Plain pointers, so that this header needs no
+        windows.h (its macros break the JUCE headers): the bodies are in ControlWinAcl.h, which the test files
+        that use NoAccessFile include after the JUCE headers. */
+    struct SavedDacl
     {
-        const std::string right_(right);
-        const std::string who = "%USERDOMAIN%\\%USERNAME%";
-        const std::string argument = right_.empty() ? who : who + ":(" + right_ + ")";
-        const std::string command = "icacls \"" + path.string() + "\" " + action + " \"" + argument + "\"";
-        // cmd strips the outer quotes of a command line that starts with a quote.
-        return std::system(("\"" + command + " >nul 2>&1\"").c_str()) == 0;
-    }
+        void* descriptor = nullptr;
+        void* dacl = nullptr;
+        bool changed = false;
+    };
+
+    /** Adds a DENY entry for the current user (by SID) to the DACL of path, keeping the original in saved. */
+    static bool deny(const std::filesystem::path& path, unsigned long rights, SavedDacl& saved);
+    /** Writes the saved original DACL back (when it was changed) and releases it. */
+    static void writeBack(const std::filesystem::path& path, SavedDacl& saved);
 
     std::filesystem::path file_;
+    SavedDacl fileSaved_;
+    SavedDacl directorySaved_;
 #endif
     std::filesystem::path directory_;
     bool locked_ = false;
@@ -441,8 +456,11 @@ public:
             std::lock_guard<std::mutex> lock(mutex_);
             waiters_.emplace_back([this, completion, waitMs, id] {
                 std::unique_lock<std::mutex> waiting(mutex_);
-                if (heldChanged_.wait_for(waiting, std::chrono::milliseconds(waitMs), [this] { return closing_; }))
+                if (heldChanged_.wait_for(waiting, std::chrono::milliseconds(waitMs), [this] { return closing_; })) {
+                    waiting.unlock();
+                    completion.respondError("SHUTTING_DOWN", {}, "the control API is stopping", false);
                     return;
+                }
                 waiting.unlock();
                 const auto parsed = parseJson(
                     "{\"job\":{\"jobId\":" + toJsonString(JsonValue::string(id))
@@ -479,6 +497,11 @@ public:
 
     void serverStopping() override
     {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            closing_ = true;
+        }
+        heldChanged_.notify_all();
         if (onStopping)
             onStopping();
         if (endHeldOnStop) {

@@ -1398,8 +1398,19 @@ public:
     /** Empty on success, otherwise what went wrong. */
     std::string run()
     {
-        if (!fixture_.start("vector"))
+        // A vector of jobs.v1 here tests the channel (duplicate ids, the in-flight limit) with waiting job.get
+        // requests; the stand-in handler reports the capability and answers a waiting job.get after its waitMs.
+        const bool jobsVector = vector_.find("capability")->text() == "jobs.v1";
+        std::vector<std::string> capabilities = {"session.v1"};
+        if (jobsVector)
+            capabilities.push_back("jobs.v1");
+        if (!fixture_.start("vector", {}, capabilities))
             return "the server did not start";
+        fixture_.handler->answerJobGetAfterWait = jobsVector;
+        if (const JsonValue* given = vector_.find("given"))
+            if (const JsonValue* jobs = given->find("jobs"))
+                for (std::size_t i = 0; i < jobs->size(); ++i)
+                    matcher_.bindings[jobs->at(i).find("bind")->text()] = JsonValue::string("job-" + std::to_string(i));
         for (std::size_t i = 0; i < fixture_.discovery.size(); ++i)
             matcher_.bindings["discovery." + fixture_.discovery.keyAt(i)] = fixture_.discovery.at(i);
         std::string wrong;
@@ -1512,7 +1523,7 @@ private:
     handler; ControlProcessorTests.Vectors runs the vectors of the methods against the real dispatcher. */
 std::string skipReason(const std::string& id, const JsonValue& vector)
 {
-    const std::set<std::string> reported = {"session.v1"};
+    const std::set<std::string> reported = {"session.v1", "jobs.v1"};
     if (reported.count(vector.find("capability")->text()) == 0)
         return "needs capability " + vector.find("capability")->text() + ", which the stand-in handler does not report";
     if (const JsonValue* extra = vector.find("extraCapabilities"))
@@ -1521,7 +1532,8 @@ std::string skipReason(const std::string& id, const JsonValue& vector)
                 return "needs capability " + extra->at(i).text();
     if (const JsonValue* given = vector.find("given"))
         for (std::size_t i = 0; i < given->size(); ++i)
-            if (given->keyAt(i) != "withoutCapabilities")
+            if (given->keyAt(i) != "withoutCapabilities"
+                && !(given->keyAt(i) == "jobs" && vector.find("capability")->text() == "jobs.v1"))
                 return "precondition given." + given->keyAt(i) + " needs the dispatcher";
     if (id == "session/info-ok")
         return "checks the session.info result of the dispatcher (ControlProcessorTests.Vectors runs it)";
@@ -1539,6 +1551,7 @@ void testSessionVectors()
     CONTROL_CHECK(files.size() >= 20);
     int passed = 0;
     int skipped = 0;
+    std::set<std::string> ranIds;
     VectorReport report("ControlUnitTests");
     for (const auto& file : files) {
         const auto vector = parsed(readFile(file));
@@ -1552,12 +1565,17 @@ void testSessionVectors()
         const auto started = Clock::now();
         const std::string failure = VectorRunner(vector).run();
         report.ran(id, failure);
-        if (CONTROL_CHECK(failure.empty()))
+        if (CONTROL_CHECK(failure.empty())) {
             ++passed;
+            ranIds.insert(id);
+        }
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
     report.write();
+    // The channel rules only this runner can check (the dispatcher runners have no listener).
+    for (const char* id : {"session/duplicate-id", "session/request-limit"})
+        CONTROL_CHECK(ranIds.count(id) == 1);
     note(std::to_string(passed) + " session vectors passed, " + std::to_string(skipped) + " skipped");
 }
 

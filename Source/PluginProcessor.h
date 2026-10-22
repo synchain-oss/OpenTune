@@ -1051,6 +1051,12 @@ public:
     ReferenceFeatureProducer getReferenceFeatureProducer() const { return resolveReferenceFeatureProducer(); }
     std::optional<std::string> getContentF0FailureReason(ContentKey key) const;
     void recordF0FailureReason(ContentKey key, const char* reason);
+    // OpenTune Control API hook: true when OpenTune's reference analysis worker can take no more jobs (message thread), see Source/Control/README.md#hooks
+    // ReferenceAnalysisService::workerLoop() leaves its finished synchronous job engaged in activeJob (a moved-from
+    // optional), so it never takes another one. The completion in preheatReferenceAlignmentFeatures() (.cpp) records the first finished synchronous job;
+    // from then on the producer's synchronous analyses cannot complete in this session (an asynchronous GAME
+    // completion resets activeJob and does not set this).
+    bool isReferenceAnalysisWorkerStalled() const noexcept { return referenceAnalysisWorkerStalled_; }
     // OpenTune Control API hook: the export lock that the editor's export and export.start share (any thread), see Source/Control/README.md#hooks
     bool tryAcquireExportLock() noexcept { return !exportLockHeld_.exchange(true); }
     void releaseExportLock() noexcept { exportLockHeld_.store(false); }
@@ -1060,6 +1066,8 @@ private:
     std::unique_ptr<ControlService> controlService_;
     std::map<ContentKey, std::string> contentF0FailureReasons_;
     uint64_t contentF0FailureEpoch_ = 0;
+    /** Message thread: a synchronous reference analysis has finished, so OpenTune's worker will take no other. */
+    bool referenceAnalysisWorkerStalled_ = false;
     std::atomic<bool> exportLockHeld_{false};
 #endif
 

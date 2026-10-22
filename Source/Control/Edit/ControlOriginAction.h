@@ -75,11 +75,12 @@ public:
             MultiMovePlacementAction::Entry::sourceTrackId), so undo() and redo() write to these slots whatever
             track deletions happened since. Never changed after construction. */
         std::vector<int> tracks;
-        /** The positions the clips of the action are at now: a copy of tracks when the entry is made, renumbered by
-            the barrier of every track deletion for the shown tracks that moved down (removeTrackAndShift()). A track
-            deletion makes the entry possibly stale when it removed or moved a track of either list (section 15.3
-            rule 6): tracks tells where the action writes, followed where the clips went; the union is taken so that
-            an entry is reported too often rather than too rarely. Filled by the constructor when left empty. */
+        /** An approximation of the positions the clips of the action are at now: a copy of tracks when the entry is
+            made, renumbered by the barrier of every track deletion for the shown tracks that moved down
+            (removeTrackAndShift()). After an undo() or redo() that took effect the slots of tracks are merged into it
+            (without duplicates), so followed covers tracks from then on, and a deletion that hits one of them reports
+            the entry possibly stale (section 15.3 rule 6: too often rather than too rarely). The real protection comes
+            from tracks: the action reads and writes only those slots. Filled by the constructor when left empty. */
         std::vector<int> followed;
     };
 
@@ -139,6 +140,8 @@ private:
     /** Undoes (undo true) or redoes one inner action, as the masks of its content allow; false when it applied
         nothing. */
     bool apply(Inner& inner, bool undo);
+    /** apply(), then merges the slots of the inner action into followed when the step took effect. */
+    bool applyAndFollow(Inner& inner, bool undo);
 
     std::shared_ptr<ControlHistory> history_;
     std::string undoId_;

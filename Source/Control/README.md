@@ -365,7 +365,7 @@ API reads it through the hook `peekUndo` / `peekRedo` / `size` / `cursor` and ap
   clips and their mix where they are). An entry made through the API knows two lists of tracks, set by the methods
   that record clip changes: `ControlOriginAction::Inner::tracks`, the slots the wrapped OpenTune actions are keyed by
   (they are fixed inside the actions, so undo and redo write to them whatever was deleted since; never changed), and
-  `Inner::followed`, where the clips are now (renumbered when a deletion moves their shown track down). The entry
+  `Inner::followed`, where the clips are now, as an approximation (renumbered when a deletion moves their shown track down; after an undo or redo that took effect the slots of `tracks` are merged into it). The entry
   becomes `possiblyStale` when the deleted track or a later shown track is in either list (the union: an entry is
   reported too often rather than too rarely), and an entry that addresses no track (a note edit addresses its
   content), only earlier tracks or only hidden tracks does not.
@@ -1453,7 +1453,7 @@ the mix that moves down, a hidden track's mix and clip that stay) and the three 
 one. `TrackBarrier` runs the barrier of a track deletion with undo entries of the API that address tracks (OpenTune's
 `MultiMovePlacementAction` in a `ControlOriginAction`), entries of the UI, `force` and its confirmation, the second
 deletion (the entry's clip was followed down by the first), a clip move across tracks followed by two deletions (the
-second removes the slot the action is keyed by, which the followed positions no longer name), an entry that addresses a
+second removes the slot the action is keyed by, which the followed positions no longer name), the same move undone and redone with `force` between deletions (the merged slots keep `followed` covering the clip), an entry that addresses a
 hidden track (not stale), and a note edit whose content left the project (`UNDO_NO_EFFECT`). `TrackVectors` runs the
 specification's `transport/*` and `track/*` vectors and the six `edit/` vectors that need a deletion's barrier
 (`given.history` with clip moves is established with the same actions); `track/delete-arrangement-changed` needs

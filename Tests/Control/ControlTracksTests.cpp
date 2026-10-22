@@ -1061,6 +1061,37 @@ void checkBarrierMoveAcrossTracks(Fixture& f)
     CONTROL_CHECK(memberOf(top, "undoId").text() == move && memberOf(top, "possiblyStale").asBoolean());
 }
 
+/** A clip move across tracks (5 to 0), two deletions of track 1, a forced undo, a deletion that moves the clip, a
+    forced redo that finds nothing to move, and a last deletion that moves the clip down again. The slot of the action
+    (5) and the renumbered position of the clip ({2, 0} after the third deletion) name neither the deleted track nor a
+    track after it, yet the clip is moved: the entry must be reported (section 15.3 rule 6: too often rather than too
+    rarely). A step that took effect merges the slots of the action into the followed positions. */
+void checkBarrierFollowedCoversSlots(Fixture& f)
+{
+    f.bridge.visibleTracks = 8;
+    const auto a = f.addClip(0);
+    settleBackgroundWork(*f.processor);
+    const auto move = pushApiCrossMove(f, a, 5, 0);
+
+    f.deleteTrack(1);
+    f.deleteTrack(1);
+    CONTROL_CHECK(f.bridge.visibleTracks == 6);
+    // The forced undo moves the clip from 0 to slot 5.
+    const auto undone = f.api.result("edit.undo", json(R"({"force":true})"));
+    CONTROL_CHECK(memberOf(undone, "applied").asBoolean());
+    // Deleting track 2 (6 shown) moves slot 5, where the clip is now, down to 4.
+    const auto third = f.deleteTrack(2);
+    CONTROL_CHECK(near(memberOf(memberOf(third, "possiblyStaleEntries"), "redo"), 1.0));
+    // The forced redo finds no clip at slot 5 and changes nothing; the entry is confirmed all the same.
+    f.api.result("edit.redo", json(R"({"force":true})"));
+    CONTROL_CHECK(!memberOf(memberOf(historyOf(f), "undoTop"), "possiblyStale").asBoolean());
+    // Deleting track 3 (5 shown) moves the clip from 4 to 3: the entry is possibly stale.
+    const auto last = f.deleteTrack(3);
+    CONTROL_CHECK(near(memberOf(memberOf(last, "possiblyStaleEntries"), "undo"), 1.0));
+    const auto top = memberOf(historyOf(f), "undoTop");
+    CONTROL_CHECK(memberOf(top, "undoId").text() == move && memberOf(top, "possiblyStale").asBoolean());
+}
+
 void checkBarrierLaterTrack(Fixture& f)
 {
     f.bridge.visibleTracks = 3;
@@ -1249,8 +1280,8 @@ void checkRemovedContentRevivedByUndo(Fixture& f)
 
 void scenarioTrackBarrierImpl()
 {
-    for (const auto check : {checkBarrierApiEntry, checkBarrierMoveAcrossTracks, checkBarrierLaterTrack,
-                             checkBarrierHiddenTrack, checkBarrierUiEntry, checkBarrierUndoBelowMark,
+    for (const auto check : {checkBarrierApiEntry, checkBarrierMoveAcrossTracks, checkBarrierFollowedCoversSlots,
+                             checkBarrierLaterTrack, checkBarrierHiddenTrack, checkBarrierUiEntry, checkBarrierUndoBelowMark,
                              checkBarrierRemovedContent, checkRemovedContentRevivedByUndo}) {
         Fixture f;
         if (f.open())

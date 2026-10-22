@@ -44,7 +44,7 @@ void ControlOriginAction::undo()
 {
     bool tookEffect = false;
     for (auto it = inner_.rbegin(); it != inner_.rend(); ++it)
-        tookEffect = apply(*it, true) || tookEffect;
+        tookEffect = applyAndFollow(*it, true) || tookEffect;
     lastStepTookEffect_ = tookEffect;
     onRedoSide_ = true;
 }
@@ -53,9 +53,22 @@ void ControlOriginAction::redo()
 {
     bool tookEffect = false;
     for (auto& inner : inner_)
-        tookEffect = apply(inner, false) || tookEffect;
+        tookEffect = applyAndFollow(inner, false) || tookEffect;
     lastStepTookEffect_ = tookEffect;
     onRedoSide_ = false;
+}
+
+bool ControlOriginAction::applyAndFollow(Inner& inner, bool undo)
+{
+    const bool tookEffect = apply(inner, undo);
+    if (tookEffect) {
+        // The step wrote to the slots of the action, so a clip may now be at any of them. followed approximates where
+        // the clips are: take the slots in (without duplicates), so that a deletion that hits a slot is never missed.
+        for (const int slot : inner.tracks)
+            if (std::find(inner.followed.begin(), inner.followed.end(), slot) == inner.followed.end())
+                inner.followed.push_back(slot);
+    }
+    return tookEffect;
 }
 
 bool ControlOriginAction::apply(Inner& inner, bool undo)

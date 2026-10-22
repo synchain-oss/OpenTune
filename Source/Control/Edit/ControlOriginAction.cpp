@@ -134,7 +134,8 @@ bool ControlOriginAction::onTrackDeleted(int deletedTrack, int visibleCount)
     bool addresses = false;
     for (auto& inner : inner_) {
         for (const int track : inner.tracks)
-            addresses = moved(track) || addresses;
+            if (moved(track))
+                addresses = true;
         for (int& track : inner.followed) {
             if (!moved(track))
                 continue;

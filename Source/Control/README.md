@@ -1430,10 +1430,10 @@ one. `TrackBarrier` runs the barrier of a track deletion with undo entries of th
 `MultiMovePlacementAction` in a `ControlOriginAction`), entries of the UI, `force` and its confirmation, the second
 deletion (the entry's clip was followed down by the first), a clip move across tracks followed by two deletions (the
 second removes the slot the action is keyed by, which the followed positions no longer name), an entry that addresses a
-hidden track (not stale), and a note edit whose content left the project (`UNDO_NO_EFFECT`). `TrackVectors` runs the specification's `transport/*` and
-`track/*` vectors and the six `edit/` vectors that need a deletion's barrier (`given.history` with clip moves is
-established with the same actions); `track/delete-arrangement-changed` needs `arrangement.edit` and runs in
-`ArrangementVectors`.
+hidden track (not stale), and a note edit whose content left the project (`UNDO_NO_EFFECT`). `TrackVectors` runs the
+specification's `transport/*` and `track/*` vectors and the six `edit/` vectors that need a deletion's barrier
+(`given.history` with clip moves is established with the same actions); `track/delete-arrangement-changed` needs
+`arrangement.edit` and runs in `ArrangementVectors`.
 
 `Tests/Control/ControlArrangementTests.cpp` holds the scenarios of the arrangement methods, with the test bridge (shown
 tracks, busy flags, dirty flag, notifications). `Arrangement` runs every op of `arrangement.edit`: moves (overlap, a

@@ -2373,6 +2373,8 @@ const char* const kMustRunEditVectors[] = {
     "content/edit-notes-shift-cents",
     "content/edit-notes-snap-to-scale",
     "content/edit-notes-unknown-note",
+    "content/get-notes-cursor-stale",
+    "content/get-pitch-curve-cursor-stale",
     "content/set-key-key-changed",
     "content/set-key-no-op",
     "content/set-key-not-found",
@@ -2397,9 +2399,10 @@ const char* const kMustRunEditVectors[] = {
     "edit/undo-unsafe-build",
 };
 
-const std::set<std::string> kEditVectorMethods = {
-    "edit.getHistory",   "edit.undo",          "edit.redo",        "content.setKey",        "content.autoTune",
-    "content.editNotes", "content.getDetails", "content.getNotes", "content.setPitchShift", "project.get"};
+const std::set<std::string> kEditVectorMethods = {"edit.getHistory",       "edit.undo",        "edit.redo",
+                                                  "content.setKey",        "content.autoTune", "content.editNotes",
+                                                  "content.getDetails",    "content.getNotes", "content.getPitchCurve",
+                                                  "content.setPitchShift", "project.get"};
 const std::set<std::string> kEditVectorCapabilities = {"session.v1", "read.v1", "history.v1", "edit.v1"};
 
 std::vector<const JsonValue*> sentRequests(const JsonValue& vector)
@@ -2847,7 +2850,9 @@ void scenarioEditVectors()
         const auto name = entry.path().filename().u8string();
         if (entry.path().extension() != ".json")
             continue;
-        for (const char* prefix : {"set-key-", "auto-tune-", "edit-notes-", "set-pitch-shift-"})
+        // The cursor-stale vectors read a page, edit the notes and read the next page with the old cursor.
+        for (const char* prefix : {"set-key-", "auto-tune-", "edit-notes-", "set-pitch-shift-",
+                                   "get-notes-cursor-stale", "get-pitch-curve-cursor-stale"})
             if (name.rfind(prefix, 0) == 0)
                 files.push_back(entry.path());
     }

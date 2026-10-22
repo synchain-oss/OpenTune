@@ -7,6 +7,7 @@
 
 #include "Control/ControlApiOptions.h"
 #include "Control/ControlDiscovery.h"
+#include "Control/ControlFileIdentity.h"
 #include "Control/ControlJson.h"
 #include "Control/ControlProtocol.h"
 #include "Control/ControlServer.h"
@@ -19,6 +20,7 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -98,7 +100,7 @@ inline std::string readFile(const std::filesystem::path& path)
 
 /** Per-vector results of one vector runner. The id of a vector is its file path relative to the `vectors` directory
     without `.json`, which is the `id` member of every vector. When the environment variable OTCP_VECTOR_REPORT_DIR
-   names a directory (an absolute path), write() puts `<directory>/<testName>.json` there:
+    names a directory (an absolute path), write() puts `<directory>/<testName>.json` there:
     {"runner": "cpp-headless:<testName>", "commit": <OTCP_VECTOR_REPORT_COMMIT or "">,
      "vectors": [{"id", "status": "PASS"|"FAIL"|"SKIP", "reason"}]}.
     Without the variable nothing happens. A failure to write is reported in one line and never fails the test. Plain
@@ -126,11 +128,6 @@ public:
         const auto directory = controlSystemEnvironment("OTCP_VECTOR_REPORT_DIR");
         if (!directory || directory->empty())
             return;
-        if (!std::filesystem::u8path(*directory).is_absolute()) {
-            std::cout << "    vector report for " << testName_
-                      << " could not be written: OTCP_VECTOR_REPORT_DIR is not absolute" << std::endl;
-            return;
-        }
         auto vectors = JsonValue::array();
         for (const auto& entry : entries_) {
             auto item = JsonValue::object();
@@ -146,10 +143,16 @@ public:
         report.appendMember("vectors", std::move(vectors));
         try {
             const auto folder = std::filesystem::u8path(*directory);
+            if (!folder.is_absolute()) {
+                std::cout << "    vector report for " << testName_
+                          << " could not be written: OTCP_VECTOR_REPORT_DIR is not absolute" << std::endl;
+                return;
+            }
             std::error_code ignored;
             std::filesystem::create_directories(folder, ignored);
             std::ofstream out(folder / std::filesystem::u8path(testName_ + ".json"), std::ios::binary);
             out << toJsonString(report);
+            out.close();
             if (!out)
                 std::cout << "    vector report for " << testName_ << " could not be written" << std::endl;
         } catch (const std::exception&) {
@@ -200,6 +203,101 @@ inline std::string pathString(const std::filesystem::path& path)
 {
     return path.u8string();
 }
+
+/**
+ * Establishes the vectors' file kind noAccess: an existing file in a directory the current user cannot open, so
+ * that controlFileIdentity() on it fails (neither found nor missing). Everything is made inside a directory the
+ * caller gives, which is a test directory and never a user directory. The destructor restores the rights, so
+ * that the test directory can be deleted.
+ *
+ * One instance manages one file: while it holds a locked file, create() refuses (returns an empty path) and
+ * isLocked() is true; call restore() first to reuse the instance.
+ *
+ * POSIX: the directory gets no permission bits at all. Windows: the Win32 ACL API adds entries that deny the
+ * current user (by SID, from the process token) the attributes of the file and the listing of the directory;
+ * the saved original DACLs are written back on restore. Nothing goes through a shell or an ANSI code page, and
+ * no step throws. create() checks the effect and returns an empty path when it was not reached (a user who
+ * ignores the rights, such as root).
+ */
+class NoAccessFile
+{
+public:
+    NoAccessFile() = default;
+    NoAccessFile(const NoAccessFile&) = delete;
+    NoAccessFile& operator=(const NoAccessFile&) = delete;
+    ~NoAccessFile() { restore(); }
+
+    /** True while this instance holds a locked file. */
+    bool isLocked() const { return locked_; }
+
+    /** The path of the file in its locked directory, or an empty string when none could be made. */
+    std::string create(const std::filesystem::path& parent, const std::string& name)
+    {
+        if (locked_)
+            return {};
+        std::error_code ec;
+        directory_ = parent / "locked-directory";
+        std::filesystem::create_directories(directory_, ec);
+        const auto file = directory_ / std::filesystem::u8path(name);
+        {
+            std::ofstream out(file, std::ios::binary);
+            out << "locked";
+        }
+        locked_ = true;
+#if defined(_WIN32)
+        file_ = file;
+        const bool denied = deny(file_, 0x80UL /* FILE_READ_ATTRIBUTES */, fileSaved_)
+                            && deny(directory_, 0x1UL /* FILE_LIST_DIRECTORY */, directorySaved_);
+#else
+        std::filesystem::permissions(directory_, std::filesystem::perms::none, ec);
+        const bool denied = !ec;
+#endif
+        ControlFileId id;
+        if (denied && controlFileIdentity(pathString(file), id) == ControlFileIdStatus::Failed)
+            return pathString(file);
+        restore();
+        return {};
+    }
+
+    /** Gives the rights back. Safe to call more than once. */
+    void restore()
+    {
+        if (!locked_)
+            return;
+        locked_ = false;
+#if defined(_WIN32)
+        writeBack(directory_, directorySaved_);
+        writeBack(file_, fileSaved_);
+#else
+        std::error_code ec;
+        std::filesystem::permissions(directory_, std::filesystem::perms::owner_all, ec);
+#endif
+    }
+
+private:
+#if defined(_WIN32)
+    /** The original DACL of a path; dacl points into descriptor. Plain pointers, so that this header needs no
+        windows.h (its macros break the JUCE headers): the bodies are in ControlWinAcl.h, which the test files
+        that use NoAccessFile include after the JUCE headers. */
+    struct SavedDacl
+    {
+        void* descriptor = nullptr;
+        void* dacl = nullptr;
+        bool changed = false;
+    };
+
+    /** Adds a DENY entry for the current user (by SID) to the DACL of path, keeping the original in saved. */
+    static bool deny(const std::filesystem::path& path, unsigned long rights, SavedDacl& saved);
+    /** Writes the saved original DACL back (when it was changed) and releases it. */
+    static void writeBack(const std::filesystem::path& path, SavedDacl& saved);
+
+    std::filesystem::path file_;
+    SavedDacl fileSaved_;
+    SavedDacl directorySaved_;
+#endif
+    std::filesystem::path directory_;
+    bool locked_ = false;
+};
 
 /** A loopback client with line reading and close detection. */
 class TestClient
@@ -349,6 +447,29 @@ public:
                 completion.respondResult(JsonValue::object());
             return;
         }
+        if (request.method == "job.get" && answerJobGetAfterWait) {
+            // Stands in for a job.get on a running job: waits waitMs, then answers with the job, still running.
+            const JsonValue* wait = request.params.find("waitMs");
+            const JsonValue* jobId = request.params.find("jobId");
+            const auto waitMs = wait != nullptr && wait->isNumber() ? static_cast<int>(wait->asDouble()) : 0;
+            const auto id = jobId != nullptr ? jobId->text() : std::string();
+            std::lock_guard<std::mutex> lock(mutex_);
+            waiters_.emplace_back([this, completion, waitMs, id] {
+                std::unique_lock<std::mutex> waiting(mutex_);
+                if (heldChanged_.wait_for(waiting, std::chrono::milliseconds(waitMs), [this] { return closing_; })) {
+                    waiting.unlock();
+                    completion.respondError("SHUTTING_DOWN", {}, "the control API is stopping", false);
+                    return;
+                }
+                waiting.unlock();
+                const auto parsed = parseJson(
+                    "{\"job\":{\"jobId\":" + toJsonString(JsonValue::string(id))
+                    + ",\"kind\":\"export\",\"state\":\"running\",\"cancellable\":true,\"createdAtMs\":1,"
+                      "\"updatedAtMs\":1,\"finishedAtMs\":null,\"progress\":{},\"result\":null,\"error\":null}}");
+                completion.respondResult(parsed.value);
+            });
+            return;
+        }
         if (request.method == "job.get") {
             {
                 std::lock_guard<std::mutex> lock(mutex_);
@@ -376,6 +497,11 @@ public:
 
     void serverStopping() override
     {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            closing_ = true;
+        }
+        heldChanged_.notify_all();
         if (onStopping)
             onStopping();
         if (endHeldOnStop) {
@@ -427,6 +553,19 @@ public:
             completion.respondResult(JsonValue::object());
     }
 
+    ~TestHandler() override
+    {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            closing_ = true;
+        }
+        heldChanged_.notify_all();
+        for (auto& waiter : waiters_)
+            waiter.join();
+    }
+
+    /** Set before the first request: job.get answers after its waitMs with a running export job. */
+    bool answerJobGetAfterWait = false;
     std::size_t bigResultBytes = 1024 * 1024;
     std::atomic<int> stoppingCalls{0};
     /** Set before stop(); both are read on the thread that calls stop(). */
@@ -440,6 +579,8 @@ private:
     std::vector<ControlCompletion> held_;
     int blocked_ = 0;
     bool unblocked_ = false;
+    bool closing_ = false;
+    std::vector<std::thread> waiters_;
 };
 
 inline ControlBuildIdentity testBuildIdentity()

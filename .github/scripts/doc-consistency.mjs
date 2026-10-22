@@ -353,7 +353,8 @@ export function parseMethodTable(readme) {
       problems.push(`${README}:${n}：方法表第一列应以 \`<方法名>\` 开头，实际是「${(cells[0] ?? '').slice(0, 40)}」`);
       continue;
     }
-    const ops = codeSpans(cells[2]).find((s) => /^Ops\/\w+\.cpp$/.test(s)) ?? null;
+    // Any .cpp path under Source/Control that registerMethods scans (subdirectories and `-` in file names included).
+    const ops = codeSpans(cells[2]).find((s) => /^[\w/.-]+\.cpp$/.test(s)) ?? null;
     const schema = codeSpans(cells[4])[0] ?? null;
     rows.push({
       n,
@@ -680,7 +681,8 @@ export function purposeWords(purpose) {
  * The hook markers in the code: lines of `// OpenTune Control API hook` (or `# ...` in CMake) in upstream files.
  * A marker that spans several comment lines is joined until the "see Source/Control/README.md#hooks" part.
  */
-export function scanHookMarkers(src) {  const candidates = [ROOT_CMAKE, ...src.list('cmake'), ...src.list('Source')]
+export function scanHookMarkers(src) {
+  const candidates = [ROOT_CMAKE, ...src.list('cmake'), ...src.list('Source')]
     .filter((f) => /\.(h|hpp|cpp|cc|mm|inl|txt|cmake)$/.test(f))
     .filter((f) => !MARKER_SCAN_EXCLUDE.some((p) => f.startsWith(p)));
   const texts = src.readMany([...new Set(candidates)]);
@@ -705,6 +707,8 @@ export function scanHookMarkers(src) {  const candidates = [ROOT_CMAKE, ...src.l
         wellFormed: /OpenTune Control API hook:\s*\S[\s\S]*,\s*see Source\/Control\/README\.md#hooks/.test(joined),
         purpose: purposeOf(joined),
         // Position facts (the README says where each hook is in words; POSITION_CLAIMS maps the words to these).
+        // These are loose heuristics (end of class, end of file, first statement of the destructor are judged by
+        // nearby lines only): they catch clearly wrong positions and can miss a wrong one, but never flag a right one.
         isInclude: /^\s*#\s*include\b/.test(line),
         afterDestructor: /::~\w+\s*\(/.test(before),
         beforeFunctionEnd: within(6, /^\}/),
@@ -970,8 +974,11 @@ export const GROUPS = [
 /**
  * Compare the documentation with the code in `src`.
  * @param {DocSource} src
- * @param {{ mirrorsBlocking?: boolean }} [opts]  mirrorsBlocking false: the mirror group is only reported (advisory)
- * @returns {{ applicable: boolean, problems: {group: string, text: string, advisory: boolean}[], notes: string[], unimplemented: string[], stats: object, fix: string | null }}
+ * @param {{ mirrorsBlocking?: boolean, claudeBlocking?: boolean }} [opts]  mirrorsBlocking false: the mirror group is only
+ *   reported (advisory). claudeBlocking false: hook and test-name problems that come from CLAUDE.md (an L0 file that a
+ *   sub-PR of upstreamable code cannot change) are only reported; the ones that come from the README, the code or the
+ *   spec copy stay blocking.
+ * @returns {{ applicable: boolean, problems: {group: string, text: string, advisory: boolean, source?: string}[], notes: string[], unimplemented: string[], stats: object, fix: string | null }}
  */
 export function checkDocConsistency(src, opts = {}) {
   const readme = src.read(README);
@@ -979,7 +986,10 @@ export function checkDocConsistency(src, opts = {}) {
   const texts = { readme, claude: src.read(CLAUDE_MD), checklist: src.read(REVIEW_CHECKLIST) };
   const out = { applicable: true, problems: [], notes: [], unimplemented: [], stats: {}, fix: null };
   const add = (group, list, advisory = false) => {
-    for (const text of list) out.problems.push({ group, text, advisory });
+    for (const text of list) {
+      const fromClaude = opts.claudeBlocking === false && (group === 'hooks' || group === 'tests') && text.startsWith(CLAUDE_MD);
+      out.problems.push({ group, text, advisory: advisory || fromClaude, source: fromClaude ? 'claude' : advisory ? 'mirrors' : undefined });
+    }
   };
   const methods = checkMethods(src, texts);
   add('methods', methods.problems);

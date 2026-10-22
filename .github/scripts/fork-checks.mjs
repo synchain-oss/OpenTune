@@ -614,14 +614,19 @@ export async function runChecks(opts = {}) {
 
   // --- documentation <=> code: README method table, hook list, mirrors, test names (whole tree at head).
   // The mirror group follows the enforcement rule of drift-pins.mjs: a sub-PR that touches neither the pin files
-  // nor drift-pins.mjs only gets a WARN, because it cannot update .github/** itself.
+  // nor drift-pins.mjs only gets a WARN, because it cannot update .github/** itself. The hook and test-name problems
+  // that come from CLAUDE.md (also L0) follow the same rule, for the same reason.
   if (want('doc-consistency')) {
     const headRev = opts.index ? null : delta.head ?? tryResolveCommit(top, opts.head ?? 'HEAD');
     const range = prRange();
     const enforcement = range?.ok
       ? decideEnforcement({ event: 'pull_request', baseRef: branchOfRef(range.baseRef), changedFiles: range.files.map((f) => f.path) })
       : decideEnforcement({ event: 'push' });
-    add(docConsistencyCheck(top, headRev, enforcement));
+    if (!headRev && !opts.index) {
+      add(result('doc-consistency', titleOf('doc-consistency'), 'FAIL', `无法解析修订 ${opts.head ?? 'HEAD'}，不能核对文档与代码（不会退回去读暂存区）`));
+    } else {
+      add(docConsistencyCheck(top, headRev, enforcement));
+    }
   }
 
   results.sort((a, b) => CHECK_IDS.indexOf(a.id) - CHECK_IDS.indexOf(b.id));
@@ -737,11 +742,12 @@ function clangFormatCheck(top, headSpec, files, headBlob, opts) {
  * Source/Control/README.md and the hook table of CLAUDE.md say what the code does (doc-consistency.mjs):
  * the method table against the registered methods and the spec copy, the hook list against the markers in the
  * code, MIRRORS.md against mirror-map.json and the pin files, the test names against the registered ctests.
- * `enforcement` is decideEnforcement() of drift-pins.mjs: when it does not block, only the mirror group is advisory.
+ * `enforcement` is decideEnforcement() of drift-pins.mjs: when it does not block, the mirror group and the problems
+ * that come from CLAUDE.md (an L0 file a sub-PR cannot change) are advisory.
  */
 function docConsistencyCheck(top, headRev, enforcement) {
   const id = 'doc-consistency';
-  const r = checkDocConsistency(gitSource(top, headRev), { mirrorsBlocking: enforcement.blocking });
+  const r = checkDocConsistency(gitSource(top, headRev), { mirrorsBlocking: enforcement.blocking, claudeBlocking: enforcement.blocking });
   if (!r.applicable) return result(id, titleOf(id), 'SKIP', `没有 ${DOC_README}（这个树里没有控制接口文档），不适用`);
   const groupTitle = (g) => DOC_GROUPS.find((x) => x.id === g)?.title ?? g;
   const line = (p) => `[${groupTitle(p.group)}] ${p.text}`;
@@ -755,7 +761,11 @@ function docConsistencyCheck(top, headRev, enforcement) {
     return result(id, titleOf(id), 'FAIL', `${blocking.length} 处文档与代码不一致（${perGroup.map(([t, n]) => `${t} ${n}`).join('、')}）；每条写明了文件和行`, [...blocking.map(line), ...advisory.map(line), ...extra]);
   }
   if (advisory.length) {
-    return result(id, titleOf(id), 'WARN', `${advisory.length} 处镜像不一致，只报告不阻塞：${enforcement.reason}。由 manager 的 L0 跟进用 node .github/scripts/drift-pins.mjs --write 补齐；其余 ${DOC_GROUPS.length - 1} 组一致`, [...advisory.map(line), ...extra]);
+    const nMirror = advisory.filter((p) => p.group === 'mirrors').length;
+    const nClaude = advisory.length - nMirror;
+    const what = [nMirror ? `${nMirror} 处镜像` : '', nClaude ? `${nClaude} 处来自 CLAUDE.md` : ''].filter(Boolean).join('、');
+    const follow = [nMirror ? '镜像用 node .github/scripts/drift-pins.mjs --write 补齐' : '', nClaude ? 'CLAUDE.md 同步改正' : ''].filter(Boolean).join('，');
+    return result(id, titleOf(id), 'WARN', `${what}不一致，只报告不阻塞：${enforcement.reason}。由 manager 的 L0 跟进：${follow}；其余检查一致`, [...advisory.map(line), ...extra]);
   }
   return result(id, titleOf(id), 'PASS', `${describeStats(r)}${r.notes.length ? `（${r.notes.join('；')}）` : ''}`);
 }

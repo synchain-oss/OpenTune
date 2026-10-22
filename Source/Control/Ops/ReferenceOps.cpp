@@ -77,15 +77,6 @@ Result<JsonValue> startJob(ControlOpContext& context, ControlJobWork work, const
     return jobs->jobRef(started.jobId);
 }
 
-/** Whether a content has alignment data of the producer this instance uses, made from its audio as it is now
-    (what content.getDetails reports as reference.alignmentReady, and what the AUTO button needs). */
-bool alignmentDataCurrent(OpenTuneAudioProcessor& processor, const EditableContentSnapshot& snapshot)
-{
-    const auto& features = snapshot.referenceFeatures;
-    return features.isReady() && features.producer == processor.getReferenceFeatureProducer()
-           && features.inputFingerprint == static_cast<std::int64_t>(snapshot.audioRevision);
-}
-
 JsonValue analysisResultJson(ControlOpContext& context, const ControlReferenceBinding& binding)
 {
     auto result = JsonValue::object();
@@ -93,8 +84,9 @@ JsonValue analysisResultJson(ControlOpContext& context, const ControlReferenceBi
     result.appendMember("referencePlacementId", JsonValue::string(binding.reference.placementId));
     result.appendMember(
         "alignmentReady",
-        JsonValue::boolean(alignmentDataCurrent(context.processor(), *binding.targetContent.snapshot)
-                           && alignmentDataCurrent(context.processor(), *binding.referenceContent.snapshot)));
+        JsonValue::boolean(
+            controlReferenceFeaturesCurrent(context.processor(), *binding.targetContent.snapshot)
+            && controlReferenceFeaturesCurrent(context.processor(), *binding.referenceContent.snapshot)));
     return result;
 }
 
@@ -159,8 +151,8 @@ public:
         // Before asking for anything: a worker that completed its one synchronous analysis takes no other job, so a
         // content that still lacks data can only be analyzed after a restart. A recorded failure of the analysis is
         // reported as such; otherwise the wait is skipped instead of running to its limit.
-        const bool targetCurrent = alignmentDataCurrent(processor, *binding.targetContent.snapshot);
-        const bool referenceCurrent = alignmentDataCurrent(processor, *binding.referenceContent.snapshot);
+        const bool targetCurrent = controlReferenceFeaturesCurrent(processor, *binding.targetContent.snapshot);
+        const bool referenceCurrent = controlReferenceFeaturesCurrent(processor, *binding.referenceContent.snapshot);
         if (!(targetCurrent && referenceCurrent)) {
             const auto failed = [&processor](const ControlContentRef& content) {
                 const auto& features = content.snapshot->referenceFeatures;
@@ -317,8 +309,8 @@ private:
                     return;
                 }
                 const auto& now = again.value();
-                if (!alignmentDataCurrent(processor, *now.targetContent.snapshot)
-                    || !alignmentDataCurrent(processor, *now.referenceContent.snapshot)) {
+                if (!controlReferenceFeaturesCurrent(processor, *now.targetContent.snapshot)
+                    || !controlReferenceFeaturesCurrent(processor, *now.referenceContent.snapshot)) {
                     if (processor.isReferenceAnalysisWorkerStalled()) {
                         step.fail(stalledError());
                         return;
@@ -338,6 +330,18 @@ private:
                 // OpenTune's alignment patch was rejected (invalid request) or produced no snapshot to commit.
                 step.fail({"INTERNAL", "", "OpenTune did not commit the alignment", false});
                 return;
+            case Status::CommittedWithoutUndo:
+                // The notes changed but no undo entry exists: as any change without an entry, it masks the entries
+                // of the API that put these notes back and discards the redo history (PROTOCOL.md section 15.3
+                // rule 9), and the project is marked as changed.
+                history->onChangeWithoutEntry(processor.getUndoManager(), content.key,
+                                              ControlContentAspect::NotesAndPitch);
+                controlMarkDirty(context);
+                step.fail({"INTERNAL", "",
+                           "OpenTune committed the alignment but returned no pitch curve; the notes changed and there "
+                           "is no undo entry",
+                           true});
+                return;
             case Status::Committed:
                 break;
         }
@@ -347,7 +351,7 @@ private:
         auto action = std::make_unique<ControlOriginAction>(history, undoId, description, std::move(aligned.actions));
         const auto names = action->innerActionNames();
         // UndoManager::addAction(), as OpenTune pushes the entry of the AUTO button; it discards the redo history.
-        processor.getUndoManager().addAction(std::move(action));
+        history->record(processor.getUndoManager(), std::move(action));
         envelope.setUndoable(undoId, description.toStdString(), names);
         // The editor marks the project as changed after the button's AUTO; the committed pitch is saved with it.
         controlMarkDirty(context);

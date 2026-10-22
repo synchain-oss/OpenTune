@@ -1481,7 +1481,7 @@ runs against the facts of an instance without it).
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
-`jobs.v1`, `import.v1`, `export.v1`, `ui.bridge` with `ui.onboardingClose`, `edit.v1`, `history.v1`, `timing.v1`, `transport.v1`, `arrangement.v1`, `tracks.v1`, `project.io`, `prefs.write`, `audio.device` and `reference.v1`). The listener answers a method of an unreported capability itself with
+`jobs.v1`, `import.v1`, `export.v1`, `ui.bridge` with `ui.onboardingClose`, `edit.v1`, `history.v1`, `timing.v1`, `transport.v1`, `arrangement.v1`, `reference.v1`, `tracks.v1`, `project.io`, `prefs.write` and `audio.device`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and

@@ -110,6 +110,11 @@ public:
         their grids. Default: nothing. */
     virtual void onTimeGridChanged() {}
 
+    /** The reference binding of a clip was set or removed through the control API (arrangement.edit setReference):
+        the editor does what it does after its own binding menu (redraws the arrangement and refreshes the reference
+        context, which feeds the piano roll and can queue reference alignment analysis). Default: nothing. */
+    virtual void onReferenceBindingChanged() {}
+
     // ---- View changes that a write makes as the UI does ----------------------------------------
 
     /** Shows a placement the way the editor does after its own import: it becomes the active track's
@@ -261,8 +266,13 @@ public:
 
     /** What the audio settings page does before it closes an ASIO device for another device type or output
         device (restoreAsioSampleRateToSystem): returns false when a required restore could not be verified, in
-        which case the change must not go on and the current device stays. Default: true (nothing to restore). */
-    virtual bool prepareAudioDeviceSwitch(const std::string& /*reason*/) { return true; }
+        which case the change must not go on and the current device stays. manager is the one the call works on
+        (audioDevice()), so that the restore acts on the device the call is about to close. Default: true (nothing to
+        restore). */
+    virtual bool prepareAudioDeviceSwitch(juce::AudioDeviceManager& /*manager*/, const std::string& /*reason*/)
+    {
+        return true;
+    }
 };
 
 } // namespace OpenTune

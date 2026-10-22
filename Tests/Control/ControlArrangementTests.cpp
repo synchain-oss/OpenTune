@@ -251,6 +251,10 @@ void checkMoves(Fixture& f, const Clip& a, const Clip& b)
     change = changeOf(result, f.pid(a));
     CONTROL_CHECK(near(memberOf(fieldOf(change, "trackId"), "after"), 1.0) && warningCodes(result) == "OVERLAPS_CLIP");
     CONTROL_CHECK(f.locate(a.placementId).trackId == 1 && f.locate(b.placementId).trackId == 1);
+    // The warning names the clip it overlaps.
+    const auto overlapWarning = warningOf(result, "OVERLAPS_CLIP");
+    const auto& overlaps = memberOf(memberOf(overlapWarning, "data"), "overlaps");
+    CONTROL_CHECK(overlaps.size() == 1 && overlaps.at(0).text() == f.pid(b));
 
     // Onto a hidden track: the tracks up to it are shown, each with TRACK_AUTO_REVEALED.
     result = f.edit(f.op("move", a, "\"toTrackId\":3,\"startTimelineSec\":2"));
@@ -355,7 +359,18 @@ void checkGainAndFades(Fixture& f, const Clip& a)
 
 void checkReferences(Fixture& f, const Clip& a, const Clip& b, const Clip& c)
 {
+    // The editor's binding menu refreshes the reference context after every binding it changes: the bridge is told
+    // once per call that changed a binding, never for a prediction, a refusal or a binding that stays.
+    int& notified = f.bridge.referenceBindingNotifications;
+    const int notifiedAtStart = notified;
+    CONTROL_CHECK(
+        f.edit(f.op("setReference", a, "\"referencePlacementId\":" + quoted(f.pid(b))), ",\"dryRun\":true").isObject());
+    CONTROL_CHECK(notified == notifiedAtStart);
     auto result = f.edit(f.op("setReference", a, "\"referencePlacementId\":" + quoted(f.pid(b))));
+    CONTROL_CHECK(notified == notifiedAtStart + 1);
+    // The same binding again changes nothing.
+    CONTROL_CHECK(f.edit(f.op("setReference", a, "\"referencePlacementId\":" + quoted(f.pid(b)))).isObject());
+    CONTROL_CHECK(notified == notifiedAtStart + 1);
     CONTROL_CHECK(memberOf(fieldOf(changeOf(result, f.pid(a)), "referencePlacementId"), "after").text() == f.pid(b));
     CONTROL_CHECK(warningCodes(result) == "EXPERIMENTAL_FEATURE" && innerActions(result) == "ReferenceBindingAction");
     // The clip itself, a cycle, a clip that does not overlap in time.
@@ -365,15 +380,19 @@ void checkReferences(Fixture& f, const Clip& a, const Clip& b, const Clip& c)
                               "INVALID_ARGUMENT", "reference_ineligible"));
     CONTROL_CHECK(f.editFails(f.op("setReference", c, "\"referencePlacementId\":" + quoted(f.pid(a))),
                               "INVALID_ARGUMENT", "reference_ineligible"));
+    CONTROL_CHECK(notified == notifiedAtStart + 1);
     // A move earlier in the same call decides: c moved over a may bind to it.
     result = f.edit(f.op("move", c, "\"startTimelineSec\":3") + ","
                     + f.op("setReference", c, "\"referencePlacementId\":" + quoted(f.pid(a))));
     CONTROL_CHECK(innerActions(result) == "MultiMovePlacementAction,ReferenceBindingAction");
     CONTROL_CHECK(f.locate(c.placementId).placement.referencePlacementId == a.placementId);
+    CONTROL_CHECK(notified == notifiedAtStart + 2);
     CONTROL_CHECK(f.edit(f.op("setReference", c, "\"referencePlacementId\":null") + ","
                          + f.op("move", c, "\"startTimelineSec\":20"))
                       .isObject());
+    CONTROL_CHECK(notified == notifiedAtStart + 3);
     result = f.edit(f.op("setReference", a, "\"referencePlacementId\":null"));
+    CONTROL_CHECK(notified == notifiedAtStart + 4);
     CONTROL_CHECK(memberOf(fieldOf(changeOf(result, f.pid(a)), "referencePlacementId"), "after").isNull());
 }
 
@@ -459,6 +478,14 @@ void checkSplitAndMerge(Fixture& f, const Clip& a, const Clip& c, const Clip& pe
     CONTROL_CHECK(entities(result, "removed") == "placement" && entities(result, "created").empty()
                   && f.revision() == before);
 
+    // A clip bound to the split clip loses its binding, and the prediction says so.
+    const auto splitBound = f.addClip("split-bound", 3, 21.0);
+    CONTROL_CHECK(settleBackgroundWork(*f.processor));
+    CONTROL_CHECK(f.arrangement().setPlacementReferencePlacement(3, splitBound.placementId, c.placementId));
+    result = f.edit(f.op("split", c, "\"atTimelineSec\":23"), ",\"dryRun\":true");
+    CONTROL_CHECK(memberOf(fieldOf(changeOf(result, f.pid(splitBound)), "referencePlacementId"), "after").isNull());
+    CONTROL_CHECK(f.locate(splitBound.placementId).placement.referencePlacementId == c.placementId);
+
     // Between two analysis frames: the cut snaps to the nearest one (SPLIT_SNAPPED).
     result = f.edit(f.op("split", c, "\"atTimelineSec\":23.004"));
     CONTROL_CHECK(warningCodes(result) == "SPLIT_SNAPPED,UPSTREAM_UNDO_DEFECT");
@@ -502,6 +529,19 @@ void checkSplitAndMerge(Fixture& f, const Clip& a, const Clip& c, const Clip& pe
     CONTROL_CHECK(f.editFails(merge(second, first), "INVALID_ARGUMENT", "merge_not_possible"));
     CONTROL_CHECK(f.editFails(merge(f.pid(a), first), "INVALID_ARGUMENT", "merge_not_possible"));
     CONTROL_CHECK(f.editFails(merge(first, first), "INVALID_ARGUMENT", "merge_not_possible"));
+
+    // A merge whose former boundary the merged clip cannot be split at again (the leading part is trimmed to 0.05 s,
+    // less than the 0.1 s a split leaves on each side): IRREVERSIBLE and no revert recipe.
+    CONTROL_CHECK(
+        f.edit("{\"op\":\"trim\",\"placementId\":" + quoted(first) + ",\"edge\":\"start\",\"toTimelineSec\":22.95}")
+            .isObject());
+    result = f.edit(merge(first, second));
+    CONTROL_CHECK(warningCodes(result) == "UPSTREAM_UNDO_DEFECT,IRREVERSIBLE");
+    const auto irreversible = memberOf(warningOf(result, "IRREVERSIBLE"), "data");
+    CONTROL_CHECK(memberOf(irreversible, "reason").text() == "split_cannot_restore_boundary"
+                  && memberOf(irreversible, "checkReason").text() == "split_out_of_range");
+    CONTROL_CHECK(!memberOf(memberOf(result, "undo"), "undoable").asBoolean()
+                  && memberOf(memberOf(result, "undo"), "revert").isNull());
 }
 
 void checkDelete(Fixture& f, const Clip& a, const Clip& b)
@@ -514,10 +554,13 @@ void checkDelete(Fixture& f, const Clip& a, const Clip& b)
     auto result = f.edit(ids, ",\"dryRun\":true");
     CONTROL_CHECK(entities(result, "removed") == "placement,placement,content,content" && f.revision() == before);
 
-    // A third clip bound to b loses the binding with it.
+    // A third clip bound to b loses the binding with it; a prediction says so as well.
     const auto bound = f.addClip("bound", 2, 3.0);
     CONTROL_CHECK(settleBackgroundWork(*f.processor));
     CONTROL_CHECK(f.arrangement().setPlacementReferencePlacement(2, bound.placementId, b.placementId));
+    result = f.edit(ids, ",\"dryRun\":true");
+    CONTROL_CHECK(memberOf(fieldOf(changeOf(result, f.pid(bound)), "referencePlacementId"), "after").isNull());
+    CONTROL_CHECK(f.locate(bound.placementId).placement.referencePlacementId == b.placementId);
     result = f.edit(ids, ",\"confirm\":true");
     CONTROL_CHECK(entities(result, "removed") == "placement,placement,content,content");
     CONTROL_CHECK(refAt(result, "removed", 2, "contentId").rfind("c:", 0) == 0);

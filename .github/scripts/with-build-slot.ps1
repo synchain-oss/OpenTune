@@ -28,7 +28,9 @@
        RelWithDebInfo lane build; pass ~12000 for a Release build that links the tests;
     4. optionally imports the MSVC developer environment (-VsDevShell, via vswhere +
        Launch-VsDevShell.ps1) so Ninja finds cl.exe;
-    5. runs the command and exits with its exit code; the slot is released in all cases.
+    5. gives the command a private MSVC PDB server (_MSPDBSRV_ENDPOINT_ = ot-<lane>-build, unless the caller set
+       one), so another project's mspdbsrv on the machine cannot make the build fail with C1041; no process is stopped;
+    6. runs the command and exits with its exit code; the slot is released in all cases.
 
   Exit codes: the command's own code; 75 when no slot or not enough memory within -WaitMinutes;
   64 for bad options. Run it from PowerShell. MSBuild trips over duplicate Path/PATH variables when
@@ -203,6 +205,14 @@ try {
             $delta | ConvertTo-Json | Set-Content -LiteralPath $cacheFile -Encoding utf8NoBOM
         }
         Write-Slot "MSVC environment ($(if ($applied) { 'cached' } else { 'fresh' })): $env:VCToolsInstallDir"
+    }
+
+    # 4b. A private MSVC PDB server. mspdbsrv is shared machine-wide by default, and a build of this lane that meets an
+    #     instance another project started can fail with C1041. A lane-specific endpoint gives its cl.exe its own
+    #     server (nothing is stopped). An endpoint the caller already set wins.
+    if (-not $env:_MSPDBSRV_ENDPOINT_) {
+        $laneDir = Split-Path -Leaf (Split-Path -Parent (Split-Path -Parent $PSScriptRoot))
+        $env:_MSPDBSRV_ENDPOINT_ = 'ot-' + ($laneDir -replace '[^A-Za-z0-9_-]', '_') + '-build'
     }
 
     # 5. Run.

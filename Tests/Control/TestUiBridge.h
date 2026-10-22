@@ -58,6 +58,7 @@ public:
     ProjectSession* projectSession() override { return session; }
     juce::ThreadPool* projectWorkerPool() override { return pool; }
     void onTimeGridChanged() override { ++timeGridNotifications; }
+    void onReferenceBindingChanged() override { ++referenceBindingNotifications; }
 
     bool focusPlacement(int trackId, std::uint64_t placementId) override
     {
@@ -95,6 +96,7 @@ public:
     /** The values setProjectOperationRunning() was called with, in order. */
     std::vector<bool> operationFlagChanges;
     int timeGridNotifications = 0;
+    int referenceBindingNotifications = 0;
     int revealCalls = 0;
     /** The placements focusPlacement() was called with, in order. */
     std::vector<std::pair<int, std::uint64_t>> focused;

@@ -1223,6 +1223,9 @@ void scenarioBusyMatrix()
     if (!CONTROL_CHECK(handles.has_value()))
         return;
     const auto& contentId = handles->contentId;
+    const auto& placementId = handles->placementId;
+    const auto arrangementRevision =
+        memberOf(memberOf(api.result("project.get"), "asOf"), "arrangementRevision").text();
     const auto revision = memberOf(handles->tokens, "revision").text();
     const auto gridRevision = memberOf(handles->tokens, "gridRevision").text();
     CONTROL_CHECK(!revision.empty() && !gridRevision.empty());
@@ -1253,6 +1256,13 @@ void scenarioBusyMatrix()
         {"content.editTimeGrid moveHandles", "content.editTimeGrid",
          "{" + content + ",\"op\":\"moveHandles\",\"expectedGridRevision\":" + quoted(gridRevision)
              + ",\"moves\":[{\"handleId\":" + quoted(clip.handleIds[0]) + ",\"outputSec\":1.1}]}"},
+        {"arrangement.edit", "arrangement.edit",
+         "{\"expectedArrangementRevision\":" + quoted(arrangementRevision)
+             + ",\"ops\":[{\"op\":\"move\",\"placementId\":" + quoted(placementId) + ",\"startTimelineSec\":4.0}]}"},
+        {"arrangement.copy", "arrangement.copy",
+         "{\"sources\":[{\"placementId\":" + quoted(placementId)
+             + "}],\"mode\":\"full\",\"toTrackId\":1,\"startTimelineSec\":12.0,\"expectedArrangementRevision\":"
+             + quoted(arrangementRevision) + "}"},
     };
     struct Condition
     {

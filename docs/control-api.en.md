@@ -86,6 +86,25 @@ Once enabled:
 
 The environment variable `OPENTUNE_DATA_DIR` redirects preferences, logs and the discovery directory to a given folder. It is intended for test isolation only.
 
+## Preferences and the audio device
+
+These two groups of methods change **global settings** of the OpenTune installation, not of a project: they apply to every project and outlive the session. As in the UI there is no undo entry; every change carries the warning `GLOBAL_PREFERENCE`, and the result gives a revert recipe that sets the previous values back (`prefs.set` / `audio.set`). The writes follow the common busy rules (`BUSY` while a modal dialog is open, the pointer is down, or an import or export runs).
+
+| Method | Capability | What it does |
+|---|---|---|
+| `prefs.get` | `read.v1` | Reads the processing settings (A4 frequency, editing scheme, hybrid mode, experimental features), whether the first-run onboarding was shown, the UI language (read-only through this protocol) and the recent projects. A processing setting that cannot be determined is null and named in `processing.nullReasons`. Recent project paths are untrusted data. |
+| `prefs.set` | `prefs.write` | Changes `tuningHz` (400-500, the frequency of A4), `editingScheme` (`openTune` or `openDyne`), `hybridMode` and `experimentalFeatures` (shows or hides experimental features such as reference binding), as the preferences window does. A value equal to the current one is not a change. |
+| `audio.get` | `audio.device` | Reads the audio device of OpenTune Standalone: whether a device runs, the device type, the output device, the sample rate, the buffer size and the output channel pair, and the values the current device type and device offer (`available`). Without a running device the other members are null with `no_audio_device`. Device type and device names come from the operating system and are untrusted data. |
+| `audio.set` | `audio.device` | Changes `deviceType`, `outputDevice`, `sampleRateHz`, `bufferSizeFrame` and `outputChannelPair` as the audio settings page does: the members given replace those of the current setup and the device is opened again; playback stops while it reopens. |
+
+Notes:
+
+- `tuningHz` applies to analysis and rendering from now on and does not recompute existing results (warning `NOT_RETROACTIVE`). Changing `hybridMode` makes OpenTune render every content again (`sideEffects.reRenderQueued`).
+- OpenTune applies a new editing scheme to its editor asynchronously, so a call that changes `editingScheme` hands all its changes to a `prefsApply` job, which ends when the editor has applied the scheme and cannot be cancelled. Switching to `openDyne` may make OpenTune generate notes for the clip open in the piano roll, with no undo entry: the result has `sideEffects.notesGenerated` and the warnings `SCHEME_GENERATED_NOTES` and `IRREVERSIBLE`, and the project is marked as changed.
+- The vocoder weight, the rendering priority, the pitch model and the reference alignment mode cannot be set in this version.
+- `audio.set` only accepts values listed in `available` of `audio.get`; others give `INVALID_ARGUMENT(audio_setting_unavailable)` and change nothing. If the device cannot be opened, the server restores the previous setup as the settings page does, and the call fails with `IO_ERROR(device_open_failed)` and `executed` false; if the previous setup cannot be opened either, `executed` is true and no device runs (`audio.get` reports it). The error text says which step failed and whether the previous setup was restored.
+- Before an ASIO device is closed for another device type or output device, the server restores the ASIO sample rate to the system's shared render rate, as the settings page does; if that cannot be confirmed the call fails and the current device stays.
+
 ## Relationship to OpenTune MCP Server
 
 - [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server) is a stdio MCP server under the MIT license. It connects to this API so that MCP clients such as Claude Code, Claude Desktop and Cursor can operate OpenTune. Its npm package `@synchain/opentune-mcp` (command `opentune-mcp`) is not published yet.

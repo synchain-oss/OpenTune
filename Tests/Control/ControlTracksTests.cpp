@@ -479,6 +479,10 @@ void checkTempo(Fixture& f)
     const auto onlyBpm = f.api.result("transport.setTempo", json(R"({"bpm":87.5})"));
     CONTROL_CHECK(near(f.processor->getBpm(), 87.5) && f.processor->getTimeSigNumerator() == 4);
     CONTROL_CHECK(!memberOf(onlyBpm, "noOp").asBoolean());
+    // The bpm reported as changed is in the recipe (never an empty params), and the signature that did not change is
+    // not.
+    const auto& onlyBpmParams = memberOf(memberOf(memberOf(onlyBpm, "undo"), "revert"), "params");
+    CONTROL_CHECK(near(memberOf(onlyBpmParams, "bpm"), 120.0) && onlyBpmParams.find("timeSignature") == nullptr);
     CONTROL_CHECK(memberOf(f.api.result("transport.setTempo", json(R"({"bpm":87.5})")), "noOp").asBoolean());
     CONTROL_CHECK(f.bridge.dirtyMarks == marks + 1);
     for (const char* params :
@@ -487,6 +491,19 @@ void checkTempo(Fixture& f)
           R"({"timeSignature":{"numerator":0,"denominator":4}})", R"({"bpm":"fast"})", R"({"tempo":90})"})
         CONTROL_CHECK(f.api.fails("transport.setTempo", json(params), "INVALID_ARGUMENT", "invalid_params"));
     CONTROL_CHECK(near(f.processor->getBpm(), 87.5));
+
+    // A time signature that the schema cannot express (OpenTune accepts a denominator of 64 and a numerator up to
+    // 64): a call that leaves it alone gets a recipe with the tempo only, one that changes it leaves no recipe.
+    f.processor->setTimeSignature(5, 64);
+    const auto keeps = f.api.result("transport.setTempo", json(R"({"bpm":100})"));
+    const auto& keepsRevert = memberOf(memberOf(keeps, "undo"), "revert");
+    CONTROL_CHECK(!hasWarning(keeps, "IRREVERSIBLE") && memberOf(keepsRevert, "params").find("timeSignature") == nullptr
+                  && near(memberOf(memberOf(keepsRevert, "params"), "bpm"), 87.5));
+    const auto changes =
+        f.api.result("transport.setTempo", json(R"({"timeSignature":{"numerator":3,"denominator":4}})"));
+    CONTROL_CHECK(memberOf(changes, "applied").asBoolean() && memberOf(memberOf(changes, "undo"), "revert").isNull()
+                  && hasWarning(changes, "IRREVERSIBLE"));
+    CONTROL_CHECK(f.processor->getTimeSigNumerator() == 3 && f.processor->getTimeSigDenominator() == 4);
 }
 
 void checkLoop(Fixture& f)
@@ -723,6 +740,8 @@ void checkTrackDuplicate(Fixture& f)
 
     // Checks: no slot, a clip in the slot, an unknown track.
     CONTROL_CHECK(f.api.fails("track.duplicate", json(R"({"trackId":99})"), "NOT_FOUND", "unknown_handle"));
+    // A hidden source slot is refused (the UI offers Duplicate Track on a shown track only).
+    CONTROL_CHECK(f.api.fails("track.duplicate", json(R"({"trackId":5})"), "INVALID_ARGUMENT", "track_hidden"));
     CONTROL_CHECK(
         f.api.fails("track.duplicate", json(R"({"trackId":0,"mode":"copy"})"), "INVALID_ARGUMENT", "invalid_params"));
     f.addClip(4);
@@ -902,7 +921,8 @@ std::string pushApiMove(Fixture& f, const Clip& clip, int track, double oldStart
     inner[0].content = clip.key;
     inner[0].tracks = {track};
     const auto undoId = f.service().history()->nextUndoId(f.instanceShort);
-    f.processor->getUndoManager().addAction(
+    f.service().history()->record(
+        f.processor->getUndoManager(),
         std::make_unique<ControlOriginAction>(f.service().history(), undoId, description, std::move(inner)));
     return undoId;
 }
@@ -1025,6 +1045,35 @@ void checkBarrierUiEntry(Fixture& f)
     CONTROL_CHECK(!memberOf(memberOf(historyOf(f), "undoTop"), "possiblyStale").asBoolean());
 }
 
+/** The history is undone below the mark of a deletion, the API records an entry there, the UI goes on editing, and
+    another deletion follows: the entries recorded after the first deletion are all counted. (The entry of the API
+    sits below the mark; it must not be taken off the count of the positions above it.) */
+void checkBarrierUndoBelowMark(Fixture& f)
+{
+    f.bridge.visibleTracks = 4;
+    const auto a = f.addClip(0);
+    f.addClip(1);
+    f.addClip(2);
+    f.addClip(3);
+    settleBackgroundWork(*f.processor);
+    pushUiMove(f, a, 0, 1.0);
+    pushUiMove(f, a, 0, 2.0);
+    // Deleting the last track: the two entries of the UI were recorded before it.
+    const auto first = f.deleteTrack(3);
+    CONTROL_CHECK(near(memberOf(memberOf(first, "possiblyStaleEntries"), "undo"), 2.0));
+    // The end user undoes one step (below the mark), the API records an entry at that position, and the UI goes on:
+    // two more entries, all recorded after the first deletion.
+    CONTROL_CHECK(f.processor->getUndoManager().undo() != nullptr);
+    pushApiMove(f, a, 0, 3.0);
+    pushUiMove(f, a, 0, 4.0);
+    pushUiMove(f, a, 0, 5.0);
+    f.bridge.visibleTracks = 3;
+    const auto second = f.deleteTrack(2);
+    // The entry of the API addresses track 0 and is not stale; the entry below the mark was counted by the first
+    // deletion; the two entries of the UI that followed are newly stale.
+    CONTROL_CHECK(near(memberOf(memberOf(second, "possiblyStaleEntries"), "undo"), 2.0));
+}
+
 void checkBarrierRemovedContent(Fixture& f)
 {
     f.bridge.visibleTracks = 3;
@@ -1094,7 +1143,7 @@ void checkRemovedContentRevivedByUndo(Fixture& f)
 void scenarioTrackBarrierImpl()
 {
     for (const auto check : {checkBarrierApiEntry, checkBarrierLaterTrack, checkBarrierUiEntry,
-                             checkBarrierRemovedContent, checkRemovedContentRevivedByUndo}) {
+                             checkBarrierUndoBelowMark, checkBarrierRemovedContent, checkRemovedContentRevivedByUndo}) {
         Fixture f;
         if (f.open())
             check(f);

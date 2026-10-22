@@ -1740,6 +1740,7 @@ void scenarioJobVectors()
     std::sort(files.begin(), files.end());
     int passed = 0;
     int skipped = 0;
+    VectorReport report("ControlProcessorTests.JobVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -1748,6 +1749,7 @@ void scenarioJobVectors()
         const auto id = memberOf(vector, "id").text();
         if (const auto reason = jobVectorSkipReason(vector); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
@@ -1755,11 +1757,13 @@ void scenarioJobVectors()
         auto slug = id;
         std::replace(slug.begin(), slug.end(), '/', '-');
         const auto failure = runJobVector(vector, slug);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty()))
             ++passed;
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     // Every vector of job/ and import/ runs headless.
     CONTROL_CHECK(skipped == 0 && passed >= 18);
     note(std::to_string(passed) + " vectors passed, " + std::to_string(skipped) + " skipped");

@@ -236,8 +236,8 @@ void scenarioUiState()
         ApiSession api;
         if (!api.open(service))
             return;
-        CONTROL_CHECK(api.fails("ui.getState", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
-        CONTROL_CHECK(api.fails("ui.dismiss", jsonOf(R"({"target":"dialogs"})"), "UNSUPPORTED", "capability_missing"));
+        CONTROL_CHECK(api.fails("ui.getState", JsonValue::object(), "UNSUPPORTED", "no_editor_window"));
+        CONTROL_CHECK(api.fails("ui.dismiss", jsonOf(R"({"target":"dialogs"})"), "UNSUPPORTED", "no_editor_window"));
     }
     {
         ScopedCapabilities seam({"ui.onboardingClose"});
@@ -306,15 +306,15 @@ void scenarioUiState()
     CONTROL_CHECK(memberOf(memberOf(idle, "uiScale"), "scale").text() == "pentatonicMinor");
     CONTROL_CHECK(f.api.fails("ui.getState", jsonOf(R"({"x":1})"), "INVALID_ARGUMENT", "invalid_params"));
 
-    // A bridge that does not report its dialogs is no editor window for ui.bridge.
+    // A bridge that does not report its dialogs cannot serve ui.bridge (an editor exists, so not no_editor_window).
     f.bridge.reportsDialogs = false;
     CONTROL_CHECK(f.api.fails("ui.getState", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
     CONTROL_CHECK(f.api.fails("ui.dismiss", jsonOf(R"({"target":"onboarding"})"), "UNSUPPORTED", "capability_missing"));
     f.bridge.reportsDialogs = true;
     // Without an editor.
     f.registered.reset();
-    CONTROL_CHECK(f.api.fails("ui.getState", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
-    CONTROL_CHECK(f.api.fails("ui.dismiss", jsonOf(R"({"target":"dialogs"})"), "UNSUPPORTED", "capability_missing"));
+    CONTROL_CHECK(f.api.fails("ui.getState", JsonValue::object(), "UNSUPPORTED", "no_editor_window"));
+    CONTROL_CHECK(f.api.fails("ui.dismiss", jsonOf(R"({"target":"dialogs"})"), "UNSUPPORTED", "no_editor_window"));
     CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 
@@ -648,6 +648,7 @@ void scenarioUiVectors()
     int skipped = 0;
     int pending = 0;
     std::set<std::string> passedIds;
+    VectorReport report("ControlProcessorTests.UiVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -656,11 +657,13 @@ void scenarioUiVectors()
         const auto id = memberOf(vector, "id").text();
         if (const auto skip = uiVectorSkip(vector, reported); !skip.reason.empty()) {
             ++(skip.pending ? pending : skipped);
+            report.skip(id, skip.reason);
             note((skip.pending ? "PENDING " : "SKIP ") + id + ": " + skip.reason);
             continue;
         }
         const auto started = Clock::now();
         const auto failure = runUiVector(vector);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty())) {
             ++passed;
             passedIds.insert(id);
@@ -668,6 +671,7 @@ void scenarioUiVectors()
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     for (const char* id : kMustRunUiVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
     if (reports(reported, "tracks.v1"))

@@ -23,7 +23,7 @@ class ControlMethodTable;
  * The project session and its worker pool belong to the editor and are reached through ControlUiBridge; a job holds
  * the editor's project-operation flag from its start to its end, so that the editor's own file commands and every
  * other write answer BUSY(project_operation) meanwhile. Without an editor, the save and open methods answer
- * UNSUPPORTED(capability_missing).
+ * UNSUPPORTED(no_editor_window).
  */
 void registerProjectOps(ControlMethodTable& table);
 

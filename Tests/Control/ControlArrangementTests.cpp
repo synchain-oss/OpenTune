@@ -939,6 +939,7 @@ void scenarioArrangementVectorsImpl()
     std::sort(files.begin(), files.end());
     std::set<std::string> passedIds;
     int skipped = 0;
+    VectorReport report("ControlProcessorTests.ArrangementVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -946,16 +947,19 @@ void scenarioArrangementVectorsImpl()
         const auto id = memberOf(parsed.value, "id").text();
         if (const auto reason = vectorSkipReason(parsed.value); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
         const auto started = Clock::now();
         const auto failure = runVector(parsed.value);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty()))
             passedIds.insert(id);
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     for (const char* id : kMustRunVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
     note(std::to_string(passedIds.size()) + " vectors passed, " + std::to_string(skipped) + " skipped");

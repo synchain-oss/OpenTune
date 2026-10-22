@@ -636,8 +636,9 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
         if (ref.trackId == params.trackId)
             removed.push_back(ref);
 
-    // trackDeleteRequested(): the arrangement removes the track and moves the later ones up (their clips and mix);
-    // then the panel shows the mix of the arrangement for the tracks that remain and one track fewer.
+    // trackDeleteRequested(): the arrangement removes the track and moves only the later shown tracks down by one
+    // position (their clips and mix); a hidden slot keeps its position, its clips and its mix. Then the panel shows
+    // the mix of the arrangement for the tracks that remain and one track fewer.
     if (!arrangement->removeTrackAndShift(params.trackId, visible))
         return controlOpError("INTERNAL", "", "OpenTune did not delete the track");
     bridge->onTrackMixChanged();
@@ -679,8 +680,11 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
     const auto epoch = controlContentEpoch(context);
     history->markContentsRemoved(leftProject, epoch);
 
-    // The barrier in the undo and redo histories (section 15.3 rule 6).
-    const auto stale = history->onTrackDeleted(processor.getUndoManager(), params.trackId, epoch);
+    // The barrier in the undo and redo histories (section 15.3 rule 6): an entry is possibly stale when it addresses
+    // the deleted track or a shown track after it, which removeTrackAndShift() moved down. A hidden track keeps its
+    // position and its clips, so an entry that addresses only hidden tracks stays valid. visible is the number of
+    // shown tracks before the deletion.
+    const auto stale = history->onTrackDeleted(processor.getUndoManager(), params.trackId, visible, epoch);
 
     // Removed: the clips, then the contents that left with them (section 14.4 rule 6).
     for (const auto& ref : removed)
@@ -713,7 +717,7 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
     }
 
     // trackIdMap: the deleted track, and every later shown track. removeTrackAndShift() moves only the shown tracks
-    // after the deleted one; hidden slots keep their position and their clips.
+    // after the deleted one down; the hidden slots keep their position, their clips and their mix.
     auto trackIdMap = JsonValue::array();
     const auto mapEntry = [](int from, JsonValue to) {
         auto entry = JsonValue::object();

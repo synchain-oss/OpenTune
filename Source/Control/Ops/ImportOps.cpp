@@ -106,6 +106,41 @@ void recordCommittedClipId(ControlOpContext& context, const ContentKey& key)
     floor.clipId = std::max(floor.clipId, key.objectId);
 }
 
+/**
+ * The arrangement's selection before a commit: the active track and the selected clip of the track that the commit
+ * inserts into. OpenTuneAudioProcessor::commitPreparedImportAsPlacement() selects every clip it commits and makes its
+ * track active (PluginProcessor.cpp:3955, and insertPlacement() selects the first clip of an empty track); that is
+ * view state the request did not ask for unless it focuses the clip. The editor's heartbeat would then load the
+ * selected clip into the piano roll, which in the openDyne scheme generates its notes
+ * (PianoRollComponent::ensureOpenDyneNotesIfNeeded()), so an import with focus false would generate notes it does
+ * not report. The import job restores the selection the commit found (see ImportJob::commit()). Message thread.
+ */
+struct CommitSelection
+{
+    int activeTrack = 0;
+    std::uint64_t selectedPlacementId = 0;
+    bool valid = false;
+};
+
+CommitSelection captureCommitSelection(const StandaloneArrangement* arrangement, int trackId)
+{
+    if (arrangement == nullptr)
+        return {};
+    return {arrangement->getActiveTrackId(), arrangement->getSelectedPlacementId(trackId), true};
+}
+
+void restoreCommitSelection(StandaloneArrangement* arrangement, int trackId, const CommitSelection& selection)
+{
+    if (arrangement == nullptr || !selection.valid)
+        return;
+    // selectPlacement() makes the track active as well, so the active track is set afterwards. The selection of
+    // another track was not touched by the commit and is left as it is. A saved clip that is gone (it should not) is
+    // cleared rather than left at the clip the commit selected.
+    if (!arrangement->selectPlacement(trackId, selection.selectedPlacementId))
+        arrangement->setSelectedPlacementIndex(trackId, -1);
+    arrangement->setActiveTrack(selection.activeTrack);
+}
+
 enum class Layout {
     Single,
     Sequential,
@@ -412,9 +447,12 @@ struct ImportItem
  *   every clip id behind OpenTune's counter) it commits once, as the editor does, without a copy.
  * - OpenTune's import creates no undo entry and the editor does not mark the project as changed after it;
  *   the job marks it (PROTOCOL.md section 15.5).
- * - commitPreparedImportAsPlacement() selects every clip it commits and makes its track the active track,
- *   also with focus false; the job leaves that as it is, and the result's ui snapshot shows it. focus only
- *   decides whether the editor shows the last clip (and, in the openDyne scheme, generates its notes).
+ * - commitPreparedImportAsPlacement() selects every clip it commits and makes its track the active track, also with
+ *   focus false. A selected clip is what the editor's heartbeat loads into the piano roll, and the openDyne scheme
+ *   generates the notes of a content it shows, so the clip would get notes the request did not ask for. The job
+ *   therefore restores the selection that the commit found (captureCommitSelection()), and focus alone decides the
+ *   selection: with focus false it does not change, and with focus true the job selects the last clip after the
+ *   commits, as the method's schema says.
  * - The clip id collision after a project was opened is only logged: the protocol has no warning code
  *   for it, so the result carries none.
  *
@@ -542,6 +580,10 @@ private:
         const std::size_t attempts = (placement.isValid() ? possibleClipIdCollisions(context) : 0) + 1;
         OpenTuneAudioProcessor::CommittedPlacement committed;
         std::size_t attempt = 0;
+        auto* arrangement = processor.getStandaloneArrangement();
+        // The commit selects the clip and makes its track active; the selection the job found is put back below,
+        // so that the editor is not shown a clip the request did not focus (see the class comment).
+        const auto selectionBefore = captureCommitSelection(arrangement, trackId);
         while (attempt < attempts && !committed.isValid()) {
             ++attempt;
             OpenTuneAudioProcessor::PreparedImport prepared;
@@ -557,6 +599,7 @@ private:
             item.error = ControlJobError{"INTERNAL", "", "OpenTune did not accept the clip", false};
             return;
         }
+        restoreCommitSelection(arrangement, trackId, selectionBefore);
         recordCommittedClipId(context, committed.contentKey);
         if (attempt > 1)
             AppLogger::logNoThrow("control API: import.start: the commit of a clip was repeated "
@@ -564,7 +607,6 @@ private:
                                   + " time(s) because the clip id was in use (project opened before)");
 
         StandaloneArrangement::Placement committedPlacement;
-        const auto* arrangement = processor.getStandaloneArrangement();
         const double duration =
             arrangement != nullptr && arrangement->getPlacementById(trackId, committed.placementId, committedPlacement)
                 ? committedPlacement.durationSeconds

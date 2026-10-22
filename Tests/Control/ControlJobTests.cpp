@@ -883,6 +883,10 @@ void scenarioImport()
                       == memberOf(item, "placementId").text());
         CONTROL_CHECK(memberOf(result, "sideEffects").size() == 0);
         CONTROL_CHECK(bridge.focused.size() == 1 && bridge.focused.back().first == 0 && bridge.structureChanges == 1);
+        // The default focus selects the imported clip, as the UI's import does.
+        auto& arrangement = *processor->getStandaloneArrangement();
+        CONTROL_CHECK(arrangement.getActiveTrackId() == 0 && arrangement.getSelectedPlacementId(0) != 0);
+        CONTROL_CHECK(memberOf(memberOf(result, "ui"), "activeTrackId").asDouble() == 0);
         // project.get shows the clip with its source file.
         const auto project = api.result("project.get");
         const auto& placements = memberOf(project, "placements");
@@ -927,6 +931,10 @@ void scenarioImport()
     // 3. Notes on request in separate tracks without focus; a file that cannot be decoded fails alone.
     {
         const auto focusedBefore = bridge.focused.size();
+        auto& arrangement = *processor->getStandaloneArrangement();
+        const int activeBefore = arrangement.getActiveTrackId();
+        const auto selectedBefore = arrangement.getSelectedPlacementId(activeBefore);
+        CONTROL_CHECK(activeBefore == 1 && selectedBefore != 0); // selected by the focus of the import above
         const auto job =
             importAndWait(api, R"({"items":[{"path":)" + quoted(take3) + R"(},{"path":)" + quoted(garbled)
                                    + R"(}],"layout":"separateTracks","trackId":3,"generateNotes":true,"focus":false})");
@@ -945,9 +953,34 @@ void scenarioImport()
                        == std::vector<std::string>{"TRACK_AUTO_REVEALED", "TRACK_AUTO_REVEALED", "IRREVERSIBLE"}));
         CONTROL_CHECK(memberOf(memberOf(result, "sideEffects"), "notesGenerated").isNull());
         CONTROL_CHECK(bridge.focused.size() == focusedBefore);
-        // OpenTune's commit selects the clip and makes its track active even without focus; the snapshot
-        // shows it (the active track was 1 after the previous import).
-        CONTROL_CHECK(memberOf(memberOf(result, "ui"), "activeTrackId").asDouble() == 3);
+        // focus false leaves the selection as it was. OpenTune's commit selects the clip it commits; the job puts the
+        // selection back, so the editor's heartbeat cannot load the clip and the openDyne scheme generates no notes
+        // for it (methods/import.start.schema.json, PROTOCOL.md section 21 rule 2).
+        CONTROL_CHECK(arrangement.getActiveTrackId() == activeBefore
+                      && arrangement.getSelectedPlacementId(activeBefore) == selectedBefore);
+        CONTROL_CHECK(memberOf(memberOf(result, "ui"), "activeTrackId").asDouble() == activeBefore);
+        CONTROL_CHECK(memberOf(api.result("project.get"), "activeTrackId").asDouble() == activeBefore);
+    }
+
+    // 3b. focus false on the active track, which already has a selected clip: the commit selects the new clip on that
+    //     track, and the job puts the selection back.
+    {
+        const auto focusedBefore = bridge.focused.size();
+        auto& arrangement = *processor->getStandaloneArrangement();
+        const int activeBefore = arrangement.getActiveTrackId();
+        const auto selectedBefore = arrangement.getSelectedPlacementId(activeBefore);
+        CONTROL_CHECK(activeBefore == 1 && selectedBefore != 0);
+        const auto job = importAndWait(api, R"({"items":[{"path":)" + quoted(take3)
+                                                + R"(}],"layout":"single","trackId":1,"focus":false})");
+        CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+        const auto& result = memberOf(job, "result");
+        const auto& item = memberOf(result, "items").at(0);
+        CONTROL_CHECK(memberOf(item, "imported").asBoolean() && !memberOf(item, "notesGenerated").asBoolean()
+                      && memberOf(item, "notesGeneratedBy").isNull());
+        CONTROL_CHECK(bridge.focused.size() == focusedBefore);
+        CONTROL_CHECK(arrangement.getActiveTrackId() == activeBefore
+                      && arrangement.getSelectedPlacementId(activeBefore) == selectedBefore);
+        CONTROL_CHECK(memberOf(memberOf(result, "ui"), "activeTrackId").asDouble() == activeBefore);
     }
 
     // 4. Checks before the job: nothing starts and executed is false.
@@ -989,7 +1022,7 @@ void scenarioImport()
         bridge.busy.*member = true;
         CONTROL_CHECK(
             api.fails("import.start", json(take1Item + R"(,"layout":"single","trackId":4})"), "BUSY", reason));
-        CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 4);
+        CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 5);
     }
     CONTROL_CHECK(api.result("job.get", json(R"({"jobId":"j:)"
                                              + memberOf(api.discovery(), "instanceId").text().substr(0, 8) + R"(:1"})"))
@@ -1060,11 +1093,15 @@ void scenarioImportAfterOpen()
     CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 2);
 
     // The import commits although the first clip ids are in use; the repeated commits are logged, and the
-    // attempts that may be repeated commit a copy of the audio.
+    // attempts that may be repeated commit a copy of the audio. focus false: the failed attempts and the accepted
+    // one leave the selection as it was.
     const auto repeatedBefore = occurrences(logText(), "was repeated");
     const auto copiesBefore = controlImportCommitCopiesForTesting();
-    const auto job =
-        importAndWait(api, R"({"items":[{"path":)" + quoted(take3) + R"(}],"layout":"single","trackId":2})");
+    auto& arrangement = *processor->getStandaloneArrangement();
+    const int activeBefore = arrangement.getActiveTrackId();
+    const auto selectedBefore = arrangement.getSelectedPlacementId(activeBefore);
+    const auto job = importAndWait(api, R"({"items":[{"path":)" + quoted(take3)
+                                            + R"(}],"layout":"single","trackId":2,"focus":false})");
     CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
     const auto& item = memberOf(memberOf(job, "result"), "items").at(0);
     CONTROL_CHECK(memberOf(item, "imported").asBoolean() && memberOf(item, "f0State").text() == "ready");
@@ -1085,6 +1122,9 @@ void scenarioImportAfterOpen()
         CONTROL_CHECK(found == 1);
     }
     CONTROL_CHECK(controlImportCommitCopiesForTesting() > copiesBefore);
+    // The repeated commit selected the clip it finally accepted; the job put the selection back.
+    CONTROL_CHECK(arrangement.getActiveTrackId() == activeBefore
+                  && arrangement.getSelectedPlacementId(activeBefore) == selectedBefore);
     const auto project = api.result("project.get");
     CONTROL_CHECK(memberOf(project, "placements").size() == 3 && memberOf(project, "contents").size() == 3);
 
@@ -1104,6 +1144,8 @@ void scenarioImportAfterOpen()
     }
     CONTROL_CHECK(controlImportCommitCopiesForTesting() == copiesAfter);
     CONTROL_CHECK(occurrences(logText(), "was repeated") == repeatedBefore + 1);
+    // This one focuses the clip it commits, as the default says.
+    CONTROL_CHECK(arrangement.getActiveTrackId() == 3 && arrangement.getSelectedPlacementId(3) != 0);
     CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 4);
 }
 
@@ -1125,6 +1167,9 @@ void scenarioImportCancel()
     for (int i = 1; i <= 3; ++i)
         items += std::string(i > 1 ? "," : "") + R"({"path":)"
                  + quoted(writeTone(media, "take" + std::to_string(i), 1.0)) + "}";
+    auto& arrangement = *processor->getStandaloneArrangement();
+    const int activeBefore = arrangement.getActiveTrackId();
+    const auto selectedBefore = arrangement.getSelectedPlacementId(activeBefore);
     const auto start = api.result(
         "import.start", json(R"({"items":[)" + items + R"(],"layout":"sequential","trackId":0,"startTimelineSec":0})"));
     const auto jobId = memberOf(memberOf(start, "job"), "jobId").text();
@@ -1159,6 +1204,10 @@ void scenarioImportCancel()
     CONTROL_CHECK(warningCodes(result) == std::vector<std::string>{"IRREVERSIBLE"});
     CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 1);
     CONTROL_CHECK(bridge.dirtyMarks >= 1);
+    // The commit selected the clip it committed; the cancelled job put the selection back, as it focuses no clip
+    // under the user's hands.
+    CONTROL_CHECK(arrangement.getActiveTrackId() == activeBefore
+                  && arrangement.getSelectedPlacementId(activeBefore) == selectedBefore);
 }
 
 // ---- Every write against every busy condition ---------------------------------------------------------

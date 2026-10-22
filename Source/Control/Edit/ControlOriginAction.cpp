@@ -114,15 +114,23 @@ bool ControlOriginAction::masked(const ContentKey& content, ControlContentAspect
     return std::find(masked_.begin(), masked_.end(), std::make_pair(content, aspect)) != masked_.end();
 }
 
-bool ControlOriginAction::onTrackDeleted(int deletedTrack)
+bool ControlOriginAction::onTrackDeleted(int deletedTrack, int visibleCount)
 {
-    // The deleted track's clips are gone and every later track moved down by one position, so an action keyed by
-    // one of these positions may now address another track. An action that addresses no track (a note edit
-    // addresses its content) or only earlier tracks is unaffected.
-    const bool addresses = std::any_of(inner_.begin(), inner_.end(), [deletedTrack](const Inner& inner) {
-        return std::any_of(inner.tracks.begin(), inner.tracks.end(),
-                           [deletedTrack](int track) { return track >= deletedTrack; });
-    });
+    // The deleted track's clips are gone and every later shown track moved down by one position, so an action keyed
+    // by one of these positions may now address another track. A hidden track (visibleCount and above) keeps its
+    // position and its clips, and every track before the deleted one keeps its position. The tracks this entry
+    // addresses move with their clips, so the shown ones after the deleted track are renumbered for the deletions that
+    // follow; an action that addresses no track (a note edit addresses its content) or only tracks that did not move
+    // is unaffected.
+    bool addresses = false;
+    for (auto& inner : inner_)
+        for (int& track : inner.tracks)
+            if (track >= deletedTrack && track < visibleCount) {
+                addresses = true;
+                // A track equal to the deleted one cannot be followed: its clip was removed with the track.
+                if (track > deletedTrack)
+                    --track;
+            }
     if (!addresses || possiblyStale_)
         return false;
     possiblyStale_ = true;
@@ -237,7 +245,7 @@ void ControlHistory::onChangeWithoutEntry(UndoManager& manager, const ContentKey
 }
 
 ControlHistory::StaleCounts ControlHistory::onTrackDeleted(const UndoManager& manager, int deletedTrack,
-                                                           std::uint64_t epoch)
+                                                           int visibleCount, std::uint64_t epoch)
 {
     prune(manager, epoch);
     StaleCounts counts;
@@ -250,7 +258,7 @@ ControlHistory::StaleCounts ControlHistory::onTrackDeleted(const UndoManager& ma
         const bool redoSide = action->onRedoSide();
         if (action->barrierGeneration() == barrierGeneration_ && !action->belowStaleMark())
             ++(redoSide ? freshControlRedo : freshControlUndo);
-        if (action->onTrackDeleted(deletedTrack))
+        if (action->onTrackDeleted(deletedTrack, visibleCount))
             ++(redoSide ? counts.redo : counts.undo);
     }
     // Entries of the UI that were not possibly stale before: the positions at or above the last mark, except those

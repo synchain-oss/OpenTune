@@ -302,7 +302,7 @@ private:
                 return;
             case Status::NotReady: {
                 // Look again at why: the clips or contents may be gone, the data may have gone stale, or OpenTune
-                // found the pitch curve unusable.
+                // found the data it aligns with unusable.
                 const auto again = controlResolveReferenceBinding(context, placementId_, referencePlacementId_);
                 if (!again.ok()) {
                     step.fail(jobErrorOf(again.error()));
@@ -315,14 +315,23 @@ private:
                         step.fail(stalledError());
                         return;
                     }
-                    // The data went stale after the wait: nothing was written, so go back to the waiting phase (the
-                    // next step asks for the analysis again; the wait limit ends the job with
-                    // reference_analysis_timeout). The job stays uncancellable: its cancellability ended above.
+                    // Defensive only, not reached in practice: step() found the data of both contents current
+                    // (preheatReferenceAlignmentFeatures() answered AlreadyReady for both) and called commit() in the
+                    // same message-thread tick, with no message dispatched in between, so nothing could replace a
+                    // content's audio or its alignment data meanwhile. Should the data be stale anyway, nothing was
+                    // written, so go back to the waiting phase (the next step asks for the analysis again; the wait
+                    // limit ends the job with reference_analysis_timeout). The job stays uncancellable: its
+                    // cancellability ended above.
                     wait(step, 0);
                     return;
                 }
+                // The data is current, yet the alignment found something it cannot use: the target's pitch curve is
+                // missing or has no frames, or ReferenceAutoAlign::align() judged the target's or the reference's
+                // features not ready (AlignmentPatch::ErrorCode::TargetAnalysisNotReady /
+                // ReferenceAnalysisNotReady). The detail names neither, as it cannot tell which one it was.
                 step.fail({"NOT_READY", "",
-                           "OpenTune's alignment data is current, but the pitch curve of the clip is empty or invalid",
+                           "OpenTune's alignment data is current, but OpenTune found the clip's pitch or alignment "
+                           "data unusable",
                            false});
                 return;
             }

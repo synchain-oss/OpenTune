@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "content/analyze-reference-job-failures",
   "type": "scenario",
-  "description": "How job.get reports a referenceAnalysis job that failed the checks it makes again when it runs: the clip was removed in the meantime (NOT_FOUND(unknown_handle)), its reference binding was removed (INVALID_ARGUMENT(reference_not_bound)), a dialog was opened (BUSY(modal_open), which only the job of content.autoTune in mode reference checks, since that job writes) or an analysis is running again (NOT_READY(f0_not_ready)). Such a job stores no alignment data and changes no note (executed false). content.analyzeReference and content.autoTune both start jobs of this kind. These states arise from changes between the call and the job, which no request of a vector can time, so the jobs are preconditions and this vector shows the form of the errors.",
+  "description": "How job.get reports a referenceAnalysis job that failed the checks it makes again when it runs: the clip was removed in the meantime (NOT_FOUND(unknown_handle)), its reference binding was removed (INVALID_ARGUMENT(reference_not_bound)), a dialog was opened (BUSY(modal_open), which only the job of content.autoTune in mode reference checks, since that job writes) an analysis is running again (NOT_READY(f0_not_ready)), or the reference analysis itself ended without alignment data: OpenTune completes one reference analysis per session and a later one never finishes (NOT_READY(reference_analysis_stalled), not retryable until OpenTune restarts), the wait limit passed (NOT_READY(reference_analysis_timeout), retryable), or OpenTune reported that the analysis failed (ANALYSIS_FAILED(reference_analysis_failed)). Such a job stores no alignment data and changes no note (executed false). content.analyzeReference and content.autoTune both start jobs of this kind. These states arise from changes between the call and the job, which no request of a vector can time, so the jobs are preconditions and this vector shows the form of the errors.",
   "capability": "reference.v1",
   "extraCapabilities": ["jobs.v1"],
   "since": "1.0",
@@ -36,6 +36,27 @@
         "state": "failed",
         "cancellable": false,
         "error": { "kind": "NOT_READY", "reason": "f0_not_ready" }
+      },
+      {
+        "bind": "analysisStalled",
+        "kind": "referenceAnalysis",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "NOT_READY", "reason": "reference_analysis_stalled" }
+      },
+      {
+        "bind": "analysisTimeout",
+        "kind": "referenceAnalysis",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "NOT_READY", "reason": "reference_analysis_timeout" }
+      },
+      {
+        "bind": "analysisFailed",
+        "kind": "referenceAnalysis",
+        "state": "failed",
+        "cancellable": false,
+        "error": { "kind": "ANALYSIS_FAILED", "reason": "reference_analysis_failed" }
       }
     ]
   },
@@ -184,6 +205,120 @@
                 "kind": "NOT_READY",
                 "reason": "f0_not_ready",
                 "retryable": true,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "analysisStalled" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 5,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "analysisStalled" },
+            "kind": "referenceAnalysis",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "NOT_READY",
+              "data": {
+                "kind": "NOT_READY",
+                "reason": "reference_analysis_stalled",
+                "retryable": false,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "analysisTimeout" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 6,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "analysisTimeout" },
+            "kind": "referenceAnalysis",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "NOT_READY",
+              "data": {
+                "kind": "NOT_READY",
+                "reason": "reference_analysis_timeout",
+                "retryable": true,
+                "detail": { "$any": "string" },
+                "executed": false
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "job.get",
+        "params": { "jobId": { "$ref": "analysisFailed" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 7,
+        "result": {
+          "job": {
+            "jobId": { "$ref": "analysisFailed" },
+            "kind": "referenceAnalysis",
+            "state": "failed",
+            "cancellable": false,
+            "createdAtMs": { "$any": "integer" },
+            "updatedAtMs": { "$any": "integer" },
+            "finishedAtMs": { "$any": "integer" },
+            "progress": { "$any": "object" },
+            "result": { "$any": true },
+            "error": {
+              "code": -32000,
+              "message": "ANALYSIS_FAILED",
+              "data": {
+                "kind": "ANALYSIS_FAILED",
+                "reason": "reference_analysis_failed",
+                "retryable": false,
                 "detail": { "$any": "string" },
                 "executed": false
               }

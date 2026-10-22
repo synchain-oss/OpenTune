@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "ui/set-selection-dry-run",
   "type": "request",
-  "description": "With dryRun true nothing is selected and nothing is generated: the result predicts the selection and the notes that selecting the clip in the openDyne scheme would generate, with the warnings the call would carry.",
+  "description": "With dryRun true nothing is selected and nothing is generated: the result predicts the selection and the notes that selecting the clip in the openDyne scheme would generate, with the warnings the call would carry. Precondition: no clip is selected and track 0 is the active track (OpenTune always has an active track), which is the state of a new project; import.start selects the last imported clip and activates its track, so a client that imported the clips resets the selection first.",
   "capability": "ui.bridge",
   "since": "1.0",
   "method": "ui.setSelection",
@@ -39,7 +39,6 @@
           "ref": { "singleton": "selection" },
           "label": { "$any": true },
           "fields": {
-            "activeTrackId": { "before": null, "after": 0, "unit": null },
             "selectedPlacementIds": {
               "before": [],
               "after": [{ "$ref": "clip.placementId" }],

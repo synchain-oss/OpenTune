@@ -83,6 +83,50 @@ describe('gates.ps1 drift-pins row', () => {
   });
 });
 
+const HAVE_PWSH = spawnSync('pwsh', ['-NoProfile', '-Command', '$PSVersionTable.PSVersion.Major'], { encoding: 'utf8' }).status === 0;
+
+describe('gates.ps1 failed-test counting', () => {
+  const gates = read('.github', 'scripts', 'gates.ps1');
+  const start = gates.indexOf('function Get-FailedTestNames');
+  const fn = start >= 0 ? gates.slice(start, gates.indexOf('\n}\n', start) + 3) : '';
+
+  test('both ctest rows merge their summaries through Get-FailedTestNames', () => {
+    assert.ok(fn, 'Get-FailedTestNames not found');
+    const body = code(gates);
+    assert.match(body, /failed = Get-FailedTestNames @\(\$summary, \$sc\)/);
+    assert.match(body, /\$failed = Get-FailedTestNames @\(\$sc, \$so\)/);
+    // The old merges counted the $null of a summary without failed as one failed test.
+    assert.doesNotMatch(body, /@\(\$(sc|so|summary)\.failed\) \+/);
+  });
+
+  /** Runs Get-FailedTestNames under the script's strict mode on summaries given as JSON texts (null: no summary). */
+  const failedOf = (...summaries) => {
+    const dir = makeTempDir('gates-failed');
+    try {
+      const args = summaries.map((s) => (s === null ? '$null' : `(ConvertFrom-Json '${s}')`)).join(', ');
+      const script = path.join(dir, 'run.ps1');
+      fs.writeFileSync(script, ['Set-StrictMode -Version 3.0', "$ErrorActionPreference = 'Stop'", fn,
+        `$r = Get-FailedTestNames @(${args})`, "Write-Output ('count=' + $r.Count)", "Write-Output ('names=' + ($r -join ','))", ''].join('\n'));
+      const r = spawnSync('pwsh', ['-NoProfile', '-NonInteractive', '-File', script], { encoding: 'utf8' });
+      assert.equal(r.status, 0, r.stderr);
+      return { count: Number(/^count=(\d+)$/m.exec(r.stdout)?.[1] ?? NaN), names: /^names=(.*)$/m.exec(r.stdout)?.[1].trim() };
+    } finally {
+      removeDir(dir);
+    }
+  };
+
+  test('a summary without failed, with failed null, or none at all adds no failed test', { skip: !HAVE_PWSH && 'pwsh is not installed' }, () => {
+    assert.deepEqual(failedOf('{"passed":3,"total":3}', null), { count: 0, names: '' });
+    assert.deepEqual(failedOf('{"passed":3,"total":3,"failed":null}', '{"failed":[]}'), { count: 0, names: '' });
+    assert.deepEqual(failedOf(null, null), { count: 0, names: '' });
+  });
+
+  test('the names of both summaries are kept, in order', { skip: !HAVE_PWSH && 'pwsh is not installed' }, () => {
+    assert.deepEqual(failedOf('{"failed":["A"]}', '{"failed":["B","C"]}'), { count: 3, names: 'A,B,C' });
+    assert.deepEqual(failedOf('{"total":1}', '{"failed":"D"}'), { count: 1, names: 'D' });
+  });
+});
+
 describe('e2e-windows workflow', () => {
   const wf = read('.github', 'workflows', 'e2e-windows.yml');
 

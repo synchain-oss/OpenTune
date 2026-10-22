@@ -242,12 +242,13 @@ public:
         return appliedNotesPrimary == notesPrimary;
     }
 
-    /** With modalAfterQueries >= 0, the queries after that many report a modal dialog as open: a dialog that opens
-        between the call that starts a job and the job's first step. */
+    /** With modalOnceJobStarted, a modal dialog is reported as open while a job of that registry is active: a dialog
+        that opens after the call started its job and before the job's first step. It does not depend on how often
+        the call or the job asks: the call's own check runs before its job exists. */
     std::optional<BusyState> queryBusy() const override
     {
         auto state = TestUiBridge::queryBusy();
-        if (state && modalAfterQueries >= 0 && busyQueries++ >= modalAfterQueries)
+        if (state && modalOnceJobStarted != nullptr && modalOnceJobStarted->activeCount() > 0)
             state->modalOpen = true;
         return state;
     }
@@ -266,8 +267,7 @@ public:
     bool generateNotes = false;
     ContentKey pianoRollKey;
     bool asioRestoreSucceeds = true;
-    int modalAfterQueries = -1;
-    mutable int busyQueries = 0;
+    std::shared_ptr<ControlJobs> modalOnceJobStarted;
 
     int preferenceNotifications = 0;
     std::vector<std::string> switchReasons;
@@ -816,16 +816,20 @@ void checkWriteDuringWait(ApiSession& api, OpenTuneAudioProcessor& processor, Pr
 }
 
 /** A modal dialog opens after the call started the job and before its first step: the job fails with BUSY, nothing
-   executed and no preference changed. */
-void checkModalBeforeFirstStep(ApiSession& api, PrefsBridge& bridge)
+   executed and no preference changed. The dialog is open from the moment the job exists (the bridge asks the
+   registry), so the call's own check passes and the first step's check sees it. */
+void checkModalBeforeFirstStep(ApiSession& api, PrefsBridge& bridge, const std::shared_ptr<ControlJobs>& jobs)
 {
+    if (!CONTROL_CHECK(jobs != nullptr))
+        return;
+    // The jobs of the earlier checks have ended, so the only active job is the one this call starts.
+    CONTROL_CHECK(pumpMessagesUntil([&jobs] { return jobs->activeCount() == 0; }, kJobWaitMs));
     const auto baseline = api.result("prefs.get");
     const auto notifications = bridge.preferenceNotifications;
     bridge.apply = PrefsBridge::Apply::Immediate;
-    bridge.busyQueries = 0;
-    bridge.modalAfterQueries = 1; // the call's own check is the first query
+    bridge.modalOnceJobStarted = jobs;
     const auto job = runAsJob(api, "prefs.set", json(R"({"editingScheme":"openDyne","tuningHz":433})"), "prefsApply");
-    bridge.modalAfterQueries = -1;
+    bridge.modalOnceJobStarted = nullptr;
     const auto& data = memberOf(memberOf(job, "error"), "data");
     CONTROL_CHECK(memberOf(job, "state").text() == "failed" && memberOf(data, "kind").text() == "BUSY"
                   && memberOf(data, "reason").text() == "modal_open" && memberOf(data, "executed").isBoolean()
@@ -861,7 +865,7 @@ void scenarioPrefsSchemeJob()
     checkSchemeTimeout(api, *processor, bridge);
     checkOverlappingTimeouts(api, *processor, bridge);
     checkWriteDuringWait(api, *processor, bridge);
-    checkModalBeforeFirstStep(api, bridge);
+    checkModalBeforeFirstStep(api, bridge, service.jobs());
 
     // Without an editor there is no one to wait for: the job applies the preference and ends.
     {
@@ -1156,6 +1160,57 @@ void checkFailureWithoutDevice(ApiSession& api, FakeAudioRig& rig)
     CONTROL_CHECK(!memberOf(deviceOf(api.result("audio.get")), "running").asBoolean());
 }
 
+/** The detail of a failed audio.set, or empty. */
+std::string errorDetail(const JsonValue& response)
+{
+    const JsonValue* data = errorData(response);
+    const JsonValue* detail = data != nullptr ? data->find("detail") : nullptr;
+    return detail != nullptr ? detail->text() : std::string();
+}
+
+/** A value that is not on offer once an earlier step of the call changed the
+   device: the previous setup is put back. When that fails too, the call fails
+   with IO_ERROR(device_open_failed) and executed true, and the detail names the
+   value that is not on offer, not a device that could not be opened. */
+void checkUnavailableAfterChange(ApiSession& api, FakeAudioRig& rig)
+{
+    const auto setupBefore = setupText(rig.manager);
+    const char* params = R"({"outputDevice":"Fake Output B","sampleRateHz":12345})";
+    const auto contains = [](const std::string& text, const char* part) {
+        return text.find(part) != std::string::npos;
+    };
+
+    // Restored: nothing changed, and the detail says so.
+    {
+        const auto response = api.request("audio.set", json(params));
+        const JsonValue* data = errorData(response);
+        CONTROL_CHECK(data != nullptr && memberOf(*data, "kind").text() == "INVALID_ARGUMENT"
+                      && memberOf(*data, "reason").text() == "audio_setting_unavailable"
+                      && !memberOf(*data, "executed").asBoolean());
+        const auto detail = errorDetail(response);
+        CONTROL_CHECK(contains(detail, "sample rate is not offered")
+                      && contains(detail, "the previous setup was restored")
+                      && !contains(detail, "could not be opened"));
+        CONTROL_CHECK(setupText(rig.manager) == setupBefore);
+    }
+
+    // The previous device does not open again: executed true, no device runs.
+    rig.behaviour.failDeviceName = "Fake Output A";
+    {
+        const auto response = api.request("audio.set", json(params));
+        const JsonValue* data = errorData(response);
+        CONTROL_CHECK(data != nullptr && memberOf(*data, "kind").text() == "IO_ERROR"
+                      && memberOf(*data, "reason").text() == "device_open_failed"
+                      && memberOf(*data, "executed").isBoolean() && memberOf(*data, "executed").asBoolean());
+        const auto detail = errorDetail(response);
+        CONTROL_CHECK(contains(detail, "sample rate is not offered")
+                      && contains(detail, "the previous setup could not be restored")
+                      && !contains(detail, "could not be opened"));
+        CONTROL_CHECK(rig.manager.getCurrentAudioDevice() == nullptr);
+    }
+    rig.behaviour.failDeviceName = {};
+}
+
 /** The ASIO transitions: the editor restores the system sample rate first; a
    restore that cannot be verified keeps the current device. */
 void checkAsioSwitch(ApiSession& api, FakeAudioRig& rig, PrefsBridge& bridge)
@@ -1208,6 +1263,12 @@ void scenarioAudioDevice()
         FakeAudioRig rig(false);
         bridge.manager = &rig.manager;
         checkFailureWithoutDevice(api, rig);
+        bridge.manager = nullptr;
+    }
+    {
+        FakeAudioRig rig;
+        bridge.manager = &rig.manager;
+        checkUnavailableAfterChange(api, rig);
         bridge.manager = nullptr;
     }
     {

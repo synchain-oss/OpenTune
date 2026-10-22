@@ -899,6 +899,37 @@ std::string pushApiMove(Fixture& f, const Clip& clip, int track, double oldStart
     return undoId;
 }
 
+/** Pushes a clip move across tracks recorded through the API, as arrangement.edit records it: the clip is on `to`
+    now, `from` is where it was; the action keeps both slots for good, and the entry addresses both. Returns its
+    undoId. */
+std::string pushApiCrossMove(Fixture& f, const Clip& clip, int from, int to, double oldStart = 1.0)
+{
+    double newStart = 0.0;
+    StandaloneArrangement::Placement placement;
+    if (f.arrangement().getPlacementById(to, clip.placementId, placement))
+        newStart = placement.timelineStartSeconds;
+    MultiMovePlacementAction::Entry entry;
+    entry.sourceTrackId = from;
+    entry.targetTrackId = to;
+    entry.placementId = clip.placementId;
+    entry.oldStartSeconds = oldStart;
+    entry.newStartSeconds = newStart;
+    auto action = std::make_unique<MultiMovePlacementAction>(
+        *f.processor, std::vector<MultiMovePlacementAction::Entry>{entry}, PlacementKey{from, clip.placementId},
+        PlacementKey{to, clip.placementId});
+    std::vector<ControlOriginAction::Inner> inner(1);
+    const auto description = action->getDescription();
+    inner[0].action = std::move(action);
+    inner[0].name = "MultiMovePlacementAction";
+    inner[0].content = clip.key;
+    inner[0].tracks = {from, to};
+    const auto undoId = f.service().history()->nextUndoId(f.instanceShort);
+    f.service().history()->record(
+        f.processor->getUndoManager(),
+        std::make_unique<ControlOriginAction>(f.service().history(), undoId, description, std::move(inner)));
+    return undoId;
+}
+
 void pushUiMove(Fixture& f, const Clip& clip, int track, double oldStart = 1.0)
 {
     f.processor->getUndoManager().addAction(clipMoveAction(f, clip, track, track, oldStart));
@@ -957,11 +988,45 @@ void checkBarrierApiEntry(Fixture& f)
     CONTROL_CHECK(memberOf(redone, "applied").asBoolean() && !hasWarning(redone, "UNDO_ENTRY_POSSIBLY_STALE"));
 
     // Another deletion makes the confirmed entry possibly stale again, and counts it: the first deletion moved the
-    // track the entry addresses from 2 to 1, and the barrier renumbered it.
+    // track the entry's clip is on from 2 to 1, and the barrier followed it (the slot the action is keyed by stays 2,
+    // which is no longer shown, so only the followed position is in range).
     f.bridge.visibleTracks = 2;
     const auto again = f.deleteTrack(0);
     CONTROL_CHECK(near(memberOf(memberOf(again, "possiblyStaleEntries"), "undo"), 1.0));
     CONTROL_CHECK(memberOf(memberOf(historyOf(f), "undoTop"), "possiblyStale").asBoolean());
+}
+
+/** A clip move across tracks (3 to 0) and two deletions. The first deletion moves the shown tracks after it down, and
+    the barrier renumbers where the clips are; but the OpenTune action keeps its recorded slots, so its undo() still
+    moves the clip to slot 3. The second deletion removes slot 3: the entry is possibly stale again, although neither
+    renumbered position (2 and 0) is among the tracks that deletion removed or moved. */
+void checkBarrierMoveAcrossTracks(Fixture& f)
+{
+    f.bridge.visibleTracks = 5;
+    const auto a = f.addClip(0);
+    settleBackgroundWork(*f.processor);
+    const auto move = pushApiCrossMove(f, a, 3, 0);
+    CONTROL_CHECK(!memberOf(memberOf(historyOf(f), "undoTop"), "possiblyStale").asBoolean());
+
+    // Deleting track 1 (5 shown) moves the shown tracks 2 to 4 down: slot 3 of the entry is among them.
+    const auto first = f.deleteTrack(1);
+    CONTROL_CHECK(near(memberOf(memberOf(first, "possiblyStaleEntries"), "undo"), 1.0) && f.bridge.visibleTracks == 4);
+    auto top = memberOf(historyOf(f), "undoTop");
+    CONTROL_CHECK(memberOf(top, "undoId").text() == move && memberOf(top, "possiblyStale").asBoolean());
+    // The end user forces the undo and then the redo: the entry is confirmed.
+    const auto forced = f.api.result("edit.undo", json(R"({"force":true})"));
+    CONTROL_CHECK(memberOf(forced, "applied").asBoolean()
+                  && !memberOf(memberOf(forced, "entry"), "possiblyStale").asBoolean());
+    const auto redone = f.api.result("edit.redo", json(undoParams(move)));
+    CONTROL_CHECK(memberOf(redone, "applied").asBoolean() && !hasWarning(redone, "UNDO_ENTRY_POSSIBLY_STALE"));
+    top = memberOf(historyOf(f), "undoTop");
+    CONTROL_CHECK(memberOf(top, "undoId").text() == move && !memberOf(top, "possiblyStale").asBoolean());
+
+    // Deleting slot 3 (4 shown) removes the slot the action still writes to: possibly stale again, and counted.
+    const auto second = f.deleteTrack(3);
+    CONTROL_CHECK(near(memberOf(memberOf(second, "possiblyStaleEntries"), "undo"), 1.0));
+    top = memberOf(historyOf(f), "undoTop");
+    CONTROL_CHECK(memberOf(top, "undoId").text() == move && memberOf(top, "possiblyStale").asBoolean());
 }
 
 void checkBarrierLaterTrack(Fixture& f)
@@ -1152,8 +1217,9 @@ void checkRemovedContentRevivedByUndo(Fixture& f)
 
 void scenarioTrackBarrierImpl()
 {
-    for (const auto check : {checkBarrierApiEntry, checkBarrierLaterTrack, checkBarrierHiddenTrack, checkBarrierUiEntry,
-                             checkBarrierUndoBelowMark, checkBarrierRemovedContent, checkRemovedContentRevivedByUndo}) {
+    for (const auto check : {checkBarrierApiEntry, checkBarrierMoveAcrossTracks, checkBarrierLaterTrack,
+                             checkBarrierHiddenTrack, checkBarrierUiEntry, checkBarrierUndoBelowMark,
+                             checkBarrierRemovedContent, checkRemovedContentRevivedByUndo}) {
         Fixture f;
         if (f.open())
             check(f);

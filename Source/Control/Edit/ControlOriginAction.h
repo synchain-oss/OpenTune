@@ -70,12 +70,17 @@ public:
             them while the notes of the content are masked (see the class comment). */
         std::optional<std::pair<PitchShiftSettings, PitchShiftSettings>> pitchShift;
         std::shared_ptr<ContentEditCommands> commands;
-        /** The track positions the action addresses when OpenTune keys it by track (a clip move or trim, a split,
-            a merge): empty for an action that addresses a content only. A track deletion makes the entry
-            possibly stale when it removed or moved one of these tracks (section 15.3 rule 6); the barrier renumbers
-            them for the shown tracks it moves, so that a later deletion compares them with the positions they have
-            then. */
+        /** The track slots the wrapped OpenTune action is keyed by (a clip move or trim, a split, a merge, ...):
+            empty for an action that addresses a content only. The action keeps these numbers for good (for example
+            MultiMovePlacementAction::Entry::sourceTrackId), so undo() and redo() write to these slots whatever
+            track deletions happened since. Never changed after construction. */
         std::vector<int> tracks;
+        /** The positions the clips of the action are at now: a copy of tracks when the entry is made, renumbered by
+            the barrier of every track deletion for the shown tracks that moved down (removeTrackAndShift()). A track
+            deletion makes the entry possibly stale when it removed or moved a track of either list (section 15.3
+            rule 6): tracks tells where the action writes, followed where the clips went; the union is taken so that
+            an entry is reported too often rather than too rarely. Filled by the constructor when left empty. */
+        std::vector<int> followed;
     };
 
     ControlOriginAction(std::shared_ptr<ControlHistory> history, std::string undoId, juce::String description,
@@ -104,12 +109,12 @@ public:
     void mask(const ContentKey& content, ControlContentAspect aspect);
 
     /** A track was deleted (section 15.3 rule 6); visibleCount is the number of shown tracks before the deletion.
-        The entry becomes possibly stale when one of the tracks it addresses is the deleted one or one of the shown
-        tracks after it (removeTrackAndShift() moves only the shown tracks after the deleted one down; a hidden track
-        keeps its position and its clips). Those shown tracks are renumbered to the positions they now have, so that
-        a later deletion sees where the clips are then. An entry that addresses no track, only tracks before the
-        deleted one or only hidden tracks stays as it is. True when the entry was not possibly stale before and is
-        now. Called by ControlHistory. */
+        The entry becomes possibly stale when a track it is keyed by (Inner::tracks) or a position its clips are at
+        (Inner::followed) is the deleted one or one of the shown tracks after it (removeTrackAndShift() moves only the
+        shown tracks after the deleted one down; a hidden track keeps its position and its clips). Only the followed
+        positions are renumbered to where the clips are now: the slots of the wrapped action never change. An entry
+        that addresses no track, only tracks before the deleted one or only hidden tracks stays as it is. True when
+        the entry was not possibly stale before and is now. Called by ControlHistory. */
     bool onTrackDeleted(int deletedTrack, int visibleCount);
     /** True from a track deletion that made the entry possibly stale until a call with force applied the entry. */
     bool possiblyStale() const noexcept { return possiblyStale_; }
@@ -241,9 +246,10 @@ public:
      * A track was deleted: every entry that may address a track which moved is possibly stale from now on.
      * visibleCount is the number of shown tracks before the deletion. Only the shown tracks after the deleted one
      * move: removeTrackAndShift() shifts the shown tracks down and leaves the hidden slots where they are, their
-     * clips and their mix with them, so an entry that addresses a hidden track only is not possibly stale. The
-     * entries of the API renumber those tracks to their new positions (ControlOriginAction::onTrackDeleted()), so
-     * that a later deletion compares them with where their clips are then. An entry recorded in the UI cannot be
+     * clips and their mix with them, so an entry that addresses a hidden track only is not possibly stale. An entry of
+     * the API compares both the slots its OpenTune actions are keyed by, which never change, and the positions its
+     * clips moved to, which are renumbered (ControlOriginAction::onTrackDeleted()), so that a later deletion sees
+     * where the clips are then and where undo() would write. An entry recorded in the UI cannot be
      * inspected, so each of them recorded before the deletion is possibly stale. OpenTune's UndoManager gives no
      * access to an entry by position, only to its two tops, its size and its cursor, so an entry of the UI is told by
      * its position: every position below the size the history had at the deletion holds an entry recorded before it.

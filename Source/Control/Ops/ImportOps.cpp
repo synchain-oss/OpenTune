@@ -452,7 +452,9 @@ struct ImportItem
  *   generates the notes of a content it shows, so the clip would get notes the request did not ask for. The job
  *   therefore restores the selection that the commit found (captureCommitSelection()), and focus alone decides the
  *   selection: with focus false it does not change, and with focus true the job selects the last clip after the
- *   commits, as the method's schema says.
+ *   commits (PROTOCOL.md section 21 rule 2). With focus true and several target tracks, only the track of the last
+ *   clip ends up with its new clip selected; the other tracks keep the clip that was selected before, where the
+ *   editor's import leaves each of them on its new clip. This is deliberate: the selection is decided by focus alone.
  * - The clip id collision after a project was opened is only logged: the protocol has no warning code
  *   for it, so the result carries none.
  *
@@ -595,11 +597,13 @@ private:
             }
             committed = processor.commitPreparedImportAsPlacement(std::move(prepared), placement);
         }
+        // On every path, a failed commit included: OpenTune does not touch the selection when it fails, so the
+        // restore is then a no-op, and it keeps the selection from depending on that.
+        restoreCommitSelection(arrangement, trackId, selectionBefore);
         if (!committed.isValid()) {
             item.error = ControlJobError{"INTERNAL", "", "OpenTune did not accept the clip", false};
             return;
         }
-        restoreCommitSelection(arrangement, trackId, selectionBefore);
         recordCommittedClipId(context, committed.contentKey);
         if (attempt > 1)
             AppLogger::logNoThrow("control API: import.start: the commit of a clip was repeated "

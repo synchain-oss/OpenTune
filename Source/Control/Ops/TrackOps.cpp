@@ -636,8 +636,9 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
         if (ref.trackId == params.trackId)
             removed.push_back(ref);
 
-    // trackDeleteRequested(): the arrangement removes the track and moves the later ones up (their clips and mix);
-    // then the panel shows the mix of the arrangement for the tracks that remain and one track fewer.
+    // trackDeleteRequested(): the arrangement removes the track and moves only the later shown tracks down by one
+    // position (their clips and mix); a hidden slot keeps its position, its clips and its mix. Then the panel shows
+    // the mix of the arrangement for the tracks that remain and one track fewer.
     if (!arrangement->removeTrackAndShift(params.trackId, visible))
         return controlOpError("INTERNAL", "", "OpenTune did not delete the track");
     bridge->onTrackMixChanged();

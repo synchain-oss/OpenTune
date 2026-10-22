@@ -24,6 +24,10 @@ ControlOriginAction::ControlOriginAction(std::shared_ptr<ControlHistory> history
     , description_(std::move(description))
     , inner_(std::move(inner))
 {
+    // The positions the clips are at start as the slots the actions are keyed by (see Inner::followed).
+    for (auto& entry : inner_)
+        if (entry.followed.empty())
+            entry.followed = entry.tracks;
     if (history_ != nullptr) {
         barrierGeneration_ = history_->barrierGeneration();
         history_->add(this);
@@ -118,19 +122,28 @@ bool ControlOriginAction::onTrackDeleted(int deletedTrack, int visibleCount)
 {
     // The deleted track's clips are gone and every later shown track moved down by one position, so an action keyed
     // by one of these positions may now address another track. A hidden track (visibleCount and above) keeps its
-    // position and its clips, and every track before the deleted one keeps its position. The tracks this entry
-    // addresses move with their clips, so the shown ones after the deleted track are renumbered for the deletions that
-    // follow; an action that addresses no track (a note edit addresses its content) or only tracks that did not move
-    // is unaffected.
+    // position and its clips, and every track before the deleted one keeps its position. Two lists are compared, and
+    // either one makes the entry possibly stale:
+    // - tracks: the slots the wrapped OpenTune action is keyed by. They are fixed inside the action, so undo() and
+    //   redo() write to these slots after any number of deletions; they are compared as they were recorded.
+    // - followed: where the clips of the action are now. The clips of the shown tracks after the deleted one moved
+    //   down with their tracks, so these are renumbered for the deletions that follow.
+    // An action that addresses no track (a note edit addresses its content) or only tracks that did not move is
+    // unaffected.
+    const auto moved = [&](int track) { return track >= deletedTrack && track < visibleCount; };
     bool addresses = false;
-    for (auto& inner : inner_)
-        for (int& track : inner.tracks)
-            if (track >= deletedTrack && track < visibleCount) {
-                addresses = true;
-                // A track equal to the deleted one cannot be followed: its clip was removed with the track.
-                if (track > deletedTrack)
-                    --track;
-            }
+    for (auto& inner : inner_) {
+        for (const int track : inner.tracks)
+            addresses = moved(track) || addresses;
+        for (int& track : inner.followed) {
+            if (!moved(track))
+                continue;
+            addresses = true;
+            // A track equal to the deleted one cannot be followed: its clip was removed with the track.
+            if (track > deletedTrack)
+                --track;
+        }
+    }
     if (!addresses || possiblyStale_)
         return false;
     possiblyStale_ = true;

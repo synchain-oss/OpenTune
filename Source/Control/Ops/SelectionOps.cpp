@@ -489,15 +489,17 @@ std::string describe(const Outcome& outcome)
 
 Error noEditor()
 {
-    return controlOpError("UNSUPPORTED", "capability_missing",
+    return controlOpError("UNSUPPORTED", "no_editor_window",
                           "ui.bridge describes the OpenTune editor window, and no editor exists");
 }
 
 Result<JsonValue> runSetSelection(ControlOpContext& context, const SelectionParams& params)
 {
     auto* bridge = context.bridge();
-    if (bridge == nullptr || !bridge->canSelect())
+    if (bridge == nullptr)
         return noEditor();
+    if (!bridge->canSelect())
+        return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not offer the selection");
     Target target;
     if (params.placement) {
         const auto placement = controlResolvePlacement(context, *params.placement);

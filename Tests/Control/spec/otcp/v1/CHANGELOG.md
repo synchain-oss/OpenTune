@@ -2,7 +2,55 @@
 
 All notable changes to the OTCP specification are recorded here. Versions follow `MAJOR.MINOR.PATCH` (README.md, "Versions"); each released version is tagged `spec-v<version>`.
 
-## [1.0.0-rc.3] - unreleased
+## [1.0.0-rc.5] - unreleased
+
+Fifth release candidate of protocol major 1, proposed as the text of 1.0.0. It records what implementing rc.4 in OpenTune showed: a job that checks the busy state again, two refusals of hidden tracks and of a missing editor window that the text did not name, the first-run overlay in a real window, and two sentences of rc.4 that said less or more than intended. The wire version stays `1.0`; no member, method, capability, error kind or warning code is added, renamed or removed; one reason is appended.
+
+### Added
+
+- Vector `track/duplicate-track-hidden`: duplicating a hidden track fails with `INVALID_ARGUMENT(track_hidden)`.
+- Vector `prefs/set-job-failures`: how `job.get` reports a `prefsApply` job that failed its second busy check with `BUSY(modal_open)`.
+- Reason `no_editor_window` (`UNSUPPORTED`, not retryable): a method that acts through the editor window while no editor exists (section 7 rule 6).
+
+### Changed
+
+- PROTOCOL.md section 7 rule 6 (new): the methods that act through the OpenTune editor window (those of `ui.bridge`, `track.add`, `track.duplicate`, `track.delete`, `project.save`, `project.saveAs`, `project.open` and `audio.set`) fail with `UNSUPPORTED(no_editor_window)`, `executed` false, while no editor exists, for example in a window-less run of a test build, although the instance reports their capabilities. The other methods work without an editor. Section 3.3 rule 5 case 10, the new reason `no_editor_window` and vectors/README.md ("Reproducibility") refer to it.
+- `prefs.set`: the `prefsApply` job checks the busy state again before its first step, so a modal dialog that opened after the call was accepted fails it with `BUSY(modal_open)`, `executed` false, and no preference changes. `x-otcp.jobErrors` lists `BUSY`.
+- `track.duplicate`: OpenTune offers Duplicate Track only for a visible track, so a hidden source track fails with `INVALID_ARGUMENT(track_hidden)`. The description of the reason `track_hidden` now covers duplication as well as deletion; the code is unchanged.
+- `ui.dismiss`: OpenTune marks onboarding as shown once the first-run overlay shows its choice, so closing a showing overlay usually changes the view only (`changes` empty, no warning, undo reason `not_persisted_state`, revert null, not a no-op). Only where onboarding was not yet marked as shown does the result list the preference with `IRREVERSIBLE`, as `ui/dismiss-onboarding-close` shows. vectors/README.md says when the precondition `onboarding: showing` holds.
+
+### Fixed
+
+- PROTOCOL.md section 12.6 rule 1: a job whose alignment data already exists is exempt from rules 2 and 3 only. Rule 4 applies to every job that fails and rule 5 to every job of `content.autoTune`, as the schema of `content.autoTune` says; rc.4 exempted such a job from rule 4 as well, although it can still fail, for example with `REVISION_CONFLICT`, and then changes no note.
+- PROTOCOL.md section 9: `trackIdMap` lists the deleted track and the tracks that moved, never a hidden track slot, as the description of `track.delete` says since rc.4.
+
+## [1.0.0-rc.4] - unreleased
+
+Fourth release candidate of protocol major 1, the last planned before 1.0.0. It gathers what implementing the arrangement, track, transport and interface methods in OpenTune and checking them against a real build showed: reasons for the one failure that had none, and places where the text or the vectors differed from what OpenTune does. The wire version stays `1.0`, and no member, method or capability is added or removed.
+
+### Added
+
+- Registry: reason codes `reference_analysis_stalled` (`NOT_READY`, not retryable), `reference_analysis_timeout` (`NOT_READY`, retryable) and `reference_analysis_failed` (`ANALYSIS_FAILED`). The `referenceAnalysis` job of `content.analyzeReference` and of `content.autoTune` (mode `reference`) ends with them when OpenTune's analysis does not produce alignment data; `x-otcp.jobErrors` of both methods lists `ANALYSIS_FAILED`.
+- PROTOCOL.md section 12.6 (new), "Reference analysis jobs": when the three reasons apply, that a failed job stores and writes nothing, and that the job of `content.autoTune` compares the content's `revision` again just before it writes.
+- PROTOCOL.md section 15.4 rule 8 (new): OpenTune's service for reference analysis completes only one analysis per session (a known defect of OpenTune); restarting OpenTune is the only remedy.
+- `content.autoTune`: `x-otcp.jobErrors` lists `REVISION_CONFLICT`: a content changed while the reference job waited fails the job with `REVISION_CONFLICT(content_changed)`, as an export fails with `REVISION_CONFLICT(changed_during_export)`.
+- Vector `ui/set-selection-queues-reference` (selecting a clip with a reference binding in the `openTune` scheme queues reference analysis for both contents); `content/analyze-reference-job-failures` shows the three new failures.
+
+### Changed
+
+- `ui.setSelection` and `ui.getState`: OpenTune always has an active track, track 0 until something selects another. A selection that leaves the active track unchanged lists no `activeTrackId` in `changes`, and the revert recipe selects the previous track (`{trackId: 0}` when no clip was selected) instead of being null. The vectors `ui/get-state-ok`, `ui/set-selection-clip`, `ui/set-selection-dry-run`, `ui/set-selection-open-editor` and `ui/set-selection-generates-notes` expect this.
+- PROTOCOL.md section 21 rule 3 and `ui.setSelection`: selecting a clip with a reference binding queues reference analysis only in the `openTune` scheme; in the `openDyne` scheme OpenTune's reference context reports no binding, and `ui/set-selection-generates-notes` no longer expects `referenceAnalysisQueued`.
+- The vectors that start from a selection state say so: `import.start` selects the last imported clip and activates its track, so such a vector assumes no clip selected and track 0 active.
+- `track.delete` and PROTOCOL.md: OpenTune moves only the visible tracks behind the deleted one. A hidden track slot keeps its position, its settings and its clips, and `trackIdMap` lists only the deleted track and the later visible tracks.
+- PROTOCOL.md section 14.4 rule 6: a split or a merge replaces clips that show the same content, so `removed` and `created` list placements only; the content is listed only when it leaves the project or enters it.
+- PROTOCOL.md section 15.2 rule 8 (new): the recipe of a merge splits the merged clip at the former boundary, which restores the clips only where the boundary lies on a frame of the analysis. Otherwise the merge has `revert` null and the warning `IRREVERSIBLE`.
+
+### Clarified
+
+- PROTOCOL.md section 15.2 rule 7 (new): a revert recipe is one request, and `arrangement.edit` refuses `split`, `merge` and `delete` combined with other ops, so a recipe never mixes them.
+- `ui.dismiss`: with the onboarding overlay closed, the result reports the closed overlay in `changes` only where the preference changed; there is no `sideEffects.onboardingClosed` member (section 14.6 never listed it).
+
+## [1.0.0-rc.3] - 2026-10-17
 
 Third release candidate of protocol major 1. It records what implementing the methods against OpenTune showed: where OpenTune behaves differently from what rc.2 assumed, which failures had no reason code, and where the specification left a choice open. The wire version stays `1.0`, and no member, code, capability or vector is removed or renamed. Three behaviours are tightened (listed under "Changed"): `timeGrid.minHandleSpacingSec` of `content.getDetails` is always present, deletions list the contents they remove, and an export without audio fails. Where the reference implementation does not send a new reason or warning yet, the text says that an implementation of this release candidate may leave it out.
 

@@ -16,7 +16,6 @@
 #include "Utils/TimeCoordinate.h"
 
 #include <algorithm>
-#include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -47,6 +46,12 @@ constexpr double kTimelineEpsilon = 1.0 / TimeCoordinate::kRenderSampleRate;
 constexpr double kSampleGridTolerance = 1.0e-9;
 /** mergePlacements(): gains this close are equal. */
 constexpr float kGainTolerance = 1.0e-6f;
+/** The largest clip gain OpenTune's interface offers, as a linear factor. The interface's one bounded gain range is the
+    volume knob (Source/Standalone/UI/TrackPanelComponent.h, setRange(0.0, 4.0, 0.001) at L313-L314); the clip-gain drag
+    (ArrangementViewComponent.cpp, mouseDrag at L2446-L2447) has no bound of its own, so the API applies the interface's
+    bounded range here, mirrored by the drift pin `track-volume-range`. Zero is the lower end: the params schema keeps
+    gainLinear at 0 or more and StandaloneArrangement::setPlacementGain() floors the stored value at 0. */
+constexpr double kMaxClipGainLinear = 4.0;
 
 // ---- Shared pieces ------------------------------------------------------------------------------
 
@@ -839,6 +844,9 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
     //    done either, IRREVERSIBLE with the check's kind and reason in data;
     //  - the check fails with NOT_READY (the pitch analysis of the merged content is still pending): a passing
     //    state, so the split recipe is given as usual and answers NOT_READY itself until the analysis is done.
+    //    That recipe is optimistic: the cut point could not be checked yet, so once the analysis is ready the split
+    //    may snap to another frame than the former boundary (the split then reports SPLIT_SNAPPED) or be refused
+    //    (split_out_of_range). It is not guaranteed to restore the former clips' boundary.
     const double boundary = trailing.placement.timelineStartSeconds;
     const auto* mergedClip = findIn(after, outcome->mergedPlacementId);
     bool giveRecipe = false;
@@ -1106,10 +1114,14 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
                 break;
             }
             case OpKind::SetGain: {
-                // The clip gain has no upper limit in OpenTune; the stored gain is a float.
+                // OpenTune's interface offers the gain range 0 to 4 linear (the volume knob, TrackPanelComponent.h
+                // L313-L314); the clip-gain drag itself has no bound (ArrangementViewComponent.cpp L2446-L2447), so the
+                // API applies the interface's bounded range and reports CLAMPED in the unit the caller named. The
+                // lower end 0 is kept by the params schema (gainLinear minimum 0) and setPlacementGain()'s floor.
                 double linear = op.gainLinear ? *op.gainLinear : std::pow(10.0, *op.gainDb / 20.0);
-                if (!(linear <= static_cast<double>(FLT_MAX))) {
-                    linear = FLT_MAX;
+                // The negated test also clamps NaN (a JSON number cannot be NaN; this only guards the arithmetic).
+                if (!(linear <= kMaxClipGainLinear)) {
+                    linear = kMaxClipGainLinear;
                     if (op.gainDb)
                         warnClamped(envelope, *clip, "gainDb", controlJsonNumber(*op.gainDb, 3),
                                     controlJsonNumber(*controlLinearToDb(linear), 3));

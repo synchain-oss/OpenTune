@@ -5,6 +5,7 @@
 // fork-checks: the machine checks for "our delta" (see fork-delta.mjs). One implementation shared by
 // the fork-gate workflow, branch-gate (identity / attribution part) and the local gates.
 // Every check reports PASS / FAIL / SKIP with a reason; the process exits 1 when any check FAILs.
+// (doc-consistency may also report WARN: a difference that is only reported, see docConsistencyCheck.)
 //
 // CLI:
 //   node fork-checks.mjs [options]
@@ -31,6 +32,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
+import { GROUPS as DOC_GROUPS, README as DOC_README, checkDocConsistency, describeStats, gitSource } from './doc-consistency.mjs';
+import { decideEnforcement } from './drift-pins.mjs';
 import { computeDelta, computePrRange } from './fork-delta.mjs';
 import {
   ALLOWED_ACTIONS,
@@ -609,6 +612,23 @@ export async function runChecks(opts = {}) {
       : result('actions-pinned', titleOf('actions-pinned'), 'PASS', `${uses} 处 uses: 均固定到 40 位 SHA 并注明版本`));
   }
 
+  // --- documentation <=> code: README method table, hook list, mirrors, test names (whole tree at head).
+  // The mirror group follows the enforcement rule of drift-pins.mjs: a sub-PR that touches neither the pin files
+  // nor drift-pins.mjs only gets a WARN, because it cannot update .github/** itself. The hook and test-name problems
+  // that come from CLAUDE.md (also L0) follow the same rule, for the same reason.
+  if (want('doc-consistency')) {
+    const headRev = opts.index ? null : delta.head ?? tryResolveCommit(top, opts.head ?? 'HEAD');
+    const range = prRange();
+    const enforcement = range?.ok
+      ? decideEnforcement({ event: 'pull_request', baseRef: branchOfRef(range.baseRef), changedFiles: range.files.map((f) => f.path) })
+      : decideEnforcement({ event: 'push' });
+    if (!headRev && !opts.index) {
+      add(result('doc-consistency', titleOf('doc-consistency'), 'FAIL', `无法解析修订 ${opts.head ?? 'HEAD'}，不能核对文档与代码（不会退回去读暂存区）`));
+    } else {
+      add(docConsistencyCheck(top, headRev, enforcement));
+    }
+  }
+
   results.sort((a, b) => CHECK_IDS.indexOf(a.id) - CHECK_IDS.indexOf(b.id));
   meta.layer = opts.layer ?? null;
   return { meta, results };
@@ -630,6 +650,7 @@ const TITLES = {
   'upstream-words': '可上游路径禁用字样',
   'workflow-triggers': 'pull_request_target 零命中',
   'actions-pinned': 'action 固定 SHA',
+  'doc-consistency': '文档一致性（方法、钩子、镜像、测试名）',
 };
 
 export const CHECK_IDS = Object.keys(TITLES);
@@ -715,6 +736,38 @@ function clangFormatCheck(top, headSpec, files, headBlob, opts) {
   return problems.length
     ? result(id, titleOf(id), 'FAIL', `${problems.length} 个文件格式不一致`, problems)
     : result(id, titleOf(id), 'PASS', `${files.length} 个文件与 clang-format ${tool.version} 输出一致`);
+}
+
+/**
+ * Source/Control/README.md and the hook table of CLAUDE.md say what the code does (doc-consistency.mjs):
+ * the method table against the registered methods and the spec copy, the hook list against the markers in the
+ * code, MIRRORS.md against mirror-map.json and the pin files, the test names against the registered ctests.
+ * `enforcement` is decideEnforcement() of drift-pins.mjs: when it does not block, the mirror group and the problems
+ * that come from CLAUDE.md (an L0 file a sub-PR cannot change) are advisory.
+ */
+function docConsistencyCheck(top, headRev, enforcement) {
+  const id = 'doc-consistency';
+  const r = checkDocConsistency(gitSource(top, headRev), { mirrorsBlocking: enforcement.blocking, claudeBlocking: enforcement.blocking });
+  if (!r.applicable) return result(id, titleOf(id), 'SKIP', `没有 ${DOC_README}（这个树里没有控制接口文档），不适用`);
+  const groupTitle = (g) => DOC_GROUPS.find((x) => x.id === g)?.title ?? g;
+  const line = (p) => `[${groupTitle(p.group)}] ${p.text}`;
+  const blocking = r.problems.filter((p) => !p.advisory);
+  const advisory = r.problems.filter((p) => p.advisory);
+  const extra = [];
+  if (r.fix && r.problems.some((p) => p.group === 'mirrors')) extra.push(`[镜像] 修复：${r.fix}`);
+  if (r.unimplemented.length) extra.push(`说明：规范里有、dispatcher 未注册（未实现）的方法：${r.unimplemented.join('、')}`);
+  if (blocking.length) {
+    const perGroup = DOC_GROUPS.map((g) => [g.title, blocking.filter((p) => p.group === g.id).length]).filter(([, n]) => n > 0);
+    return result(id, titleOf(id), 'FAIL', `${blocking.length} 处文档与代码不一致（${perGroup.map(([t, n]) => `${t} ${n}`).join('、')}）；每条写明了文件和行`, [...blocking.map(line), ...advisory.map(line), ...extra]);
+  }
+  if (advisory.length) {
+    const nMirror = advisory.filter((p) => p.group === 'mirrors').length;
+    const nClaude = advisory.length - nMirror;
+    const what = [nMirror ? `${nMirror} 处镜像` : '', nClaude ? `${nClaude} 处来自 CLAUDE.md` : ''].filter(Boolean).join('、');
+    const follow = [nMirror ? '镜像用 node .github/scripts/drift-pins.mjs --write 补齐' : '', nClaude ? 'CLAUDE.md 同步改正' : ''].filter(Boolean).join('，');
+    return result(id, titleOf(id), 'WARN', `${what}不一致，只报告不阻塞：${enforcement.reason}。由 manager 的 L0 跟进：${follow}；其余检查一致`, [...advisory.map(line), ...extra]);
+  }
+  return result(id, titleOf(id), 'PASS', `${describeStats(r)}${r.notes.length ? `（${r.notes.join('；')}）` : ''}`);
 }
 
 function layerCheck(opts, files, rangeNote, multi) {

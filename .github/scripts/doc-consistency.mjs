@@ -13,8 +13,7 @@
 //   hooks    README hook list <=> the `// OpenTune Control API hook` markers in the code <=> the hook table of
 //            CLAUDE.md: the files, the number of entries per file, and the identifiers a row names.
 //   mirrors  MIRRORS.md <=> mirror-map.json <=> .github/drift-pins/* (the rules of drift-pins.mjs --check, called
-//            as a library; whether a difference blocks follows its decideEnforcement). Problems that come from
-//            CLAUDE.md follow decideClaudeEnforcement instead (an L0 file: it blocks when the branch changes it).
+//            as a library; whether a difference blocks follows its decideEnforcement).
 //   tests    the test names README.md, CLAUDE.md and REVIEW-CHECKLIST.md (when it exists) mention <=> the ctest
 //            names cmake/OpenTuneControl.cmake registers (add_test names and ControlProcessorTests.<Scenario>).
 //
@@ -25,7 +24,7 @@
 //       exit 0 = consistent, 1 = at least one problem, 2 = usage / git error
 import fs from 'node:fs';
 import path from 'node:path';
-import { FIX_HINT, MIRRORS_MD, MIRROR_MAP, PIN_DIR, decideEnforcement, readMirrors, verifyConsistency } from './drift-pins.mjs';
+import { FIX_HINT, MIRRORS_MD, MIRROR_MAP, PIN_DIR, readMirrors, verifyConsistency } from './drift-pins.mjs';
 import { isMainModule, listTreeFiles, parseArgs, readBlobs, repoTop, tryResolveCommit } from './fork-lib.mjs';
 
 export const README = 'Source/Control/README.md';
@@ -66,35 +65,17 @@ export function memorySource(files) {
   };
 }
 
-/**
- * The absolute path of the '/'-separated repository path `p` below `root`, or null when the normalised result is not
- * inside `root` (a `..` that climbs out, a drive or UNC prefix, a NUL). The paths come out of the documentation
- * (README rows, hook tables), so they are not trusted: a stray `../` must not make the check read other files.
- */
-export function resolveInside(root, p) {
-  if (typeof p !== 'string' || p.includes('\0')) return null;
-  const rootAbs = path.resolve(root);
-  const abs = path.resolve(rootAbs, ...p.split('/'));
-  const rel = path.relative(rootAbs, abs);
-  if (rel === '') return abs;
-  if (rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) return null;
-  return abs;
-}
-
-/** Source over the working tree below `root`; a path that leaves `root` reads as missing (resolveInside). */
+/** Source over the working tree below `root`. */
 export function fsSource(root) {
   const read = (p) => {
-    const abs = resolveInside(root, p);
-    if (abs == null) return null;
     try {
-      return fs.readFileSync(abs, 'utf8').replace(/^\uFEFF/, '');
+      return fs.readFileSync(path.join(root, ...p.split('/')), 'utf8').replace(/^\uFEFF/, '');
     } catch {
       return null;
     }
   };
   const walk = (rel, out) => {
-    const abs = resolveInside(root, rel);
-    if (abs == null) return;
+    const abs = path.join(root, ...rel.split('/'));
     let entries;
     try {
       entries = fs.readdirSync(abs, { withFileTypes: true });
@@ -113,9 +94,7 @@ export function fsSource(root) {
     list: (dir) => {
       const out = [];
       const rel = dir.replace(/\/+$/, '');
-      const abs = resolveInside(root, rel);
-      if (abs == null) return out;
-      if (fs.existsSync(abs) && fs.statSync(abs).isFile()) return [rel];
+      if (fs.existsSync(path.join(root, ...rel.split('/'))) && fs.statSync(path.join(root, ...rel.split('/'))).isFile()) return [rel];
       walk(rel, out);
       return out.sort();
     },
@@ -359,20 +338,6 @@ export function parsePairTable(source, name) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Findings
-// ---------------------------------------------------------------------------------------------
-
-/**
- * One finding of a check. `source` says where the finding comes from: the file the message is about (a document or a
- * code file; CLAUDE_MD for CLAUDE.md), or the tag of a cross-file group such as 'mirrors'. Callers decide on `source`,
- * never on the wording of `text`.
- * @typedef {{ source: string, text: string }} Issue
- */
-
-/** @returns {Issue} */
-const issue = (source, text) => ({ source, text });
-
-// ---------------------------------------------------------------------------------------------
 // Group 1: methods
 // ---------------------------------------------------------------------------------------------
 
@@ -380,12 +345,12 @@ const issue = (source, text) => ({ source, text });
 export function parseMethodTable(readme) {
   const problems = [];
   const sec = sectionOf(readme, /^##\s+Method table\s*$/);
-  if (!sec) return { rows: [], problems: [issue(README, `${README}：找不到「## Method table」小节`)] };
+  if (!sec) return { rows: [], problems: [`${README}：找不到「## Method table」小节`] };
   const rows = [];
   for (const { n, cells } of tableRows(sec.lines)) {
     const method = codeSpans(cells[0])[0];
     if (!method || !METHOD_RE.test(method)) {
-      problems.push(issue(README, `${README}:${n}：方法表第一列应以 \`<方法名>\` 开头，实际是「${(cells[0] ?? '').slice(0, 40)}」`));
+      problems.push(`${README}:${n}：方法表第一列应以 \`<方法名>\` 开头，实际是「${(cells[0] ?? '').slice(0, 40)}」`);
       continue;
     }
     // Any .cpp path under Source/Control that registerMethods scans (subdirectories and `-` in file names included).
@@ -407,44 +372,44 @@ export function parseMethodTable(readme) {
 /**
  * The methods the dispatcher registers: OpsRegistry.cpp's registerControlMethods calls (comments ignored)
  * register<Group>Ops functions, defined anywhere under Source/Control, whose table.add calls name the methods.
- * @returns {{ methods: Map<string, {file: string, line: number}>, problems: Issue[], notes: string[] }}
+ * @returns {{ methods: Map<string, {file: string, line: number}>, problems: string[], notes: string[] }}
  */
 export function registeredMethods(src) {
   const problems = [];
   const notes = [];
   const methods = new Map();
   const registry = src.read(OPS_REGISTRY);
-  if (registry == null) return { methods, problems: [issue(OPS_REGISTRY, `${OPS_REGISTRY} 不存在，无法读出已注册的方法`)], notes };
+  if (registry == null) return { methods, problems: [`${OPS_REGISTRY} 不存在，无法读出已注册的方法`], notes };
   const defs = new Map(); // function name -> {file, ...}
   const files = src.list('Source/Control').filter((f) => /\.cpp$/.test(f));
   const texts = src.readMany(files);
   for (const f of files) {
     for (const [name, info] of parseRegisterFunctions(texts.get(f) ?? '')) {
-      if (defs.has(name) && name !== 'registerControlMethods') problems.push(issue(f, `${f}:${info.line}：${name} 在 ${defs.get(name).file} 里也定义了`));
+      if (defs.has(name) && name !== 'registerControlMethods') problems.push(`${f}:${info.line}：${name} 在 ${defs.get(name).file} 里也定义了`);
       defs.set(name, { file: f, ...info });
     }
   }
   const root = defs.get('registerControlMethods');
   if (!root || root.file !== OPS_REGISTRY) {
-    return { methods, problems: [...problems, issue(OPS_REGISTRY, `${OPS_REGISTRY}：找不到 void registerControlMethods(ControlMethodTable& table) 的定义`)], notes };
+    return { methods, problems: [...problems, `${OPS_REGISTRY}：找不到 void registerControlMethods(ControlMethodTable& table) 的定义`], notes };
   }
   const visited = new Set(['registerControlMethods']);
   const visit = (name, from) => {
     const def = defs.get(name);
     if (!def) {
-      problems.push(issue(from.file, `${from.file}:${from.line}：调用了 ${name}(table)，但 Source/Control 下找不到它的定义`));
+      problems.push(`${from.file}:${from.line}：调用了 ${name}(table)，但 Source/Control 下找不到它的定义`);
       return;
     }
     if (visited.has(name)) return;
     visited.add(name);
     for (const add of def.adds) {
       if (add.method == null) {
-        problems.push(issue(def.file, `${def.file}:${add.line}：table.add(...) 里找不到字符串形式的方法名，无法核对`));
+        problems.push(`${def.file}:${add.line}：table.add(...) 里找不到字符串形式的方法名，无法核对`);
         continue;
       }
       if (methods.has(add.method)) {
         const first = methods.get(add.method);
-        problems.push(issue(def.file, `${def.file}:${add.line}：${add.method} 已在 ${first.file}:${first.line} 注册过`));
+        problems.push(`${def.file}:${add.line}：${add.method} 已在 ${first.file}:${first.line} 注册过`);
         continue;
       }
       methods.set(add.method, { file: def.file, line: add.line });
@@ -474,17 +439,17 @@ export function specMethods(src) {
   const out = new Map();
   const files = src.list(SPEC_METHODS_DIR).filter((f) => /\.schema\.json$/.test(f));
   const texts = src.readMany(files);
-  if (!files.length) problems.push(issue(SPEC_METHODS_DIR, `${SPEC_METHODS_DIR}/ 下没有 *.schema.json，无法核对规范里的方法`));
+  if (!files.length) problems.push(`${SPEC_METHODS_DIR}/ 下没有 *.schema.json，无法核对规范里的方法`);
   for (const f of files) {
     const name = path.posix.basename(f).replace(/\.schema\.json$/, '');
     let tag = null;
     try {
       tag = JSON.parse(texts.get(f) ?? '')['x-otcp'] ?? null;
     } catch (e) {
-      problems.push(issue(f, `${f}：不是合法的 JSON（${e.message}）`));
+      problems.push(`${f}：不是合法的 JSON（${e.message}）`);
       continue;
     }
-    if (!tag || tag.method !== name) problems.push(issue(f, `${f}：x-otcp.method 是「${tag?.method}」，与文件名 ${name} 不一致`));
+    if (!tag || tag.method !== name) problems.push(`${f}：x-otcp.method 是「${tag?.method}」，与文件名 ${name} 不一致`);
     out.set(name, { file: f, capability: tag?.capability ?? null });
   }
   return { methods: out, problems };
@@ -527,39 +492,39 @@ function checkMethods(src, texts) {
     const extra = [...claimed].filter((m) => !call.methods.has(m));
     const missing = [...call.methods].filter((m) => !claimed.has(m));
     if (extra.length || missing.length) {
-      problems.push(issue(OPS_REGISTRY, `${OPS_REGISTRY}:${call.line}：${call.name} 这一行的注释与它实际注册的方法不一致（注释多写：${extra.join('、') || '无'}；注释漏写：${missing.join('、') || '无'}）`));
+      problems.push(`${OPS_REGISTRY}:${call.line}：${call.name} 这一行的注释与它实际注册的方法不一致（注释多写：${extra.join('、') || '无'}；注释漏写：${missing.join('、') || '无'}）`);
     }
   }
 
   const protocolText = src.read(PROTOCOL_CPP);
   const kMethods = protocolText == null ? null : parsePairTable(protocolText, 'kMethods');
-  if (!kMethods) problems.push(issue(PROTOCOL_CPP, `${PROTOCOL_CPP}：找不到 kMethods[] 表，无法核对方法的能力位`));
+  if (!kMethods) problems.push(`${PROTOCOL_CPP}：找不到 kMethods[] 表，无法核对方法的能力位`);
   const capabilityOf = new Map((kMethods ?? []).map((e) => [e.a, { capability: e.b, line: e.line }]));
 
   // README <=> registered
   const rowOf = new Map();
   for (const row of table.rows) {
-    if (rowOf.has(row.method)) problems.push(issue(README, `${README}:${row.n}：方法表里 ${row.method} 列了两次（另一行是 ${rowOf.get(row.method).n}）`));
+    if (rowOf.has(row.method)) problems.push(`${README}:${row.n}：方法表里 ${row.method} 列了两次（另一行是 ${rowOf.get(row.method).n}）`);
     else rowOf.set(row.method, row);
   }
   for (const [method, where] of reg.methods) {
-    if (!rowOf.has(method)) problems.push(issue(README, `${README}：方法表缺少 ${method}（${where.file}:${where.line} 已注册）；在「## Method table」末尾加一行`));
+    if (!rowOf.has(method)) problems.push(`${README}：方法表缺少 ${method}（${where.file}:${where.line} 已注册）；在「## Method table」末尾加一行`);
   }
   for (const row of table.rows) {
     if (reg.methods.has(row.method)) continue;
     if (ANSWERED_ELSEWHERE.has(row.method)) continue;
-    problems.push(issue(README, `${README}:${row.n}：方法表列了 ${row.method}，但 ${OPS_REGISTRY} 没有注册它；方法实现后再列，或删掉这一行`));
+    problems.push(`${README}:${row.n}：方法表列了 ${row.method}，但 ${OPS_REGISTRY} 没有注册它；方法实现后再列，或删掉这一行`);
   }
 
   // registered / README rows <=> spec, protocol table
   for (const [method, where] of reg.methods) {
-    if (spec.methods.size && !spec.methods.has(method)) problems.push(issue(where.file, `${where.file}:${where.line}：注册了 ${method}，但锁定的规范副本里没有 ${SPEC_METHODS_DIR}/${method}.schema.json`));
-    if (kMethods && !capabilityOf.has(method)) problems.push(issue(where.file, `${where.file}:${where.line}：注册了 ${method}，但 ${PROTOCOL_CPP} 的 kMethods 里没有它（运行时 table.add 会断言失败）`));
+    if (spec.methods.size && !spec.methods.has(method)) problems.push(`${where.file}:${where.line}：注册了 ${method}，但锁定的规范副本里没有 ${SPEC_METHODS_DIR}/${method}.schema.json`);
+    if (kMethods && !capabilityOf.has(method)) problems.push(`${where.file}:${where.line}：注册了 ${method}，但 ${PROTOCOL_CPP} 的 kMethods 里没有它（运行时 table.add 会断言失败）`);
   }
   for (const e of kMethods ?? []) {
-    if (spec.methods.size && !spec.methods.has(e.a)) problems.push(issue(PROTOCOL_CPP, `${PROTOCOL_CPP}:${e.line}：kMethods 里的 ${e.a} 不在规范副本里`));
+    if (spec.methods.size && !spec.methods.has(e.a)) problems.push(`${PROTOCOL_CPP}:${e.line}：kMethods 里的 ${e.a} 不在规范副本里`);
     const s = spec.methods.get(e.a);
-    if (s && s.capability && s.capability !== e.b) problems.push(issue(PROTOCOL_CPP, `${PROTOCOL_CPP}:${e.line}：${e.a} 的能力位是 ${e.b}，规范（${s.file}）是 ${s.capability}`));
+    if (s && s.capability && s.capability !== e.b) problems.push(`${PROTOCOL_CPP}:${e.line}：${e.a} 的能力位是 ${e.b}，规范（${s.file}）是 ${s.capability}`);
   }
   const unimplemented = [...spec.methods.keys()].filter((m) => !reg.methods.has(m) && !ANSWERED_ELSEWHERE.has(m)).sort();
 
@@ -567,27 +532,27 @@ function checkMethods(src, texts) {
   for (const row of table.rows) {
     const known = capabilityOf.get(row.method);
     if (known && row.capability !== known.capability) {
-      problems.push(issue(README, `${README}:${row.n}：${row.method} 的能力列是 ${row.capability ?? '(空)'}，${PROTOCOL_CPP}:${known.line} 的 kMethods 是 ${known.capability}`));
+      problems.push(`${README}:${row.n}：${row.method} 的能力列是 ${row.capability ?? '(空)'}，${PROTOCOL_CPP}:${known.line} 的 kMethods 是 ${known.capability}`);
     }
-    if (!known && row.capability && !CAPABILITY_RE.test(row.capability)) problems.push(issue(README, `${README}:${row.n}：${row.method} 的能力列「${row.capability}」不像能力位`));
+    if (!known && row.capability && !CAPABILITY_RE.test(row.capability)) problems.push(`${README}:${row.n}：${row.method} 的能力列「${row.capability}」不像能力位`);
     const where = reg.methods.get(row.method);
     if (where) {
       const want = where.file.replace(/^Source\/Control\//, '');
-      if (!row.ops) problems.push(issue(README, `${README}:${row.n}：${row.method} 的 Ops 文件列应以 \`${want}\` 开头（${where.file}:${where.line} 注册）`));
-      else if (row.ops !== want) problems.push(issue(README, `${README}:${row.n}：${row.method} 的 Ops 文件列是 ${row.ops}，但它在 ${where.file}:${where.line} 注册`));
+      if (!row.ops) problems.push(`${README}:${row.n}：${row.method} 的 Ops 文件列应以 \`${want}\` 开头（${where.file}:${where.line} 注册）`);
+      else if (row.ops !== want) problems.push(`${README}:${row.n}：${row.method} 的 Ops 文件列是 ${row.ops}，但它在 ${where.file}:${where.line} 注册`);
     } else if (ANSWERED_ELSEWHERE.has(row.method) && !row.answeredElsewhere) {
-      problems.push(issue(README, `${README}:${row.n}：${row.method} 由监听端自己回答，Ops 文件列应写 "answered by ..."`));
+      problems.push(`${README}:${row.n}：${row.method} 由监听端自己回答，Ops 文件列应写 "answered by ..."`);
     }
     const want = `methods/${row.method}.schema.json`;
-    if (row.schema !== want) problems.push(issue(README, `${README}:${row.n}：${row.method} 的 Schema 列是「${row.schema ?? '(空)'}」，应为 \`${want}\``));
-    else if (spec.methods.size && !spec.methods.has(row.method)) problems.push(issue(README, `${README}:${row.n}：${row.method} 的 Schema 列指向 ${want}，规范副本里没有这个文件`));
+    if (row.schema !== want) problems.push(`${README}:${row.n}：${row.method} 的 Schema 列是「${row.schema ?? '(空)'}」，应为 \`${want}\``);
+    else if (spec.methods.size && !spec.methods.has(row.method)) problems.push(`${README}:${row.n}：${row.method} 的 Schema 列指向 ${want}，规范副本里没有这个文件`);
   }
 
   // capability list sentence
   const sentence = parseCapabilitySentence(readme);
-  if (!sentence) problems.push(issue(README, `${README}：找不到「## Capabilities and protocol versions」小节`));
+  if (!sentence) problems.push(`${README}：找不到「## Capabilities and protocol versions」小节`);
   else if (!sentence.capabilities) {
-    problems.push(issue(README, `${README}:${sentence.line}：找不到「capability of every registered method (now \`a\`, \`b\` ...)」这句话，无法核对能力清单；保持这个写法`));
+    problems.push(`${README}:${sentence.line}：找不到「capability of every registered method (now \`a\`, \`b\` ...)」这句话，无法核对能力清单；保持这个写法`);
   } else {
     const expected = new Set();
     for (const method of reg.methods.keys()) {
@@ -599,8 +564,8 @@ function checkMethods(src, texts) {
     expected.delete('session.v1');
     const listed = new Set(sentence.capabilities);
     listed.delete('session.v1');
-    for (const c of [...expected].sort()) if (!listed.has(c)) problems.push(issue(README, `${README}:${sentence.line}：能力清单缺少 ${c}（有已注册的方法用它）`));
-    for (const c of [...listed].sort()) if (!expected.has(c)) problems.push(issue(README, `${README}:${sentence.line}：能力清单列了 ${c}，但没有已注册的方法用它`));
+    for (const c of [...expected].sort()) if (!listed.has(c)) problems.push(`${README}:${sentence.line}：能力清单缺少 ${c}（有已注册的方法用它）`);
+    for (const c of [...listed].sort()) if (!expected.has(c)) problems.push(`${README}:${sentence.line}：能力清单列了 ${c}，但没有已注册的方法用它`);
   }
 
   return { problems, notes, stats: { readme: table.rows.length, registered: reg.methods.size, spec: spec.methods.size }, unimplemented };
@@ -660,7 +625,7 @@ export const POSITION_CLAIMS = [
 /** README hook rows: [{n, files, spans, claims, text}] */
 export function parseReadmeHooks(readme) {
   const sec = sectionOf(readme, /^##\s+Hooks\s*$/);
-  if (!sec) return { rows: [], text: '', problems: [issue(README, `${README}：找不到「## Hooks」小节`)] };
+  if (!sec) return { rows: [], text: '', problems: [`${README}：找不到「## Hooks」小节`] };
   const rows = [];
   for (const { n, cells } of tableRows(sec.lines)) {
     const files = codeSpans(cells[0]).filter((s) => /^(Source\/[\w./-]+|CMakeLists\.txt|cmake\/[\w.-]+)$/.test(s));
@@ -679,7 +644,7 @@ export function parseReadmeHooks(readme) {
 export function parseClaudeHooks(claude) {
   const lines = splitLines(claude).map((text, i) => ({ n: i + 1, text }));
   const at = lines.findIndex((l) => /已声明的钩子/.test(l.text));
-  if (at < 0) return { rows: [], problems: [issue(CLAUDE_MD, `${CLAUDE_MD}：找不到「已声明的钩子」（钩子表前的说明行）`)] };
+  if (at < 0) return { rows: [], problems: [`${CLAUDE_MD}：找不到「已声明的钩子」（钩子表前的说明行）`] };
   const rows = [];
   for (const { n, cells } of tableRows(lines.slice(at + 1))) {
     rows.push({ n, files: hookFilesOf(cells[1]), spans: codeSpans(cells[0]) });
@@ -760,14 +725,14 @@ function checkHooks(src, texts) {
   const problems = [];
   const readmeHooks = parseReadmeHooks(texts.readme);
   problems.push(...readmeHooks.problems);
-  const claudeHooks = texts.claude == null ? { rows: [], problems: [issue(CLAUDE_MD, `${CLAUDE_MD} 不存在，无法核对钩子表`)] } : parseClaudeHooks(texts.claude);
+  const claudeHooks = texts.claude == null ? { rows: [], problems: [`${CLAUDE_MD} 不存在，无法核对钩子表`] } : parseClaudeHooks(texts.claude);
   problems.push(...claudeHooks.problems);
   const markers = scanHookMarkers(src);
 
   const markersByFile = new Map();
   for (const m of markers) markersByFile.set(m.file, [...(markersByFile.get(m.file) ?? []), m]);
   for (const m of markers) {
-    if (!m.wellFormed) problems.push(issue(m.file, `${m.file}:${m.line}：钩子标记应写成「// ${HOOK_MARKER}: <用途>, see Source/Control/README.md#hooks」`));
+    if (!m.wellFormed) problems.push(`${m.file}:${m.line}：钩子标记应写成「// ${HOOK_MARKER}: <用途>, see Source/Control/README.md#hooks」`);
   }
   const rowsByFile = (rows) => {
     const map = new Map();
@@ -778,30 +743,30 @@ function checkHooks(src, texts) {
   const claudeByFile = rowsByFile(claudeHooks.rows);
   const where = (rows) => rows.map((r) => r.n).join('、');
 
-  for (const r of readmeHooks.rows) if (!r.files.length) problems.push(issue(README, `${README}:${r.n}：钩子清单这一行的 File 列里没有文件路径（\`Source/...\` 或 \`CMakeLists.txt\`）`));
-  for (const r of claudeHooks.rows) if (!r.files.length) problems.push(issue(CLAUDE_MD, `${CLAUDE_MD}:${r.n}：钩子表这一行的「文件」列里没有文件路径`));
+  for (const r of readmeHooks.rows) if (!r.files.length) problems.push(`${README}:${r.n}：钩子清单这一行的 File 列里没有文件路径（\`Source/...\` 或 \`CMakeLists.txt\`）`);
+  for (const r of claudeHooks.rows) if (!r.files.length) problems.push(`${CLAUDE_MD}:${r.n}：钩子表这一行的「文件」列里没有文件路径`);
 
   const allFiles = new Set([...markersByFile.keys(), ...readmeByFile.keys(), ...claudeByFile.keys()]);
   for (const file of [...allFiles].sort()) {
     const ms = markersByFile.get(file) ?? [];
     const rr = readmeByFile.get(file) ?? [];
     const cr = claudeByFile.get(file) ?? [];
-    if (ms.length && !rr.length) problems.push(issue(README, `${README}：钩子清单缺少 ${file}（代码里有 ${ms.length} 处标记，第 ${ms.map((m) => m.line).join('、')} 行）；在「## Hooks」表加一行`));
-    if (ms.length && claudeHooks.rows.length && !cr.length) problems.push(issue(CLAUDE_MD, `${CLAUDE_MD}：钩子表缺少 ${file}（代码里有 ${ms.length} 处标记，第 ${ms.map((m) => m.line).join('、')} 行）；在 §1 钩子表加一行或并入已有的行`));
-    if (!ms.length && rr.length) problems.push(issue(README, `${README}:${where(rr)}：钩子清单列了 ${file}，但文件里没有「${HOOK_MARKER}」标记`));
-    if (!ms.length && cr.length) problems.push(issue(CLAUDE_MD, `${CLAUDE_MD}:${where(cr)}：钩子表列了 ${file}，但文件里没有「${HOOK_MARKER}」标记`));
+    if (ms.length && !rr.length) problems.push(`${README}：钩子清单缺少 ${file}（代码里有 ${ms.length} 处标记，第 ${ms.map((m) => m.line).join('、')} 行）；在「## Hooks」表加一行`);
+    if (ms.length && claudeHooks.rows.length && !cr.length) problems.push(`${CLAUDE_MD}：钩子表缺少 ${file}（代码里有 ${ms.length} 处标记，第 ${ms.map((m) => m.line).join('、')} 行）；在 §1 钩子表加一行或并入已有的行`);
+    if (!ms.length && rr.length) problems.push(`${README}:${where(rr)}：钩子清单列了 ${file}，但文件里没有「${HOOK_MARKER}」标记`);
+    if (!ms.length && cr.length) problems.push(`${CLAUDE_MD}:${where(cr)}：钩子表列了 ${file}，但文件里没有「${HOOK_MARKER}」标记`);
     // Entries: every listed entry stands for at least one marker, so there are never more rows than markers.
-    if (ms.length && rr.length > ms.length) problems.push(issue(README, `${README}:${where(rr)}：${file} 在钩子清单里有 ${rr.length} 条，代码里只有 ${ms.length} 处标记（第 ${ms.map((m) => m.line).join('、')} 行）；多出的条目没有对应的标记`));
-    if (ms.length && cr.length > ms.length) problems.push(issue(CLAUDE_MD, `${CLAUDE_MD}:${where(cr)}：${file} 在钩子表里有 ${cr.length} 条，代码里只有 ${ms.length} 处标记（第 ${ms.map((m) => m.line).join('、')} 行）`));
+    if (ms.length && rr.length > ms.length) problems.push(`${README}:${where(rr)}：${file} 在钩子清单里有 ${rr.length} 条，代码里只有 ${ms.length} 处标记（第 ${ms.map((m) => m.line).join('、')} 行）；多出的条目没有对应的标记`);
+    if (ms.length && cr.length > ms.length) problems.push(`${CLAUDE_MD}:${where(cr)}：${file} 在钩子表里有 ${cr.length} 条，代码里只有 ${ms.length} 处标记（第 ${ms.map((m) => m.line).join('、')} 行）`);
     // Position: a row that says where its hook is (includes, end of the constructor, ...) needs a marker there.
     for (const r of rr) {
       for (const claim of r.claims) {
-        if (ms.length && !ms.some(claim.holds)) problems.push(issue(README, `${README}:${r.n}：${file} 的钩子清单写了「${claim.says}」，但 ${file} 里没有这个位置的钩子标记（标记在第 ${ms.map((m) => m.line).join('、')} 行）`));
+        if (ms.length && !ms.some(claim.holds)) problems.push(`${README}:${r.n}：${file} 的钩子清单写了「${claim.says}」，但 ${file} 里没有这个位置的钩子标记（标记在第 ${ms.map((m) => m.line).join('、')} 行）`);
       }
     }
     const includeMarker = ms.find((m) => m.isInclude);
     if (includeMarker && rr.length && !rr.some((r) => r.claims.some((c) => c.key === 'include'))) {
-      problems.push(issue(README, `${README}:${where(rr)}：${file}:${includeMarker.line} 的钩子标记在 #include 行上，钩子清单里 ${file} 的行没有写 include`));
+      problems.push(`${README}:${where(rr)}：${file}:${includeMarker.line} 的钩子标记在 #include 行上，钩子清单里 ${file} 的行没有写 include`);
     }
     // Purpose keywords, the other way round: what a marker says the hook is for has to be described in the README
     // rows of that file. At least one word of the purpose has to occur there; the rest of the wording is free.
@@ -811,7 +776,7 @@ function checkHooks(src, texts) {
         const words = purposeWords(m.purpose);
         if (!words.length) continue;
         if (!words.some((w) => readmeText.includes(w))) {
-          problems.push(issue(file, `${file}:${m.line}：钩子标记的用途「${m.purpose}」在 ${README} 钩子清单里 ${file} 的行中一个词都没有；这一行要说明同一件事`));
+          problems.push(`${file}:${m.line}：钩子标记的用途「${m.purpose}」在 ${README} 钩子清单里 ${file} 的行中一个词都没有；这一行要说明同一件事`);
         }
       }
     }
@@ -831,11 +796,11 @@ function checkHooks(src, texts) {
   const checkNames = (docFile, row, label) => {
     for (const span of row.spans) {
       if (/^Source\/[\w./-]+\.(h|hpp|cpp|cc|mm)$/.test(span)) {
-        if (src.read(span) == null) problems.push(issue(docFile, `${docFile}:${row.n}：${label}提到的文件 ${span} 不存在`));
+        if (src.read(span) == null) problems.push(`${docFile}:${row.n}：${label}提到的文件 ${span} 不存在`);
         continue;
       }
       for (const needle of namesOf(span)) {
-        if (!inCorpus(needle)) problems.push(issue(docFile, `${docFile}:${row.n}：${label}提到 \`${span}\`，但钩子文件和 Source/Control 里都没有「${needle}」；改名或删除了的话更新这一行`));
+        if (!inCorpus(needle)) problems.push(`${docFile}:${row.n}：${label}提到 \`${span}\`，但钩子文件和 Source/Control 里都没有「${needle}」；改名或删除了的话更新这一行`);
       }
     }
   };
@@ -845,7 +810,7 @@ function checkHooks(src, texts) {
     const names = r.spans.flatMap(namesOf);
     const readmeText = r.files.flatMap((f) => (readmeByFile.get(f) ?? []).map((x) => x.text)).join('\n');
     if (names.length && readmeText && !names.some((nm) => readmeText.includes(nm))) {
-      problems.push(issue(CLAUDE_MD, `${CLAUDE_MD}:${r.n}：钩子表这一行提到的名字（${names.slice(0, 4).map((s) => `\`${s}\``).join('、')}）在 ${README} 钩子清单里 ${r.files.join('、')} 的行中一个都没有；两边说的是不是同一处钩子`));
+      problems.push(`${CLAUDE_MD}:${r.n}：钩子表这一行提到的名字（${names.slice(0, 4).map((s) => `\`${s}\``).join('、')}）在 ${README} 钩子清单里 ${r.files.join('、')} 的行中一个都没有；两边说的是不是同一处钩子`);
     }
   }
 
@@ -862,18 +827,18 @@ function checkHooks(src, texts) {
 function checkMirrors(src) {
   const mapText = src.read(MIRROR_MAP);
   const md = src.read(MIRRORS_MD);
-  if (mapText == null) return { problems: [issue(MIRROR_MAP, `${MIRROR_MAP} 不存在`)], stats: {} };
-  if (md == null) return { problems: [issue(MIRRORS_MD, `${MIRRORS_MD} 不存在`)], stats: {} };
+  if (mapText == null) return { problems: [`${MIRROR_MAP} 不存在`], stats: {} };
+  if (md == null) return { problems: [`${MIRRORS_MD} 不存在`], stats: {} };
   let mirrors;
   try {
     mirrors = readMirrors(mapText);
   } catch (e) {
-    return { problems: [issue(MIRROR_MAP, `${MIRROR_MAP}：读不出 mirrors（${e.message}）`)], stats: {} };
+    return { problems: [`${MIRROR_MAP}：读不出 mirrors（${e.message}）`], stats: {} };
   }
   const pinNames = src.list(PIN_DIR).filter((f) => /\.txt$/i.test(f));
   const pinTexts = src.readMany(pinNames);
   const pinFiles = new Map(pinNames.map((f) => [path.posix.basename(f), pinTexts.get(f) ?? '']));
-  const problems = verifyConsistency({ mirrors, pinFiles, mirrorsMd: md }).map((text) => issue('mirrors', text));
+  const problems = verifyConsistency({ mirrors, pinFiles, mirrorsMd: md });
   return { problems, stats: { mirrors: mirrors.length, groups: pinFiles.size }, fix: problems.length ? FIX_HINT : null };
 }
 
@@ -906,14 +871,14 @@ export function registeredTests(src) {
   const names = new Set();
   const scenarios = new Set();
   const cmake = src.read(CONTROL_CMAKE);
-  if (cmake == null) return { names, problems: [issue(CONTROL_CMAKE, `${CONTROL_CMAKE} 不存在，无法读出注册的测试`)], scenarios };
+  if (cmake == null) return { names, problems: [`${CONTROL_CMAKE} 不存在，无法读出注册的测试`], scenarios };
   const stripped = cmake.replace(/^\s*#.*$/gm, '');
   for (const m of stripped.matchAll(/\badd_test\s*\(\s*NAME\s+([A-Za-z][\w.]*)/g)) names.add(m[1]);
   for (const body of cmakeCallBodies(stripped, /\b(?:set|list)\s*\(\s*(?:APPEND\s+)?_opentune_control_scenarios\b/g)) {
     for (const s of body.matchAll(/"([A-Za-z][A-Za-z0-9]*)(?:\|[^"]*)?"/g)) scenarios.add(s[1]);
   }
-  if (!scenarios.size) problems.push(issue(CONTROL_CMAKE, `${CONTROL_CMAKE}：找不到 _opentune_control_scenarios 列表，无法读出 ${SCENARIO_PREFIX}.<场景> 的名字`));
-  if (!stripped.includes(`${SCENARIO_PREFIX}.\${`)) problems.push(issue(CONTROL_CMAKE, `${CONTROL_CMAKE}：测试名前缀不是 ${SCENARIO_PREFIX}.<场景>，检查脚本需要同步`));
+  if (!scenarios.size) problems.push(`${CONTROL_CMAKE}：找不到 _opentune_control_scenarios 列表，无法读出 ${SCENARIO_PREFIX}.<场景> 的名字`);
+  if (!stripped.includes(`${SCENARIO_PREFIX}.\${`)) problems.push(`${CONTROL_CMAKE}：测试名前缀不是 ${SCENARIO_PREFIX}.<场景>，检查脚本需要同步`);
   const rootCmake = src.read(ROOT_CMAKE) ?? '';
   for (const m of rootCmake.replace(/^\s*#.*$/gm, '').matchAll(/\badd_test\s*\(\s*NAME\s+([A-Za-z][\w.]*)/g)) names.add(m[1]);
   for (const s of scenarios) names.add(`${SCENARIO_PREFIX}.${s}`);
@@ -925,7 +890,7 @@ const FILE_SUFFIXES = new Set(['cpp', 'h', 'hpp', 'md', 'json', 'txt', 'cmake'])
 /**
  * Test names a markdown file mentions: `ControlUnitTests`, `ControlProcessorTests.Reads`, a `.Vectors` that follows
  * one of them in the same table row or paragraph, and the pattern of `ctest ... -R <pattern>`.
- * @returns {{ names: {name: string, line: number}[], files: {file: string, line: number}[], patterns: {pattern: string, line: number}[], problems: Issue[] }}
+ * @returns {{ names: {name: string, line: number}[], files: {file: string, line: number}[], patterns: {pattern: string, line: number}[], problems: string[] }}
  */
 export function scanTestNames(text, docFile) {
   const names = [];
@@ -939,7 +904,7 @@ export function scanTestNames(text, docFile) {
     const re = /(?<![A-Za-z0-9_.])(Control[A-Za-z]*Tests?)(?:\.([A-Za-z][A-Za-z0-9]*))?(?![A-Za-z0-9_])|`\.([A-Z][A-Za-z0-9]*)`/g;
     for (let m = re.exec(line); m; m = re.exec(line)) {
       if (m[3]) {
-        if (!prefix) problems.push(issue(docFile, `${docFile}:${n}：\`.${m[3]}\` 前面没有可以补全的测试名（写成 ControlProcessorTests.${m[3]}）`));
+        if (!prefix) problems.push(`${docFile}:${n}：\`.${m[3]}\` 前面没有可以补全的测试名（写成 ControlProcessorTests.${m[3]}）`);
         else names.push({ name: `${prefix}.${m[3]}`, line: n });
       } else if (m[2] && FILE_SUFFIXES.has(m[2])) {
         files.push({ file: `Tests/Control/${m[1]}.${m[2]}`, line: n });
@@ -976,20 +941,20 @@ function checkTests(src, texts) {
       const hint = name.startsWith(`${SCENARIO_PREFIX}.`)
         ? `${CONTROL_CMAKE} 的场景列表里没有 ${name.slice(SCENARIO_PREFIX.length + 1)}`
         : `${CONTROL_CMAKE} 里没有 add_test(NAME ${group} ...)`;
-      problems.push(issue(file, `${file}:${line}：引用的测试名 ${name} 没有注册（${hint}）`));
+      problems.push(`${file}:${line}：引用的测试名 ${name} 没有注册（${hint}）`);
     }
     for (const { file: ref, line } of scan.files) {
-      if (src.read(ref) == null) problems.push(issue(file, `${file}:${line}：引用的测试文件 ${ref} 不存在`));
+      if (src.read(ref) == null) problems.push(`${file}:${line}：引用的测试文件 ${ref} 不存在`);
     }
     for (const { pattern, line } of scan.patterns) {
       let re;
       try {
         re = new RegExp(pattern);
       } catch {
-        problems.push(issue(file, `${file}:${line}：ctest -R ${pattern} 不是合法的正则`));
+        problems.push(`${file}:${line}：ctest -R ${pattern} 不是合法的正则`);
         continue;
       }
-      if (reg.names.size && ![...reg.names].some((nm) => re.test(nm))) problems.push(issue(file, `${file}:${line}：ctest -R ${pattern} 匹配不到任何注册的测试`));
+      if (reg.names.size && ![...reg.names].some((nm) => re.test(nm))) problems.push(`${file}:${line}：ctest -R ${pattern} 匹配不到任何注册的测试`);
     }
   }
   return { problems, notes, stats: { registered: reg.names.size, mentioned } };
@@ -998,23 +963,6 @@ function checkTests(src, texts) {
 // ---------------------------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------------------------
-
-/**
- * Whether a problem that comes from CLAUDE.md fails the check or is only reported. CLAUDE.md is an L0 file that a
- * sub-PR of upstreamable code (base feature/**) cannot change, so such a sub-PR only gets a WARN for it; every other
- * event (a push, a pull request into dev, review-base/** or sync/**) blocks as decideEnforcement does for the base
- * and the event, and a branch that changes CLAUDE.md itself stays blocking whatever its base is. The pin files do not
- * matter here: unlike the mirror group, nothing in CLAUDE.md is regenerated from them.
- * @param {{event: string, baseRef?: string, changedFiles?: string[]}} input
- * @returns {{blocking: boolean, reason: string}}
- */
-export function decideClaudeEnforcement({ event, baseRef = '', changedFiles = [] }) {
-  const byEvent = decideEnforcement({ event, baseRef, changedFiles: [] });
-  if (byEvent.blocking) return byEvent;
-  if (changedFiles.includes(CLAUDE_MD)) return { blocking: true, reason: `PR 改了 ${CLAUDE_MD}，阻塞` };
-  const base = String(baseRef).replace(/^refs\/heads\//, '');
-  return { blocking: false, reason: `PR 的 base 是 ${base} 且没改 ${CLAUDE_MD}：这条来自 ${CLAUDE_MD}（L0 文件，可上游的子 PR 改不了它），只报告，由 manager 的 L0 跟进` };
-}
 
 export const GROUPS = [
   { id: 'methods', title: '方法' },
@@ -1027,10 +975,10 @@ export const GROUPS = [
  * Compare the documentation with the code in `src`.
  * @param {DocSource} src
  * @param {{ mirrorsBlocking?: boolean, claudeBlocking?: boolean }} [opts]  mirrorsBlocking false: the mirror group is only
- *   reported (advisory). claudeBlocking false: the problems whose `source` is CLAUDE.md (an L0 file that a sub-PR of
- *   upstreamable code cannot change) are only reported; the ones that come from the README, the code or the spec copy
- *   stay blocking.
- * @returns {{ applicable: boolean, problems: {group: string, text: string, advisory: boolean, source: string}[], notes: string[], unimplemented: string[], stats: object, fix: string | null }}
+ *   reported (advisory). claudeBlocking false: hook and test-name problems that come from CLAUDE.md (an L0 file that a
+ *   sub-PR of upstreamable code cannot change) are only reported; the ones that come from the README, the code or the
+ *   spec copy stay blocking.
+ * @returns {{ applicable: boolean, problems: {group: string, text: string, advisory: boolean, source?: string}[], notes: string[], unimplemented: string[], stats: object, fix: string | null }}
  */
 export function checkDocConsistency(src, opts = {}) {
   const readme = src.read(README);
@@ -1038,9 +986,9 @@ export function checkDocConsistency(src, opts = {}) {
   const texts = { readme, claude: src.read(CLAUDE_MD), checklist: src.read(REVIEW_CHECKLIST) };
   const out = { applicable: true, problems: [], notes: [], unimplemented: [], stats: {}, fix: null };
   const add = (group, list, advisory = false) => {
-    for (const { text, source } of list) {
-      const fromClaude = opts.claudeBlocking === false && source === CLAUDE_MD;
-      out.problems.push({ group, text, source, advisory: advisory || fromClaude });
+    for (const text of list) {
+      const fromClaude = opts.claudeBlocking === false && (group === 'hooks' || group === 'tests') && text.startsWith(CLAUDE_MD);
+      out.problems.push({ group, text, advisory: advisory || fromClaude, source: fromClaude ? 'claude' : advisory ? 'mirrors' : undefined });
     }
   };
   const methods = checkMethods(src, texts);

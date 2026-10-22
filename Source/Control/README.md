@@ -11,6 +11,9 @@ UI does. It is compiled only with the CMake option `OPENTUNE_ENABLE_CONTROL_API`
 only when enabled at run time. With the option OFF, or ON but not enabled, OpenTune behaves exactly as
 without this directory.
 
+**Review / 审核.** [`REVIEW-CHECKLIST.md`](REVIEW-CHECKLIST.md) is the checklist for reviewing a change of the control API, and the common basis on which OpenTune's maintainers and the API's contributors review it; each item says which file to read, which test to run or what to grep.
+[`REVIEW-CHECKLIST.md`](REVIEW-CHECKLIST.md) 是控制接口改动的审核清单，也是 OpenTune 维护者与接口贡献者双方审核的共同依据；每一条都写明看哪个文件、跑哪个测试、grep 什么。
+
 ## Quick rules for AI agents / AI agent 快速规则
 
 Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant to keep the control API intact.

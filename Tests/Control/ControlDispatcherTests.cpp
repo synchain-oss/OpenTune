@@ -377,6 +377,8 @@ void checkSessionInfo(ApiSession& api)
     CONTROL_CHECK(scheme == "openTune" || scheme == "openDyne");
     CONTROL_CHECK(memberOf(processing, "f0Model").text() == "fcpe");
     CONTROL_CHECK(memberOf(processing, "vocoderReady").isBoolean() && memberOf(processing, "hybridMode").isBoolean());
+    // The options are reported by prefs.get only.
+    CONTROL_CHECK(processing.find("options") == nullptr);
 
     CONTROL_CHECK(containsString(memberOf(memberOf(info, "import"), "extensions"), ".wav"));
     CONTROL_CHECK(memberOf(memberOf(info, "import"), "maxChannels").asDouble() == 2);
@@ -1126,13 +1128,31 @@ void checkPrefs(ApiSession& api, OpenTuneAudioProcessor& processor)
     CONTROL_CHECK(
         (memberNames(result) == std::set<std::string>{"processing", "onboardingShown", "language", "recentProjects"}));
     const auto& processing = memberOf(result, "processing");
-    CONTROL_CHECK(
-        (memberNames(processing)
-             == std::set<std::string>{"tuningHz", "editingScheme", "hybridMode", "vocoderWeight", "f0Model",
-                                      "renderingPriority", "experimentalFeatures", "referenceAlignMode", "nullReasons"}
-         || memberNames(processing)
-                == std::set<std::string>{"tuningHz", "editingScheme", "hybridMode", "vocoderWeight", "f0Model",
-                                         "renderingPriority", "experimentalFeatures", "referenceAlignMode"}));
+    CONTROL_CHECK((memberNames(processing)
+                       == std::set<std::string>{"tuningHz", "editingScheme", "hybridMode", "vocoderWeight", "f0Model",
+                                                "renderingPriority", "experimentalFeatures", "referenceAlignMode",
+                                                "options", "nullReasons"}
+                   || memberNames(processing)
+                          == std::set<std::string>{"tuningHz", "editingScheme", "hybridMode", "vocoderWeight",
+                                                   "f0Model", "renderingPriority", "experimentalFeatures",
+                                                   "referenceAlignMode", "options"}));
+    // The options the window offers: four arrays of text, the two enumerations in full. Which weight files and
+    // pitch models exist depends on the machine, so their content is checked by PrefsOptions with a models
+    // directory of its own.
+    {
+        const auto& options = memberOf(processing, "options");
+        CONTROL_CHECK(
+            (memberNames(options)
+             == std::set<std::string>{"vocoderWeight", "f0Model", "renderingPriority", "referenceAlignMode"}));
+        for (const char* name : {"vocoderWeight", "f0Model"}) {
+            const auto& list = memberOf(options, name);
+            CONTROL_CHECK(list.isArray() && list.size() <= 64);
+            for (std::size_t i = 0; i < list.size(); ++i)
+                CONTROL_CHECK(list.at(i).isString() && !list.at(i).text().empty());
+        }
+        CONTROL_CHECK(toJsonString(memberOf(options, "renderingPriority")) == R"(["gpuFirst","cpuFirst"])");
+        CONTROL_CHECK(toJsonString(memberOf(options, "referenceAlignMode")) == R"(["standardAuto","game"])");
+    }
     CONTROL_CHECK(near(memberOf(processing, "tuningHz"), TuningConfig::currentTuningHz(), 1e-3));
     CONTROL_CHECK(memberOf(processing, "editingScheme").text() == "openDyne");
     CONTROL_CHECK(memberOf(processing, "f0Model").text() == "fcpe");

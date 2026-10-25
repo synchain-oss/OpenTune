@@ -152,6 +152,10 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # Selection: ui.setSelection, through the editor's bridge, with the effects it predicts and observes.
         Source/Control/Ops/SelectionOps.cpp
         Source/Control/Ops/SelectionOps.h
+        # Preference options: the vocoder weights and pitch models that prefs.get offers (processing.options) and prefs.set
+        # accepts, and the vocoder state and processor calls that the prefs.set job waits on and makes.
+        Source/Control/Ops/PrefsModels.cpp
+        Source/Control/Ops/PrefsModels.h
     )
 
     target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_CONTROL_SOURCES})
@@ -423,6 +427,9 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         list(APPEND _opentune_control_scenarios
             "PrefsRoundTrip|--control-api"
             "PrefsSchemeJob|--control-api"
+            "PrefsOptions|--control-api"
+            "PrefsVocoderJob|--control-api"
+            "PrefsVocoderOverlap|--control-api"
             "PrefsVectors|--control-api"
             "AudioDevice|--control-api"
             "AudioVectors|--control-api"

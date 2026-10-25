@@ -1185,7 +1185,10 @@ roll, run only in the Standalone application.
 `prefs.set` (`Ops/PrefsOps.cpp`, capability `prefs.write`) and `audio.get` / `audio.set` (`Ops/AudioDeviceOps.cpp`,
 capability `audio.device`). Each capability is reported because all its methods are registered. Both settings are
 user-global: results carry the warning `GLOBAL_PREFERENCE`, there is no undo entry (OpenTune has none; reason
-`ui_parity`), and the revert recipe is the same call with the previous values.
+`ui_parity`), and the revert recipe is the same call with the previous values. `prefs.set` can have nothing to put back:
+a stored vocoder weight whose name the wire cannot carry (not valid UTF-8, empty, or longer than 64 code points) is
+left out of the recipe, and when that was the only member that changed the recipe is `null` (reason still `ui_parity`,
+and with it the warning `IRREVERSIBLE`), never a `prefs.set` call without params.
 
 **prefs.set** changes eight processing preferences, in this order wherever the result lists them (`changes`, the
 `GLOBAL_PREFERENCE` names, the revert recipe): `tuningHz` (A4), `editingScheme`, `hybridMode`, `experimentalFeatures`,
@@ -1218,10 +1221,20 @@ The tuning does not recompute existing results (`NOT_RETROACTIVE`).
   ends as soon as the changes are made. If the vocoder is not back within the limit (60 s, `kDefaultVocoderWaitMs`,
   `controlSetPrefsVocoderWaitForTesting()` in tests), the job takes its changes back (preferences, the editor, and the
   runtime is asked for the previous weight or priority again) and fails with `MODEL_UNAVAILABLE(vocoder_not_ready)`,
-  retryable, `executed` false. `reRenderQueued` is reported for the vocoder weight (the completion of
-  `setVocoderModelWeight()` clears every render cache and renders every clip again) when the job waited for the switch;
-  not for the rendering priority, which clears nothing. With the editing scheme in the same call both conditions must
-  hold; whichever limit runs out first fails the job (the scheme's `INTERNAL`, the vocoder's `vocoder_not_ready`).
+  retryable, `executed` false. A switch that has ended without a vocoder (the weight or the backend could not be
+  loaded) is not waited for: the worker is idle, nothing is reconfiguring, and the runtime keeps asking for the same
+  weight, so the vocoder would never come back by itself. The job sees that state after its changes were made, takes
+  them back at once, as for the timeout, and fails with `MODEL_UNAVAILABLE(vocoder_load_failed)`, **not** retryable
+  (the same weight fails again), `executed` false; `vocoder_not_ready` stays for the limit. The state is read in the
+  order idle worker, reconfiguring, ready (`controlVocoderState()`): an idle worker has finished everything queued
+  before, so the other two flags read afterwards are final and a switch that straddles the read is not taken for a
+  failure. Withdrawing after a timeout reports `executed` false, but if the original switch was merely slow it still
+  completes later, clears the render caches and renders again, and the withdrawn switch (the runtime was asked for the
+  previous weight or priority) renders once more; the final state is consistent. `reRenderQueued` is reported for the
+  vocoder weight (the completion of `setVocoderModelWeight()` clears every render cache and renders every clip again)
+  when the job waited for the switch; not for the rendering priority, which clears nothing. With the editing scheme in
+  the same call both conditions must hold; whichever limit runs out first fails the job (the scheme's `INTERNAL`, the
+  vocoder's `vocoder_not_ready`), and a failed load fails it at once.
 - **Pitch model.** The window asks the processor first (`setF0ModelType()`) and stores the model only when that
   succeeds; so does the call. When the processor refuses, the call (or the job) fails with
   `MODEL_UNAVAILABLE(model_missing)` and `executed` false, and nothing else of the call changes either. The pitch model
@@ -1253,11 +1266,13 @@ The tuning does not recompute existing results (`NOT_RETROACTIVE`).
 - **Busy.** Like every write, `prefs.set` answers `BUSY` first (`modal_open` while the preferences window is open).
 
 **Deviations from the vectors.** The specification copy (rc.5) knows the four original members only: its params and
-`processing` schemas are closed, and it lists neither `processing.options`, nor the reasons `option_unavailable` and
-`vocoder_not_ready`, nor `MODEL_UNAVAILABLE` among the errors of a `prefsApply` job. The vectors of the copy still pass
-(`prefs/get-ok` matches with extra members allowed). The new members, `processing.options` and the two reasons follow
-the next specification version (rc.6); the copy is updated by the spec-sync, not by this change. `option_unavailable` is
-`INVALID_ARGUMENT` and not retryable, `vocoder_not_ready` is `MODEL_UNAVAILABLE` and retryable.
+`processing` schemas are closed, and it lists neither `processing.options`, nor the reasons `option_unavailable`,
+`vocoder_not_ready` and `vocoder_load_failed`, nor `MODEL_UNAVAILABLE` among the errors of a `prefsApply` job. The
+vectors of the copy still pass (`prefs/get-ok` matches with extra members allowed). The new members,
+`processing.options`, the three reasons and the `null` revert recipe of the case above follow the next specification
+version (rc.6); the copy is updated by the spec-sync, not by this change. `option_unavailable` is
+`INVALID_ARGUMENT` and not retryable, `vocoder_not_ready` is `MODEL_UNAVAILABLE` and retryable, `vocoder_load_failed` is
+`MODEL_UNAVAILABLE` and not retryable.
 
 The hooks of this method are none: it uses only the public functions of the processor and `AppPreferences` and the
 existing `ControlUiBridge::onPreferencesChanged()`.

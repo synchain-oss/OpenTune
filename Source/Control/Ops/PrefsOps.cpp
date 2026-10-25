@@ -335,7 +335,9 @@ std::optional<Error> applyDelta(ControlOpContext& context, const PrefsRequest& r
  * Puts the preferences a delta changed back to the state before it; the editor is told only when asked to. With a
  * context the runtime is asked for the previous vocoder weight, rendering priority and pitch model as well, so that
  * the stored preferences and the runtime agree again; without one (the control API is stopping) only the stored
- * preferences change.
+ * preferences change. The one exception is the reference alignment mode, which the processor gets either way:
+ * setExperimentalReferenceAlignMode() only assigns a member, so calling it without a context is harmless and keeps
+ * processor and preferences in agreement.
  */
 void restoreState(ControlOpContext* context, OpenTuneAudioProcessor& processor, const PrefsState& before,
                   const PrefsDelta& delta)
@@ -374,6 +376,7 @@ void restoreState(ControlOpContext* context, OpenTuneAudioProcessor& processor, 
     }
     if (delta.align) {
         preferences.setExperimentalReferenceAlignMode(alignModeOf(before.referenceGame));
+        // Not guarded by context, unlike the runtime calls above: a plain member assignment (see the comment above).
         processor.setExperimentalReferenceAlignMode(alignModeOf(before.referenceGame));
     }
     if (context != nullptr && delta.any())
@@ -416,9 +419,9 @@ std::optional<JsonValue> wireWeight(const std::string& weight)
  * Records what a delta changed in the envelope: the changes, the warning GLOBAL_PREFERENCE (NOT_RETROACTIVE for the
  * tuning, EXPERIMENTAL_FEATURE for the reference alignment mode), reRenderQueued for the hybrid switch and for a
  * vocoder weight that the job saw switched (vocoderSwitched), and the undo descriptor (no undo entry, as in OpenTune;
- * the revert recipe is the same call with the previous values). The members come in the order of the schema: the
- * original four, then vocoderWeight, renderingPriority, f0Model and referenceAlignMode. Nothing is recorded for a delta
- * that changes nothing.
+ * the revert recipe is the same call with the previous values, or null when none of them can be sent). The members come
+ * in the order of the schema: the original four, then vocoderWeight, renderingPriority, f0Model and
+ * referenceAlignMode. Nothing is recorded for a delta that changes nothing.
  */
 void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope, const PrefsState& before,
                  const PrefsRequest& request, const PrefsDelta& delta, bool vocoderSwitched)
@@ -505,7 +508,13 @@ void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope, cons
             envelope.addSideEffect("reRenderQueued", std::move(effect));
         }
     }
-    envelope.setNotUndoable("ui_parity", controlRevertRecipe("prefs.set", std::move(revert)));
+    // A stored vocoder weight that the wire cannot carry is left out of the recipe; when nothing else is left (only
+    // the vocoder weight changed), no request can restore the state, and revert is null (the envelope then adds the
+    // warning IRREVERSIBLE), never a prefs.set with empty params.
+    if (revert.size() == 0)
+        envelope.setNotUndoable("ui_parity");
+    else
+        envelope.setNotUndoable("ui_parity", controlRevertRecipe("prefs.set", std::move(revert)));
 }
 
 // ---- Notes that a change of the editing scheme makes the editor generate --------------------------------
@@ -588,8 +597,12 @@ void recordGeneratedNotes(ControlOpContext& context, ControlWriteEnvelope& envel
  * reconfiguring" until then. The command stays in the worker's queue or is the worker's active transaction until its
  * completion callback ran on the message thread, so an idle worker proves that the command was executed, whatever it
  * did (a weight the runtime already holds is answered without any flag). If the vocoder is not back within
- * vocoderWaitMs(), the job takes its changes back and fails with MODEL_UNAVAILABLE(vocoder_not_ready). A vocoder that
- * was not ready before the change is not waited for: the job ends as soon as the changes are made.
+ * vocoderWaitMs(), the job takes its changes back and fails with MODEL_UNAVAILABLE(vocoder_not_ready), which can
+ * succeed when asked again. If the worker is idle, no reconfiguration is running and the vocoder is not there, the
+ * command ran and could not load a vocoder (a damaged or incompatible weight file; the runtime keeps asking for the
+ * same weight, so the vocoder never recovers by itself): the job takes its changes back at once and fails with
+ * MODEL_UNAVAILABLE(vocoder_load_failed), which is not retryable. A vocoder that was not ready before the change is
+ * not waited for: the job ends as soon as the changes are made.
  *
  * A job that the registry destroys before it ended (the control API is stopping) also takes its changes back.
  */
@@ -638,6 +651,14 @@ public:
         if (waitsForVocoder_) {
             const auto vocoder = controlVocoderState();
             vocoderBack = vocoder.ready && !vocoder.reconfiguring && vocoder.controlIdle;
+            // The command was posted before the first state read, so an idle worker means it ran to its completion.
+            // The vocoder was ready before it: if it is gone now and nothing is reconfiguring, the load failed, and
+            // waiting for the limit would only delay the same failure.
+            if (vocoder.controlIdle && !vocoder.reconfiguring && !vocoder.ready) {
+                abandon(context, jobStep, "MODEL_UNAVAILABLE", "vocoder_load_failed",
+                        "the vocoder could not be loaded with the new vocoder weight or rendering priority");
+                return;
+            }
         }
         if (applied && vocoderBack) {
             finish(context, jobStep);
@@ -811,7 +832,9 @@ Error startRefusal(const std::string& refusal)
  * Checks the vocoder weight and the pitch model of a request against what the preferences window offers
  * (processing.options of prefs.get) and resolves the pitch model's type. A value that is not on offer gives
  * INVALID_ARGUMENT(option_unavailable) with the name of the member, and nothing changes. A value that is equal to the
- * current one is checked as well. Message thread.
+ * current one is checked as well. Reads the disk on every call that names a vocoder weight or a pitch model (the lists
+ * are scanned from the models directory, as controlPrefsOptionsJson() does for prefs.get); the directory is small.
+ * Message thread.
  */
 std::optional<Error> checkOptions(PrefsRequest& request)
 {

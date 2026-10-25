@@ -339,7 +339,8 @@ bool controlErrorRetryable(std::string_view kind, std::string_view reason)
         && (reason == "f0_failed" || reason == "f0_empty" || reason == "grid_not_seeded"
             || reason == "export_dry_stretched" || reason == "reference_analysis_stalled"))
         return false;
-    // The vocoder is being loaded or its weight could not be loaded in time; asking again can succeed.
+    // The vocoder was still being loaded when the wait ran out; asking again can succeed. Not so for
+    // vocoder_load_failed (the load ended and failed: the same weight fails again), which keeps the default, false.
     if (kind == "MODEL_UNAVAILABLE" && reason == "vocoder_not_ready")
         return true;
     return controlErrorRetryableByDefault(kind);

@@ -935,8 +935,9 @@ constexpr const char* kWeightZ = "zz-custom.onnx";
  * reconfiguring but the worker is busy, then the vocoder is gone and reconfiguring for loadingMs, and after that it is
  * ready with an idle worker. That is the order of events of ProcessRenderRuntime, where the flag "reconfiguring" is
  * set by the worker thread some time after the processor call returned. loadingMs 0 is a weight the runtime already
- * holds (it answers without any flag). neverReady keeps the vocoder reconfiguring for good. present false is a
- * runtime without a vocoder. calls lists the processor calls in order.
+ * holds (it answers without any flag). neverReady keeps the vocoder reconfiguring for good. failNextLoad makes the
+ * reload end without a vocoder (not ready, not reconfiguring, idle worker). present false is a runtime without a
+ * vocoder. calls lists the processor calls in order.
  *
  * Installing it replaces the models directory (the real scan then runs on a directory of the test), the vocoder state
  * and the three processor calls; with fakePitchModels also the list of pitch models, to have more than one.
@@ -991,6 +992,9 @@ public:
             return {true, false, false};
         if (neverReady || elapsed < queuedMs + loadingMs)
             return {false, true, false};
+        // A load that failed leaves no vocoder, no reconfiguration and an idle worker.
+        if (commandFails_)
+            return {false, false, true};
         return {true, false, true};
     }
 
@@ -998,6 +1002,8 @@ public:
     void settle()
     {
         commandAtMs.reset();
+        commandFails_ = false;
+        failNextLoad = false;
         neverReady = false;
         present = true;
     }
@@ -1008,20 +1014,30 @@ public:
         present = true;
         neverReady = true;
         queuedMs = 0;
+        commandFails_ = false;
         commandAtMs = juce::Time::getMillisecondCounter();
     }
 
     bool present = true;
     bool neverReady = false;
+    /** The load of the next command fails (a damaged weight): after the reload there is no vocoder. A command after it,
+        such as the one that puts the previous weight back, loads. */
+    bool failNextLoad = false;
     std::uint32_t queuedMs = 300;
     std::uint32_t loadingMs = 300;
     bool f0Accepts = true;
     std::vector<std::string> calls;
 
 private:
-    void command() { commandAtMs = juce::Time::getMillisecondCounter(); }
+    void command()
+    {
+        commandAtMs = juce::Time::getMillisecondCounter();
+        commandFails_ = failNextLoad;
+        failNextLoad = false;
+    }
 
     std::optional<std::uint32_t> commandAtMs;
+    bool commandFails_ = false;
 };
 
 std::vector<std::string> optionList(const JsonValue& array)
@@ -1278,6 +1294,49 @@ void checkVocoderWeight(ApiSession& api, OpenTuneAudioProcessor& processor, Pref
     preferences.setVocoderModelWeight(kDefaultVocoderWeight);
     runtime.calls.clear();
     runtime.settle();
+}
+
+/** A stored vocoder weight whose name the wire cannot carry (here longer than 64 code points) is left out of the revert
+    recipe. When nothing else changed, the recipe is null (reason ui_parity, and the warning IRREVERSIBLE), never a
+    prefs.set without params; with another member changed, the recipe holds that member alone. */
+void checkUnsendableStoredWeight(ApiSession& api, OpenTuneAudioProcessor& processor, FakeRuntime& runtime)
+{
+    auto& preferences = processor.getAppPreferences();
+    runtime.queuedMs = 100;
+    runtime.loadingMs = 100;
+    const std::string stored(65, 'w');
+
+    preferences.setVocoderModelWeight(stored);
+    {
+        const auto job = runAsJob(api, "prefs.set", json(R"({"vocoderWeight":"aa-custom.onnx"})"), "prefsApply");
+        CONTROL_CHECK(jobSucceeded(job));
+        const auto& result = memberOf(job, "result");
+        CONTROL_CHECK(memberOf(result, "changes").size() == 1);
+        CONTROL_CHECK(memberOf(fieldOf(changeAt(result, 0), "vocoderWeight"), "before").isNull());
+        CONTROL_CHECK(memberOf(fieldOf(changeAt(result, 0), "vocoderWeight"), "after").text() == kWeightA);
+        CONTROL_CHECK(undoIsUiParity(result));
+        CONTROL_CHECK(memberOf(memberOf(result, "undo"), "revert").isNull());
+        CONTROL_CHECK(hasWarning(result, "IRREVERSIBLE"));
+    }
+
+    runtime.settle();
+    preferences.setVocoderModelWeight(stored);
+    {
+        const auto job =
+            runAsJob(api, "prefs.set", json(R"({"vocoderWeight":"aa-custom.onnx","tuningHz":433})"), "prefsApply");
+        CONTROL_CHECK(jobSucceeded(job));
+        const auto& result = memberOf(job, "result");
+        CONTROL_CHECK(memberOf(result, "changes").size() == 2);
+        CONTROL_CHECK(undoIsUiParity(result));
+        const auto& params = memberOf(memberOf(memberOf(result, "undo"), "revert"), "params");
+        CONTROL_CHECK(params.size() == 1 && numberIs(memberOf(params, "tuningHz"), 440.0));
+        CONTROL_CHECK(!hasWarning(result, "IRREVERSIBLE"));
+        replayRevert(api, result);
+        CONTROL_CHECK(TuningConfig::currentTuningHz() == 440.0f);
+    }
+    runtime.calls.clear();
+    runtime.settle();
+    resetPreferences(processor);
 }
 
 /** renderingPriority: no-op, the change as a job that waits for the vocoder, no render again, the revert recipe. */
@@ -1672,6 +1731,86 @@ void checkVocoderTimeout(ApiSession& api, OpenTuneAudioProcessor& processor, Pre
     settleVocoderScenario(processor, runtime);
 }
 
+/** The runtime ends the switch without a vocoder (the weight could not be loaded): the job does not wait for its
+    limit, it takes the preferences back and fails at once with MODEL_UNAVAILABLE(vocoder_load_failed), not retryable
+    and with executed false; the runtime is asked for the previous weight or priority again, which loads, and the same
+    call succeeds once the weight loads. */
+void checkVocoderLoadFailure(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge,
+                             FakeRuntime& runtime)
+{
+    const auto baseline = api.result("prefs.get");
+    // A limit that a job reaching it would fail with vocoder_not_ready after, far later than the failure is seen.
+    constexpr std::uint32_t kLimitMs = 4000;
+    constexpr std::uint32_t kSwitchMs = 400;
+    struct Case
+    {
+        const char* params;
+        std::vector<std::string> calls;
+    };
+    const Case cases[] = {
+        {R"({"vocoderWeight":"aa-custom.onnx","tuningHz":433})",
+         {std::string("weight:") + kWeightA, "weight:hifigan.onnx"}},
+        {R"({"renderingPriority":"cpuFirst","hybridMode":false})", {"priority:cpuFirst", "priority:gpuFirst"}},
+        {R"({"vocoderWeight":"zz-custom.onnx","experimentalFeatures":true})",
+         {std::string("weight:") + kWeightZ, "weight:hifigan.onnx"}},
+    };
+    for (const auto& item : cases) {
+        controlSetPrefsVocoderWaitForTesting(kLimitMs);
+        runtime.settle();
+        runtime.calls.clear();
+        runtime.queuedMs = kSwitchMs / 2;
+        runtime.loadingMs = kSwitchMs / 2;
+        runtime.failNextLoad = true;
+        const auto notifications = bridge.preferenceNotifications;
+        const auto startedAt = juce::Time::getMillisecondCounter();
+        const auto job = runAsJob(api, "prefs.set", json(item.params), "prefsApply");
+        const auto elapsed = juce::Time::getMillisecondCounter() - startedAt;
+        CONTROL_CHECK(jobFailedWith(job, "MODEL_UNAVAILABLE", "vocoder_load_failed", false, false));
+        // The failure is seen once the runtime has ended the switch, not when the limit is reached.
+        CONTROL_CHECK(elapsed >= kSwitchMs && elapsed < kLimitMs);
+        // The detail is fixed text: it names no file.
+        const auto detail = memberOf(memberOf(memberOf(job, "error"), "data"), "detail").text();
+        CONTROL_CHECK(detail.find("vocoder") != std::string::npos && detail.find("custom") == std::string::npos);
+        CONTROL_CHECK(runtime.calls == item.calls);
+        CONTROL_CHECK(bridge.preferenceNotifications == notifications + 2);
+        CONTROL_CHECK(TuningConfig::currentTuningHz() == 440.0f);
+        CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+    }
+
+    // The scheme and the vocoder in one job: the failure of the vocoder ends the job while the editor is still busy
+    // with the scheme, and the scheme goes back too.
+    {
+        bridge.apply = PrefsBridge::Apply::AfterDelay;
+        bridge.applyDelayMs = 100;
+        controlSetPrefsVocoderWaitForTesting(kLimitMs);
+        runtime.settle();
+        runtime.calls.clear();
+        runtime.failNextLoad = true;
+        const auto job = runAsJob(
+            api, "prefs.set", json(R"({"editingScheme":"openDyne","vocoderWeight":"aa-custom.onnx"})"), "prefsApply");
+        CONTROL_CHECK(jobFailedWith(job, "MODEL_UNAVAILABLE", "vocoder_load_failed", false, false));
+        CONTROL_CHECK(!AudioEditingScheme::usesNotesPrimaryScheme(
+            processor.getAppPreferences().getState().shared.audioEditingScheme));
+        CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+        bridge.apply = PrefsBridge::Apply::Immediate;
+        bridge.applyDelayMs = 0;
+    }
+
+    // The weight loads now: the call that failed succeeds, and its revert recipe takes everything back.
+    controlSetPrefsVocoderWaitForTesting(0);
+    runtime.settle();
+    runtime.calls.clear();
+    runtime.queuedMs = 100;
+    runtime.loadingMs = 100;
+    const auto job = runAsJob(api, "prefs.set", json(cases[0].params), "prefsApply");
+    CONTROL_CHECK(jobSucceeded(job));
+    CONTROL_CHECK(memberOf(memberOf(job, "result"), "changes").size() == 2);
+    const auto reverted = replayRevertAsJob(api, memberOf(job, "result"));
+    CONTROL_CHECK(jobSucceeded(reverted));
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+    settleVocoderScenario(processor, runtime);
+}
+
 } // namespace
 
 void scenarioPrefsVocoderJob()
@@ -1696,6 +1835,8 @@ void scenarioPrefsVocoderJob()
     runtime.install(models);
     checkNoWaitWhenNotReady(api, *processor, runtime);
     checkVocoderTimeout(api, *processor, bridge, runtime);
+    checkVocoderLoadFailure(api, *processor, bridge, runtime);
+    checkUnsendableStoredWeight(api, *processor, runtime);
     resetPreferences(*processor);
     const auto dispatcher = service.dispatcher();
     CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);

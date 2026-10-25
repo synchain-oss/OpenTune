@@ -116,13 +116,16 @@ ControlVocoderState controlVocoderState()
     if (backend.vocoderState)
         return backend.vocoderState();
     // ProcessRenderRuntime: the process-wide vocoder and its control worker, polled without a hook. The worker's
-    // queue and active transaction are read last: a command is queued before the vocoder is flagged as
-    // reconfiguring, and the active transaction ends only after the completion ran on the message thread.
+    // queue and active transaction are read first: a command is queued before the vocoder is flagged as
+    // reconfiguring, and the active transaction ends only after the completion ran on the message thread, so a worker
+    // that is idle has finished every command queued before this call, and the two flags read after it are the state
+    // that the commands left (read the other way round, a reconfiguration that ends between the reads could pair a
+    // flag from before it with an idle worker after it).
     auto& render = ProcessRenderRuntime::getInstance();
     ControlVocoderState state;
-    state.ready = render.isVocoderReady();
-    state.reconfiguring = render.isVocoderReconfiguring();
     state.controlIdle = render.controlQueueDepth() == 0 && !render.hasActiveTransaction();
+    state.reconfiguring = render.isVocoderReconfiguring();
+    state.ready = render.isVocoderReady();
     return state;
 }
 

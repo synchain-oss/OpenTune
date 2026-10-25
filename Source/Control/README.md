@@ -58,6 +58,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `mirror-map.json`, `MIRRORS.md` | The upstream functions that the API mirrors, with a hash of each (machine-readable source of truth and the table generated from it); checked by `Tests/Control/ControlMirrorDriftTests.cpp` (see "Mirrors"). |
 | `ControlFileIdentity.*` | File identity (volume and file id, `st_dev` and `st_ino`), "same file" by identity, and the final rename that never replaces (PROTOCOL.md sections 20.3 and 20.4); standard library and operating system only. |
 | `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme, the processing object of `session.info` and `prefs.get`). |
+| `Ops/PrefsModels.*` | `processing.options` of `prefs.get` (the vocoder weights and pitch models on offer) and the calls of `prefs.set` into the render runtime (vocoder weight, inference backend, pitch model, and the vocoder state a job waits on), behind `ControlPrefsBackend`, a test seam. See "Preferences and audio device". |
 | `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
 | `Ops/TransportOps.*`, `Ops/TrackOps.*`, `Ops/TrackSupport.*` | `transport.control`, `transport.setTempo`, `transport.setLoop`; `track.set`, `track.add`, `track.duplicate`, `track.delete`; and what the track methods share (slot checks, the state of a track, the shown-track count; reusable by the clip methods). See "Transport and tracks". |
 | `Ops/ArrangementOps.*` | `arrangement.edit` (move, trim, gain, fades, split, merge, delete, reference binding) and `arrangement.copy`, through the arrangement's setters and the processor's split, merge, delete and copy functions with the arrangement view's undo actions. See "Arrangement". |
@@ -1184,16 +1185,65 @@ roll, run only in the Standalone application.
 `prefs.set` (`Ops/PrefsOps.cpp`, capability `prefs.write`) and `audio.get` / `audio.set` (`Ops/AudioDeviceOps.cpp`,
 capability `audio.device`). Each capability is reported because all its methods are registered. Both settings are
 user-global: results carry the warning `GLOBAL_PREFERENCE`, there is no undo entry (OpenTune has none; reason
-`ui_parity`), and the revert recipe is the same call with the previous values.
+`ui_parity`), and the revert recipe is the same call with the previous values. `prefs.set` can have nothing to put back:
+a stored vocoder weight whose name the wire cannot carry (not valid UTF-8, empty, or longer than 64 code points) is
+left out of the recipe, and when that was the only member that changed the recipe is `null` (reason still `ui_parity`,
+and with it the warning `IRREVERSIBLE`), never a `prefs.set` call without params.
 
-**prefs.set** changes the four processing preferences that the schema lists: `tuningHz` (A4), `editingScheme`,
-`hybridMode` and `experimentalFeatures`. The vocoder weight, the rendering priority, the pitch model and the reference
-alignment mode cannot be set in this version, and no cosmetic preference can be; the params schema is closed, so
-they are `INVALID_ARGUMENT(invalid_params)`. Each change repeats what the preferences window does for its control
-(the `AppPreferences` setter, for the hybrid switch also `invalidateAllContentCaches()`, which is why the result
-carries `reRenderQueued`) and then calls `ControlUiBridge::onPreferencesChanged()`, which is the editor's
-`syncSharedAppPreferences()`. Values equal to the current ones change nothing (a no-op when none differs). The tuning
-does not recompute existing results (`NOT_RETROACTIVE`).
+**prefs.set** changes eight processing preferences, in this order wherever the result lists them (`changes`, the
+`GLOBAL_PREFERENCE` names, the revert recipe): `tuningHz` (A4), `editingScheme`, `hybridMode`, `experimentalFeatures`,
+`vocoderWeight`, `renderingPriority` (`gpuFirst` or `cpuFirst`), `f0Model` and `referenceAlignMode` (`standardAuto` or
+`game`). No cosmetic preference can be set; the params schema is closed, so any other member is
+`INVALID_ARGUMENT(invalid_params)`. Each change repeats what the preferences window does for its control (the
+`AppPreferences` setter and the processor call that follows it; for the hybrid switch `invalidateAllContentCaches()`,
+which is why the result carries `reRenderQueued`) and then calls `ControlUiBridge::onPreferencesChanged()` once, which is
+the editor's `syncSharedAppPreferences()`. Values equal to the current ones change nothing (a no-op when none differs).
+The tuning does not recompute existing results (`NOT_RETROACTIVE`).
+
+- **What is on offer.** `prefs.get` reports it in `processing.options` (`session.info` does not): `vocoderWeight`
+  (the built-in weights whose file exists, then the files of the `vocoder_weights` folder, the list the window shows;
+  names that are not valid UTF-8 or longer than 64 code points are left out, at most 64 entries), `f0Model` (the pitch
+  models whose file exists; only `fcpe` in OpenTune), and the two fixed enumerations `renderingPriority` and
+  `referenceAlignMode`. A `vocoderWeight` or `f0Model` that is not listed is
+  `INVALID_ARGUMENT(option_unavailable)` (not retryable; the detail names the member, never the value), checked before
+  anything changes and also when the value equals the current one. The two lists are read from the models directory when
+  asked (`ControlPrefsBackend::modelsDirectory` replaces it in tests); the processing object of `session.info` stays as
+  it was.
+- **Vocoder weight and rendering priority: a job.** OpenTune applies both asynchronously: `setVocoderModelWeight()` and
+  `resetInferenceBackend()` only queue a command for the process-wide `ProcessRenderRuntime` and return; its control
+  worker thread takes the vocoder away (the flag `isVocoderReconfiguring()` turns true) when it starts the command and
+  loads the weight or backend. So a call that changes either one returns a job of kind `prefsApply` as well, and the
+  flag is not enough to tell when it is over: right after the call the vocoder is still "ready, not reconfiguring". The
+  job therefore ends when the vocoder is ready, is not reconfiguring **and** the control worker is idle (its queue is
+  empty and it has no active transaction; the command stays active until its completion ran on the message thread).
+  A weight the runtime already holds is answered without any flag, which the idle worker covers as well. It waits only
+  when the vocoder was ready before the call; a vocoder that is missing or already reloading is not waited for, the job
+  ends as soon as the changes are made. If the vocoder is not back within the limit (60 s, `kDefaultVocoderWaitMs`,
+  `controlSetPrefsVocoderWaitForTesting()` in tests), the job takes its changes back (preferences, the editor, and the
+  runtime is asked for the previous weight or priority again) and fails with `MODEL_UNAVAILABLE(vocoder_not_ready)`,
+  retryable, `executed` false. A switch that has ended without a vocoder (the weight or the backend could not be
+  loaded) is not waited for: the worker is idle, nothing is reconfiguring, and the runtime keeps asking for the same
+  weight, so the vocoder would never come back by itself. The job sees that state after its changes were made, takes
+  them back at once, as for the timeout, and fails with `MODEL_UNAVAILABLE(vocoder_load_failed)`, **not** retryable
+  (the same weight fails again), `executed` false; `vocoder_not_ready` stays for the limit. The state is read in the
+  order idle worker, reconfiguring, ready (`controlVocoderState()`): an idle worker has finished everything queued
+  before, so the other two flags read afterwards are final and a switch that straddles the read is not taken for a
+  failure. Withdrawing after a timeout reports `executed` false, but if the original switch was merely slow it still
+  completes later, clears the render caches and renders again, and the withdrawn switch (the runtime was asked for the
+  previous weight or priority) renders once more; the final state is consistent. `reRenderQueued` is reported for the
+  vocoder weight (the completion of `setVocoderModelWeight()` clears every render cache and renders every clip again)
+  when the job waited for the switch; not for the rendering priority, which clears nothing. With the editing scheme in
+  the same call both conditions must hold; whichever limit runs out first fails the job (the scheme's `INTERNAL`, the
+  vocoder's `vocoder_not_ready`), and a failed load fails it at once.
+- **Pitch model.** The window asks the processor first (`setF0ModelType()`) and stores the model only when that
+  succeeds; so does the call. When the processor refuses, the call (or the job) fails with
+  `MODEL_UNAVAILABLE(model_missing)` and `executed` false, and nothing else of the call changes either. The pitch model
+  is the first thing applied. OpenTune has one model (`fcpe`), so a refusal cannot be provoked in the real application;
+  the tests replace the processor call (`ControlPrefsBackend`).
+- **Reference alignment mode** is applied at once, with the warning `EXPERIMENTAL_FEATURE` (subject
+  `{preference: "referenceAlignMode"}`): the mode only matters for AUTO Ref, an experimental feature. The editor's
+  `syncSharedAppPreferences()` hands the mode to the processor and flags the reference context for a refresh; the call
+  also hands it to the processor itself, so that processor and preferences agree without an editor.
 
 - **Editing scheme: a job.** A call that changes the editing scheme changes nothing itself and returns a job of kind
   `prefsApply` (not cancellable). The job's first step makes every change of the call, the following steps wait until
@@ -1211,8 +1261,21 @@ does not recompute existing results (`NOT_RETROACTIVE`).
   both. Any other preference that changed while the job waited (another `prefs.set`, the preferences window) keeps its
   new value; the error's detail names it and `executed` is true. Otherwise `executed` is false: no half-applied set of
   preferences stays.
-- **Everything else is applied at once** and returns the envelope.
+- **Everything else is applied at once** (the tuning, the hybrid and experimental switches, the pitch model, the reference
+  alignment mode) and returns the envelope.
 - **Busy.** Like every write, `prefs.set` answers `BUSY` first (`modal_open` while the preferences window is open).
+
+**Deviations from the vectors.** The specification copy (rc.5) knows the four original members only: its params and
+`processing` schemas are closed, and it lists neither `processing.options`, nor the reasons `option_unavailable`,
+`vocoder_not_ready` and `vocoder_load_failed`, nor `MODEL_UNAVAILABLE` among the errors of a `prefsApply` job. The
+vectors of the copy still pass (`prefs/get-ok` matches with extra members allowed). The new members,
+`processing.options`, the three reasons and the `null` revert recipe of the case above follow the next specification
+version (rc.6); the copy is updated by the spec-sync, not by this change. `option_unavailable` is
+`INVALID_ARGUMENT` and not retryable, `vocoder_not_ready` is `MODEL_UNAVAILABLE` and retryable, `vocoder_load_failed` is
+`MODEL_UNAVAILABLE` and not retryable.
+
+The hooks of this method are none: it uses only the public functions of the processor and `AppPreferences` and the
+existing `ControlUiBridge::onPreferencesChanged()`.
 
 **audio.get / audio.set** work on the Standalone application's `juce::AudioDeviceManager`, which only the editor owns
 (`ControlUiBridge::audioDevice()`), and repeat the steps of the audio settings page (`AudioDeviceSettingsContent` in
@@ -1240,9 +1303,14 @@ does not recompute existing results (`NOT_RETROACTIVE`).
   to "no device"); without one the result says
   `IRREVERSIBLE`.
 
-Tests: `Tests/Control/ControlPrefsTests.cpp` (`PrefsRoundTrip`, `PrefsSchemeJob`, `PrefsVectors`, `AudioDevice`,
-`AudioVectors`). The audio tests never open, list or change a real device: the device manager has two fake device types
-whose devices open or fail to open on request, and they run only with the test's `OPENTUNE_DATA_DIR`. `PrefsVectors`
+Tests: `Tests/Control/ControlPrefsTests.cpp` (`PrefsRoundTrip`, `PrefsSchemeJob`, `PrefsOptions`, `PrefsVocoderJob`,
+`PrefsVocoderOverlap`, `PrefsVectors`, `AudioDevice`, `AudioVectors`). The audio tests never open, list or change a real
+device: the device manager has two fake device types whose devices open or fail to open on request, and they run only
+with the test's `OPENTUNE_DATA_DIR`. The vocoder weight, rendering priority and pitch model reach the render runtime
+through `ControlPrefsBackend` (`Ops/PrefsModels.h`); `PrefsOptions`, `PrefsVocoderJob` and `PrefsVocoderOverlap` replace
+it with a test double that reports the vocoder as queued, reloading and ready again after chosen delays (and a models
+directory under the test's data directory with fake weight files), so no real model is loaded and the waits are
+deterministic. `PrefsVectors`
 runs `prefs/set-scheme-job` with the piano roll opened on the test bridge instead of sending the vector's first request,
 `ui.setSelection`, whose test bridge is in `ControlSelectionTests.cpp`. Behaviour on a real device (listing, switching type and output, ASIO) cannot be
 tested headless and is checked by hand on a real installation.
@@ -1541,7 +1609,7 @@ than one step.
 | `content.segmentNotes` | `read.v1` | `Ops/ContentReadOps.cpp` | `ControlProcessorTests.Reads`, `.Vectors` | `methods/content.segmentNotes.schema.json` |
 | `content.getDetails` | `read.v1` | `Ops/ContentDetailsOps.cpp` | `ControlProcessorTests.Details`, `.Vectors` | `methods/content.getDetails.schema.json` |
 | `transport.get` | `read.v1` | `Ops/ProjectReadOps.cpp` | `ControlProcessorTests.Details`, `.Vectors` | `methods/transport.get.schema.json` |
-| `prefs.get` | `read.v1` | `Ops/AppReadOps.cpp` | `ControlProcessorTests.Details`, `.Vectors` | `methods/prefs.get.schema.json` |
+| `prefs.get` | `read.v1` | `Ops/AppReadOps.cpp` (`processing.options` from `Ops/PrefsModels.cpp`) | `ControlProcessorTests.Details`, `.PrefsOptions`, `.Vectors` | `methods/prefs.get.schema.json` |
 | `app.getLog` | `read.v1` | `Ops/AppReadOps.cpp` (tail and redaction in `ControlLogTail.cpp`; off the message thread) | `ControlProcessorTests.Details`, `.OffMainThread`, `ControlUnitTests` | `methods/app.getLog.schema.json` |
 | `job.get` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.JobShutdown`, `.JobVectors` | `methods/job.get.schema.json` |
 | `job.cancel` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.ImportCancel`, `.JobVectors` | `methods/job.cancel.schema.json` |
@@ -1564,7 +1632,7 @@ than one step.
 | `project.saveAs` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.saveAs.schema.json` |
 | `project.open` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.open.schema.json` |
 | `project.clearRecent` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors`, `.ProjectWithoutEditor` | `methods/project.clearRecent.schema.json` |
-| `prefs.set` | `prefs.write` | `Ops/PrefsOps.cpp` (a job of kind `prefsApply` for a change of the editing scheme) | `ControlProcessorTests.PrefsRoundTrip`, `.PrefsSchemeJob`, `.PrefsVectors` | `methods/prefs.set.schema.json` |
+| `prefs.set` | `prefs.write` | `Ops/PrefsOps.cpp` (a job of kind `prefsApply` for a change of the editing scheme, the vocoder weight or the rendering priority; `Ops/PrefsModels.cpp` for the options and the runtime calls) | `ControlProcessorTests.PrefsRoundTrip`, `.PrefsSchemeJob`, `.PrefsOptions`, `.PrefsVocoderJob`, `.PrefsVocoderOverlap`, `.PrefsVectors` | `methods/prefs.set.schema.json` |
 | `audio.get` | `audio.device` | `Ops/AudioDeviceOps.cpp` | `ControlProcessorTests.AudioDevice`, `.AudioVectors` | `methods/audio.get.schema.json` |
 | `audio.set` | `audio.device` | `Ops/AudioDeviceOps.cpp` | `ControlProcessorTests.AudioDevice`, `.AudioVectors` | `methods/audio.set.schema.json` |
 | `transport.control` | `transport.v1` | `Ops/TransportOps.cpp` | `ControlProcessorTests.Transport`, `.TrackVectors` | `methods/transport.control.schema.json` |

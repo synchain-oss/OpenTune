@@ -1637,6 +1637,178 @@
       "noteZh": "混合模式开关的 processor 回调让所有内容重新渲染（invalidateAllContentCaches）；prefs.set 的 hybridMode 也调用它，并报告 reRenderQueued。"
     },
     {
+      "id": "prefs-vocoder-weight",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "vocoderWeightSelector_.onChange",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "1f2e5b5ca8d7619a6b4c32650935861335c6ad239d55a6cdcce43e3a065d797d"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions",
+        "ControlProcessorTests.PrefsVocoderJob",
+        "ControlProcessorTests.PrefsVocoderOverlap"
+      ],
+      "note": "The weight selector stores the vocoder weight (AppPreferences::setVocoderModelWeight), calls the processor callback below and has the editor apply the preferences; prefs.set vocoderWeight does the same, as a job that waits for the vocoder.",
+      "noteZh": "声码器权重下拉框用 AppPreferences::setVocoderModelWeight 保存权重，调用下面的 processor 回调，并让编辑器应用偏好；prefs.set 的 vocoderWeight 做同样的事，但作为等待声码器的 job。"
+    },
+    {
+      "id": "prefs-vocoder-weight-processor",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "auto onVocoderModelWeightChanged",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "77b3e9be5dcb6e928d5c0d4407138b120934918a9caa6b12884b242dfa601ab0"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsModels.cpp",
+          "symbols": [
+            "controlSetVocoderWeight"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "recordDelta"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions",
+        "ControlProcessorTests.PrefsVocoderJob"
+      ],
+      "note": "The processor callback of the weight selector asks the processor for the new weight (setVocoderModelWeight), which makes every content render again once the runtime has switched; prefs.set vocoderWeight calls it too and reports reRenderQueued.",
+      "noteZh": "权重下拉框的 processor 回调向 processor 请求新权重（setVocoderModelWeight），运行时切换完成后所有内容重新渲染；prefs.set 的 vocoderWeight 也调用它，并报告 reRenderQueued。"
+    },
+    {
+      "id": "prefs-rendering-priority",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "renderingPrioritySelector_.onChange",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "035ba82218d936f12522457677574920be8bbe3350333a159534a7ccdef6ed39"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsModels.cpp",
+          "symbols": [
+            "controlResetInferenceBackend"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions",
+        "ControlProcessorTests.PrefsVocoderJob",
+        "ControlProcessorTests.PrefsVocoderOverlap"
+      ],
+      "note": "The priority selector stores the rendering priority (AppPreferences::setRenderingPriority), resets the inference backend through the processor (resetInferenceBackend(forceCpu), passed to the preferences page as an inline lambda in showPreferencesDialog) and has the editor apply the preferences; prefs.set renderingPriority does the same and reports no render.",
+      "noteZh": "优先级下拉框用 AppPreferences::setRenderingPriority 保存渲染优先级，经 processor 重置推理后端（resetInferenceBackend(forceCpu)，在 showPreferencesDialog 里以内联 lambda 传给偏好页），并让编辑器应用偏好；prefs.set 的 renderingPriority 做同样的事，不报告重新渲染。"
+    },
+    {
+      "id": "prefs-f0-model",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "f0ModelSelector_.onChange",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "0b559059442b9ad017ee4363048ac9eccd620b060009f10b330c12de97f09a90"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions"
+      ],
+      "note": "The pitch-model selector first asks the processor to switch (the processor callback below) and, only when that succeeds, stores the model (AppPreferences::setF0ModelType) and has the editor apply the preferences; prefs.set f0Model does the same in that order and fails with MODEL_UNAVAILABLE when the processor refuses.",
+      "noteZh": "音高模型下拉框先请求 processor 切换（下面的 processor 回调），成功后才用 AppPreferences::setF0ModelType 保存并让编辑器应用偏好；prefs.set 的 f0Model 按同样顺序执行，processor 拒绝时返回 MODEL_UNAVAILABLE。"
+    },
+    {
+      "id": "prefs-f0-model-processor",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "auto onF0ModelChanged",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "84fde8935140179daad231230128738a88745ed5441a8a24026281cb29c043d5"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsModels.cpp",
+          "symbols": [
+            "controlSetF0Model"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions"
+      ],
+      "note": "The processor callback of the pitch-model selector is setF0ModelType, whose result says whether the model was switched; prefs.set f0Model calls it and treats false as a refusal.",
+      "noteZh": "音高模型下拉框的 processor 回调是 setF0ModelType，其返回值表示模型是否已切换；prefs.set 的 f0Model 调用它，并把 false 当作拒绝。"
+    },
+    {
+      "id": "prefs-reference-align-mode",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "experimentalReferenceAlignModeSelector_.onChange",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "4e8962d7e67e854a49a1992d3e9418fc4a0528348c7ec2eba911915d54291516"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions"
+      ],
+      "note": "The AUTO Ref mode selector stores the mode (AppPreferences::setExperimentalReferenceAlignMode) and has the editor apply the preferences, which hands the mode to the processor and flags the reference context for a refresh; prefs.set referenceAlignMode does the same and warns with EXPERIMENTAL_FEATURE.",
+      "noteZh": "AUTO Ref 模式下拉框用 AppPreferences::setExperimentalReferenceAlignMode 保存模式，并让编辑器应用偏好（把模式交给 processor，并标记参考上下文需要刷新）；prefs.set 的 referenceAlignMode 做同样的事，并给出 EXPERIMENTAL_FEATURE 警告。"
+    },
+    {
       "id": "audio-list-types",
       "group": "audio-device",
       "upstream": {

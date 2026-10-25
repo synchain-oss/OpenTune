@@ -200,6 +200,40 @@ struct FakeAudioRig
     }
     ~FakeAudioRig() { manager.closeAudioDevice(); }
 
+    /** The device type and output device in use, and another of each (a different device type that has an output
+        device; another output device of the current type): the names that the vectors' given.audio.alternatives binds.
+        valid is false when no device runs or an alternative is missing. */
+    struct Alternatives
+    {
+        bool valid = false;
+        std::string deviceType;
+        std::string outputDevice;
+        std::string otherDeviceType;
+        std::string otherOutputDevice;
+    };
+    Alternatives alternatives()
+    {
+        Alternatives names;
+        auto* device = manager.getCurrentAudioDevice();
+        auto* currentType = manager.getCurrentDeviceTypeObject();
+        if (device == nullptr || currentType == nullptr)
+            return names;
+        names.deviceType = currentType->getTypeName().toStdString();
+        names.outputDevice = device->getName().toStdString();
+        for (const auto& name : currentType->getDeviceNames(false))
+            if (name != device->getName()) {
+                names.otherOutputDevice = name.toStdString();
+                break;
+            }
+        for (auto* type : manager.getAvailableDeviceTypes())
+            if (type != currentType && type->getDeviceNames(false).size() != 0) {
+                names.otherDeviceType = type->getTypeName().toStdString();
+                break;
+            }
+        names.valid = !names.otherOutputDevice.empty() && !names.otherDeviceType.empty();
+        return names;
+    }
+
     FakeAudioBehaviour behaviour;
     juce::AudioDeviceManager manager;
 };
@@ -1634,12 +1668,17 @@ void settleVocoderScenario(OpenTuneAudioProcessor& processor, FakeRuntime& runti
 }
 
 /** The vocoder was ready before the change, so the job waits for it; when it was not (no vocoder in the runtime, or
-    one that is reloading already) the job does not wait, ends as soon as the changes are made and reports no render of
-    its own: a job that waited would fail here, as the vocoder never gets ready. */
+    one that is reloading already) the job does not wait and ends as soon as the changes are made: a job that waited
+    would fail here, as the vocoder never gets ready. It reports the render of every content for a new weight all the
+    same: OpenTune renders once the weight has loaded, which can be after the job ended. A new rendering priority
+    renders nothing again. */
 void checkNoWaitWhenNotReady(ApiSession& api, OpenTuneAudioProcessor& processor, FakeRuntime& runtime)
 {
     auto& preferences = processor.getAppPreferences();
     controlSetPrefsVocoderWaitForTesting(800);
+    const auto reRenderQueued = [](const JsonValue& job) -> const JsonValue& {
+        return memberOf(memberOf(memberOf(job, "result"), "sideEffects"), "reRenderQueued");
+    };
 
     // A runtime without a vocoder.
     runtime.present = false;
@@ -1647,7 +1686,8 @@ void checkNoWaitWhenNotReady(ApiSession& api, OpenTuneAudioProcessor& processor,
         const auto job = runAsJob(api, "prefs.set", json(R"({"vocoderWeight":"aa-custom.onnx"})"), "prefsApply");
         CONTROL_CHECK(jobSucceeded(job));
         CONTROL_CHECK(memberOf(memberOf(job, "result"), "changes").size() == 1);
-        CONTROL_CHECK(memberOf(memberOf(job, "result"), "sideEffects").find("reRenderQueued") == nullptr);
+        CONTROL_CHECK(memberOf(reRenderQueued(job), "contentIds").size() == 1
+                      && memberOf(reRenderQueued(job), "revert").isNull());
         CONTROL_CHECK(preferences.getState().shared.vocoderModelWeight == kWeightA);
         CONTROL_CHECK((runtime.calls == std::vector<std::string>{std::string("weight:") + kWeightA}));
     }
@@ -1655,6 +1695,7 @@ void checkNoWaitWhenNotReady(ApiSession& api, OpenTuneAudioProcessor& processor,
         const auto job = runAsJob(api, "prefs.set", json(R"({"renderingPriority":"cpuFirst"})"), "prefsApply");
         CONTROL_CHECK(jobSucceeded(job));
         CONTROL_CHECK(preferences.getState().shared.renderingPriority == RenderingPriority::CpuFirst);
+        CONTROL_CHECK(memberOf(memberOf(job, "result"), "sideEffects").size() == 0);
     }
 
     // A vocoder that is reconfiguring already, whatever the reason.
@@ -1665,6 +1706,7 @@ void checkNoWaitWhenNotReady(ApiSession& api, OpenTuneAudioProcessor& processor,
             runAsJob(api, "prefs.set", json(R"({"vocoderWeight":"hifigan.onnx","tuningHz":434})"), "prefsApply");
         CONTROL_CHECK(jobSucceeded(job));
         CONTROL_CHECK(memberOf(memberOf(job, "result"), "changes").size() == 2);
+        CONTROL_CHECK(memberOf(reRenderQueued(job), "contentIds").size() == 1);
         CONTROL_CHECK((runtime.calls == std::vector<std::string>{"weight:hifigan.onnx"}));
     }
 
@@ -1971,6 +2013,106 @@ void checkModalBeforeVocoderChange(ApiSession& api, PrefsBridge& bridge, FakeRun
     CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
 }
 
+/** Polls session.info until processing reports this vocoderReady and vocoderReconfiguring, for at most timeoutMs. */
+bool sessionVocoderBecomes(ApiSession& api, bool ready, bool reconfiguring, int timeoutMs)
+{
+    const auto startedAt = juce::Time::getMillisecondCounter();
+    while (juce::Time::getMillisecondCounter() - startedAt < static_cast<std::uint32_t>(timeoutMs)) {
+        const auto info = api.result("session.info");
+        const auto& processing = memberOf(info, "processing");
+        if (memberOf(processing, "vocoderReady").isBoolean()
+            && memberOf(processing, "vocoderReady").asBoolean() == ready
+            && memberOf(processing, "vocoderReconfiguring").isBoolean()
+            && memberOf(processing, "vocoderReconfiguring").asBoolean() == reconfiguring)
+            return true;
+        pumpMessagesFor(10);
+    }
+    return false;
+}
+
+/** The job's failure when the editor generated the notes of the clip open in the piano roll: executed is true, the
+   detail says that notes were generated and kept and names the content (a handle), the notes and the dirty flag stay,
+   and everything else is back. */
+bool notesKeptInFailure(const JsonValue& job, const std::string& contentId)
+{
+    const auto& data = memberOf(memberOf(job, "error"), "data");
+    const auto detail = memberOf(data, "detail").text();
+    const bool ok = memberOf(data, "executed").isBoolean() && memberOf(data, "executed").asBoolean()
+                    && detail.find("generated notes") != std::string::npos && detail.find("kept") != std::string::npos
+                    && detail.find(contentId) != std::string::npos && detail.find(".wav") == std::string::npos;
+    if (!ok)
+        note("the failed job does not say that generated notes were kept: " + toJsonString(job));
+    return ok;
+}
+
+/** Switching to openDyne made the editor generate the notes of the clip open in the piano roll (no undo entry), and
+    then the vocoder fails to come back: the job takes the preferences back, and the notes stay, the project stays
+    marked as changed, the detail says so and executed is true. Once for the limit that ran out (retryable
+    vocoder_not_ready), once for a weight that cannot be loaded (vocoder_load_failed); then the restored weight loads
+    again, and session.info reports that while it does. */
+void checkGeneratedNotesStay(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge,
+                             FakeRuntime& runtime, const Clip& waitClip, const ClipHandles& waitHandles,
+                             const Clip& failClip, const ClipHandles& failHandles)
+{
+    auto& preferences = processor.getAppPreferences();
+    const auto baseline = api.result("prefs.get");
+    const auto savedView = bridge.view;
+    bridge.apply = PrefsBridge::Apply::Immediate;
+    bridge.generateNotes = true;
+    bridge.view.workspace = "pianoRoll";
+
+    // The limit runs out: the vocoder never comes back.
+    {
+        bridge.pianoRollKey = waitClip.key;
+        bridge.view.pianoRollPlacementId = waitClip.placementId;
+        bridge.project.dirty = false;
+        CONTROL_CHECK(!processor.getContentSnapshot(waitClip.key)->noteTopologyInitialized);
+        controlSetPrefsVocoderWaitForTesting(600);
+        runtime.neverReady = true;
+        const auto job = runAsJob(
+            api, "prefs.set", json(R"({"editingScheme":"openDyne","vocoderWeight":"aa-custom.onnx"})"), "prefsApply");
+        CONTROL_CHECK(jobFailedWith(job, "MODEL_UNAVAILABLE", "vocoder_not_ready", true, true));
+        CONTROL_CHECK(notesKeptInFailure(job, waitHandles.contentId));
+        CONTROL_CHECK(processor.getContentSnapshot(waitClip.key)->noteTopologyInitialized
+                      && !processor.getContentSnapshot(waitClip.key)->notes.empty());
+        CONTROL_CHECK(bridge.project.dirty);
+        CONTROL_CHECK(!AudioEditingScheme::usesNotesPrimaryScheme(preferences.getState().shared.audioEditingScheme));
+        CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+        CONTROL_CHECK(
+            (runtime.calls == std::vector<std::string>{std::string("weight:") + kWeightA, "weight:hifigan.onnx"}));
+        settleVocoderScenario(processor, runtime);
+    }
+
+    // The weight cannot be loaded: the job fails at once, with the same consequences for the notes. The previous
+    // weight is handed back, and while it loads session.info reports a vocoder that is reconfiguring.
+    {
+        bridge.pianoRollKey = failClip.key;
+        bridge.view.pianoRollPlacementId = failClip.placementId;
+        bridge.project.dirty = false;
+        CONTROL_CHECK(!processor.getContentSnapshot(failClip.key)->noteTopologyInitialized);
+        controlSetPrefsVocoderWaitForTesting(8000);
+        runtime.queuedMs = 100;
+        runtime.loadingMs = 600;
+        runtime.failNextLoad = true;
+        const auto job = runAsJob(
+            api, "prefs.set", json(R"({"editingScheme":"openDyne","vocoderWeight":"aa-custom.onnx"})"), "prefsApply");
+        CONTROL_CHECK(jobFailedWith(job, "MODEL_UNAVAILABLE", "vocoder_load_failed", true, false));
+        CONTROL_CHECK(notesKeptInFailure(job, failHandles.contentId));
+        CONTROL_CHECK(processor.getContentSnapshot(failClip.key)->noteTopologyInitialized);
+        CONTROL_CHECK(bridge.project.dirty);
+        CONTROL_CHECK(!AudioEditingScheme::usesNotesPrimaryScheme(preferences.getState().shared.audioEditingScheme));
+        CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+        CONTROL_CHECK(
+            (runtime.calls == std::vector<std::string>{std::string("weight:") + kWeightA, "weight:hifigan.onnx"}));
+        // The runtime was asked for the previous weight: it reloads (reconfiguring), and then the vocoder is back.
+        CONTROL_CHECK(sessionVocoderBecomes(api, false, true, 2000));
+        CONTROL_CHECK(sessionVocoderBecomes(api, true, false, 4000));
+        settleVocoderScenario(processor, runtime);
+    }
+    bridge.view = savedView;
+    bridge.generateNotes = false;
+}
+
 } // namespace
 
 void scenarioPrefsVocoderOverlap()
@@ -1985,6 +2127,14 @@ void scenarioPrefsVocoderOverlap()
     bridge.preferences = &processor->getAppPreferences();
     auto registered = std::make_unique<ScopedBridge>(service, bridge);
     fixtureAddClip(*processor, readyClip("vocoder-overlap"));
+    // Two more clips, each to be opened in the piano roll once by checkGeneratedNotesStay (the notes of a clip are
+    // generated only once).
+    auto waitSpec = readyClip("vocoder-notes-wait");
+    waitSpec.trackId = 1;
+    auto failSpec = readyClip("vocoder-notes-fail");
+    failSpec.trackId = 2;
+    const auto waitClip = fixtureAddClip(*processor, waitSpec);
+    const auto failClip = fixtureAddClip(*processor, failSpec);
     std::optional<ApiSession> session;
     session.emplace();
     auto& api = *session;
@@ -2000,6 +2150,13 @@ void scenarioPrefsVocoderOverlap()
     checkVocoderTimesOutWhileSchemeIsApplied(api, *processor, bridge, runtime);
     checkWriteDuringVocoderWait(api, *processor, runtime);
     checkModalBeforeVocoderChange(api, bridge, runtime, service.jobs());
+    {
+        const auto project = api.result("project.get");
+        const auto waitHandles = fixtureHandlesOf(project, 1, 2.0);
+        const auto failHandles = fixtureHandlesOf(project, 2, 2.0);
+        if (CONTROL_CHECK(waitHandles.has_value() && failHandles.has_value()))
+            checkGeneratedNotesStay(api, *processor, bridge, runtime, waitClip, *waitHandles, failClip, *failHandles);
+    }
 
     // The control API stops while a job waits for the vocoder: the stored preferences are put back, and the runtime is
     // not asked again (there is no context any more to ask with).
@@ -2407,15 +2564,58 @@ void scenarioAudioDevice()
 
 namespace {
 
-const std::set<std::string> kPrefsVectorMethods = {"prefs.set", "session.info", "job.get", "ui.setSelection"};
+const std::set<std::string> kPrefsVectorMethods = {"prefs.get", "prefs.set", "session.info", "job.get",
+                                                   "ui.setSelection"};
 const std::set<std::string> kAudioVectorMethods = {"audio.get", "audio.set"};
+/** The vectors of prefs.set, and the vectors of prefs.get that need preferences established (read.v1; the other
+    vectors of prefs.get run in the Vectors scenario of ControlDispatcherTests.cpp). */
+const std::set<std::string> kPrefsVectorCapabilities = {"prefs.write", "read.v1"};
+const std::set<std::string> kAudioVectorCapabilities = {"audio.device"};
+
+/** Why this runner does not run the preference given by a vector (a member of given.preferences), or empty when it
+    establishes it. */
+std::string preferencesSkipReason(const JsonValue& preferences)
+{
+    for (std::size_t i = 0; i < preferences.size(); ++i) {
+        const auto& member = preferences.keyAt(i);
+        if (member == "options") {
+            const auto& options = preferences.at(i);
+            for (std::size_t o = 0; o < options.size(); ++o) {
+                const auto& list = options.keyAt(o);
+                if (list == "f0Model") {
+                    for (std::size_t n = 0; n < options.at(o).size(); ++n)
+                        if (options.at(o).at(n).text() != "fcpe")
+                            return "the pitch model " + options.at(o).at(n).text()
+                                   + " is not established by this runner (OpenTune has fcpe only)";
+                } else if (list != "vocoderWeight") {
+                    return "precondition given.preferences.options." + list + " is not established by this runner";
+                }
+            }
+            continue;
+        }
+        if (member == "f0Model") {
+            if (preferences.at(i).text() != "fcpe")
+                return "the pitch model " + preferences.at(i).text()
+                       + " is not established by this runner (OpenTune has fcpe only)";
+            continue;
+        }
+        if (member == "tuningHz" || member == "hybridMode" || member == "experimentalFeatures"
+            || member == "vocoderWeight" || member == "renderingPriority" || member == "referenceAlignMode")
+            continue;
+        return "precondition given.preferences." + member + " is not established by this runner";
+    }
+    return {};
+}
 
 /** Why this runner does not run a vector, or empty when it does. */
-std::string vectorSkipReason(const JsonValue& vector, const std::string& capability,
+std::string vectorSkipReason(const JsonValue& vector, const std::set<std::string>& capabilities,
                              const std::set<std::string>& methods)
 {
-    if (memberOf(vector, "capability").text() != capability)
+    if (capabilities.count(memberOf(vector, "capability").text()) == 0)
         return "runs in the runner of its own capability";
+    if (memberOf(vector, "capability").text() == "read.v1"
+        && !memberOf(memberOf(vector, "given"), "preferences").isObject())
+        return "a read without preferences of its own runs in ControlProcessorTests.Vectors";
     const auto& extra = memberOf(vector, "extraCapabilities");
     for (std::size_t i = 0; i < extra.size(); ++i)
         if (extra.at(i).text() != "jobs.v1" && extra.at(i).text() != "ui.bridge")
@@ -2439,7 +2639,12 @@ std::string vectorSkipReason(const JsonValue& vector, const std::string& capabil
     const auto& given = memberOf(vector, "given");
     for (std::size_t i = 0; i < given.size(); ++i) {
         const auto& name = given.keyAt(i);
-        if (name == "dirty" || name == "preferences" || name == "editingScheme" || name == "audio")
+        if (name == "preferences") {
+            if (const auto reason = preferencesSkipReason(given.at(i)); !reason.empty())
+                return reason;
+            continue;
+        }
+        if (name == "dirty" || name == "editingScheme" || name == "audio")
             continue;
         if (name == "jobs") {
             for (std::size_t j = 0; j < given.at(i).size(); ++j)
@@ -2472,13 +2677,48 @@ std::string runVector(const JsonValue& vector, bool withClips)
         return "the control API did not start";
     const auto& given = memberOf(vector, "given");
     const auto& preferencesGiven = memberOf(given, "preferences");
-    resetPreferences(
-        *processor, memberOf(given, "editingScheme").text() == "openDyne",
-        !(preferencesGiven.find("hybridMode") != nullptr && !memberOf(preferencesGiven, "hybridMode").asBoolean()),
-        false,
-        preferencesGiven.find("tuningHz") != nullptr
-            ? static_cast<float>(memberOf(preferencesGiven, "tuningHz").asDouble())
-            : TuningConfig::kDefaultTuningHz);
+    const auto booleanGiven = [&preferencesGiven](const char* name, bool otherwise) {
+        const JsonValue* value = preferencesGiven.find(name);
+        return value != nullptr ? value->asBoolean() : otherwise;
+    };
+    resetPreferences(*processor, memberOf(given, "editingScheme").text() == "openDyne",
+                     booleanGiven("hybridMode", true), booleanGiven("experimentalFeatures", false),
+                     preferencesGiven.find("tuningHz") != nullptr
+                         ? static_cast<float>(memberOf(preferencesGiven, "tuningHz").asDouble())
+                         : TuningConfig::kDefaultTuningHz);
+    // The processing preferences of the vector (the pitch model is fcpe, the only one OpenTune has, as the defaults).
+    auto& preferences = processor->getAppPreferences();
+    if (const JsonValue* weight = preferencesGiven.find("vocoderWeight"))
+        preferences.setVocoderModelWeight(weight->text());
+    if (const JsonValue* priority = preferencesGiven.find("renderingPriority"))
+        preferences.setRenderingPriority(priority->text() == "cpuFirst" ? RenderingPriority::CpuFirst
+                                                                        : RenderingPriority::GpuFirst);
+    if (const JsonValue* mode = preferencesGiven.find("referenceAlignMode"))
+        preferences.setExperimentalReferenceAlignMode(mode->text() == "game"
+                                                          ? ExperimentalReferenceAlignMode::Game
+                                                          : ExperimentalReferenceAlignMode::StandardAuto);
+    // The models of the installation (given.preferences.options) are files in a models directory of the test, and the
+    // render runtime is a test double that reloads the vocoder after a short while, so that no real model is loaded and
+    // no real inference backend is reset. Without options the directory is empty, as on an installation without models.
+    const auto models = freshModelsDirectory("vector");
+    if (models.empty())
+        return "the models directory of the vector could not be made";
+    if (const JsonValue* options = preferencesGiven.find("options")) {
+        const auto& weights = memberOf(*options, "vocoderWeight");
+        for (std::size_t i = 0; i < weights.size(); ++i) {
+            const auto name = weights.at(i).text();
+            const bool builtIn = name == kVocoderWeightCommunity || name == kVocoderWeightCoulin9;
+            touchFile(builtIn ? models / std::filesystem::u8path(name)
+                              : models / "vocoder_weights" / std::filesystem::u8path(name));
+        }
+        // The only pitch model that can be listed is fcpe (vectorSkipReason skips a vector that names another).
+        if (memberOf(*options, "f0Model").size() != 0)
+            touchFile(models / "fcpe.onnx");
+    }
+    FakeRuntime runtime;
+    runtime.queuedMs = 100;
+    runtime.loadingMs = 100;
+    runtime.install(models);
     const auto& audioGiven = memberOf(given, "audio");
     const bool audioRunning = audioGiven.find("running") == nullptr || memberOf(audioGiven, "running").asBoolean();
     FakeAudioRig rig(audioRunning);
@@ -2493,6 +2733,17 @@ std::string runVector(const JsonValue& vector, bool withClips)
     ScopedBridge registered(service, bridge);
 
     VectorMatcher matcher;
+    if (const JsonValue* alternatives = audioGiven.find("alternatives"); alternatives && alternatives->asBoolean()) {
+        // given.audio.alternatives: the current device type and output device, and another of each. The rig always
+        // offers a second device type with an output device and a second output device on the current type.
+        const auto names = rig.alternatives();
+        if (!names.valid)
+            return "the fake audio devices offer no alternatives";
+        matcher.bindings["audio.deviceType"] = JsonValue::string(names.deviceType);
+        matcher.bindings["audio.outputDevice"] = JsonValue::string(names.outputDevice);
+        matcher.bindings["audio.otherDeviceType"] = JsonValue::string(names.otherDeviceType);
+        matcher.bindings["audio.otherOutputDevice"] = JsonValue::string(names.otherOutputDevice);
+    }
     std::vector<Clip> created;
     const auto& clips = memberOf(given, "clips");
     std::vector<std::string> binds;
@@ -2578,7 +2829,7 @@ std::string runVector(const JsonValue& vector, bool withClips)
     return failure;
 }
 
-void runVectorsOf(const char* testName, const char* directory, const char* capability,
+void runVectorsOf(const char* testName, const char* directory, const std::set<std::string>& capabilities,
                   const std::set<std::string>& methods, const std::vector<std::string>& mustRun, bool withClips)
 {
     VectorReport report(testName);
@@ -2597,7 +2848,7 @@ void runVectorsOf(const char* testName, const char* directory, const char* capab
             continue;
         const auto& vector = parsed.value;
         const auto id = memberOf(vector, "id").text();
-        if (const auto reason = vectorSkipReason(vector, capability, methods); !reason.empty()) {
+        if (const auto reason = vectorSkipReason(vector, capabilities, methods); !reason.empty()) {
             ++skipped;
             report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
@@ -2615,7 +2866,7 @@ void runVectorsOf(const char* testName, const char* directory, const char* capab
     }
     report.write();
     for (const auto& id : mustRun)
-        CONTROL_CHECK(passedIds.count(id) == 1);
+        CONTROL_CHECK(mustRunHolds(std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR), passedIds, id));
     note(std::to_string(passed) + " vectors passed, " + std::to_string(skipped) + " skipped");
 }
 
@@ -2623,17 +2874,24 @@ void runVectorsOf(const char* testName, const char* directory, const char* capab
 
 void scenarioPrefsVectors()
 {
-    // prefs/get-ok is a read, run by the Vectors scenario.
-    runVectorsOf("ControlProcessorTests.PrefsVectors", "prefs", "prefs.write", kPrefsVectorMethods,
-                 {"prefs/set-hybrid", "prefs/set-no-op", "prefs/set-out-of-range", "prefs/set-scheme",
-                  "prefs/set-scheme-job", "prefs/set-tuning", "prefs/set-tuning-revert", "prefs/set-job-failures"},
+    // prefs/get-ok is a read without preconditions, run by the Vectors scenario; prefs/get-options needs the options
+    // of the installation and runs here.
+    runVectorsOf("ControlProcessorTests.PrefsVectors", "prefs", kPrefsVectorCapabilities, kPrefsVectorMethods,
+                 {"prefs/get-options", "prefs/set-experimental-features", "prefs/set-f0-model-noop", "prefs/set-hybrid",
+                  "prefs/set-job-failures", "prefs/set-no-op", "prefs/set-option-unavailable",
+                  "prefs/set-option-unavailable-unchanged", "prefs/set-out-of-range", "prefs/set-reference-align-mode",
+                  "prefs/set-rendering-priority", "prefs/set-scheme", "prefs/set-scheme-job", "prefs/set-tuning",
+                  "prefs/set-tuning-revert", "prefs/set-vocoder-load-failed", "prefs/set-vocoder-not-ready",
+                  "prefs/set-vocoder-weight"},
                  true);
 }
 
 void scenarioAudioVectors()
 {
-    runVectorsOf("ControlProcessorTests.AudioVectors", "audio", "audio.device", kAudioVectorMethods,
-                 {"audio/get-no-device", "audio/get-ok", "audio/set-ok", "audio/set-rollback", "audio/set-unavailable"},
+    runVectorsOf("ControlProcessorTests.AudioVectors", "audio", kAudioVectorCapabilities, kAudioVectorMethods,
+                 {"audio/get-no-device", "audio/get-ok", "audio/set-device-type", "audio/set-ok",
+                  "audio/set-output-channel-pair", "audio/set-output-device", "audio/set-rollback",
+                  "audio/set-unavailable"},
                  false);
 }
 

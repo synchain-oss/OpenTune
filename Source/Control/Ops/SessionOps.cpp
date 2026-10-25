@@ -3,10 +3,10 @@
 
 #include "OpsJson.h"
 #include "OpsSupport.h"
+#include "PrefsModels.h"
 
 #include "Audio/AudioFormatRegistry.h"
 #include "PluginProcessor.h"
-#include "Runtime/ProcessRenderRuntime.h"
 #include "Utils/AccelerationDetector.h"
 #include "Utils/AppPreferences.h"
 
@@ -116,10 +116,12 @@ ControlProcessingRuntime processingRuntime()
     ControlProcessingRuntime runtime;
     // AccelerationDetector::getSelection(): the inference backend in use (CPU until one was detected).
     runtime.backend = backendName(AccelerationDetector::getInstance().getSelection().backend);
-    // ProcessRenderRuntime: the process-wide vocoder, polled without a hook.
-    auto& render = ProcessRenderRuntime::getInstance();
-    runtime.vocoderReady = render.isVocoderReady();
-    runtime.vocoderReconfiguring = render.isVocoderReconfiguring();
+    // ProcessRenderRuntime::isVocoderReady() / isVocoderReconfiguring(): the process-wide vocoder, polled without a
+    // hook. Read through controlVocoderState(), which asks the runtime unless a test replaced it, so that the tests of
+    // prefs.set see what session.info reports while their fake runtime reloads the vocoder.
+    const auto vocoder = controlVocoderState();
+    runtime.vocoderReady = vocoder.ready;
+    runtime.vocoderReconfiguring = vocoder.reconfiguring;
     return runtime;
 }
 

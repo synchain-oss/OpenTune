@@ -2,6 +2,7 @@
 #include "PrefsOps.h"
 
 #include "OpsSupport.h"
+#include "PrefsModels.h"
 #include "WriteEnvelope.h"
 
 #include "Control/ControlJobs.h"
@@ -32,8 +33,19 @@ constexpr const char* kJobKindPrefsApply = "prefsApply";
     synchronously when the bridge hands them over and again on its heartbeat (30 Hz when idle), so the wait only
     matters for an editor that has stopped running its heartbeat. */
 constexpr std::uint32_t kDefaultApplyTimeoutMs = 10000;
+/** How long a prefsApply job waits for the vocoder to be ready again after a change of the vocoder weight or the
+    rendering priority. Longer than kDefaultApplyTimeoutMs: the runtime destroys the vocoder session and loads the model
+    again, which takes seconds on a slow disk or a cold GPU. The specification names no number (an implementation
+    defined limit). */
+constexpr std::uint32_t kDefaultVocoderWaitMs = 60000;
 
 std::atomic<std::uint32_t>& applyTimeoutOverrideMs()
+{
+    static std::atomic<std::uint32_t> overrideMs{0};
+    return overrideMs;
+}
+
+std::atomic<std::uint32_t>& vocoderWaitOverrideMs()
 {
     static std::atomic<std::uint32_t> overrideMs{0};
     return overrideMs;
@@ -43,6 +55,12 @@ std::uint32_t applyTimeoutMs()
 {
     const auto overrideMs = applyTimeoutOverrideMs().load();
     return overrideMs != 0 ? overrideMs : kDefaultApplyTimeoutMs;
+}
+
+std::uint32_t vocoderWaitMs()
+{
+    const auto overrideMs = vocoderWaitOverrideMs().load();
+    return overrideMs != 0 ? overrideMs : kDefaultVocoderWaitMs;
 }
 
 // ---- Params ---------------------------------------------------------------------------------------
@@ -55,6 +73,15 @@ struct PrefsRequest
     std::optional<bool> notesPrimary;
     std::optional<bool> hybridMode;
     std::optional<bool> experimentalFeatures;
+    /** vocoderWeight: a file name of processing.options.vocoderWeight (checked when the call runs). */
+    std::optional<std::string> vocoderWeight;
+    /** renderingPriority: true for cpuFirst, false for gpuFirst. */
+    std::optional<bool> cpuFirst;
+    /** f0Model: a name of processing.options.f0Model (checked when the call runs), and the type it names. */
+    std::optional<std::string> f0Model;
+    std::optional<F0ModelType> f0Type;
+    /** referenceAlignMode: true for game, false for standardAuto. */
+    std::optional<bool> referenceGame;
 };
 
 /** A4 as the wire carries it: three decimals, like controlJsonNumber(tuningHz, 3) in prefs.get and session.info. */
@@ -74,12 +101,39 @@ bool readBoolean(ControlParamReader& reader, const char* name, std::optional<boo
     return true;
 }
 
+/** An optional text member of 1 to kControlOptionTextCodePoints code points. */
+bool readOptionName(ControlParamReader& reader, const char* name, std::optional<std::string>& out)
+{
+    const JsonValue* value = reader.member(name);
+    if (value == nullptr)
+        return true;
+    if (!value->isString() || value->text().empty() || utf8CodePointCount(value->text()) > kControlOptionTextCodePoints)
+        return reader.fail(std::string(name) + " must be a string of 1 to "
+                           + std::to_string(kControlOptionTextCodePoints) + " characters");
+    out = value->text();
+    return true;
+}
+
+/** An optional member that is one of two words; out is true for the second. */
+bool readEnumPair(ControlParamReader& reader, const char* name, const char* first, const char* second,
+                  std::optional<bool>& out)
+{
+    const JsonValue* value = reader.member(name);
+    if (value == nullptr)
+        return true;
+    if (!value->isString() || (value->text() != first && value->text() != second))
+        return reader.fail(std::string(name) + " must be " + first + " or " + second);
+    out = value->text() == second;
+    return true;
+}
+
 /** Checks the params of prefs.set on the connection thread: a closed object with at least one member. */
 bool parsePrefsSet(const JsonValue& params, PrefsRequest& out, std::string& why)
 {
     ControlParamReader reader(params);
     std::optional<double> tuning;
-    if (!reader.onlyMembers({"tuningHz", "editingScheme", "hybridMode", "experimentalFeatures"})
+    if (!reader.onlyMembers({"tuningHz", "editingScheme", "hybridMode", "experimentalFeatures", "vocoderWeight",
+                             "renderingPriority", "f0Model", "referenceAlignMode"})
         || !reader.optionalNumber("tuningHz", static_cast<double>(TuningConfig::kMinTuningHz),
                                   static_cast<double>(TuningConfig::kMaxTuningHz), tuning)) {
         why = reader.why();
@@ -93,13 +147,18 @@ bool parsePrefsSet(const JsonValue& params, PrefsRequest& out, std::string& why)
         out.notesPrimary = scheme->text() == "openDyne";
     }
     if (!readBoolean(reader, "hybridMode", out.hybridMode)
-        || !readBoolean(reader, "experimentalFeatures", out.experimentalFeatures)) {
+        || !readBoolean(reader, "experimentalFeatures", out.experimentalFeatures)
+        || !readOptionName(reader, "vocoderWeight", out.vocoderWeight)
+        || !readEnumPair(reader, "renderingPriority", "gpuFirst", "cpuFirst", out.cpuFirst)
+        || !readOptionName(reader, "f0Model", out.f0Model)
+        || !readEnumPair(reader, "referenceAlignMode", "standardAuto", "game", out.referenceGame)) {
         why = reader.why();
         return false;
     }
     if (tuning)
         out.tuningHz = roundedTuning(*tuning);
-    if (!out.tuningHz && !out.notesPrimary && !out.hybridMode && !out.experimentalFeatures) {
+    if (!out.tuningHz && !out.notesPrimary && !out.hybridMode && !out.experimentalFeatures && !out.vocoderWeight
+        && !out.cpuFirst && !out.f0Model && !out.referenceGame) {
         why = "params must have at least one member";
         return false;
     }
@@ -108,13 +167,17 @@ bool parsePrefsSet(const JsonValue& params, PrefsRequest& out, std::string& why)
 
 // ---- The preferences, and what a request changes -----------------------------------------------------
 
-/** The four preferences prefs.set changes, as prefs.get reports them. */
+/** The preferences prefs.set changes, as prefs.get reports them. */
 struct PrefsState
 {
     float tuningHz = TuningConfig::kDefaultTuningHz;
     bool notesPrimary = false;
     bool hybridMode = true;
     bool experimentalFeatures = false;
+    std::string vocoderWeight = kDefaultVocoderWeight;
+    bool cpuFirst = false;
+    std::string f0Model = "fcpe";
+    bool referenceGame = false;
 };
 
 PrefsState readState(OpenTuneAudioProcessor& processor)
@@ -127,6 +190,10 @@ PrefsState readState(OpenTuneAudioProcessor& processor)
     state.notesPrimary = AudioEditingScheme::usesNotesPrimaryScheme(shared.audioEditingScheme);
     state.hybridMode = shared.lightPitchCorrectionEnabled;
     state.experimentalFeatures = shared.experimentalFeaturesEnabled;
+    state.vocoderWeight = shared.vocoderModelWeight;
+    state.cpuFirst = shared.renderingPriority == RenderingPriority::CpuFirst;
+    state.f0Model = controlF0ModelName(shared.f0ModelType);
+    state.referenceGame = shared.experimentalReferenceAlignMode == ExperimentalReferenceAlignMode::Game;
     return state;
 }
 
@@ -137,8 +204,18 @@ struct PrefsDelta
     bool scheme = false;
     bool hybrid = false;
     bool experimental = false;
+    bool vocoder = false;
+    bool priority = false;
+    bool f0 = false;
+    bool align = false;
 
-    bool any() const noexcept { return tuning || scheme || hybrid || experimental; }
+    bool any() const noexcept
+    {
+        return tuning || scheme || hybrid || experimental || vocoder || priority || f0 || align;
+    }
+    /** The editor applies the scheme asynchronously, and the runtime replaces the vocoder asynchronously after a new
+        weight or a new rendering priority: a call that changes one of them is a job. */
+    bool needsJob() const noexcept { return scheme || vocoder || priority; }
 };
 
 PrefsDelta computeDelta(const PrefsState& state, const PrefsRequest& request)
@@ -148,6 +225,10 @@ PrefsDelta computeDelta(const PrefsState& state, const PrefsRequest& request)
     delta.scheme = request.notesPrimary && *request.notesPrimary != state.notesPrimary;
     delta.hybrid = request.hybridMode && *request.hybridMode != state.hybridMode;
     delta.experimental = request.experimentalFeatures && *request.experimentalFeatures != state.experimentalFeatures;
+    delta.vocoder = request.vocoderWeight && *request.vocoderWeight != state.vocoderWeight;
+    delta.priority = request.cpuFirst && *request.cpuFirst != state.cpuFirst;
+    delta.f0 = request.f0Model && *request.f0Model != state.f0Model;
+    delta.align = request.referenceGame && *request.referenceGame != state.referenceGame;
     return delta;
 }
 
@@ -163,20 +244,52 @@ PrefsState stateAfter(const PrefsState& before, const PrefsRequest& request, con
         after.hybridMode = *request.hybridMode;
     if (delta.experimental)
         after.experimentalFeatures = *request.experimentalFeatures;
+    if (delta.vocoder)
+        after.vocoderWeight = *request.vocoderWeight;
+    if (delta.priority)
+        after.cpuFirst = *request.cpuFirst;
+    if (delta.f0)
+        after.f0Model = *request.f0Model;
+    if (delta.align)
+        after.referenceGame = *request.referenceGame;
     return after;
+}
+
+/** The type a pitch model name stands for among the pitch models that OpenTune lists. */
+std::optional<F0ModelType> f0TypeOf(const std::string& name)
+{
+    for (const auto& model : controlF0Models())
+        if (model.name == name)
+            return model.type;
+    return std::nullopt;
+}
+
+ExperimentalReferenceAlignMode alignModeOf(bool game)
+{
+    return game ? ExperimentalReferenceAlignMode::Game : ExperimentalReferenceAlignMode::StandardAuto;
 }
 
 /**
  * Makes the changes of a request, as OpenTune's preferences window does for each control (SharedEditingPage's tuning
- * slider and scheme selector, SharedAudioPage's experimental toggle and hybrid toggle with its processor callback in
- * showPreferencesDialog), and then lets the editor apply the preferences. Message thread.
+ * slider and scheme selector, SharedAudioPage's experimental toggle, hybrid toggle with its processor callback in
+ * showPreferencesDialog, rendering priority, vocoder weight, pitch model and reference alignment mode selectors with
+ * their processor callbacks), and then lets the editor apply the preferences. The pitch model comes first, as the
+ * window asks the processor before it stores the model: when the processor refuses, nothing changes and the error is
+ * returned. Message thread.
  */
-void applyDelta(ControlOpContext& context, const PrefsRequest& request, const PrefsDelta& delta)
+std::optional<Error> applyDelta(ControlOpContext& context, const PrefsRequest& request, const PrefsDelta& delta)
 {
     auto& processor = context.processor();
     // AppPreferences setters: each stores the value, persists the preferences file and, for the tuning, updates the
     // process-wide A4 frequency.
     auto& preferences = processor.getAppPreferences();
+    if (delta.f0) {
+        // f0ModelSelector_.onChange: the processor switches the model first (setF0ModelType); a refusal leaves the
+        // window's preference as it is, and only an accepted model is stored.
+        if (!request.f0Type || !controlSetF0Model(processor, *request.f0Type))
+            return controlOpError("MODEL_UNAVAILABLE", "model_missing", "OpenTune could not switch the pitch model");
+        preferences.setF0ModelType(*request.f0Type);
+    }
     if (delta.tuning) {
         TuningConfig::TuningSettings tuning;
         tuning.tuningHz = *request.tuningHz;
@@ -192,16 +305,48 @@ void applyDelta(ControlOpContext& context, const PrefsRequest& request, const Pr
     }
     if (delta.experimental)
         preferences.setExperimentalFeaturesEnabled(*request.experimentalFeatures);
+    if (delta.vocoder) {
+        // vocoderWeightSelector_.onChange: the preference first, then the processor's asynchronous switch (the
+        // runtime's control worker destroys the vocoder session and loads the weight).
+        preferences.setVocoderModelWeight(*request.vocoderWeight);
+        controlSetVocoderWeight(processor, *request.vocoderWeight);
+    }
+    if (delta.priority) {
+        // renderingPrioritySelector_.onChange: the preference first, then the processor's asynchronous reset of the
+        // inference backend (cpuFirst forces the CPU).
+        preferences.setRenderingPriority(*request.cpuFirst ? RenderingPriority::CpuFirst : RenderingPriority::GpuFirst);
+        controlResetInferenceBackend(processor, *request.cpuFirst);
+    }
+    if (delta.align) {
+        // experimentalReferenceAlignModeSelector_.onChange stores the mode; the editor's
+        // syncSharedAppPreferences() (the bridge call below) hands it to the processor and flags the reference
+        // context for a refresh. The processor gets it here as well, so that a call without an editor leaves the
+        // processor and the preferences in agreement.
+        preferences.setExperimentalReferenceAlignMode(alignModeOf(*request.referenceGame));
+        processor.setExperimentalReferenceAlignMode(alignModeOf(*request.referenceGame));
+    }
     if (delta.any())
         if (auto* bridge = context.bridge())
             bridge->onPreferencesChanged();
+    return std::nullopt;
 }
 
-/** Puts the preferences a delta changed back to the state before it; the editor is told only when asked to. */
+/**
+ * Puts the preferences a delta changed back to the state before it; the editor is told only when asked to. With a
+ * context the runtime is asked for the previous vocoder weight, rendering priority and pitch model as well, so that
+ * the stored preferences and the runtime agree again; without one (the control API is stopping) only the stored
+ * preferences change.
+ */
 void restoreState(ControlOpContext* context, OpenTuneAudioProcessor& processor, const PrefsState& before,
                   const PrefsDelta& delta)
 {
     auto& preferences = processor.getAppPreferences();
+    if (delta.f0)
+        if (const auto type = f0TypeOf(before.f0Model)) {
+            if (context != nullptr)
+                controlSetF0Model(processor, *type);
+            preferences.setF0ModelType(*type);
+        }
     if (delta.tuning) {
         TuningConfig::TuningSettings tuning;
         tuning.tuningHz = before.tuningHz;
@@ -217,6 +362,20 @@ void restoreState(ControlOpContext* context, OpenTuneAudioProcessor& processor, 
     }
     if (delta.experimental)
         preferences.setExperimentalFeaturesEnabled(before.experimentalFeatures);
+    if (delta.vocoder) {
+        preferences.setVocoderModelWeight(before.vocoderWeight);
+        if (context != nullptr)
+            controlSetVocoderWeight(processor, before.vocoderWeight);
+    }
+    if (delta.priority) {
+        preferences.setRenderingPriority(before.cpuFirst ? RenderingPriority::CpuFirst : RenderingPriority::GpuFirst);
+        if (context != nullptr)
+            controlResetInferenceBackend(processor, before.cpuFirst);
+    }
+    if (delta.align) {
+        preferences.setExperimentalReferenceAlignMode(alignModeOf(before.referenceGame));
+        processor.setExperimentalReferenceAlignMode(alignModeOf(before.referenceGame));
+    }
     if (context != nullptr && delta.any())
         if (auto* bridge = context->bridge())
             bridge->onPreferencesChanged();
@@ -244,13 +403,25 @@ void addPreferenceChange(ControlWriteEnvelope& envelope, const char* name, const
     envelope.addChange("preference", preferenceRef(name), JsonValue::string(label), std::move(fields));
 }
 
+/** A stored vocoder weight as the wire carries it, or nullopt when it cannot be sent back (empty, not UTF-8 or longer
+    than the limit of processing.options). */
+std::optional<JsonValue> wireWeight(const std::string& weight)
+{
+    if (weight.empty() || !isValidUtf8(weight) || utf8CodePointCount(weight) > kControlOptionTextCodePoints)
+        return std::nullopt;
+    return JsonValue::string(weight);
+}
+
 /**
- * Records what a delta changed in the envelope: the changes, the warning GLOBAL_PREFERENCE (and NOT_RETROACTIVE for the
- * tuning), reRenderQueued for the hybrid switch, and the undo descriptor (no undo entry, as in OpenTune; the revert
- * recipe is the same call with the previous values). Nothing is recorded for a delta that changes nothing.
+ * Records what a delta changed in the envelope: the changes, the warning GLOBAL_PREFERENCE (NOT_RETROACTIVE for the
+ * tuning, EXPERIMENTAL_FEATURE for the reference alignment mode), reRenderQueued for the hybrid switch and for a
+ * vocoder weight that the job saw switched (vocoderSwitched), and the undo descriptor (no undo entry, as in OpenTune;
+ * the revert recipe is the same call with the previous values). The members come in the order of the schema: the
+ * original four, then vocoderWeight, renderingPriority, f0Model and referenceAlignMode. Nothing is recorded for a delta
+ * that changes nothing.
  */
 void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope, const PrefsState& before,
-                 const PrefsRequest& request, const PrefsDelta& delta)
+                 const PrefsRequest& request, const PrefsDelta& delta, bool vocoderSwitched)
 {
     if (!delta.any())
         return;
@@ -282,13 +453,48 @@ void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope, cons
         names.append(JsonValue::string("experimentalFeatures"));
         revert.appendMember("experimentalFeatures", JsonValue::boolean(before.experimentalFeatures));
     }
+    if (delta.vocoder) {
+        const auto previous = wireWeight(before.vocoderWeight);
+        addPreferenceChange(envelope, "vocoderWeight", "Vocoder weight", previous ? *previous : JsonValue(),
+                            JsonValue::string(*request.vocoderWeight), JsonValue());
+        names.append(JsonValue::string("vocoderWeight"));
+        // A stored weight that the wire cannot carry has no value to revert to.
+        if (previous)
+            revert.appendMember("vocoderWeight", *previous);
+    }
+    if (delta.priority) {
+        addPreferenceChange(envelope, "renderingPriority", "Rendering priority",
+                            JsonValue::string(before.cpuFirst ? "cpuFirst" : "gpuFirst"),
+                            JsonValue::string(*request.cpuFirst ? "cpuFirst" : "gpuFirst"), JsonValue());
+        names.append(JsonValue::string("renderingPriority"));
+        revert.appendMember("renderingPriority", JsonValue::string(before.cpuFirst ? "cpuFirst" : "gpuFirst"));
+    }
+    if (delta.f0) {
+        addPreferenceChange(envelope, "f0Model", "Pitch model", JsonValue::string(before.f0Model),
+                            JsonValue::string(*request.f0Model), JsonValue());
+        names.append(JsonValue::string("f0Model"));
+        revert.appendMember("f0Model", JsonValue::string(before.f0Model));
+    }
+    if (delta.align) {
+        addPreferenceChange(envelope, "referenceAlignMode", "Reference alignment mode",
+                            JsonValue::string(before.referenceGame ? "game" : "standardAuto"),
+                            JsonValue::string(*request.referenceGame ? "game" : "standardAuto"), JsonValue());
+        names.append(JsonValue::string("referenceAlignMode"));
+        revert.appendMember("referenceAlignMode", JsonValue::string(before.referenceGame ? "game" : "standardAuto"));
+    }
     auto data = JsonValue::object();
     data.appendMember("preferences", std::move(names));
     envelope.addWarning("GLOBAL_PREFERENCE", JsonValue(), std::move(data));
     if (delta.tuning)
         envelope.addWarning("NOT_RETROACTIVE", preferenceRef("tuningHz"));
-    if (delta.hybrid) {
-        // The processor queued a new render of every content (invalidateAllContentCaches()).
+    // The mode only decides how the next AUTO Ref analyses the reference, which is an experimental feature.
+    if (delta.align)
+        envelope.addWarning("EXPERIMENTAL_FEATURE", preferenceRef("referenceAlignMode"));
+    if (delta.hybrid || vocoderSwitched) {
+        // The processor queued a new render of every content: invalidateAllContentCaches() for the hybrid switch; for
+        // the vocoder weight the completion of setVocoderModelWeight() clears every render cache and requests a full
+        // render of every clip (unless the switch failed, which the job's wait would not have ended on). The
+        // rendering priority clears no cache.
         auto ids = JsonValue::array();
         for (const auto& key : controlLiveContents(context))
             ids.append(JsonValue::string(controlContentId(context, key)));
@@ -365,14 +571,27 @@ void recordGeneratedNotes(ControlOpContext& context, ControlWriteEnvelope& envel
     controlMarkDirty(context);
 }
 
-// ---- The job of a change of the editing scheme ---------------------------------------------------------
+// ---- The job of a change that OpenTune applies asynchronously -------------------------------------------
 
 /**
- * The job of a prefs.set that changes the editing scheme. Its first step makes every change of the request (so the
- * call that started it changed nothing), the following steps wait until the editor reports the scheme as applied, and
- * the last step ends the job with the write envelope. If the editor does not apply the scheme in time, the job takes
- * its changes back (withdraw()) and fails. A job that the registry destroys before it ended (the control API is
- * stopping) also takes them back.
+ * The job of a prefs.set that changes the editing scheme, the vocoder weight or the rendering priority. Its first step
+ * makes every change of the request (so the call that started it changed nothing), the following steps wait, and the
+ * last step ends the job with the write envelope. What the job waits for:
+ *
+ * - The editing scheme: until the editor reports the scheme as applied. If it does not within applyTimeoutMs(), the job
+ *   takes its changes back (withdraw()) and fails with INTERNAL.
+ * - The vocoder weight and the rendering priority, when the vocoder was ready before the first step: until the vocoder
+ *   is ready again, is not reconfiguring and the runtime's control worker has nothing left to do. The flag
+ *   "reconfiguring" cannot be the only sign: OpenTuneAudioProcessor::setVocoderModelWeight() and
+ * resetInferenceBackend() only post a command to the process-wide ProcessRenderRuntime and return, and the control
+ * worker thread sets the flag (and takes the vocoder away) when it starts the command, so the vocoder stays "ready, not
+ * reconfiguring" until then. The command stays in the worker's queue or is the worker's active transaction until its
+ * completion callback ran on the message thread, so an idle worker proves that the command was executed, whatever it
+ * did (a weight the runtime already holds is answered without any flag). If the vocoder is not back within
+ * vocoderWaitMs(), the job takes its changes back and fails with MODEL_UNAVAILABLE(vocoder_not_ready). A vocoder that
+ * was not ready before the change is not waited for: the job ends as soon as the changes are made.
+ *
+ * A job that the registry destroys before it ended (the control API is stopping) also takes its changes back.
  */
 class PrefsApplyJob
 {
@@ -402,20 +621,36 @@ public:
                 finished_ = true;
                 return;
             }
-            begin(context);
+            if (const auto refused = begin(context)) {
+                // The processor could not switch the pitch model, which is applied first: nothing was changed.
+                const auto reply = controlMapError(*refused);
+                jobStep.fail(ControlJobError{reply.kind, reply.reason, reply.detail, false});
+                finished_ = true;
+                return;
+            }
         }
         auto* bridge = context.bridge();
         bool applied = true;
         if (delta_.scheme && bridge != nullptr)
             if (const auto reported = bridge->editingSchemeApplied(*request_.notesPrimary))
                 applied = *reported;
-        if (!applied) {
-            if (juce::Time::getMillisecondCounter() - startedAtMs_ < applyTimeoutMs())
-                return;
-            abandon(context, jobStep);
+        bool vocoderBack = true;
+        if (waitsForVocoder_) {
+            const auto vocoder = controlVocoderState();
+            vocoderBack = vocoder.ready && !vocoder.reconfiguring && vocoder.controlIdle;
+        }
+        if (applied && vocoderBack) {
+            finish(context, jobStep);
             return;
         }
-        finish(context, jobStep);
+        const auto waitedMs = juce::Time::getMillisecondCounter() - startedAtMs_;
+        if (!applied && waitedMs >= applyTimeoutMs()) {
+            abandon(context, jobStep, "INTERNAL", "", "the editor did not apply the editing scheme in time");
+        } else if (!vocoderBack && waitedMs >= vocoderWaitMs()) {
+            abandon(context, jobStep, "MODEL_UNAVAILABLE", "vocoder_not_ready",
+                    "the vocoder was not ready again in time after the vocoder weight or the rendering priority "
+                    "changed");
+        }
     }
 
 private:
@@ -433,8 +668,9 @@ private:
         jobs.erase(std::remove(jobs.begin(), jobs.end(), this), jobs.end());
     }
 
-    /** The envelope starts immediately before the change; the change is made and handed to the editor. */
-    void begin(ControlOpContext& context)
+    /** The envelope starts immediately before the change; the change is made and handed to the editor. Returns the
+       error of the pitch model that the processor refused, in which case nothing was changed. */
+    std::optional<Error> begin(ControlOpContext& context)
     {
         before_ = readState(context.processor());
         delta_ = computeDelta(before_, request_);
@@ -442,15 +678,23 @@ private:
         restoreTo_ = before_;
         envelope_.emplace(context);
         watch_ = delta_.scheme && *request_.notesPrimary ? captureNotesWatch(context) : NotesWatch{};
-        applyDelta(context, request_, delta_);
+        // Whether the vocoder is there to be waited for is decided before the commands are posted.
+        if (delta_.vocoder || delta_.priority) {
+            const auto vocoder = controlVocoderState();
+            waitsForVocoder_ = vocoder.ready && !vocoder.reconfiguring;
+        }
+        if (auto refused = applyDelta(context, request_, delta_))
+            return refused;
         startedAtMs_ = juce::Time::getMillisecondCounter();
         started_ = true;
         pendingJobs().push_back(this);
+        return std::nullopt;
     }
 
     void finish(ControlOpContext& context, ControlJobStep& jobStep)
     {
-        recordDelta(context, *envelope_, before_, request_, delta_);
+        // A vocoder weight that the job waited for was switched: the completion of the switch queued every render.
+        recordDelta(context, *envelope_, before_, request_, delta_, delta_.vocoder && waitsForVocoder_);
         recordGeneratedNotes(context, *envelope_, watch_);
         // The job runs while the user may change other contents.
         envelope_->limitDiffToTouchedContents();
@@ -460,23 +704,24 @@ private:
         jobStep.succeed(std::move(result));
     }
 
-    /** The editor did not apply the scheme: the job takes its changes back, so that no half-applied set of
-        preferences stays. A preference that another write changed meanwhile keeps that write's value; the detail
+    /** What the job waits for did not happen in time (the editor applying the scheme, the vocoder being ready again):
+        the job takes its changes back, so that no half-applied set of preferences stays, and fails with the error of
+        the wait that ran out. A preference that another write changed meanwhile keeps that write's value; the detail
         names it, and executed is true because the job's change was not rolled back completely (PROTOCOL.md section
         17.4 rule 3). */
-    void abandon(ControlOpContext& context, ControlJobStep& jobStep)
+    void abandon(ControlOpContext& context, ControlJobStep& jobStep, const char* kind, const char* reason,
+                 const char* what)
     {
         const auto kept = withdraw(&context, context.processor());
         finished_ = true;
         leavePending();
-        std::string detail = "the editor did not apply the editing scheme in time; the previous preferences were "
-                             "restored";
+        std::string detail = std::string(what) + "; the previous preferences were restored";
         if (!kept.empty()) {
             detail += " except those another write changed while the job waited, which keep that write's value:";
             for (const auto& name : kept)
                 detail += " " + name;
         }
-        jobStep.fail(ControlJobError{"INTERNAL", "", detail, !kept.empty()});
+        jobStep.fail(ControlJobError{kind, reason, detail, !kept.empty()});
     }
 
     /**
@@ -493,6 +738,10 @@ private:
         settle(&PrefsDelta::hybrid, &PrefsState::hybridMode, "hybridMode", current, restore, kept);
         settle(&PrefsDelta::experimental, &PrefsState::experimentalFeatures, "experimentalFeatures", current, restore,
                kept);
+        settle(&PrefsDelta::vocoder, &PrefsState::vocoderWeight, "vocoderWeight", current, restore, kept);
+        settle(&PrefsDelta::priority, &PrefsState::cpuFirst, "renderingPriority", current, restore, kept);
+        settle(&PrefsDelta::f0, &PrefsState::f0Model, "f0Model", current, restore, kept);
+        settle(&PrefsDelta::align, &PrefsState::referenceGame, "referenceAlignMode", current, restore, kept);
         restoreState(context, processor, restoreTo_, restore);
         return kept;
     }
@@ -542,6 +791,9 @@ private:
     NotesWatch watch_;
     std::optional<ControlWriteEnvelope> envelope_;
     std::uint32_t startedAtMs_ = 0;
+    /** The vocoder was ready before the job changed the vocoder weight or the rendering priority: the job waits for it
+        to be ready again. */
+    bool waitsForVocoder_ = false;
     bool started_ = false;
     bool finished_ = false;
 };
@@ -555,15 +807,44 @@ Error startRefusal(const std::string& refusal)
                                   : controlOpError("SHUTTING_DOWN", "", "the control API is stopping");
 }
 
-Result<JsonValue> runPrefsSet(ControlOpContext& context, const PrefsRequest& request)
+/**
+ * Checks the vocoder weight and the pitch model of a request against what the preferences window offers
+ * (processing.options of prefs.get) and resolves the pitch model's type. A value that is not on offer gives
+ * INVALID_ARGUMENT(option_unavailable) with the name of the member, and nothing changes. A value that is equal to the
+ * current one is checked as well. Message thread.
+ */
+std::optional<Error> checkOptions(PrefsRequest& request)
+{
+    if (request.vocoderWeight) {
+        const auto weights = controlVocoderWeightOptions();
+        if (std::find(weights.begin(), weights.end(), *request.vocoderWeight) == weights.end())
+            return controlOpError("INVALID_ARGUMENT", "option_unavailable",
+                                  "vocoderWeight is not one of processing.options.vocoderWeight");
+    }
+    if (request.f0Model) {
+        const auto names = controlF0ModelOptions();
+        const auto type = f0TypeOf(*request.f0Model);
+        if (!type || std::find(names.begin(), names.end(), *request.f0Model) == names.end())
+            return controlOpError("INVALID_ARGUMENT", "option_unavailable",
+                                  "f0Model is not one of processing.options.f0Model");
+        request.f0Type = type;
+    }
+    return std::nullopt;
+}
+
+Result<JsonValue> runPrefsSet(ControlOpContext& context, const PrefsRequest& parsed)
 {
     if (auto busy = controlCheckBusy(context))
         return *busy;
+    auto request = parsed;
+    if (auto unavailable = checkOptions(request))
+        return *unavailable;
     const auto before = readState(context.processor());
     const auto delta = computeDelta(before, request);
-    if (delta.scheme) {
-        // OpenTune applies a new editing scheme to its editor asynchronously: a job makes all the changes, and the call
-        // itself changes nothing (PROTOCOL.md section 14.2 rule 3).
+    if (delta.needsJob()) {
+        // OpenTune applies a new editing scheme to its editor asynchronously, and replaces the vocoder asynchronously
+        // after a new weight or rendering priority: a job makes all the changes, and the call itself changes nothing
+        // (PROTOCOL.md section 14.2 rule 3).
         auto* jobs = context.jobs();
         if (jobs == nullptr)
             return controlOpError("INTERNAL", "", "the jobs registry is not available");
@@ -575,8 +856,9 @@ Result<JsonValue> runPrefsSet(ControlOpContext& context, const PrefsRequest& req
         return envelope.handedToJob(context, jobs->jobRef(started.jobId));
     }
     ControlWriteEnvelope envelope(context);
-    applyDelta(context, request, delta);
-    recordDelta(context, envelope, before, request, delta);
+    if (auto refused = applyDelta(context, request, delta))
+        return *refused;
+    recordDelta(context, envelope, before, request, delta, false);
     return envelope.committed(context);
 }
 
@@ -590,6 +872,11 @@ void registerPrefsOps(ControlMethodTable& table)
 void controlSetPrefsApplyTimeoutForTesting(std::uint32_t milliseconds)
 {
     applyTimeoutOverrideMs() = milliseconds;
+}
+
+void controlSetPrefsVocoderWaitForTesting(std::uint32_t milliseconds)
+{
+    vocoderWaitOverrideMs() = milliseconds;
 }
 
 } // namespace OpenTune

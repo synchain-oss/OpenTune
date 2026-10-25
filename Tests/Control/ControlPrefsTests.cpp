@@ -8,7 +8,11 @@
 // audio device. The test bridge stands in for the editor: it applies the
 // editing scheme (with an optional delay or never), generates the notes of the
 // clip open in the piano roll as the piano roll does, and records what the
-// control API asks of the editor. Registered with the other processor scenarios
+// control API asks of the editor. The vocoder weight, the rendering priority and
+// the pitch model reach the render runtime through ControlPrefsBackend: the
+// scenarios replace it with a test double that reports the vocoder as queued,
+// reloading and ready again after chosen delays, and lists the weight files of a
+// models directory of the test. Registered with the other processor scenarios
 // in ControlProcessorTests.cpp.
 
 #include "ControlContentFixtures.h"
@@ -17,18 +21,22 @@
 
 #include "Control/ControlDispatcher.h"
 #include "Control/ControlJobs.h"
+#include "Control/Ops/PrefsModels.h"
 #include "Control/Ops/PrefsOps.h"
+#include "Inference/IF0Extractor.h"
 #include "PluginProcessor.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/AudioEditingScheme.h"
 #include "Utils/NoteGeneratorTypes.h"
 #include "Utils/TuningConfig.h"
+#include "Utils/VocoderModelWeight.h"
 
 #include <juce_audio_devices/juce_audio_devices.h>
 
 #include <algorithm>
 #include <atomic>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -223,6 +231,8 @@ public:
     void onPreferencesChanged() override
     {
         ++preferenceNotifications;
+        // What the editor's syncSharedAppPreferences() reads and hands to the processor and the reference context.
+        alignModeAtNotification = preferences->getState().shared.experimentalReferenceAlignMode;
         pendingNotesPrimary =
             AudioEditingScheme::usesNotesPrimaryScheme(preferences->getState().shared.audioEditingScheme);
         pendingSinceMs = juce::Time::getMillisecondCounter();
@@ -270,6 +280,8 @@ public:
     std::shared_ptr<ControlJobs> modalOnceJobStarted;
 
     int preferenceNotifications = 0;
+    /** The reference alignment mode the preferences held at the last notification; nullopt before the first. */
+    std::optional<ExperimentalReferenceAlignMode> alignModeAtNotification;
     std::vector<std::string> switchReasons;
     mutable int schemeQueries = 0;
     mutable bool appliedNotesPrimary = false;
@@ -325,6 +337,10 @@ void resetPreferences(OpenTuneAudioProcessor& processor, bool notesPrimary = fal
                                                    : AudioEditingScheme::Scheme::CorrectedF0Primary);
     preferences.setLightPitchCorrectionEnabled(hybrid);
     preferences.setExperimentalFeaturesEnabled(experimental);
+    preferences.setVocoderModelWeight(kDefaultVocoderWeight);
+    preferences.setRenderingPriority(RenderingPriority::GpuFirst);
+    preferences.setF0ModelType(F0ModelType::FCPE);
+    preferences.setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode::StandardAuto);
 }
 
 /** A clip with a ready analysis and no notes, on track 0 from 2 s to 8 s. */
@@ -543,8 +559,9 @@ void checkSynchronousChanges(ApiSession& api, OpenTuneAudioProcessor& processor,
         for (const char* params :
              {"{}", R"({"tuningHz":380})", R"({"tuningHz":500.5})", R"({"tuningHz":"440"})",
               R"({"editingScheme":"openJazz"})", R"({"hybridMode":"yes"})", R"({"experimentalFeatures":1})",
-              R"({"vocoderWeight":"x"})", R"({"renderingPriority":"cpuFirst"})", R"({"referenceAlignMode":"game"})",
-              R"({"hybridMode":true,"theme":"dark"})"})
+              R"({"vocoderWeight":""})", R"({"vocoderWeight":5})", R"({"renderingPriority":"fast"})",
+              R"({"renderingPriority":1})", R"({"f0Model":""})", R"({"f0Model":true})", R"({"referenceAlignMode":"x"})",
+              R"({"referenceAlignMode":false})", R"({"hybridMode":true,"theme":"dark"})"})
             CONTROL_CHECK(api.fails("prefs.set", json(params), "INVALID_ARGUMENT", "invalid_params"));
         CONTROL_CHECK(bridge.preferenceNotifications == notifications);
         CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
@@ -897,6 +914,969 @@ void scenarioPrefsSchemeJob()
     AppPreferences stored;
     stored.load();
     CONTROL_CHECK(!AudioEditingScheme::usesNotesPrimaryScheme(stored.getState().shared.audioEditingScheme));
+    CONTROL_CHECK(stored.getState().shared.tuning.tuningHz == 440.0f);
+}
+
+// ---- The vocoder weight, the rendering priority, the pitch model and the reference alignment mode
+// ---------------------------------
+
+namespace {
+
+/** Pitch model types OpenTune does not have, for the second and third entry of a fake model list. */
+constexpr auto kOtherPitchModel = static_cast<F0ModelType>(2);
+constexpr auto kGonePitchModel = static_cast<F0ModelType>(3);
+constexpr const char* kWeightA = "aa-custom.onnx";
+constexpr const char* kWeightZ = "zz-custom.onnx";
+
+/**
+ * The render runtime and the processor calls behind prefs.set, as far as the control API reaches them through
+ * ControlPrefsBackend. A new vocoder weight or rendering priority reaches the runtime's control worker at once (the
+ * command is queued); the worker then takes queuedMs to start it, during which the vocoder is still ready and not
+ * reconfiguring but the worker is busy, then the vocoder is gone and reconfiguring for loadingMs, and after that it is
+ * ready with an idle worker. That is the order of events of ProcessRenderRuntime, where the flag "reconfiguring" is
+ * set by the worker thread some time after the processor call returned. loadingMs 0 is a weight the runtime already
+ * holds (it answers without any flag). neverReady keeps the vocoder reconfiguring for good. present false is a
+ * runtime without a vocoder. calls lists the processor calls in order.
+ *
+ * Installing it replaces the models directory (the real scan then runs on a directory of the test), the vocoder state
+ * and the three processor calls; with fakePitchModels also the list of pitch models, to have more than one.
+ */
+class FakeRuntime
+{
+public:
+    FakeRuntime() = default;
+    FakeRuntime(const FakeRuntime&) = delete;
+    FakeRuntime& operator=(const FakeRuntime&) = delete;
+    ~FakeRuntime()
+    {
+        controlSetPrefsBackendForTesting({});
+        controlSetPrefsApplyTimeoutForTesting(0);
+        controlSetPrefsVocoderWaitForTesting(0);
+    }
+
+    void install(const std::filesystem::path& models, bool fakePitchModels = false)
+    {
+        ControlPrefsBackend backend;
+        backend.modelsDirectory = [dir = models.u8string()] { return dir; };
+        backend.vocoderState = [this] { return state(); };
+        backend.setVocoderWeight = [this](OpenTuneAudioProcessor&, const std::string& weight) {
+            command();
+            calls.push_back("weight:" + weight);
+        };
+        backend.resetInferenceBackend = [this](OpenTuneAudioProcessor&, bool forceCpu) {
+            command();
+            calls.push_back(forceCpu ? "priority:cpuFirst" : "priority:gpuFirst");
+        };
+        backend.setF0Model = [this](OpenTuneAudioProcessor&, F0ModelType type) {
+            calls.push_back("f0:" + std::to_string(static_cast<int>(type)));
+            return f0Accepts;
+        };
+        if (fakePitchModels)
+            backend.f0Models = [] {
+                return std::vector<F0ModelInfo>{{F0ModelType::FCPE, "fcpe", "FCPE", 0, true},
+                                                {kOtherPitchModel, "other", "Other", 0, true},
+                                                {kGonePitchModel, "gone", "Gone", 0, false}};
+            };
+        controlSetPrefsBackendForTesting(std::move(backend));
+    }
+
+    ControlVocoderState state() const
+    {
+        if (!present)
+            return {false, false, true};
+        if (!commandAtMs)
+            return {true, false, true};
+        const auto elapsed = juce::Time::getMillisecondCounter() - *commandAtMs;
+        if (elapsed < queuedMs)
+            return {true, false, false};
+        if (neverReady || elapsed < queuedMs + loadingMs)
+            return {false, true, false};
+        return {true, false, true};
+    }
+
+    /** The runtime has finished everything it was asked: a ready vocoder and an idle worker. */
+    void settle()
+    {
+        commandAtMs.reset();
+        neverReady = false;
+        present = true;
+    }
+
+    /** The runtime is in the middle of a reconfiguration that never ends. */
+    void getStuck()
+    {
+        present = true;
+        neverReady = true;
+        queuedMs = 0;
+        commandAtMs = juce::Time::getMillisecondCounter();
+    }
+
+    bool present = true;
+    bool neverReady = false;
+    std::uint32_t queuedMs = 300;
+    std::uint32_t loadingMs = 300;
+    bool f0Accepts = true;
+    std::vector<std::string> calls;
+
+private:
+    void command() { commandAtMs = juce::Time::getMillisecondCounter(); }
+
+    std::optional<std::uint32_t> commandAtMs;
+};
+
+std::vector<std::string> optionList(const JsonValue& array)
+{
+    std::vector<std::string> out;
+    for (std::size_t i = 0; i < array.size(); ++i)
+        out.push_back(array.at(i).text());
+    return out;
+}
+
+const JsonValue& optionsOf(const JsonValue& prefs)
+{
+    return memberOf(memberOf(prefs, "processing"), "options");
+}
+
+/** An empty directory of this scenario under OPENTUNE_DATA_DIR: the test's own models directory. */
+std::filesystem::path freshModelsDirectory(const char* name)
+{
+    const auto root = isolatedDataDirectory();
+    if (!CONTROL_CHECK(!root.empty()))
+        return {};
+    const auto dir = root / "prefs-models" / name;
+    std::error_code ignored;
+    std::filesystem::remove_all(dir, ignored);
+    std::filesystem::create_directories(dir, ignored);
+    return dir;
+}
+
+void touchFile(const std::filesystem::path& file)
+{
+    std::error_code ignored;
+    std::filesystem::create_directories(file.parent_path(), ignored);
+    std::ofstream stream(file, std::ios::binary);
+    stream << "x";
+    CONTROL_CHECK(stream.good());
+}
+
+/** The job ended failed with this error, executed and retryable. */
+bool jobFailedWith(const JsonValue& job, const char* kind, const char* reason, bool executed, bool retryable)
+{
+    const auto& data = memberOf(memberOf(job, "error"), "data");
+    const bool reasonOk =
+        reason[0] == '\0' ? data.find("reason") == nullptr : memberOf(data, "reason").text() == reason;
+    const bool ok = memberOf(job, "state").text() == "failed" && memberOf(data, "kind").text() == kind && reasonOk
+                    && memberOf(data, "executed").isBoolean() && memberOf(data, "executed").asBoolean() == executed
+                    && memberOf(data, "retryable").isBoolean() && memberOf(data, "retryable").asBoolean() == retryable;
+    if (!ok)
+        note(std::string("expected a prefsApply job failed with ") + kind + "(" + reason + "), executed "
+             + (executed ? "true" : "false") + ": " + toJsonString(job));
+    return ok;
+}
+
+/** The job has not ended (queued or running); a read that does not wait. */
+bool jobIsActive(ApiSession& api, const std::string& jobId)
+{
+    auto params = JsonValue::object();
+    params.appendMember("jobId", JsonValue::string(jobId));
+    const auto state = memberOf(memberOf(api.result("job.get", std::move(params)), "job"), "state").text();
+    return state == "queued" || state == "running";
+}
+
+/** The job is still waiting at this point in time, taken a short while after it started: asserted only while the
+    time since it started leaves no room for the wait to be over on a loaded machine (the wait lasts at least
+    minimumWaitMs). */
+void checkJobStillWaiting(ApiSession& api, const std::string& jobId, std::uint32_t startedAtMs,
+                          std::uint32_t minimumWaitMs)
+{
+    const bool early = juce::Time::getMillisecondCounter() - startedAtMs + 100 < minimumWaitMs;
+    const bool active = jobIsActive(api, jobId);
+    if (early)
+        CONTROL_CHECK(active);
+}
+
+/** The members the changes of a result name, in order. */
+std::vector<std::string> changedPreferences(const JsonValue& result)
+{
+    std::vector<std::string> names;
+    const auto& changes = memberOf(result, "changes");
+    for (std::size_t i = 0; i < changes.size(); ++i)
+        names.push_back(memberOf(memberOf(changes.at(i), "ref"), "preference").text());
+    return names;
+}
+
+/** One change of a result: the label and the two values of its only field. */
+bool changeIs(const JsonValue& result, std::size_t index, const char* name, const char* label, const JsonValue& before,
+              const JsonValue& after)
+{
+    const auto& change = changeAt(result, index);
+    const auto& field = fieldOf(change, name);
+    const bool ok =
+        memberOf(change, "entity").text() == "preference"
+        && memberOf(memberOf(change, "ref"), "preference").text() == name && memberOf(change, "label").text() == label
+        && memberOf(change, "fields").size() == 1 && toJsonString(memberOf(field, "before")) == toJsonString(before)
+        && toJsonString(memberOf(field, "after")) == toJsonString(after) && memberOf(field, "unit").isNull();
+    if (!ok)
+        note(std::string("the change of ") + name + " is not as expected: " + toJsonString(change));
+    return ok;
+}
+
+/** A job that the revert recipe of a result starts, sent unchanged; returns the job. */
+JsonValue replayRevertAsJob(ApiSession& api, const JsonValue& result)
+{
+    const auto& revert = memberOf(memberOf(result, "undo"), "revert");
+    if (!CONTROL_CHECK(revert.isObject() && memberOf(revert, "method").text() == "prefs.set"))
+        return JsonValue();
+    return runAsJob(api, "prefs.set", memberOf(revert, "params"), "prefsApply");
+}
+
+/** The lists of processing.options: empty without models, in the order of the window with them. */
+void checkOptionLists(ApiSession& api, const std::filesystem::path& models)
+{
+    // Nothing on disk: nothing to choose among the weights and the pitch models; the two enumerations are complete.
+    {
+        const auto prefs = api.result("prefs.get");
+        const auto& options = optionsOf(prefs);
+        CONTROL_CHECK(memberOf(options, "vocoderWeight").isArray() && memberOf(options, "vocoderWeight").size() == 0);
+        CONTROL_CHECK(memberOf(options, "f0Model").isArray() && memberOf(options, "f0Model").size() == 0);
+        CONTROL_CHECK(
+            (optionList(memberOf(options, "renderingPriority")) == std::vector<std::string>{"gpuFirst", "cpuFirst"}));
+        CONTROL_CHECK(
+            (optionList(memberOf(options, "referenceAlignMode")) == std::vector<std::string>{"standardAuto", "game"}));
+        // session.info reports the same processing object without the options.
+        CONTROL_CHECK(memberOf(memberOf(api.result("session.info"), "processing"), "options").isNull());
+    }
+
+    // The built-in weights in the window's order, then the files of vocoder_weights sorted by name; a file of the
+    // folder with the name of a built-in weight is not listed twice; a name longer than 64 characters can never be
+    // sent back, so it is left out. The pitch model is listed when its file exists.
+    touchFile(models / "hifigan_coulin9.onnx");
+    touchFile(models / "hifigan.onnx");
+    touchFile(models / "vocoder_weights" / kWeightZ);
+    touchFile(models / "vocoder_weights" / kWeightA);
+    touchFile(models / "vocoder_weights" / "hifigan.onnx");
+    touchFile(models / "vocoder_weights" / std::filesystem::u8path("\xE5\xA3\xB0.onnx"));
+    touchFile(models / "vocoder_weights" / (std::string(65, 'x') + ".onnx"));
+    touchFile(models / "vocoder_weights" / "readme.txt");
+    touchFile(models / "fcpe.onnx");
+    {
+        const auto prefs = api.result("prefs.get");
+        const auto& options = optionsOf(prefs);
+        CONTROL_CHECK((optionList(memberOf(options, "vocoderWeight"))
+                       == std::vector<std::string>{"hifigan.onnx", "hifigan_coulin9.onnx", kWeightA, kWeightZ,
+                                                   "\xE5\xA3\xB0.onnx"}));
+        CONTROL_CHECK((optionList(memberOf(options, "f0Model")) == std::vector<std::string>{"fcpe"}));
+        CONTROL_CHECK(
+            (optionList(memberOf(options, "renderingPriority")) == std::vector<std::string>{"gpuFirst", "cpuFirst"}));
+    }
+}
+
+/** vocoderWeight: not on offer, no-op, the change as a job that waits for the vocoder, the revert recipe. */
+void checkVocoderWeight(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge, FakeRuntime& runtime,
+                        const ClipHandles& clip)
+{
+    auto& preferences = processor.getAppPreferences();
+    const auto baseline = api.result("prefs.get");
+    const auto notifications = bridge.preferenceNotifications;
+
+    // A weight that is not on offer changes nothing, also the other members of the call; the detail names the member
+    // and not the value, and the error is not retryable.
+    for (const char* params : {R"({"vocoderWeight":"nope.onnx"})", R"({"vocoderWeight":"nope.onnx","tuningHz":433})",
+                               R"({"vocoderWeight":"HIFIGAN.onnx"})"})
+        CONTROL_CHECK(api.fails("prefs.set", json(params), "INVALID_ARGUMENT", "option_unavailable"));
+    {
+        const auto response = api.request("prefs.set", json(R"({"vocoderWeight":"nope.onnx"})"));
+        const auto* data = errorData(response);
+        CONTROL_CHECK(data != nullptr && memberOf(*data, "detail").text().find("vocoderWeight") != std::string::npos
+                      && memberOf(*data, "detail").text().find("nope") == std::string::npos
+                      && !memberOf(*data, "retryable").asBoolean());
+    }
+    // Text of more than 64 characters is not a valid value at all.
+    {
+        auto params = JsonValue::object();
+        params.appendMember("vocoderWeight", JsonValue::string(std::string(65, 'w')));
+        CONTROL_CHECK(api.fails("prefs.set", std::move(params), "INVALID_ARGUMENT", "invalid_params"));
+    }
+    CONTROL_CHECK(runtime.calls.empty() && bridge.preferenceNotifications == notifications);
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+
+    // The weight the preferences hold counts as unavailable when its file is gone: the check does not look at the
+    // current value.
+    preferences.setVocoderModelWeight("missing.onnx");
+    CONTROL_CHECK(
+        api.fails("prefs.set", json(R"({"vocoderWeight":"missing.onnx"})"), "INVALID_ARGUMENT", "option_unavailable"));
+    preferences.setVocoderModelWeight(kDefaultVocoderWeight);
+
+    // The current weight: a no-op, no job, no call to the runtime, the editor is not told.
+    {
+        const auto result = api.result("prefs.set", json(R"({"vocoderWeight":"hifigan.onnx"})"));
+        CONTROL_CHECK(memberOf(result, "noOp").asBoolean() && memberOf(result, "job").isNull()
+                      && memberOf(result, "changes").size() == 0 && memberOf(result, "warnings").size() == 0);
+        CONTROL_CHECK(memberOf(memberOf(result, "undo"), "reason").text() == "no_op");
+        CONTROL_CHECK(runtime.calls.empty() && bridge.preferenceNotifications == notifications);
+    }
+
+    // Another weight is a job: the call changes nothing, the job stores the weight, asks the processor, and ends when
+    // the vocoder is back (first queued, then reconfiguring, then ready with an idle worker).
+    runtime.queuedMs = 300;
+    runtime.loadingMs = 300;
+    const auto taken = juce::Time::getMillisecondCounter();
+    const auto response = api.result("prefs.set", json(R"({"vocoderWeight":"aa-custom.onnx"})"));
+    CONTROL_CHECK(!memberOf(response, "applied").asBoolean() && memberOf(response, "changes").size() == 0
+                  && memberOf(memberOf(response, "job"), "kind").text() == "prefsApply");
+    CONTROL_CHECK(preferences.getState().shared.vocoderModelWeight == kDefaultVocoderWeight);
+    const auto jobId = jobIdOf(response);
+    CONTROL_CHECK(
+        pumpMessagesUntil([&] { return preferences.getState().shared.vocoderModelWeight == kWeightA; }, kJobChangeMs));
+    // The vocoder is still ready and not reconfiguring while the worker has not started the command (the flag is set
+    // later, by the worker): the job is not over then, nor while the vocoder is reloading.
+    pumpMessagesFor(150);
+    checkJobStillWaiting(api, jobId, taken, 600);
+    pumpMessagesFor(300);
+    checkJobStillWaiting(api, jobId, taken, 600);
+    const auto job = waitJob(api, jobId);
+    CONTROL_CHECK(jobSucceeded(job));
+    CONTROL_CHECK(juce::Time::getMillisecondCounter() - taken >= 600);
+    const auto& result = memberOf(job, "result");
+    CONTROL_CHECK(memberOf(result, "applied").asBoolean() && !memberOf(result, "noOp").asBoolean());
+    CONTROL_CHECK(memberOf(result, "changes").size() == 1);
+    CONTROL_CHECK(changeIs(result, 0, "vocoderWeight", "Vocoder weight", JsonValue::string("hifigan.onnx"),
+                           JsonValue::string(kWeightA)));
+    CONTROL_CHECK((warningCodes(result) == std::vector<std::string>{"GLOBAL_PREFERENCE"}));
+    CONTROL_CHECK((globalPreferences(result) == std::vector<std::string>{"vocoderWeight"}));
+    CONTROL_CHECK(undoIsUiParity(result));
+    // The weight is stored and the processor was asked once: the runtime's completion renders every clip again.
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{std::string("weight:") + kWeightA}));
+    CONTROL_CHECK(bridge.preferenceNotifications == notifications + 1);
+    const auto& queued = memberOf(memberOf(memberOf(result, "sideEffects"), "reRenderQueued"), "contentIds");
+    CONTROL_CHECK(queued.size() == 1 && queued.at(0).text() == clip.contentId);
+    CONTROL_CHECK(memberOf(memberOf(memberOf(result, "sideEffects"), "reRenderQueued"), "revert").isNull());
+    CONTROL_CHECK(memberOf(memberOf(api.result("prefs.get"), "processing"), "vocoderWeight").text() == kWeightA);
+    CONTROL_CHECK(memberOf(memberOf(api.result("session.info"), "processing"), "vocoderWeight").text() == kWeightA);
+    const auto& params = memberOf(memberOf(memberOf(result, "undo"), "revert"), "params");
+    CONTROL_CHECK(params.size() == 1 && memberOf(params, "vocoderWeight").text() == "hifigan.onnx");
+
+    // The revert recipe, sent as it is, takes the weight back (another job); the preferences read as before.
+    const auto reverted = replayRevertAsJob(api, result);
+    CONTROL_CHECK(jobSucceeded(reverted));
+    CONTROL_CHECK(memberOf(memberOf(reverted, "result"), "changes").size() == 1);
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+    CONTROL_CHECK(
+        (runtime.calls == std::vector<std::string>{std::string("weight:") + kWeightA, "weight:hifigan.onnx"}));
+    runtime.calls.clear();
+    runtime.settle();
+
+    // A weight the runtime already holds is answered without any flag: the vocoder is never reconfiguring, and the job
+    // still ends, when the worker is done with the command.
+    runtime.queuedMs = 250;
+    runtime.loadingMs = 0;
+    const auto heldAt = juce::Time::getMillisecondCounter();
+    const auto held = runAsJob(api, "prefs.set", json(R"({"vocoderWeight":"zz-custom.onnx"})"), "prefsApply");
+    CONTROL_CHECK(jobSucceeded(held));
+    CONTROL_CHECK(juce::Time::getMillisecondCounter() - heldAt >= 250);
+    CONTROL_CHECK(memberOf(memberOf(held, "result"), "sideEffects").find("reRenderQueued") != nullptr);
+    preferences.setVocoderModelWeight(kDefaultVocoderWeight);
+    runtime.calls.clear();
+    runtime.settle();
+}
+
+/** renderingPriority: no-op, the change as a job that waits for the vocoder, no render again, the revert recipe. */
+void checkRenderingPriority(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge,
+                            FakeRuntime& runtime)
+{
+    auto& preferences = processor.getAppPreferences();
+    const auto baseline = api.result("prefs.get");
+    const auto notifications = bridge.preferenceNotifications;
+
+    {
+        const auto result = api.result("prefs.set", json(R"({"renderingPriority":"gpuFirst"})"));
+        CONTROL_CHECK(memberOf(result, "noOp").asBoolean() && memberOf(result, "job").isNull());
+        CONTROL_CHECK(runtime.calls.empty() && bridge.preferenceNotifications == notifications);
+    }
+
+    runtime.queuedMs = 250;
+    runtime.loadingMs = 250;
+    const auto taken = juce::Time::getMillisecondCounter();
+    const auto job = runAsJob(api, "prefs.set", json(R"({"renderingPriority":"cpuFirst"})"), "prefsApply");
+    CONTROL_CHECK(jobSucceeded(job));
+    CONTROL_CHECK(juce::Time::getMillisecondCounter() - taken >= 500);
+    const auto& result = memberOf(job, "result");
+    CONTROL_CHECK(memberOf(result, "changes").size() == 1);
+    CONTROL_CHECK(changeIs(result, 0, "renderingPriority", "Rendering priority", JsonValue::string("gpuFirst"),
+                           JsonValue::string("cpuFirst")));
+    CONTROL_CHECK((globalPreferences(result) == std::vector<std::string>{"renderingPriority"}));
+    CONTROL_CHECK((warningCodes(result) == std::vector<std::string>{"GLOBAL_PREFERENCE"}));
+    CONTROL_CHECK(undoIsUiParity(result));
+    CONTROL_CHECK(preferences.getState().shared.renderingPriority == RenderingPriority::CpuFirst);
+    CONTROL_CHECK(memberOf(memberOf(api.result("prefs.get"), "processing"), "renderingPriority").text() == "cpuFirst");
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"priority:cpuFirst"}));
+    // Resetting the inference backend clears no render cache: nothing is rendered again.
+    CONTROL_CHECK(memberOf(result, "sideEffects").size() == 0);
+    const auto& params = memberOf(memberOf(memberOf(result, "undo"), "revert"), "params");
+    CONTROL_CHECK(params.size() == 1 && memberOf(params, "renderingPriority").text() == "gpuFirst");
+
+    CONTROL_CHECK(jobSucceeded(replayRevertAsJob(api, result)));
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"priority:cpuFirst", "priority:gpuFirst"}));
+    runtime.calls.clear();
+    runtime.settle();
+}
+
+/** f0Model: not on offer, no-op, the change, a processor that refuses (also inside a job), the order, the revert. */
+void checkPitchModel(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge, FakeRuntime& runtime)
+{
+    auto& preferences = processor.getAppPreferences();
+    const auto baseline = api.result("prefs.get");
+    const auto notifications = bridge.preferenceNotifications;
+    CONTROL_CHECK((optionList(memberOf(optionsOf(baseline), "f0Model")) == std::vector<std::string>{"fcpe", "other"}));
+
+    // A model that is not on offer, or is listed without its file, changes nothing.
+    for (const char* params : {R"({"f0Model":"nope"})", R"({"f0Model":"gone"})", R"({"f0Model":"FCPE"})",
+                               R"({"f0Model":"other","vocoderWeight":"nope.onnx"})"})
+        CONTROL_CHECK(api.fails("prefs.set", json(params), "INVALID_ARGUMENT", "option_unavailable"));
+    CONTROL_CHECK(runtime.calls.empty() && bridge.preferenceNotifications == notifications);
+
+    // The model in use: a no-op that does not even ask the processor.
+    {
+        const auto result = api.result("prefs.set", json(R"({"f0Model":"fcpe"})"));
+        CONTROL_CHECK(memberOf(result, "noOp").asBoolean() && memberOf(result, "changes").size() == 0);
+        CONTROL_CHECK(runtime.calls.empty() && bridge.preferenceNotifications == notifications);
+    }
+
+    // The processor refuses: the call fails with MODEL_UNAVAILABLE(model_missing), executed false, and changes
+    // nothing, also not the other members of the call; the model is the first thing asked.
+    runtime.f0Accepts = false;
+    CONTROL_CHECK(api.fails("prefs.set", json(R"({"f0Model":"other","tuningHz":433,"hybridMode":false})"),
+                            "MODEL_UNAVAILABLE", "model_missing"));
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"f0:2"}));
+    CONTROL_CHECK(bridge.preferenceNotifications == notifications && TuningConfig::currentTuningHz() == 440.0f);
+    CONTROL_CHECK(preferences.getF0ModelType() == F0ModelType::FCPE);
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+    // The same inside a job (the call also changes the scheme, the vocoder weight and the priority): the job fails
+    // with the same error, executed false; the runtime is asked nothing else.
+    runtime.calls.clear();
+    const auto refused = runAsJob(
+        api, "prefs.set",
+        json(
+            R"({"f0Model":"other","editingScheme":"openDyne","vocoderWeight":"aa-custom.onnx","renderingPriority":"cpuFirst"})"),
+        "prefsApply");
+    CONTROL_CHECK(jobFailedWith(refused, "MODEL_UNAVAILABLE", "model_missing", false, false));
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"f0:2"}));
+    CONTROL_CHECK(bridge.preferenceNotifications == notifications);
+    CONTROL_CHECK(preferences.getF0ModelType() == F0ModelType::FCPE);
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+    CONTROL_CHECK(!AudioEditingScheme::usesNotesPrimaryScheme(preferences.getState().shared.audioEditingScheme)
+                  && preferences.getState().shared.vocoderModelWeight == kDefaultVocoderWeight
+                  && preferences.getState().shared.renderingPriority == RenderingPriority::GpuFirst);
+    // Nothing of the failed job stays pending: a later job is not held back.
+    CONTROL_CHECK(jobSucceeded(runAsJob(api, "prefs.set", json(R"({"editingScheme":"openDyne"})"), "prefsApply")));
+    CONTROL_CHECK(jobSucceeded(runAsJob(api, "prefs.set", json(R"({"editingScheme":"openTune"})"), "prefsApply")));
+    runtime.calls.clear();
+    const auto afterJobs = bridge.preferenceNotifications;
+
+    // The processor accepts: the model is stored, the change is listed, the revert recipe takes it back.
+    runtime.f0Accepts = true;
+    const auto result = api.result("prefs.set", json(R"({"f0Model":"other"})"));
+    CONTROL_CHECK(memberOf(result, "applied").asBoolean() && memberOf(result, "job").isNull());
+    CONTROL_CHECK(memberOf(result, "changes").size() == 1);
+    CONTROL_CHECK(changeIs(result, 0, "f0Model", "Pitch model", JsonValue::string("fcpe"), JsonValue::string("other")));
+    CONTROL_CHECK((warningCodes(result) == std::vector<std::string>{"GLOBAL_PREFERENCE"}));
+    CONTROL_CHECK((globalPreferences(result) == std::vector<std::string>{"f0Model"}));
+    CONTROL_CHECK(undoIsUiParity(result) && memberOf(result, "sideEffects").size() == 0);
+    CONTROL_CHECK(preferences.getF0ModelType() == kOtherPitchModel);
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"f0:2"}));
+    CONTROL_CHECK(bridge.preferenceNotifications == afterJobs + 1);
+    const auto& params = memberOf(memberOf(memberOf(result, "undo"), "revert"), "params");
+    CONTROL_CHECK(params.size() == 1 && memberOf(params, "f0Model").text() == "fcpe");
+    // The model in use is "other" now, so "fcpe" changes it back and "other" is the no-op.
+    CONTROL_CHECK(memberOf(api.result("prefs.set", json(R"({"f0Model":"other"})")), "noOp").asBoolean());
+    const auto reverted = replayRevert(api, result);
+    CONTROL_CHECK(memberOf(reverted, "applied").asBoolean() && memberOf(reverted, "changes").size() == 1);
+    CONTROL_CHECK(preferences.getF0ModelType() == F0ModelType::FCPE);
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+    runtime.calls.clear();
+}
+
+/** referenceAlignMode: not a valid value, no-op, the change with its warning and the editor told, without an editor,
+    the revert recipe. */
+void checkReferenceAlignMode(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge,
+                             ControlService& service)
+{
+    auto& preferences = processor.getAppPreferences();
+    const auto baseline = api.result("prefs.get");
+    const auto notifications = bridge.preferenceNotifications;
+
+    CONTROL_CHECK(
+        api.fails("prefs.set", json(R"({"referenceAlignMode":"Game"})"), "INVALID_ARGUMENT", "invalid_params"));
+    {
+        const auto result = api.result("prefs.set", json(R"({"referenceAlignMode":"standardAuto"})"));
+        CONTROL_CHECK(memberOf(result, "noOp").asBoolean() && memberOf(result, "warnings").size() == 0);
+        CONTROL_CHECK(bridge.preferenceNotifications == notifications);
+    }
+
+    // The mode applies when the call returns: no job. The editor is told after the preference was stored (it reads the
+    // mode then and flags the reference context for a refresh). EXPERIMENTAL_FEATURE says that the mode only matters
+    // for AUTO Ref, which is experimental.
+    const auto result = api.result("prefs.set", json(R"({"referenceAlignMode":"game"})"));
+    CONTROL_CHECK(memberOf(result, "applied").asBoolean() && memberOf(result, "job").isNull());
+    CONTROL_CHECK(changeIs(result, 0, "referenceAlignMode", "Reference alignment mode",
+                           JsonValue::string("standardAuto"), JsonValue::string("game")));
+    CONTROL_CHECK((warningCodes(result) == std::vector<std::string>{"GLOBAL_PREFERENCE", "EXPERIMENTAL_FEATURE"}));
+    CONTROL_CHECK((globalPreferences(result) == std::vector<std::string>{"referenceAlignMode"}));
+    {
+        const auto& warnings = memberOf(result, "warnings");
+        const auto& subject = memberOf(warnings.at(1), "subject");
+        CONTROL_CHECK(subject.size() == 1 && memberOf(subject, "preference").text() == "referenceAlignMode");
+    }
+    CONTROL_CHECK(undoIsUiParity(result) && memberOf(result, "sideEffects").size() == 0);
+    CONTROL_CHECK(preferences.getState().shared.experimentalReferenceAlignMode == ExperimentalReferenceAlignMode::Game);
+    CONTROL_CHECK(bridge.preferenceNotifications == notifications + 1);
+    CONTROL_CHECK(bridge.alignModeAtNotification == ExperimentalReferenceAlignMode::Game);
+    CONTROL_CHECK(memberOf(memberOf(api.result("prefs.get"), "processing"), "referenceAlignMode").text() == "game");
+    const auto& params = memberOf(memberOf(memberOf(result, "undo"), "revert"), "params");
+    CONTROL_CHECK(params.size() == 1 && memberOf(params, "referenceAlignMode").text() == "standardAuto");
+    const auto reverted = replayRevert(api, result);
+    CONTROL_CHECK(memberOf(reverted, "applied").asBoolean() && hasWarning(reverted, "EXPERIMENTAL_FEATURE"));
+    CONTROL_CHECK(bridge.alignModeAtNotification == ExperimentalReferenceAlignMode::StandardAuto);
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+
+    // Without an editor the preference is stored all the same.
+    service.setUiBridge(nullptr);
+    const auto alone = api.result("prefs.set", json(R"({"referenceAlignMode":"game"})"));
+    CONTROL_CHECK(memberOf(alone, "applied").asBoolean() && hasWarning(alone, "EXPERIMENTAL_FEATURE"));
+    CONTROL_CHECK(preferences.getState().shared.experimentalReferenceAlignMode == ExperimentalReferenceAlignMode::Game);
+    CONTROL_CHECK(bridge.preferenceNotifications == notifications + 2);
+    replayRevert(api, alone);
+    service.setUiBridge(&bridge);
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+}
+
+/** All eight members in one call: the order of the changes, of GLOBAL_PREFERENCE and of the revert recipe, the order of
+    the calls (the pitch model first), one reRenderQueued, and the revert recipe taking all eight back. */
+void checkAllMembers(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge, FakeRuntime& runtime,
+                     const ClipHandles& clip)
+{
+    auto& preferences = processor.getAppPreferences();
+    const auto baseline = api.result("prefs.get");
+    const auto notifications = bridge.preferenceNotifications;
+    runtime.queuedMs = 100;
+    runtime.loadingMs = 100;
+    const auto job = runAsJob(
+        api, "prefs.set",
+        json(
+            R"({"referenceAlignMode":"game","f0Model":"other","renderingPriority":"cpuFirst","vocoderWeight":"zz-custom.onnx","experimentalFeatures":true,"hybridMode":false,"editingScheme":"openDyne","tuningHz":435.5})"),
+        "prefsApply");
+    CONTROL_CHECK(jobSucceeded(job));
+    // The editor is told once for the eight members.
+    CONTROL_CHECK(bridge.preferenceNotifications == notifications + 1);
+    const auto& result = memberOf(job, "result");
+    const std::vector<std::string> order{"tuningHz",      "editingScheme",     "hybridMode", "experimentalFeatures",
+                                         "vocoderWeight", "renderingPriority", "f0Model",    "referenceAlignMode"};
+    CONTROL_CHECK(changedPreferences(result) == order);
+    CONTROL_CHECK(globalPreferences(result) == order);
+    CONTROL_CHECK((warningCodes(result)
+                   == std::vector<std::string>{"GLOBAL_PREFERENCE", "NOT_RETROACTIVE", "EXPERIMENTAL_FEATURE"}));
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"f0:2", "weight:zz-custom.onnx", "priority:cpuFirst"}));
+    // The hybrid switch and the vocoder weight make one side effect, not two.
+    CONTROL_CHECK(memberOf(result, "sideEffects").size() == 1);
+    const auto& queued = memberOf(memberOf(memberOf(result, "sideEffects"), "reRenderQueued"), "contentIds");
+    CONTROL_CHECK(queued.size() == 1 && queued.at(0).text() == clip.contentId);
+    const auto& params = memberOf(memberOf(memberOf(result, "undo"), "revert"), "params");
+    CONTROL_CHECK(params.size() == 8);
+    CONTROL_CHECK(
+        numberIs(memberOf(params, "tuningHz"), 440.0) && memberOf(params, "editingScheme").text() == "openTune"
+        && memberOf(params, "hybridMode").asBoolean() && !memberOf(params, "experimentalFeatures").asBoolean()
+        && memberOf(params, "vocoderWeight").text() == "hifigan.onnx"
+        && memberOf(params, "renderingPriority").text() == "gpuFirst" && memberOf(params, "f0Model").text() == "fcpe"
+        && memberOf(params, "referenceAlignMode").text() == "standardAuto");
+    const auto state = preferences.getState().shared;
+    CONTROL_CHECK(AudioEditingScheme::usesNotesPrimaryScheme(state.audioEditingScheme)
+                  && !state.lightPitchCorrectionEnabled && state.experimentalFeaturesEnabled
+                  && state.vocoderModelWeight == kWeightZ && state.renderingPriority == RenderingPriority::CpuFirst
+                  && state.f0ModelType == kOtherPitchModel
+                  && state.experimentalReferenceAlignMode == ExperimentalReferenceAlignMode::Game);
+
+    // Sent as it is, the recipe takes all eight back.
+    runtime.calls.clear();
+    const auto reverted = replayRevertAsJob(api, result);
+    CONTROL_CHECK(jobSucceeded(reverted));
+    CONTROL_CHECK(memberOf(memberOf(reverted, "result"), "changes").size() == 8);
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+    CONTROL_CHECK(preferences.getF0ModelType() == F0ModelType::FCPE);
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{"f0:1", "weight:hifigan.onnx", "priority:gpuFirst"}));
+    runtime.calls.clear();
+    runtime.settle();
+}
+
+} // namespace
+
+void scenarioPrefsOptions()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    resetPreferences(*processor);
+    PrefsBridge bridge;
+    bridge.processor = processor.get();
+    bridge.preferences = &processor->getAppPreferences();
+    ScopedBridge registered(service, bridge);
+    fixtureAddClip(*processor, readyClip("options"));
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    const auto handles = fixtureHandlesOf(api.result("project.get"), 0, 2.0);
+    const auto models = freshModelsDirectory("options");
+    if (!CONTROL_CHECK(handles.has_value() && !models.empty()))
+        return;
+    FakeRuntime runtime;
+    runtime.install(models);
+    checkOptionLists(api, models);
+    checkVocoderWeight(api, *processor, bridge, runtime, *handles);
+    checkRenderingPriority(api, *processor, bridge, runtime);
+    // From here the pitch models are a fake list of three: fcpe, other and gone (not available).
+    runtime.install(models, true);
+    checkPitchModel(api, *processor, bridge, runtime);
+    checkReferenceAlignMode(api, *processor, bridge, service);
+    checkAllMembers(api, *processor, bridge, runtime, *handles);
+    resetPreferences(*processor);
+    const auto dispatcher = service.dispatcher();
+    CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+}
+
+// ---- The wait of a job for the vocoder
+// ----------------------------------------------------------------------------
+
+namespace {
+
+/** The models directory of the vocoder scenarios: the two built-in weights and two custom ones. */
+std::filesystem::path vocoderModels(const char* name)
+{
+    const auto models = freshModelsDirectory(name);
+    if (models.empty())
+        return models;
+    touchFile(models / "hifigan.onnx");
+    touchFile(models / "hifigan_coulin9.onnx");
+    touchFile(models / "vocoder_weights" / kWeightA);
+    touchFile(models / "vocoder_weights" / kWeightZ);
+    return models;
+}
+
+/** Puts the runtime, the preferences and the timeouts back for the next check. */
+void settleVocoderScenario(OpenTuneAudioProcessor& processor, FakeRuntime& runtime)
+{
+    controlSetPrefsApplyTimeoutForTesting(0);
+    controlSetPrefsVocoderWaitForTesting(0);
+    runtime.settle();
+    runtime.calls.clear();
+    runtime.queuedMs = 300;
+    runtime.loadingMs = 300;
+    resetPreferences(processor);
+}
+
+/** The vocoder was ready before the change, so the job waits for it; when it was not (no vocoder in the runtime, or
+    one that is reloading already) the job does not wait, ends as soon as the changes are made and reports no render of
+    its own: a job that waited would fail here, as the vocoder never gets ready. */
+void checkNoWaitWhenNotReady(ApiSession& api, OpenTuneAudioProcessor& processor, FakeRuntime& runtime)
+{
+    auto& preferences = processor.getAppPreferences();
+    controlSetPrefsVocoderWaitForTesting(800);
+
+    // A runtime without a vocoder.
+    runtime.present = false;
+    {
+        const auto job = runAsJob(api, "prefs.set", json(R"({"vocoderWeight":"aa-custom.onnx"})"), "prefsApply");
+        CONTROL_CHECK(jobSucceeded(job));
+        CONTROL_CHECK(memberOf(memberOf(job, "result"), "changes").size() == 1);
+        CONTROL_CHECK(memberOf(memberOf(job, "result"), "sideEffects").find("reRenderQueued") == nullptr);
+        CONTROL_CHECK(preferences.getState().shared.vocoderModelWeight == kWeightA);
+        CONTROL_CHECK((runtime.calls == std::vector<std::string>{std::string("weight:") + kWeightA}));
+    }
+    {
+        const auto job = runAsJob(api, "prefs.set", json(R"({"renderingPriority":"cpuFirst"})"), "prefsApply");
+        CONTROL_CHECK(jobSucceeded(job));
+        CONTROL_CHECK(preferences.getState().shared.renderingPriority == RenderingPriority::CpuFirst);
+    }
+
+    // A vocoder that is reconfiguring already, whatever the reason.
+    runtime.getStuck();
+    runtime.calls.clear();
+    {
+        const auto job =
+            runAsJob(api, "prefs.set", json(R"({"vocoderWeight":"hifigan.onnx","tuningHz":434})"), "prefsApply");
+        CONTROL_CHECK(jobSucceeded(job));
+        CONTROL_CHECK(memberOf(memberOf(job, "result"), "changes").size() == 2);
+        CONTROL_CHECK((runtime.calls == std::vector<std::string>{"weight:hifigan.onnx"}));
+    }
+
+    // A change that touches neither the weight nor the priority never looks at the vocoder.
+    {
+        const auto job = runAsJob(api, "prefs.set", json(R"({"editingScheme":"openDyne"})"), "prefsApply");
+        CONTROL_CHECK(jobSucceeded(job));
+        CONTROL_CHECK(AudioEditingScheme::usesNotesPrimaryScheme(preferences.getState().shared.audioEditingScheme));
+        CONTROL_CHECK(jobSucceeded(runAsJob(api, "prefs.set", json(R"({"editingScheme":"openTune"})"), "prefsApply")));
+    }
+    settleVocoderScenario(processor, runtime);
+}
+
+/** The vocoder is not ready again in time: the job takes the preferences back, tells the editor, asks the runtime for
+    the previous weight or priority again, and fails with MODEL_UNAVAILABLE(vocoder_not_ready), retryable and with
+    executed false; asked again once the vocoder works, the same call succeeds. */
+void checkVocoderTimeout(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge, FakeRuntime& runtime)
+{
+    const auto baseline = api.result("prefs.get");
+    constexpr std::uint32_t kLimitMs = 600;
+    struct Case
+    {
+        const char* params;
+        std::vector<std::string> calls;
+    };
+    const Case cases[] = {
+        {R"({"vocoderWeight":"aa-custom.onnx","tuningHz":433})",
+         {std::string("weight:") + kWeightA, "weight:hifigan.onnx"}},
+        {R"({"renderingPriority":"cpuFirst","hybridMode":false})", {"priority:cpuFirst", "priority:gpuFirst"}},
+        {R"({"vocoderWeight":"zz-custom.onnx","renderingPriority":"cpuFirst"})",
+         {std::string("weight:") + kWeightZ, "priority:cpuFirst", "weight:hifigan.onnx", "priority:gpuFirst"}},
+    };
+    for (const auto& item : cases) {
+        controlSetPrefsVocoderWaitForTesting(kLimitMs);
+        runtime.settle();
+        runtime.calls.clear();
+        runtime.neverReady = true;
+        const auto notifications = bridge.preferenceNotifications;
+        const auto startedAt = juce::Time::getMillisecondCounter();
+        const auto job = runAsJob(api, "prefs.set", json(item.params), "prefsApply");
+        CONTROL_CHECK(jobFailedWith(job, "MODEL_UNAVAILABLE", "vocoder_not_ready", false, true));
+        CONTROL_CHECK(juce::Time::getMillisecondCounter() - startedAt >= kLimitMs);
+        // The detail is fixed text: it names no file.
+        const auto detail = memberOf(memberOf(memberOf(job, "error"), "data"), "detail").text();
+        CONTROL_CHECK(detail.find("vocoder") != std::string::npos && detail.find("custom") == std::string::npos);
+        CONTROL_CHECK(runtime.calls == item.calls);
+        CONTROL_CHECK(bridge.preferenceNotifications == notifications + 2);
+        CONTROL_CHECK(TuningConfig::currentTuningHz() == 440.0f);
+        CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+    }
+
+    // The vocoder works again: the call that failed succeeds and its revert recipe takes everything back.
+    controlSetPrefsVocoderWaitForTesting(0);
+    runtime.settle();
+    runtime.calls.clear();
+    runtime.queuedMs = 100;
+    runtime.loadingMs = 100;
+    const auto job = runAsJob(api, "prefs.set", json(cases[0].params), "prefsApply");
+    CONTROL_CHECK(jobSucceeded(job));
+    CONTROL_CHECK(memberOf(memberOf(job, "result"), "changes").size() == 2);
+    const auto reverted = replayRevertAsJob(api, memberOf(job, "result"));
+    CONTROL_CHECK(jobSucceeded(reverted));
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+    settleVocoderScenario(processor, runtime);
+}
+
+} // namespace
+
+void scenarioPrefsVocoderJob()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    resetPreferences(*processor);
+    PrefsBridge bridge;
+    bridge.processor = processor.get();
+    bridge.preferences = &processor->getAppPreferences();
+    ScopedBridge registered(service, bridge);
+    fixtureAddClip(*processor, readyClip("vocoder-job"));
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    const auto models = vocoderModels("vocoder-job");
+    if (!CONTROL_CHECK(!models.empty()))
+        return;
+    FakeRuntime runtime;
+    runtime.install(models);
+    checkNoWaitWhenNotReady(api, *processor, runtime);
+    checkVocoderTimeout(api, *processor, bridge, runtime);
+    resetPreferences(*processor);
+    const auto dispatcher = service.dispatcher();
+    CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+}
+
+namespace {
+
+/** The scheme and the vocoder in one job: it ends when both hold, whichever comes last. */
+void checkSchemeAndVocoder(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge,
+                           FakeRuntime& runtime)
+{
+    auto& preferences = processor.getAppPreferences();
+    bridge.apply = PrefsBridge::Apply::AfterDelay;
+
+    // The editor is the slow one (700 ms; the vocoder is back after 300).
+    runtime.queuedMs = 150;
+    runtime.loadingMs = 150;
+    bridge.applyDelayMs = 700;
+    {
+        const auto startedAt = juce::Time::getMillisecondCounter();
+        const auto job = runAsJob(
+            api, "prefs.set", json(R"({"editingScheme":"openDyne","vocoderWeight":"aa-custom.onnx"})"), "prefsApply");
+        CONTROL_CHECK(jobSucceeded(job));
+        CONTROL_CHECK(juce::Time::getMillisecondCounter() - startedAt >= 700);
+        CONTROL_CHECK(memberOf(memberOf(job, "result"), "changes").size() == 2);
+        CONTROL_CHECK(AudioEditingScheme::usesNotesPrimaryScheme(preferences.getState().shared.audioEditingScheme));
+        CONTROL_CHECK(preferences.getState().shared.vocoderModelWeight == kWeightA);
+    }
+
+    // The vocoder is the slow one (800 ms; the editor applies after 200). The runtime has finished the first command.
+    runtime.settle();
+    runtime.queuedMs = 400;
+    runtime.loadingMs = 400;
+    bridge.applyDelayMs = 200;
+    {
+        const auto startedAt = juce::Time::getMillisecondCounter();
+        const auto job = runAsJob(api, "prefs.set",
+                                  json(R"({"editingScheme":"openTune","vocoderWeight":"hifigan.onnx"})"), "prefsApply");
+        CONTROL_CHECK(jobSucceeded(job));
+        CONTROL_CHECK(juce::Time::getMillisecondCounter() - startedAt >= 800);
+        CONTROL_CHECK(!AudioEditingScheme::usesNotesPrimaryScheme(preferences.getState().shared.audioEditingScheme));
+        CONTROL_CHECK(preferences.getState().shared.vocoderModelWeight == kDefaultVocoderWeight);
+    }
+    settleVocoderScenario(processor, runtime);
+    bridge.apply = PrefsBridge::Apply::Immediate;
+    bridge.applyDelayMs = 0;
+}
+
+/** The editor never applies the scheme although the vocoder is back: INTERNAL after the scheme's limit, not the
+    vocoder's error, and both the preferences and the runtime are put back. */
+void checkSchemeTimesOutWhileVocoderIsBack(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge,
+                                           FakeRuntime& runtime)
+{
+    const auto baseline = api.result("prefs.get");
+    bridge.apply = PrefsBridge::Apply::Never;
+    controlSetPrefsApplyTimeoutForTesting(kWaitingJobTimeoutMs);
+    runtime.queuedMs = 100;
+    runtime.loadingMs = 100;
+    const auto startedAt = juce::Time::getMillisecondCounter();
+    const auto job = runAsJob(api, "prefs.set",
+                              json(R"({"editingScheme":"openDyne","vocoderWeight":"aa-custom.onnx"})"), "prefsApply");
+    CONTROL_CHECK(jobFailedInternal(job, false));
+    CONTROL_CHECK(juce::Time::getMillisecondCounter() - startedAt >= kWaitingJobTimeoutMs);
+    CONTROL_CHECK(
+        (runtime.calls == std::vector<std::string>{std::string("weight:") + kWeightA, "weight:hifigan.onnx"}));
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+    settleVocoderScenario(processor, runtime);
+    bridge.apply = PrefsBridge::Apply::Immediate;
+}
+
+/** The editor applies the scheme but the vocoder does not come back: the vocoder's error, and the scheme is taken back
+    too. */
+void checkVocoderTimesOutWhileSchemeIsApplied(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge,
+                                              FakeRuntime& runtime)
+{
+    const auto baseline = api.result("prefs.get");
+    bridge.apply = PrefsBridge::Apply::Immediate;
+    controlSetPrefsVocoderWaitForTesting(600);
+    runtime.neverReady = true;
+    const auto notifications = bridge.preferenceNotifications;
+    const auto job = runAsJob(api, "prefs.set",
+                              json(R"({"editingScheme":"openDyne","vocoderWeight":"aa-custom.onnx"})"), "prefsApply");
+    CONTROL_CHECK(jobFailedWith(job, "MODEL_UNAVAILABLE", "vocoder_not_ready", false, true));
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+    CONTROL_CHECK(bridge.preferenceNotifications == notifications + 2);
+    CONTROL_CHECK(
+        (runtime.calls == std::vector<std::string>{std::string("weight:") + kWeightA, "weight:hifigan.onnx"}));
+    settleVocoderScenario(processor, runtime);
+}
+
+/** Another write while the job waits for the vocoder: the job takes back what still holds its value and leaves the
+    weight the write changed, which the detail names; executed is true. */
+void checkWriteDuringVocoderWait(ApiSession& api, OpenTuneAudioProcessor& processor, FakeRuntime& runtime)
+{
+    auto& preferences = processor.getAppPreferences();
+    controlSetPrefsVocoderWaitForTesting(kWaitingJobTimeoutMs);
+    runtime.neverReady = true;
+    const auto jobId = jobIdOf(api.result("prefs.set", json(R"({"vocoderWeight":"aa-custom.onnx","tuningHz":433})")));
+    CONTROL_CHECK(!jobId.empty());
+    CONTROL_CHECK(pumpMessagesUntil([] { return TuningConfig::currentTuningHz() == 433.0f; }, kJobChangeMs));
+    preferences.setVocoderModelWeight(kWeightZ);
+    const auto job = waitJob(api, jobId);
+    CONTROL_CHECK(jobFailedWith(job, "MODEL_UNAVAILABLE", "vocoder_not_ready", true, true));
+    const auto detail = memberOf(memberOf(memberOf(job, "error"), "data"), "detail").text();
+    CONTROL_CHECK(detail.find("vocoderWeight") != std::string::npos && detail.find("tuningHz") == std::string::npos);
+    // The tuning is back; the weight keeps the value of the later write, and the runtime was not asked to take the
+    // job's weight back over it.
+    CONTROL_CHECK(TuningConfig::currentTuningHz() == 440.0f);
+    CONTROL_CHECK(preferences.getState().shared.vocoderModelWeight == kWeightZ);
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{std::string("weight:") + kWeightA}));
+    settleVocoderScenario(processor, runtime);
+}
+
+/** A modal dialog opens before the job's first step: BUSY, nothing executed, the runtime was not asked anything. */
+void checkModalBeforeVocoderChange(ApiSession& api, PrefsBridge& bridge, FakeRuntime& runtime,
+                                   const std::shared_ptr<ControlJobs>& jobs)
+{
+    if (!CONTROL_CHECK(jobs != nullptr))
+        return;
+    CONTROL_CHECK(pumpMessagesUntil([&jobs] { return jobs->activeCount() == 0; }, kJobWaitMs));
+    const auto baseline = api.result("prefs.get");
+    const auto notifications = bridge.preferenceNotifications;
+    bridge.modalOnceJobStarted = jobs;
+    const auto job = runAsJob(
+        api, "prefs.set", json(R"({"vocoderWeight":"aa-custom.onnx","renderingPriority":"cpuFirst"})"), "prefsApply");
+    bridge.modalOnceJobStarted = nullptr;
+    const auto& data = memberOf(memberOf(job, "error"), "data");
+    CONTROL_CHECK(memberOf(job, "state").text() == "failed" && memberOf(data, "kind").text() == "BUSY"
+                  && memberOf(data, "reason").text() == "modal_open" && memberOf(data, "executed").isBoolean()
+                  && !memberOf(data, "executed").asBoolean());
+    CONTROL_CHECK(runtime.calls.empty() && bridge.preferenceNotifications == notifications);
+    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
+}
+
+} // namespace
+
+void scenarioPrefsVocoderOverlap()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    resetPreferences(*processor);
+    PrefsBridge bridge;
+    bridge.processor = processor.get();
+    bridge.preferences = &processor->getAppPreferences();
+    auto registered = std::make_unique<ScopedBridge>(service, bridge);
+    fixtureAddClip(*processor, readyClip("vocoder-overlap"));
+    std::optional<ApiSession> session;
+    session.emplace();
+    auto& api = *session;
+    if (!api.open(service))
+        return;
+    const auto models = vocoderModels("vocoder-overlap");
+    if (!CONTROL_CHECK(!models.empty()))
+        return;
+    FakeRuntime runtime;
+    runtime.install(models);
+    checkSchemeAndVocoder(api, *processor, bridge, runtime);
+    checkSchemeTimesOutWhileVocoderIsBack(api, *processor, bridge, runtime);
+    checkVocoderTimesOutWhileSchemeIsApplied(api, *processor, bridge, runtime);
+    checkWriteDuringVocoderWait(api, *processor, runtime);
+    checkModalBeforeVocoderChange(api, bridge, runtime, service.jobs());
+
+    // The control API stops while a job waits for the vocoder: the stored preferences are put back, and the runtime is
+    // not asked again (there is no context any more to ask with).
+    bridge.apply = PrefsBridge::Apply::Immediate;
+    runtime.neverReady = true;
+    runtime.calls.clear();
+    const auto job = api.result("prefs.set", json(R"({"vocoderWeight":"aa-custom.onnx","tuningHz":434})"));
+    CONTROL_CHECK(!jobIdOf(job).empty());
+    CONTROL_CHECK(pumpMessagesUntil([&] { return TuningConfig::currentTuningHz() == 434.0f; }, kJobChangeMs));
+    CONTROL_CHECK(processor->getAppPreferences().getState().shared.vocoderModelWeight == kWeightA);
+    session.reset();
+    registered.reset();
+    processor.reset();
+    CONTROL_CHECK(TuningConfig::currentTuningHz() == 440.0f);
+    CONTROL_CHECK((runtime.calls == std::vector<std::string>{std::string("weight:") + kWeightA}));
+    AppPreferences stored;
+    stored.load();
+    CONTROL_CHECK(stored.getState().shared.vocoderModelWeight == kDefaultVocoderWeight);
     CONTROL_CHECK(stored.getState().shared.tuning.tuningHz == 440.0f);
 }
 

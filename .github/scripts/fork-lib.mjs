@@ -412,12 +412,16 @@ function escapeAnnotation(text) {
   return String(text).replace(/%/g, '%25').replace(/\r/g, '%0D').replace(/\n/g, '%0A');
 }
 
-/** Emit GitHub annotations for failed checks and append the table to the job summary. */
+/**
+ * Emit GitHub annotations (::error for a FAIL, ::warning for a WARN, so that a report-only result shows up on the
+ * run page too) and append the table to the job summary.
+ */
 export function reportToGitHub(markdown, results) {
   for (const r of results) {
-    if (r.result !== 'FAIL') continue;
+    if (r.result !== 'FAIL' && r.result !== 'WARN') continue;
+    const level = r.result === 'FAIL' ? 'error' : 'warning';
     const first = r.problems[0] ? `：${r.problems[0]}` : '';
-    process.stdout.write(`::error title=${escapeAnnotation(r.id)}::${escapeAnnotation(`${r.detail}${first}`)}\n`);
+    process.stdout.write(`::${level} title=${escapeAnnotation(r.id)}::${escapeAnnotation(`${r.detail}${first}`)}\n`);
   }
   const summary = process.env.GITHUB_STEP_SUMMARY;
   if (summary) fs.appendFileSync(summary, markdown + '\n');

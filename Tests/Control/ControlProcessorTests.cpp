@@ -541,6 +541,7 @@ const Scenario kScenarios[] = {
     {"Import", scenarioImport, false},
     {"ImportAfterOpen", scenarioImportAfterOpen, false},
     {"ImportCancel", scenarioImportCancel, false},
+    {"ImportRevert", scenarioImportRevert, false},
     {"JobVectors", scenarioJobVectors, false},
     {"BusyMatrix", scenarioBusyMatrix, false},
     {"JobDisconnect", scenarioJobDisconnect, true},

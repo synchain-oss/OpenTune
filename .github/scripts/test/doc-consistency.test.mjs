@@ -4,8 +4,11 @@
 // doc-consistency: the documentation of the control API against the code. One case per group: a tree with
 // one difference must report it (and say which file and line to change); the consistent tree must not.
 import assert from 'node:assert/strict';
-import { describe, test } from 'node:test';
-import { checkDocConsistency, memorySource } from '../doc-consistency.mjs';
+import fs from 'node:fs';
+import path from 'node:path';
+import { after, describe, test } from 'node:test';
+import { CLAUDE_MD, README, checkDocConsistency, decideClaudeEnforcement, fsSource, memorySource, resolveInside } from '../doc-consistency.mjs';
+import { makeTempDir, removeDir } from '../fork-lib.mjs';
 import { docFixture, patch } from './doc-fixture.mjs';
 
 /** Run the check over a tree given as { path: text }. */
@@ -170,6 +173,128 @@ describe('doc-consistency', () => {
       const problems = of(run(files, { mirrorsBlocking: false }), 'tests');
       assert.ok(problems.length);
       assert.ok(problems.every((p) => p.advisory === false));
+    });
+  });
+
+  describe('source of a problem', () => {
+    test('every problem says which file it comes from, without looking at its wording', () => {
+      const claude = patch(docFixture(), 'CLAUDE.md', '`Source/Foo.h/.cpp`', '`Source/Bar.h/.cpp`');
+      const fromClaude = of(run(claude), 'hooks');
+      assert.ok(fromClaude.length);
+      assert.ok(fromClaude.every((p) => p.source === CLAUDE_MD), JSON.stringify(fromClaude));
+      const readme = patch(docFixture(), 'Source/Control/README.md', '`Source/Foo.h` (end of the class)', '`Source/Gone.h` (end of the class)');
+      const fromReadme = of(run(readme), 'hooks');
+      assert.ok(fromReadme.length);
+      assert.ok(fromReadme.every((p) => typeof p.source === 'string' && p.source.length > 0));
+      assert.ok(fromReadme.some((p) => p.source === README), JSON.stringify(fromReadme));
+      assert.ok(!fromReadme.some((p) => p.source === CLAUDE_MD));
+      assert.ok(of(run(readme, { claudeBlocking: false }), 'hooks').every((p) => p.advisory === false));
+    });
+
+    test('claudeBlocking false makes only the problems whose source is CLAUDE.md advisory', () => {
+      // One problem from each: the hook table of CLAUDE.md and the hook list of the README both lose a file.
+      let files = patch(docFixture(), 'CLAUDE.md', '`Source/Foo.h/.cpp`', '`Source/Bar.h/.cpp`');
+      files = patch(files, 'Source/Control/README.md', '`Source/Foo.h` (end of the class)', '`Source/Gone.h` (end of the class)');
+      const hooks = of(run(files, { claudeBlocking: false }), 'hooks');
+      assert.ok(hooks.some((p) => p.source === CLAUDE_MD && p.advisory === true), JSON.stringify(hooks));
+      assert.ok(hooks.some((p) => p.source !== CLAUDE_MD && p.advisory === false), JSON.stringify(hooks));
+      assert.ok(hooks.every((p) => p.advisory === (p.source === CLAUDE_MD)));
+    });
+  });
+
+  describe('decideClaudeEnforcement', () => {
+    const sub = { event: 'pull_request', baseRef: 'feature/control-api' };
+    test('a sub-PR that does not change CLAUDE.md only reports, with its own reason', () => {
+      const d = decideClaudeEnforcement({ ...sub, changedFiles: ['Source/Control/README.md'] });
+      assert.equal(d.blocking, false);
+      assert.match(d.reason, /CLAUDE\.md/);
+      assert.match(d.reason, /feature\/control-api/);
+    });
+
+    test('touching the pin files does not make CLAUDE.md problems block', () => {
+      const d = decideClaudeEnforcement({ ...sub, changedFiles: ['.github/drift-pins/alpha.txt', '.github/scripts/drift-pins.mjs'] });
+      assert.equal(d.blocking, false);
+    });
+
+    test('a branch that changes CLAUDE.md stays blocking whatever its base is', () => {
+      const d = decideClaudeEnforcement({ ...sub, changedFiles: ['CLAUDE.md'] });
+      assert.equal(d.blocking, true);
+      assert.match(d.reason, /CLAUDE\.md/);
+    });
+
+    test('pushes and pull requests into dev, review-base/** and sync/** block', () => {
+      assert.equal(decideClaudeEnforcement({ event: 'push' }).blocking, true);
+      for (const baseRef of ['dev', 'refs/heads/dev', 'review-base/12', 'sync/20260101']) {
+        assert.equal(decideClaudeEnforcement({ event: 'pull_request', baseRef, changedFiles: [] }).blocking, true, baseRef);
+      }
+    });
+  });
+
+  describe('files read from a working tree', () => {
+    const dirs = [];
+    after(() => dirs.forEach(removeDir));
+    /** <tmp>/outside.txt next to <tmp>/repo/ with the documentation fixture. */
+    const tree = () => {
+      const top = makeTempDir('doccons');
+      dirs.push(top);
+      const root = path.join(top, 'repo');
+      for (const [file, text] of Object.entries(docFixture())) {
+        const abs = path.join(root, ...file.split('/'));
+        fs.mkdirSync(path.dirname(abs), { recursive: true });
+        fs.writeFileSync(abs, text);
+      }
+      fs.writeFileSync(path.join(top, 'outside.txt'), 'outside');
+      fs.writeFileSync(path.join(top, 'outside.h'), '// outside the tree\n');
+      fs.writeFileSync(path.join(root, 'inside.txt'), 'inside');
+      return { top, root };
+    };
+
+    test('paths are normalised and read as long as they stay inside the root', () => {
+      const { root } = tree();
+      const src = fsSource(root);
+      assert.equal(src.read('inside.txt'), 'inside');
+      assert.equal(src.read('Source/../inside.txt'), 'inside');
+      assert.equal(src.read('Source/Control/../../inside.txt'), 'inside');
+      assert.equal(src.read('./inside.txt'), 'inside');
+      assert.equal(src.read('no-such-file.txt'), null);
+      assert.ok(src.list('Source/Control/../Control').length > 0);
+    });
+
+    test('a path that climbs out of the root reads as missing', () => {
+      const { top, root } = tree();
+      const src = fsSource(root);
+      assert.equal(src.read('../outside.txt'), null);
+      assert.equal(src.read('Source/../../outside.txt'), null);
+      assert.equal(src.read('Source/Control/../../../outside.txt'), null);
+      assert.equal(src.read(`${top.replace(/\\/g, '/')}/outside.txt`), null);
+      assert.equal(src.read('C:/Windows/win.ini'), null);
+      assert.equal(src.read('inside.txt\0'), null);
+      assert.deepEqual([...src.readMany(['../outside.txt', 'inside.txt'])], [['../outside.txt', null], ['inside.txt', 'inside']]);
+      assert.deepEqual(src.list('..'), []);
+      assert.deepEqual(src.list('Source/../..'), []);
+      assert.deepEqual(src.list('../outside.txt'), []);
+    });
+
+    test('resolveInside', () => {
+      const root = path.resolve('some', 'repo');
+      assert.equal(resolveInside(root, 'a/b.txt'), path.join(root, 'a', 'b.txt'));
+      assert.equal(resolveInside(root, 'a/../b.txt'), path.join(root, 'b.txt'));
+      assert.equal(resolveInside(root, ''), root);
+      assert.equal(resolveInside(root, '..'), null);
+      assert.equal(resolveInside(root, 'a/../../b.txt'), null);
+      assert.equal(resolveInside(root, '..repo/x'), path.join(root, '..repo', 'x'));
+    });
+
+    test('a README row that names a file outside the tree reports it as missing, although it exists there', () => {
+      const { root } = tree();
+      assert.deepEqual(checkDocConsistency(fsSource(root)).problems, []);
+      const readme = path.join(root, 'Source', 'Control', 'README.md');
+      const before = fs.readFileSync(readme, 'utf8');
+      const text = before.replace('Public `ensureRuntime()`', 'Public `ensureRuntime()` next to `Source/../../outside.h`');
+      assert.notEqual(text, before);
+      fs.writeFileSync(readme, text);
+      const problems = of(checkDocConsistency(fsSource(root)), 'hooks');
+      assert.ok(problems.some((p) => /outside\.h 不存在/.test(p.text)), problems.map((p) => p.text).join('\n'));
     });
   });
 });

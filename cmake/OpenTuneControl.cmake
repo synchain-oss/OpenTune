@@ -364,6 +364,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "Import|--control-api"
             "ImportAfterOpen|--control-api"
             "ImportCancel|--control-api"
+            "ImportRevert|--control-api"
             "JobVectors|--control-api"
             "BusyMatrix|--control-api"
             "JobDisconnect|--control-api"

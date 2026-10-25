@@ -33,13 +33,17 @@ class ControlMethodTable;
  *   vocoder was ready before the change, until the vocoder is ready again after the new weight or priority. Switching
  *   to openDyne can make the editor generate notes for the clip open in the piano roll; the job reports it as
  *   sideEffects.notesGenerated with SCHEME_GENERATED_NOTES and IRREVERSIBLE, and marks the project as changed. A new
- *   vocoder weight makes OpenTune render every content again (sideEffects.reRenderQueued); a new rendering priority
- *   does not. If the editor does not apply the scheme within the time limit, or the vocoder is not ready within its
- *   own, longer limit, the job restores the previous preferences (and asks the runtime for the previous vocoder weight
- *   and priority) and fails, with INTERNAL for the scheme and MODEL_UNAVAILABLE(vocoder_not_ready, retryable) for the
- *   vocoder, so that no half-applied set remains. When the runtime has finished the switch and there is no vocoder (the
- *   weight could not be loaded) the job does not wait for the limit: it restores at once and fails with
- *   MODEL_UNAVAILABLE(vocoder_load_failed), which is not retryable.
+ *   vocoder weight makes OpenTune render every content again once the new weight has loaded
+ *   (sideEffects.reRenderQueued, reported for every change of the weight, also when the job did not wait for the
+ *   vocoder); a new rendering priority does not. If the editor does not apply the scheme within the time limit, or the
+ *   vocoder is not ready within its own, longer limit, the job restores the previous preferences (and asks the runtime
+ *   for the previous vocoder weight and priority, which loads again) and fails, with INTERNAL for the scheme and
+ *   MODEL_UNAVAILABLE(vocoder_not_ready, retryable) for the vocoder, so that no half-applied set remains. When the
+ *   runtime has finished the switch and there is no vocoder (the weight could not be loaded) the job does not wait for
+ *   the limit: it restores at once and fails with MODEL_UNAVAILABLE(vocoder_load_failed), which is not retryable. A
+ *   failed job reports executed false, except when a preference that another write changed keeps that write's value,
+ *   or when the editor had generated notes for the open clip (they have no undo entry and stay, the project stays
+ *   marked as changed, and the detail says so): then executed is true.
  *
  * No cosmetic preference can be set (the params schema is closed).
  *

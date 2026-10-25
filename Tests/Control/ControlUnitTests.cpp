@@ -955,6 +955,33 @@ void testInFlightRules()
     CONTROL_CHECK(responseIdText(session.readLine()) == "300");
 }
 
+/** The stand-in answers job.get for the jobs it knows and, as the dispatcher does, NOT_FOUND(job_not_found) for an id
+    that no job has. */
+void testStandInJobGet()
+{
+    ServerFixture fixture;
+    if (!fixture.start("stand-in-job-get", {}, {"session.v1", "jobs.v1"}))
+        return;
+    fixture.handler->answerJobGetAfterWait = true;
+    fixture.handler->knownJobIds = {"job-0"};
+    TestClient session;
+    CONTROL_CHECK(fixture.authenticate(session).has_value());
+
+    CONTROL_CHECK(session.sendLine(requestLine("1", "job.get", R"({"jobId":"job-0","waitMs":0})")));
+    const auto known = session.readLine();
+    const auto parsedKnown = known ? parseJson(*known) : JsonParseResult{};
+    CONTROL_CHECK(parsedKnown.ok && parsedKnown.value.find("result") != nullptr
+                  && parsedKnown.value.find("result")->find("job")->find("jobId")->text() == "job-0");
+
+    // An id that no job has; the unbound ids of the vectors are of this kind.
+    CONTROL_CHECK(session.sendLine(requestLine("2", "job.get", R"({"jobId":"j:00000000:999999","waitMs":0})")));
+    const auto unknown = session.readLine();
+    CONTROL_CHECK(isError(unknown, "NOT_FOUND", "job_not_found") && responseIdText(unknown) == "2");
+    const auto parsedUnknown = unknown ? parseJson(*unknown) : JsonParseResult{};
+    const JsonValue* data = parsedUnknown.ok ? errorData(parsedUnknown.value) : nullptr;
+    CONTROL_CHECK(data != nullptr && data->find("executed") != nullptr && !data->find("executed")->asBoolean());
+}
+
 void testLineLimits()
 {
     ServerFixture fixture;
@@ -1425,8 +1452,11 @@ public:
         fixture_.handler->answerJobGetAfterWait = jobsVector;
         if (const JsonValue* given = vector_.find("given"))
             if (const JsonValue* jobs = given->find("jobs"))
-                for (std::size_t i = 0; i < jobs->size(); ++i)
-                    matcher_.bindings[jobs->at(i).find("bind")->text()] = JsonValue::string("job-" + std::to_string(i));
+                for (std::size_t i = 0; i < jobs->size(); ++i) {
+                    const auto id = "job-" + std::to_string(i);
+                    matcher_.bindings[jobs->at(i).find("bind")->text()] = JsonValue::string(id);
+                    fixture_.handler->knownJobIds.insert(id);
+                }
         for (std::size_t i = 0; i < fixture_.discovery.size(); ++i)
             matcher_.bindings["discovery." + fixture_.discovery.keyAt(i)] = fixture_.discovery.at(i);
         std::string wrong;
@@ -1616,6 +1646,7 @@ int main(int argc, char** argv)
         {"connection limits", testConnectionLimits},
         {"flood", testFloodDoesNotDisturbSessions},
         {"in-flight rules", testInFlightRules},
+        {"stand-in job.get", testStandInJobGet},
         {"line limits", testLineLimits},
         {"idle timeout", testIdleTimeout},
         {"stop with busy connections", testStopWithBusyConnections},

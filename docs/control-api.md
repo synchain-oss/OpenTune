@@ -107,7 +107,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - `referenceAlignMode` 立即生效，并带警告 `EXPERIMENTAL_FEATURE`：该模式只影响实验功能 AUTO Ref。编辑器随之刷新参考上下文。
 - 还原配方：`prefs.set` 的结果没有撤销条目（`ui_parity`），还原配方是用原来的值再调一次 `prefs.set`。原来的声码器权重名若无法放上线路（不是合法 UTF-8、为空或超过 64 个码点），配方里省略这一项；这次调用只改了它时，配方为 null（原因仍是 `ui_parity`，结果带警告 `IRREVERSIBLE`），不会给出没有参数的 `prefs.set`。
 - 与规范的关系：`processing.options`、`vocoderWeight`、`renderingPriority`、`f0Model`、`referenceAlignMode` 以及原因码 `option_unavailable`、`vocoder_not_ready`、`vocoder_load_failed` 随规范 rc.6 登记；仓库里的规范副本仍是 rc.5，两者的差别记录在 `Source/Control/README.md` 的「Deviations from the vectors」。
-- `audio.set` 只接受 `audio.get` 的 `available` 里列出的值，否则返回 `INVALID_ARGUMENT(audio_setting_unavailable)`，什么都不改。设备打不开时，服务端像设置页一样恢复原来的设置，调用以 `IO_ERROR(device_open_failed)` 失败，`executed` 为 false；原来的设置也打不开时，`executed` 为 true，且没有设备在运行（`audio.get` 会如实报告）。失败信息会说明是哪一步出了问题，以及原设置是否已恢复。
+- `audio.set` 只接受 `audio.get` 的 `available` 里列出的值，否则返回 `INVALID_ARGUMENT(audio_setting_unavailable)`。设备类型和输出设备在动手之前就按清单检查，不在清单里时什么都不改；采样率、缓冲区大小和输出声道对要等将要运行的设备打开之后才能检查，所以同一次调用里前面的步骤（换设备类型、换输出设备）可能已经改过设备：这时服务端像设置页一样先把原来的设置恢复回去，再返回这个错误。设备打不开时，服务端同样恢复原来的设置，调用以 `IO_ERROR(device_open_failed)` 失败，`executed` 为 false；原来的设置也打不开时，`executed` 为 true，且没有设备在运行（`audio.get` 会如实报告）。前面的步骤已经改过设备、后面的值又不在清单里、原来的设置也恢复不了时同样如此：返回的是 `IO_ERROR(device_open_failed)`，`executed` 为 true，而不是 `INVALID_ARGUMENT`。失败信息会说明是哪一步出了问题，以及原设置是否已恢复。
 - 在 ASIO 设备上切换设备类型或输出设备之前，服务端会像设置页一样先把 ASIO 采样率恢复为系统共享渲染率；恢复无法确认时调用失败，当前设备保持不变。
 
 ## 与 OpenTune MCP Server 的关系

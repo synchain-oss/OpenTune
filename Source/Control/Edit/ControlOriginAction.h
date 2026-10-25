@@ -77,10 +77,13 @@ public:
         std::vector<int> tracks;
         /** An approximation of the positions the clips of the action are at now: a copy of tracks when the entry is
             made, renumbered by the barrier of every track deletion for the shown tracks that moved down
-            (removeTrackAndShift()). After an undo() or redo() that took effect the slots of tracks are merged into it
-            (without duplicates), so followed covers tracks from then on, and a deletion that hits one of them reports
-            the entry possibly stale (section 15.3 rule 6: too often rather than too rarely). The real protection comes
-            from tracks: the action reads and writes only those slots. Filled by the constructor when left empty. */
+            (removeTrackAndShift()). After an undo() or redo() in which the action was executed (not blocked by a mask)
+            the slots of tracks are merged into it (without duplicates), so followed covers tracks from then on, and a
+            deletion that hits one of them reports the entry possibly stale (section 15.3 rule 6: too often rather than
+            too rarely). "Executed" is all that is known: the value apply() returns does not reflect an upstream action
+            that rejects the change on its own (for example because its clip is gone), which only makes followed cover
+            more tracks than needed. The real protection comes from tracks: the action reads and writes only those
+            slots. Filled by the constructor when left empty. */
         std::vector<int> followed;
     };
 
@@ -102,8 +105,9 @@ public:
     bool unsafe() const;
     /** False when the last undo() or redo() applied none of the inner actions: every one was masked, or the
         pitch shift it puts back through commitPitchShiftEdit() applied nothing (see the class comment). The step
-        then changed nothing, and edit.undo / edit.redo report UNDO_NO_EFFECT (section 15.3 rules 5 and 9).
-        True before the first step. */
+        then changed nothing, and edit.undo / edit.redo report UNDO_NO_EFFECT (section 15.3 rules 5 and 9). An
+        action that was executed counts even if the upstream action rejected the change on its own: apply() cannot
+        tell. True before the first step. */
     bool lastStepTookEffect() const noexcept { return lastStepTookEffect_; }
     /** A change without an undo entry changed this aspect of the content: from now on the entry no longer
         puts it back. Called by ControlHistory. */
@@ -140,7 +144,8 @@ private:
     /** Undoes (undo true) or redoes one inner action, as the masks of its content allow; false when it applied
         nothing. */
     bool apply(Inner& inner, bool undo);
-    /** apply(), then merges the slots of the inner action into followed when the step took effect. */
+    /** apply(), then merges the slots of the inner action into followed when the action was executed (not blocked
+        by a mask). The value apply() returns does not reflect an upstream action that rejects the change itself. */
     bool applyAndFollow(Inner& inner, bool undo);
 
     std::shared_ptr<ControlHistory> history_;

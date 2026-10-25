@@ -10,6 +10,11 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+// Before windows.h, as the macro requires, and only if nothing defined it yet: this header comes after the JUCE
+// headers, so their own inclusion of windows.h is not affected and the order of the includes stays as it is.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
 #include <windows.h>
 #include <aclapi.h>
 #pragma comment(lib, "advapi32.lib")
@@ -59,6 +64,9 @@ inline bool NoAccessFile::deny(const std::filesystem::path& path, unsigned long 
         return false;
     saved.descriptor = descriptor;
     saved.dacl = original;
+    // GetNamedSecurityInfoW hands out a NULL DACL for a path that everyone may use fully; SetEntriesInAclW then builds
+    // an ACL of the one DENY entry alone, so the original has to be put back as the NULL it was.
+    saved.daclWasNull = original == nullptr;
     EXPLICIT_ACCESS_W entry{};
     entry.grfAccessPermissions = rights;
     entry.grfAccessMode = DENY_ACCESS;
@@ -78,10 +86,11 @@ inline bool NoAccessFile::deny(const std::filesystem::path& path, unsigned long 
 
 inline void NoAccessFile::writeBack(const std::filesystem::path& path, SavedDacl& saved)
 {
-    if (saved.changed && saved.dacl != nullptr) {
+    if (saved.changed) {
+        // DACL_SECURITY_INFORMATION with a NULL pDacl sets a NULL DACL: exactly the original of a path that had one.
         const std::wstring wide = path.wstring();
         SetNamedSecurityInfoW(const_cast<LPWSTR>(wide.c_str()), SE_FILE_OBJECT, DACL_SECURITY_INFORMATION, nullptr,
-                              nullptr, static_cast<PACL>(saved.dacl), nullptr);
+                              nullptr, saved.daclWasNull ? nullptr : static_cast<PACL>(saved.dacl), nullptr);
     }
     if (saved.descriptor != nullptr)
         LocalFree(saved.descriptor);

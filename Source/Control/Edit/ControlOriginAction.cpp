@@ -42,33 +42,35 @@ ControlOriginAction::~ControlOriginAction()
 
 void ControlOriginAction::undo()
 {
-    bool tookEffect = false;
+    bool executed = false;
     for (auto it = inner_.rbegin(); it != inner_.rend(); ++it)
-        tookEffect = applyAndFollow(*it, true) || tookEffect;
-    lastStepTookEffect_ = tookEffect;
+        executed = applyAndFollow(*it, true) || executed;
+    lastStepTookEffect_ = executed;
     onRedoSide_ = true;
 }
 
 void ControlOriginAction::redo()
 {
-    bool tookEffect = false;
+    bool executed = false;
     for (auto& inner : inner_)
-        tookEffect = applyAndFollow(inner, false) || tookEffect;
-    lastStepTookEffect_ = tookEffect;
+        executed = applyAndFollow(inner, false) || executed;
+    lastStepTookEffect_ = executed;
     onRedoSide_ = false;
 }
 
 bool ControlOriginAction::applyAndFollow(Inner& inner, bool undo)
 {
-    const bool tookEffect = apply(inner, undo);
-    if (tookEffect) {
-        // The step wrote to the slots of the action, so a clip may now be at any of them. followed approximates where
-        // the clips are: take the slots in (without duplicates), so that a deletion that hits a slot is never missed.
+    const bool executed = apply(inner, undo);
+    if (executed) {
+        // The action was executed (not blocked by a mask), so it may have written to the slots it is keyed by and a
+        // clip may now be at any of them. apply() cannot tell whether the upstream action then rejected the change
+        // itself; that only costs a deletion report that was not needed. followed approximates where the clips are:
+        // take the slots in (without duplicates), so that a deletion that hits a slot is never missed.
         for (const int slot : inner.tracks)
             if (std::find(inner.followed.begin(), inner.followed.end(), slot) == inner.followed.end())
                 inner.followed.push_back(slot);
     }
-    return tookEffect;
+    return executed;
 }
 
 bool ControlOriginAction::apply(Inner& inner, bool undo)

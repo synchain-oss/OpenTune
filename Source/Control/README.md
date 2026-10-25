@@ -1119,8 +1119,8 @@ SNAP and the pitch tool use. A scale picked in the transport bar while no clip i
 not reflected.
 
 **Deviations from the vectors.** The titles of `ConfirmDialogContent` dialogs are empty (above).
-`ui/dismiss-confirm-commit` needs `tracks.v1` for its revert recipe and is skipped until that capability is reported;
-`UiDismiss` covers the same commit without it. (OpenTune always has an active track, track 0 in a new project, so the
+`ui/dismiss-confirm-commit` needs `tracks.v1` for its revert recipe: the runner runs it where that capability is
+reported (it is, and the vector passes) and `UiDismiss` covers the same commit without it. (OpenTune always has an active track, track 0 in a new project, so the
 UI snapshot reports `activeTrackId` 0; since spec rc.4 `ui/get-state-ok` expects this, and so does the runner.)
 
 Tests: `Tests/Control/ControlUiTests.cpp` (`UiState`, `UiDismiss`, `UiOnboardingWithheld`, `UiVectors`) against the
@@ -1235,11 +1235,16 @@ The tuning does not recompute existing results (`NOT_RETROACTIVE`).
   before, so the other two flags read afterwards are final and a switch that straddles the read is not taken for a
   failure. Withdrawing after a timeout reports `executed` false, but if the original switch was merely slow it still
   completes later, clears the render caches and renders again, and the withdrawn switch (the runtime was asked for the
-  previous weight or priority) renders once more; the final state is consistent. `reRenderQueued` is reported for the
-  vocoder weight (the completion of `setVocoderModelWeight()` clears every render cache and renders every clip again)
-  when the job waited for the switch; not for the rendering priority, which clears nothing. With the editing scheme in
-  the same call both conditions must hold; whichever limit runs out first fails the job (the scheme's `INTERNAL`, the
-  vocoder's `vocoder_not_ready`), and a failed load fails it at once.
+  previous weight or priority) renders once more; the final state is consistent. Taking the changes back hands the
+  previous weight and rendering priority to the runtime (`restoreState()`; a preference that keeps another write's value
+  was handed over by that write), which loads them again: `session.info` reports `vocoderReconfiguring` true while it
+  does, and `vocoderReady` afterwards says whether it could (the test double of `PrefsVocoderOverlap` shows the
+  sequence). `reRenderQueued` is reported for every change of the vocoder weight (the completion of
+  `setVocoderModelWeight()` clears every render cache and renders every clip again once the weight has loaded), whether
+  or not the job waited for the vocoder: a job that did not wait ends before the render starts, and a weight that cannot
+  be loaded renders nothing; not for the rendering priority, which clears nothing. With the editing scheme in the same
+  call both conditions must hold; whichever limit runs out first fails the job (the scheme's `INTERNAL`, the vocoder's
+  `vocoder_not_ready`), and a failed load fails it at once.
 - **Pitch model.** The window asks the processor first (`setF0ModelType()`) and stores the model only when that
   succeeds; so does the call. When the processor refuses, the call (or the job) fails with
   `MODEL_UNAVAILABLE(model_missing)` and `executed` false, and nothing else of the call changes either. The pitch model
@@ -1264,20 +1269,31 @@ The tuning does not recompute existing results (`NOT_RETROACTIVE`).
   later `prefsApply` job, still waiting, changed from that value is left to that job, whose own restore then writes the
   first job's previous value; so two jobs that time out one after the other leave the preferences as they were before
   both. Any other preference that changed while the job waited (another `prefs.set`, the preferences window) keeps its
-  new value; the error's detail names it and `executed` is true. Otherwise `executed` is false: no half-applied set of
-  preferences stays.
+  new value; the error's detail names it and `executed` is true. The notes that the editor generated for the open clip
+  cannot be taken back either (no undo entry): a job that fails after it (the vocoder did not come back, or could not
+  load the weight) leaves them, keeps the project marked as changed, says in the detail that generated notes were kept
+  (naming the content by its handle, never a file) and reports `executed` true as well. Otherwise `executed` is false:
+  no half-applied set of preferences stays.
 - **Everything else is applied at once** (the tuning, the hybrid and experimental switches, the pitch model, the reference
   alignment mode) and returns the envelope.
 - **Busy.** Like every write, `prefs.set` answers `BUSY` first (`modal_open` while the preferences window is open).
 
-**Deviations from the vectors.** The specification copy (rc.5) knows the four original members only: its params and
-`processing` schemas are closed, and it lists neither `processing.options`, nor the reasons `option_unavailable`,
-`vocoder_not_ready` and `vocoder_load_failed`, nor `MODEL_UNAVAILABLE` among the errors of a `prefsApply` job. The
-vectors of the copy still pass (`prefs/get-ok` matches with extra members allowed). The new members,
-`processing.options`, the three reasons and the `null` revert recipe of the case above follow the next specification
-version (rc.6); the copy is updated by the spec-sync, not by this change. `option_unavailable` is
-`INVALID_ARGUMENT` and not retryable, `vocoder_not_ready` is `MODEL_UNAVAILABLE` and retryable, `vocoder_load_failed` is
-`MODEL_UNAVAILABLE` and not retryable.
+**Deviations from the vectors.** None for `prefs.set`, `prefs.get` and `audio.set`. The specification copy (rc.6) has
+the four members `vocoderWeight`, `renderingPriority`, `f0Model` and `referenceAlignMode`, `processing.options`, the
+reasons `option_unavailable` (`INVALID_ARGUMENT`, not retryable), `vocoder_not_ready` (`MODEL_UNAVAILABLE`, retryable)
+and `vocoder_load_failed` (`MODEL_UNAVAILABLE`, not retryable), the `MODEL_UNAVAILABLE` errors of a `prefsApply` job
+and the `null` revert recipe of the case above, and every vector of `prefs/` and `audio/` runs in `PrefsVectors` or
+`AudioVectors` and passes (their must-run lists name them, so that none can silently become a skip). How the runner
+establishes what the vectors give: `given.preferences` is written to the preferences, and `options` makes the listed
+weight files and the pitch model files in a models directory under the test's data directory (the
+`modelsDirectory` member of `ControlPrefsBackend`), with the test double of the render runtime (`FakeRuntime`) behind
+`setVocoderModelWeight()` and `resetInferenceBackend()`, so no model is loaded and no inference backend is reset;
+`given.audio.alternatives` binds `audio.deviceType`, `audio.outputDevice`, `audio.otherDeviceType` and
+`audio.otherOutputDevice` to the names of the fake device manager, which always offers a second device type and a
+second output device. The vectors
+`prefs/set-vocoder-not-ready` and `prefs/set-vocoder-load-failed` have their failed job as a precondition (no request
+can make a wait run out or a weight fail to load), so they show the form of the error; `PrefsVocoderJob` and
+`PrefsVocoderOverlap` make the real job fail both ways.
 
 The hooks of this method are none: it uses only the public functions of the processor and `AppPreferences` and the
 existing `ControlUiBridge::onPreferencesChanged()`.
@@ -1319,7 +1335,7 @@ with the test's `OPENTUNE_DATA_DIR`. The vocoder weight, rendering priority and 
 through `ControlPrefsBackend` (`Ops/PrefsModels.h`); `PrefsOptions`, `PrefsVocoderJob` and `PrefsVocoderOverlap` replace
 it with a test double that reports the vocoder as queued, reloading and ready again after chosen delays (and a models
 directory under the test's data directory with fake weight files), so no real model is loaded and the waits are
-deterministic. `PrefsVectors`
+deterministic; `PrefsVectors` installs the same double for every vector. `PrefsVectors`
 runs `prefs/set-scheme-job` with the piano roll opened on the test bridge instead of sending the vector's first request,
 `ui.setSelection`, whose test bridge is in `ControlSelectionTests.cpp`. Behaviour on a real device (listing, switching type and output, ASIO) cannot be
 tested headless and is checked by hand on a real installation.

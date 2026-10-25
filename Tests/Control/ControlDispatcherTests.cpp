@@ -1346,6 +1346,9 @@ std::string vectorSkipReason(const JsonValue& vector)
             continue; // without an editor the project has no unsaved changes
         if (name == "editingScheme")
             continue; // set in the preferences by runVector
+        if (name == "preferences")
+            return "precondition given.preferences (and the options of the installation) is established by "
+                   "ControlProcessorTests.PrefsVectors, not by this runner";
         if (name != "clips")
             return "precondition given." + name + " is not established by this runner";
         for (std::size_t c = 0; c < given.at(i).size(); ++c) {

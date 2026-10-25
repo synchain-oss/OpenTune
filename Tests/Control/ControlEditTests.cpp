@@ -2362,6 +2362,7 @@ const char* const kMustRunEditVectors[] = {
     "content/auto-tune-not-ready",
     "content/auto-tune-notes-only",
     "content/auto-tune-regenerate",
+    "content/auto-tune-regenerate-note-split",
     "content/auto-tune-snap-notes",
     "content/edit-notes-busy-export",
     "content/edit-notes-content-changed",
@@ -2369,6 +2370,8 @@ const char* const kMustRunEditVectors[] = {
     "content/edit-notes-not-ready",
     "content/edit-notes-note-refs",
     "content/edit-notes-set-params",
+    "content/edit-notes-set-params-drift",
+    "content/edit-notes-set-params-vibrato-rate",
     "content/edit-notes-set-target-pitch",
     "content/edit-notes-shift-cents",
     "content/edit-notes-snap-to-scale",
@@ -2881,7 +2884,7 @@ void scenarioEditVectors()
     }
     report.write();
     for (const char* id : kMustRunEditVectors)
-        CONTROL_CHECK(passedIds.count(id) == 1);
+        CONTROL_CHECK(mustRunHolds(std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR), passedIds, id));
     note(std::to_string(passedIds.size()) + " vectors passed, " + std::to_string(skipped) + " skipped");
 }
 

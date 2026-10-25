@@ -417,14 +417,14 @@ std::optional<JsonValue> wireWeight(const std::string& weight)
 
 /**
  * Records what a delta changed in the envelope: the changes, the warning GLOBAL_PREFERENCE (NOT_RETROACTIVE for the
- * tuning, EXPERIMENTAL_FEATURE for the reference alignment mode), reRenderQueued for the hybrid switch and for a
- * vocoder weight that the job saw switched (vocoderSwitched), and the undo descriptor (no undo entry, as in OpenTune;
- * the revert recipe is the same call with the previous values, or null when none of them can be sent). The members come
- * in the order of the schema: the original four, then vocoderWeight, renderingPriority, f0Model and
- * referenceAlignMode. Nothing is recorded for a delta that changes nothing.
+ * tuning, EXPERIMENTAL_FEATURE for the reference alignment mode), reRenderQueued for the hybrid switch and for every
+ * change of the vocoder weight, and the undo descriptor (no undo entry, as in OpenTune; the revert recipe is the same
+ * call with the previous values, or null when none of them can be sent). The members come in the order of the schema:
+ * the original four, then vocoderWeight, renderingPriority, f0Model and referenceAlignMode. Nothing is recorded for a
+ * delta that changes nothing.
  */
 void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope, const PrefsState& before,
-                 const PrefsRequest& request, const PrefsDelta& delta, bool vocoderSwitched)
+                 const PrefsRequest& request, const PrefsDelta& delta)
 {
     if (!delta.any())
         return;
@@ -493,11 +493,13 @@ void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope, cons
     // The mode only decides how the next AUTO Ref analyses the reference, which is an experimental feature.
     if (delta.align)
         envelope.addWarning("EXPERIMENTAL_FEATURE", preferenceRef("referenceAlignMode"));
-    if (delta.hybrid || vocoderSwitched) {
+    if (delta.hybrid || delta.vocoder) {
         // The processor queued a new render of every content: invalidateAllContentCaches() for the hybrid switch; for
         // the vocoder weight the completion of setVocoderModelWeight() clears every render cache and requests a full
-        // render of every clip (unless the switch failed, which the job's wait would not have ended on). The
-        // rendering priority clears no cache.
+        // render of every clip once the new weight has loaded. That holds for every change of the weight, whether or
+        // not the job waited for the vocoder: a job that did not wait (the vocoder was not ready before the change)
+        // ends before the render starts, and a weight that cannot be loaded renders nothing (session.info keeps
+        // reporting vocoderReady false). The rendering priority clears no cache.
         auto ids = JsonValue::array();
         for (const auto& key : controlLiveContents(context))
             ids.append(JsonValue::string(controlContentId(context, key)));
@@ -557,15 +559,23 @@ NotesWatch captureNotesWatch(ControlOpContext& context)
     return watch;
 }
 
+/** Whether the editor generated the notes of the watched clip since the watch was taken (they were not generated
+    before, and the content still exists). */
+bool notesWereGenerated(ControlOpContext& context, const NotesWatch& watch)
+{
+    if (!watch.valid || watch.topologyInitialized)
+        return false;
+    const auto snapshot = controlLiveSnapshot(context, watch.key);
+    return snapshot != nullptr && snapshot->noteTopologyInitialized;
+}
+
 /** Records the notes the editor generated for the watched clip: the side effect, the two warnings, the project marked
     as changed (the scheme change has no undo entry, and nothing but deleting the clip takes the notes away). */
 void recordGeneratedNotes(ControlOpContext& context, ControlWriteEnvelope& envelope, const NotesWatch& watch)
 {
-    if (!watch.valid || watch.topologyInitialized)
+    if (!notesWereGenerated(context, watch))
         return;
     const auto snapshot = controlLiveSnapshot(context, watch.key);
-    if (snapshot == nullptr || !snapshot->noteTopologyInitialized)
-        return;
     auto effect = JsonValue::object();
     effect.appendMember("contentId", JsonValue::string(watch.contentId));
     effect.appendMember("noteCount", JsonValue::integer(static_cast<std::int64_t>(snapshot->notes.size())));
@@ -603,6 +613,12 @@ void recordGeneratedNotes(ControlOpContext& context, ControlWriteEnvelope& envel
  * same weight, so the vocoder never recovers by itself): the job takes its changes back at once and fails with
  * MODEL_UNAVAILABLE(vocoder_load_failed), which is not retryable. A vocoder that was not ready before the change is
  * not waited for: the job ends as soon as the changes are made.
+ *
+ * When a job takes its changes back it hands the previous vocoder weight and rendering priority back to the runtime
+ * (restoreState()), which loads them again: session.info reports the vocoder as reconfiguring while it does, and
+ * vocoderReady afterwards says whether it could. The one change that cannot be taken back is the notes that the switch
+ * to openDyne made the editor generate for the clip open in the piano roll (no undo entry): they stay, the project
+ * stays marked as changed, the error's detail says so and executed is true.
  *
  * A job that the registry destroys before it ended (the control API is stopping) also takes its changes back.
  */
@@ -714,8 +730,7 @@ private:
 
     void finish(ControlOpContext& context, ControlJobStep& jobStep)
     {
-        // A vocoder weight that the job waited for was switched: the completion of the switch queued every render.
-        recordDelta(context, *envelope_, before_, request_, delta_, delta_.vocoder && waitsForVocoder_);
+        recordDelta(context, *envelope_, before_, request_, delta_);
         recordGeneratedNotes(context, *envelope_, watch_);
         // The job runs while the user may change other contents.
         envelope_->limitDiffToTouchedContents();
@@ -729,10 +744,14 @@ private:
         the job takes its changes back, so that no half-applied set of preferences stays, and fails with the error of
         the wait that ran out. A preference that another write changed meanwhile keeps that write's value; the detail
         names it, and executed is true because the job's change was not rolled back completely (PROTOCOL.md section
-        17.4 rule 3). */
+        17.4 rule 3). The same holds for the notes that the editor generated for the clip open in the piano roll when it
+        applied openDyne: they have no undo entry and stay, the project stays marked as changed, and the detail names
+        the content (a handle, never a file name). */
     void abandon(ControlOpContext& context, ControlJobStep& jobStep, const char* kind, const char* reason,
                  const char* what)
     {
+        // Looked at before the changes are taken back: taking the scheme back does not remove the notes.
+        const bool notesKept = notesWereGenerated(context, watch_);
         const auto kept = withdraw(&context, context.processor());
         finished_ = true;
         leavePending();
@@ -742,7 +761,14 @@ private:
             for (const auto& name : kept)
                 detail += " " + name;
         }
-        jobStep.fail(ControlJobError{kind, reason, detail, !kept.empty()});
+        if (notesKept) {
+            // controlMarkDirty(): the project has unsaved changes now, as it has after the job that ended normally.
+            controlMarkDirty(context);
+            detail += std::string(kept.empty() ? "; " : ", and ")
+                      + "the editor had generated notes for the clip open in the piano roll (content "
+                      + watch_.contentId + ") when it applied the editing scheme openDyne, and they were kept";
+        }
+        jobStep.fail(ControlJobError{kind, reason, detail, !kept.empty() || notesKept});
     }
 
     /**
@@ -881,7 +907,7 @@ Result<JsonValue> runPrefsSet(ControlOpContext& context, const PrefsRequest& par
     ControlWriteEnvelope envelope(context);
     if (auto refused = applyDelta(context, request, delta))
         return *refused;
-    recordDelta(context, envelope, before, request, delta, false);
+    recordDelta(context, envelope, before, request, delta);
     return envelope.committed(context);
 }
 

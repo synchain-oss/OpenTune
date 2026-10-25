@@ -416,6 +416,14 @@ void testProtocol()
     CONTROL_CHECK(!controlErrorRetryable("NOT_READY", "reference_analysis_stalled"));
     CONTROL_CHECK(controlErrorRetryable("NOT_READY", "reference_analysis_timeout"));
     CONTROL_CHECK(!controlErrorRetryable("ANALYSIS_FAILED", "reference_analysis_failed"));
+    // The preference options: a vocoder that is not back in time may be ready when asked again; a weight that could
+    // not be loaded fails again, a pitch model that cannot be switched is not cured by a retry, and neither is a value
+    // that is not on offer.
+    CONTROL_CHECK(controlErrorRetryable("MODEL_UNAVAILABLE", "vocoder_not_ready"));
+    CONTROL_CHECK(!controlErrorRetryable("MODEL_UNAVAILABLE", "vocoder_load_failed"));
+    CONTROL_CHECK(!controlErrorRetryable("MODEL_UNAVAILABLE", "model_missing"));
+    CONTROL_CHECK(!controlErrorRetryable("MODEL_UNAVAILABLE", ""));
+    CONTROL_CHECK(!controlErrorRetryable("INVALID_ARGUMENT", "option_unavailable"));
     {
         const auto line =
             controlErrorResponse({}, "BUSY", "request_limit", "x\xC3\xA9" + std::string(2000, 'y'), false);

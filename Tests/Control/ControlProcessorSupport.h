@@ -467,6 +467,9 @@ void scenarioImport();
 void scenarioImportAfterOpen();
 /** A three-file import cancelled after its first commit reports the committed clip. */
 void scenarioImportCancel();
+/** The revert recipes of an import delete the imported clips and bring the project back (arrangement.v1); without
+    that capability revert is null and the result is IRREVERSIBLE. */
+void scenarioImportRevert();
 /** The specification's vectors of job.get, job.cancel and import.start, against the real dispatcher. */
 void scenarioJobVectors();
 /** Every write method (import, export, key, AUTO in both modes, note edits, pitch shift, undo, redo, time-grid

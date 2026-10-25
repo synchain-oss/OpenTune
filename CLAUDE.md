@@ -62,7 +62,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - 错误用 `Source/Utils/Error.h` 的 `Result<T>` / `Error`，只在 `ControlDispatcher` 里映射为 OTCP 错误 kind。
 - 日志只用 `AppLogger`，不得记录 token、serverProof 或完整请求体。
 - 实时（音频）路径上不加锁、不分配内存、不做 I/O。
-- 内容修改只在消息线程进行，唯一入口是 `ControlDispatcher::runOnMessageThread`。网络线程等待主线程时，绝不持有 `CompletionCallbackLease`。关闭合同见 `Source/Control/README.md`。
+- 内容修改只在消息线程进行，唯一入口是 `ControlMessageThread::call()`。网络线程等待主线程时，绝不持有 `CompletionCallbackLease`。关闭合同见 `Source/Control/README.md`。
 - 测试：每个文件一个 `main()`，用 CMake `add_test` 注册，不用 gtest / Catch2。生命周期测试沿用上游 `Tests/LifecycleWatchdog.h`。超时不够时用命名常量。
 - 新文件首行写 SPDX：`// SPDX-License-Identifier: AGPL-3.0-or-later`（规范副本目录除外）。豁免与 fork-gate 的 `spdx` 检查一致：无法加注释头的文件（`.json`、`.txt`、`.sha256` 等数据文件；`CMakeLists.txt` 不豁免）、规范副本目录 `Tests/Control/spec/**`，以及与维护者正本逐字节一致的署名规则副本（`.github/scripts/check-attribution.mjs`、`attribution-patterns.txt`）。Markdown 用 HTML 注释形式写 SPDX。
 - `Source/Control/**`、`Tests/Control/**`、`ControlEditorBridge*` 的新文件用 clang-format 18.1.8 格式化（fork 专用配置）。

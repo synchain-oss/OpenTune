@@ -22,7 +22,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 1. If you change an upstream function that is listed in `MIRRORS.md`, you must run `ControlMirrorDriftTests` and bring the mirrored code in `Source/Control` in line as `MIRRORS.md` says before you update the hash. The test exists only in a build configured with `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` (both are OFF by default), for example `cmake -S . -B build-control -G Ninja -DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON`, then build it and run `ctest --test-dir build-control -C RelWithDebInfo -R ControlMirrorDrift --no-tests=error`; in a default build `ctest -R Control` finds no test, and without `--no-tests=error` that still exits 0. / 改了 `MIRRORS.md` 里列出的上游函数，必须运行 `ControlMirrorDriftTests`，并按 `MIRRORS.md` 同步 `Source/Control` 里的镜像代码，然后才能更新哈希。这个测试只存在于用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` configure 的构建里（两者默认都是 OFF），例如 `cmake -S . -B build-control -G Ninja -DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON`，构建后运行 `ctest --test-dir build-control -C RelWithDebInfo -R ControlMirrorDrift --no-tests=error`；默认构建里 `ctest -R Control` 找不到任何测试，不加 `--no-tests=error` 时退出码仍是 0。
 2. Do not delete or move code marked `// OpenTune Control API hook`; the list is in "Hooks". / 不要删除或挪动标有 `// OpenTune Control API hook` 的代码，清单见「Hooks」。
 3. With `OPENTUNE_ENABLE_CONTROL_API` OFF, or ON but not enabled at run time, OpenTune must behave as before. / 选项关闭，或开启但运行时未启用时，OpenTune 的行为必须与原来一致。
-4. The control API reads and writes content only on the message thread, through `ControlMessageThread`: `post()` queues a function for the message thread and returns at once, `call()` runs it there and waits for it to return (the dispatcher uses `call()`); never from the network thread. / 控制接口只在消息线程、经 `ControlMessageThread` 读写内容：`post()` 把函数排到消息线程上就返回，`call()`在那里执行它并等它返回（dispatcher 用的是 `call()`）；绝不在网络线程。
+4. The control API reads and writes content only on the message thread, through `ControlMessageThread`: `post()` queues a function for the message thread and returns at once, `call()` runs it there and waits for it to return (the dispatcher uses `call()`); never from the network thread. / 控制接口只在消息线程、经 `ControlMessageThread` 读写内容：`post()` 把函数排到消息线程上就返回，`call()` 在那里执行它并等它返回（dispatcher 用的是 `call()`）；绝不在网络线程。
 
 ## File map
 
@@ -369,10 +369,12 @@ API reads it through the hook `peekUndo` / `peekRedo` / `size` / `cursor` and ap
   clips and their mix where they are). An entry made through the API knows two lists of tracks, set by the methods
   that record clip changes: `ControlOriginAction::Inner::tracks`, the slots the wrapped OpenTune actions are keyed by
   (they are fixed inside the actions, so undo and redo write to them whatever was deleted since; never changed), and
-  `Inner::followed`, where the clips are now, as an approximation (renumbered when a deletion moves their shown track down; after an undo or redo that took effect the slots of `tracks` are merged into it). The entry
-  becomes `possiblyStale` when the deleted track or a later shown track is in either list (the union: an entry is
-  reported too often rather than too rarely), and an entry that addresses no track (a note edit addresses its
-  content), only earlier tracks or only hidden tracks does not.
+  `Inner::followed`, where the clips are now, as an approximation (renumbered when a deletion moves their shown track
+  down; after an undo or redo in which the action was executed, that is not blocked by a mask, the slots of `tracks` are
+  merged into it; whether the upstream action then rejected the change itself is not known, which only makes it cover
+  more tracks than needed). The entry becomes `possiblyStale` when the deleted track or a later shown track is in
+  either list (the union: an entry is reported too often rather than too rarely), and an entry that addresses no
+  track (a note edit addresses its content), only earlier tracks or only hidden tracks does not.
   `edit.getHistory` reports `possiblyStale`; `edit.undo` and `edit.redo` refuse such an entry with
   `UNDO_CONFLICT(stale_entry)` unless `force` is true, and a call with `force` applies it and confirms it
   (`ControlHistory::confirmStale()`: no warning, `possiblyStale` false) until another deletion makes it stale again. An
@@ -588,10 +590,13 @@ Where the method's specification differs from the editor's import, the job follo
   file after the last clip on its track (or places it at `startTimelineSec`), as the specification
   requires for every layout.
 
-The result has no undo entry (reason `ui_parity`, as the UI). Its revert recipe would delete the clips
-with `arrangement.edit`; while the instance does not report `arrangement.v1`, no request can delete them,
-so `revert` is null and the result carries `IRREVERSIBLE`. An import that committed no clip is a no-op
-(reason `no_op`).
+The result has no undo entry (reason `ui_parity`, as the UI). While the instance reports `arrangement.v1`,
+its revert recipe deletes the committed clips with one `arrangement.edit` op `delete`, at the arrangement
+revision right after the last commit, with `requiresConsent: true` (the client adds `confirm` after the end user
+agreed); a cancelled job lists only the clips it committed. `sideEffects.notesGenerated.revert` is the same
+recipe for the focused clips whose notes were generated. While the instance does not report `arrangement.v1`,
+no request can delete the clips, so `revert` is null and the result carries `IRREVERSIBLE`. An import that
+committed no clip is a no-op (reason `no_op`).
 
 Known OpenTune behaviours, reported as they are:
 
@@ -1295,7 +1300,11 @@ existing `ControlUiBridge::onPreferencesChanged()`.
 - **Rollback.** A step that fails to open the device puts the setup from before the whole call back (the device type
   first, then the setup, as the page does for one change) and the call fails with `IO_ERROR(device_open_failed)` and
   `executed` false. If the previous setup cannot be opened either, `executed` is true and no device runs
-  (`audio.get` reports it). If no device ran before the call, none runs after a failed one. The ASIO restore of the
+  (`audio.get` reports it). That also covers a value of the last step (sample rate, buffer size, channel pair) that
+  the device does not offer after an earlier step of the call already changed the device: the previous setup is put
+  back first and the call is `INVALID_ARGUMENT(audio_setting_unavailable)` with `executed` false, but when it cannot
+  be put back it is `IO_ERROR(device_open_failed)` with `executed` true. If no device ran before the call, none runs
+  after a failed one. The ASIO restore of the
   system sample rate that the page makes before it closes an ASIO device for another type or output device is the
   bridge's `prepareAudioDeviceSwitch()`; when it cannot be verified the current device stays.
 - Without an editor `audio.set` answers `UNSUPPORTED(no_editor_window)`; with an editor that has no device manager,
@@ -1452,7 +1461,9 @@ selection as it was, also on the active track and its selected clip),
 revealed tracks, item failures, the checks before the job, busy, idempotency and commits without a copy
 of the audio; `ImportAfterOpen` the import after a project was opened and when its commit copies the
 audio; `ImportCancel` a cancellation after the first of three commits while the UI is busy;
-`JobVectors` the specification's vectors of `job/` and `import/`.
+`ImportRevert` the revert recipes of an import sent with consent (the project is as it was before the import),
+refused without it, and stale after another change, and an instance without `arrangement.v1`
+(`revert` null, `IRREVERSIBLE`); `JobVectors` the specification's vectors of `job/` and `import/`.
 
 `Tests/Control/ControlExportTests.cpp` holds the scenarios of `export.start`. Without a vocoder model
 OpenTune cannot render, so the scenarios drive the render cache of a content themselves while OpenTune's
@@ -1613,7 +1624,7 @@ than one step.
 | `app.getLog` | `read.v1` | `Ops/AppReadOps.cpp` (tail and redaction in `ControlLogTail.cpp`; off the message thread) | `ControlProcessorTests.Details`, `.OffMainThread`, `ControlUnitTests` | `methods/app.getLog.schema.json` |
 | `job.get` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.JobShutdown`, `.JobVectors` | `methods/job.get.schema.json` |
 | `job.cancel` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.ImportCancel`, `.JobVectors` | `methods/job.cancel.schema.json` |
-| `import.start` | `import.v1` | `Ops/ImportOps.cpp` | `ControlProcessorTests.Import`, `.ImportAfterOpen`, `.ImportCancel`, `.JobVectors` | `methods/import.start.schema.json` |
+| `import.start` | `import.v1` | `Ops/ImportOps.cpp` | `ControlProcessorTests.Import`, `.ImportAfterOpen`, `.ImportCancel`, `.ImportRevert`, `.JobVectors` | `methods/import.start.schema.json` |
 | `export.start` | `export.v1` | `Ops/ExportOps.cpp` (identity and rename in `ControlFileIdentity.cpp`) | `ControlProcessorTests.Export`, `.ExportFailures`, `.ExportVectors`, `.ExportTimeStretch` | `methods/export.start.schema.json` |
 | `ui.getState` | `ui.bridge` | `Ops/UiOps.cpp` (editor side in `../Standalone/ControlEditorBridgeModals.cpp`) | `ControlProcessorTests.UiState`, `.UiVectors` | `methods/ui.getState.schema.json` |
 | `ui.dismiss` | `ui.bridge`; closing a showing overlay also `ui.onboardingClose` | `Ops/UiOps.cpp` (editor side in `../Standalone/ControlEditorBridgeModals.cpp`) | `ControlProcessorTests.UiDismiss`, `.UiOnboardingWithheld`, `.UiVectors` | `methods/ui.dismiss.schema.json` |

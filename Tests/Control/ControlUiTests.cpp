@@ -396,6 +396,19 @@ void scenarioUiDismiss()
         CONTROL_CHECK(memberOf(revert, "method").text() == "track.set");
     else
         CONTROL_CHECK(revert.isNull());
+    // The round trip: the recipe, sent as it came (it needs no consent), puts the colour back that the dialog
+    // committed. The dialog is gone, so the write is not blocked, and the track is as it was before the commit.
+    if (revertible && CONTROL_CHECK(!memberOf(revert, "requiresConsent").asBoolean())) {
+        const auto reverted = f.api.result(memberOf(revert, "method").text(), memberOf(revert, "params"));
+        CONTROL_CHECK(memberOf(reverted, "applied").asBoolean() && !memberOf(reverted, "noOp").asBoolean());
+        CONTROL_CHECK(f.trackColour(1) == colourBefore);
+        const auto& revertedChanges = memberOf(reverted, "changes");
+        if (CONTROL_CHECK(revertedChanges.size() == 1)) {
+            const auto& revertedColour = memberOf(memberOf(revertedChanges.at(0), "fields"), "colour");
+            CONTROL_CHECK(memberOf(revertedColour, "before").text() == "#00FF00"
+                          && memberOf(revertedColour, "after").text() == colourBefore);
+        }
+    }
     const auto* commitWarning = findWarning(committed, "DIALOG_CLOSE_COMMITTED");
     const auto* irreversible = findWarning(committed, "IRREVERSIBLE");
     CONTROL_CHECK(commitWarning != nullptr && (irreversible == nullptr) == revertible

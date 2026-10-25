@@ -30,6 +30,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -205,6 +206,9 @@ inline std::string pathString(const std::filesystem::path& path)
 }
 
 /**
+ * A test file that uses this class on Windows must include ControlWinAcl.h after the JUCE headers: the Windows half
+ * of the members is defined there, and without it the test links on POSIX but fails to link on Windows only.
+ *
  * Establishes the vectors' file kind noAccess: an existing file in a directory the current user cannot open, so
  * that controlFileIdentity() on it fails (neither found nor missing). Everything is made inside a directory the
  * caller gives, which is a test directory and never a user directory. The destructor restores the rights, so
@@ -278,11 +282,13 @@ private:
 #if defined(_WIN32)
     /** The original DACL of a path; dacl points into descriptor. Plain pointers, so that this header needs no
         windows.h (its macros break the JUCE headers): the bodies are in ControlWinAcl.h, which the test files
-        that use NoAccessFile include after the JUCE headers. */
+        that use NoAccessFile include after the JUCE headers. A path can have a NULL DACL (everyone has full access),
+        which differs from an empty one: daclWasNull records it, and the write-back then restores a NULL DACL. */
     struct SavedDacl
     {
         void* descriptor = nullptr;
         void* dacl = nullptr;
+        bool daclWasNull = false;
         bool changed = false;
     };
 
@@ -426,6 +432,9 @@ private:
  * being read. project.get answers with a result of bigResultBytes, to produce output faster than a
  * client reads. Everything else is answered with UNSUPPORTED(capability_missing).
  *
+ * With answerJobGetAfterWait, job.get answers for the job ids in knownJobIds only; any other id is answered as the
+ * dispatcher answers an id it does not retain, with NOT_FOUND(job_not_found) and executed false.
+ *
  * serverStopping() runs onStopping (if set), then, with endHeldOnStop, ends every held request with
  * SHUTTING_DOWN as the dispatcher ends its waiting job.get requests.
  */
@@ -453,6 +462,11 @@ public:
             const JsonValue* jobId = request.params.find("jobId");
             const auto waitMs = wait != nullptr && wait->isNumber() ? static_cast<int>(wait->asDouble()) : 0;
             const auto id = jobId != nullptr ? jobId->text() : std::string();
+            if (knownJobIds.count(id) == 0) {
+                completion.respondError("NOT_FOUND", "job_not_found", "the test handler retains no job with this id",
+                                        false);
+                return;
+            }
             std::lock_guard<std::mutex> lock(mutex_);
             waiters_.emplace_back([this, completion, waitMs, id] {
                 std::unique_lock<std::mutex> waiting(mutex_);
@@ -566,6 +580,8 @@ public:
 
     /** Set before the first request: job.get answers after its waitMs with a running export job. */
     bool answerJobGetAfterWait = false;
+    /** Set before the first request, with answerJobGetAfterWait: the ids of the jobs that exist. */
+    std::set<std::string> knownJobIds;
     std::size_t bigResultBytes = 1024 * 1024;
     std::atomic<int> stoppingCalls{0};
     /** Set before stop(); both are read on the thread that calls stop(). */

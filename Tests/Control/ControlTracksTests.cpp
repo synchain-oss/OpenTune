@@ -504,6 +504,35 @@ void checkTempo(Fixture& f)
     CONTROL_CHECK(memberOf(changes, "applied").asBoolean() && memberOf(memberOf(changes, "undo"), "revert").isNull()
                   && hasWarning(changes, "IRREVERSIBLE"));
     CONTROL_CHECK(f.processor->getTimeSigNumerator() == 3 && f.processor->getTimeSigDenominator() == 4);
+
+    // The same for a numerator above 32, which the schema cannot express either. A call that leaves the signature
+    // alone gets a recipe of the tempo only, and that recipe is a complete one: sent unchanged it puts the tempo
+    // back and leaves the signature as it was.
+    f.processor->setTimeSignature(40, 4);
+    const double bpmBefore = f.processor->getBpm();
+    const auto keepsBig = f.api.result("transport.setTempo", json(R"({"bpm":110})"));
+    const auto& keepsBigRevert = memberOf(memberOf(keepsBig, "undo"), "revert");
+    CONTROL_CHECK(memberOf(keepsBig, "applied").asBoolean() && !hasWarning(keepsBig, "IRREVERSIBLE")
+                  && memberOf(keepsBigRevert, "params").find("timeSignature") == nullptr
+                  && near(memberOf(memberOf(keepsBigRevert, "params"), "bpm"), bpmBefore));
+    CONTROL_CHECK(
+        memberOf(f.api.result("transport.setTempo", memberOf(keepsBigRevert, "params")), "applied").asBoolean());
+    CONTROL_CHECK(near(f.processor->getBpm(), bpmBefore) && f.processor->getTimeSigNumerator() == 40
+                  && f.processor->getTimeSigDenominator() == 4);
+    // A call that changes the signature as well leaves no recipe at all, the tempo included: a recipe has to restore
+    // the whole state, and this one could not restore the 40/4, so a recipe of the tempo alone would be a partial one.
+    // The warning says which signature could not be put back.
+    const auto both =
+        f.api.result("transport.setTempo", json(R"({"bpm":90,"timeSignature":{"numerator":3,"denominator":4}})"));
+    CONTROL_CHECK(memberOf(both, "applied").asBoolean() && memberOf(memberOf(both, "undo"), "revert").isNull()
+                  && memberOf(memberOf(both, "undo"), "reason").text() == "ui_parity");
+    CONTROL_CHECK(near(f.processor->getBpm(), 90.0) && f.processor->getTimeSigNumerator() == 3
+                  && f.processor->getTimeSigDenominator() == 4);
+    CONTROL_CHECK(warningCodes(both) == "IRREVERSIBLE");
+    const auto& irreversible = memberOf(memberOf(both, "warnings").at(0), "data");
+    CONTROL_CHECK(memberOf(irreversible, "reason").text() == "previous_time_signature_not_settable"
+                  && near(memberOf(memberOf(irreversible, "timeSignature"), "numerator"), 40.0)
+                  && near(memberOf(memberOf(irreversible, "timeSignature"), "denominator"), 4.0));
 }
 
 void checkLoop(Fixture& f)
@@ -1063,9 +1092,10 @@ void checkBarrierMoveAcrossTracks(Fixture& f)
 
 /** A clip move across tracks (5 to 0), two deletions of track 1, a forced undo, a deletion that moves the clip, a
     forced redo that finds nothing to move, and a last deletion that moves the clip down again. The slot of the action
-    (5) and the renumbered position of the clip ({2, 0} after the third deletion) name neither the deleted track nor a
-    track after it, yet the clip is moved: the entry must be reported (section 15.3 rule 6: too often rather than too
-    rarely). A step that took effect merges the slots of the action into the followed positions. */
+    (5) and the renumbered position of the clip ({2, 0} after the third deletion: the value without the merge below,
+    not what followed holds then) name neither the deleted track nor a track after it, yet the clip is moved: the
+    entry must be reported (section 15.3 rule 6: too often rather than too rarely). A step in which the action was
+    executed (not blocked by a mask) merges the slots of the action into the followed positions. */
 void checkBarrierFollowedCoversSlots(Fixture& f)
 {
     f.bridge.visibleTracks = 8;

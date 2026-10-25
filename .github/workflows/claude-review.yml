@@ -32,7 +32,7 @@ jobs:
         1. **不改变上游行为**：上游已有文件的改动必须在 CLAUDE.md §1 钩子表内，带
            `// OpenTune Control API hook: <purpose>` 标记，并在接口关闭时为空操作；PianoRoll 与
            PianoRollToolHandler 零改动；上游文件不得被格式化、改缩进/换行符/编码/include 顺序（部分带 UTF-8 BOM，须保留）。
-        2. **线程与生命周期**：内容修改只在消息线程，唯一入口 ControlDispatcher::runOnMessageThread；网络线程等待主线程
+        2. **线程与生命周期**：内容修改只在消息线程，唯一入口 ControlMessageThread::call()；网络线程等待主线程
            时绝不持有 CompletionCallbackLease；关闭合同（停止标志 → SHUTTING_DOWN → 唤醒等待者 → 关监听与连接 →
            有界 join → 删发现文件）；超时的请求之后绝不执行；实时音频路径不加锁、不分配、不做 I/O。
         3. **socket 与密钥**：只绑字面量 127.0.0.1、端口 0；鉴权前读取上限与 2 秒首行规则；token/serverProof 只来自

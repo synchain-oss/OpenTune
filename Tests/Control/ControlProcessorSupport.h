@@ -618,6 +618,17 @@ void scenarioPrefsRoundTrip();
    editor generates, the revert recipe, the wait that ends without the editor and puts every preference back, and a job
    that the stopping control API destroys. */
 void scenarioPrefsSchemeJob();
+/** processing.options of prefs.get, and the vocoder weight, the rendering priority, the pitch model and the reference
+    alignment mode of prefs.set: values that are not on offer, no-ops, changes with their warnings and side effects, the
+    processor that refuses a pitch model, the revert recipes, all members in one call. The render runtime is replaced by
+   a test double (ControlPrefsBackend). */
+void scenarioPrefsOptions();
+/** The wait of the prefsApply job for the vocoder after a new weight or rendering priority: no wait when the vocoder
+   was not ready before the change, the wait until it is ready again, the time-out that takes the preferences back. */
+void scenarioPrefsVocoderJob();
+/** The vocoder wait together with the other waits of the job: the editing scheme, another write, a modal dialog and the
+    stopping control API. */
+void scenarioPrefsVocoderOverlap();
 /** The specification's vectors of prefs.set, against the real dispatcher. */
 void scenarioPrefsVectors();
 /** audio.get and audio.set on a fake device manager: what is on offer, values that are not, every step of a change, the

@@ -32,7 +32,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
-import { GROUPS as DOC_GROUPS, README as DOC_README, checkDocConsistency, describeStats, gitSource } from './doc-consistency.mjs';
+import { CLAUDE_MD as DOC_CLAUDE_MD, GROUPS as DOC_GROUPS, README as DOC_README, checkDocConsistency, decideClaudeEnforcement, describeStats, gitSource } from './doc-consistency.mjs';
 import { decideEnforcement } from './drift-pins.mjs';
 import { computeDelta, computePrRange } from './fork-delta.mjs';
 import {
@@ -615,17 +615,20 @@ export async function runChecks(opts = {}) {
   // --- documentation <=> code: README method table, hook list, mirrors, test names (whole tree at head).
   // The mirror group follows the enforcement rule of drift-pins.mjs: a sub-PR that touches neither the pin files
   // nor drift-pins.mjs only gets a WARN, because it cannot update .github/** itself. The hook and test-name problems
-  // that come from CLAUDE.md (also L0) follow the same rule, for the same reason.
+  // that come from CLAUDE.md (also L0) have their own rule: a sub-PR only gets a WARN for them as long as the branch
+  // does not change CLAUDE.md itself (decideClaudeEnforcement); the pin files do not matter for them.
   if (want('doc-consistency')) {
     const headRev = opts.index ? null : delta.head ?? tryResolveCommit(top, opts.head ?? 'HEAD');
     const range = prRange();
-    const enforcement = range?.ok
-      ? decideEnforcement({ event: 'pull_request', baseRef: branchOfRef(range.baseRef), changedFiles: range.files.map((f) => f.path) })
-      : decideEnforcement({ event: 'push' });
+    const event = range?.ok
+      ? { event: 'pull_request', baseRef: branchOfRef(range.baseRef), changedFiles: range.files.map((f) => f.path) }
+      : { event: 'push' };
+    const enforcement = decideEnforcement(event);
+    const claudeEnforcement = decideClaudeEnforcement(event);
     if (!headRev && !opts.index) {
       add(result('doc-consistency', titleOf('doc-consistency'), 'FAIL', `无法解析修订 ${opts.head ?? 'HEAD'}，不能核对文档与代码（不会退回去读暂存区）`));
     } else {
-      add(docConsistencyCheck(top, headRev, enforcement));
+      add(docConsistencyCheck(top, headRev, enforcement, claudeEnforcement));
     }
   }
 
@@ -742,12 +745,13 @@ function clangFormatCheck(top, headSpec, files, headBlob, opts) {
  * Source/Control/README.md and the hook table of CLAUDE.md say what the code does (doc-consistency.mjs):
  * the method table against the registered methods and the spec copy, the hook list against the markers in the
  * code, MIRRORS.md against mirror-map.json and the pin files, the test names against the registered ctests.
- * `enforcement` is decideEnforcement() of drift-pins.mjs: when it does not block, the mirror group and the problems
- * that come from CLAUDE.md (an L0 file a sub-PR cannot change) are advisory.
+ * `enforcement` is decideEnforcement() of drift-pins.mjs: when it does not block, the mirror group is advisory.
+ * `claudeEnforcement` is decideClaudeEnforcement() of doc-consistency.mjs: when it does not block, the problems that
+ * come from CLAUDE.md (an L0 file a sub-PR cannot change) are advisory. Each has its own reason in the WARN.
  */
-function docConsistencyCheck(top, headRev, enforcement) {
+function docConsistencyCheck(top, headRev, enforcement, claudeEnforcement) {
   const id = 'doc-consistency';
-  const r = checkDocConsistency(gitSource(top, headRev), { mirrorsBlocking: enforcement.blocking, claudeBlocking: enforcement.blocking });
+  const r = checkDocConsistency(gitSource(top, headRev), { mirrorsBlocking: enforcement.blocking, claudeBlocking: claudeEnforcement.blocking });
   if (!r.applicable) return result(id, titleOf(id), 'SKIP', `没有 ${DOC_README}（这个树里没有控制接口文档），不适用`);
   const groupTitle = (g) => DOC_GROUPS.find((x) => x.id === g)?.title ?? g;
   const line = (p) => `[${groupTitle(p.group)}] ${p.text}`;
@@ -762,10 +766,11 @@ function docConsistencyCheck(top, headRev, enforcement) {
   }
   if (advisory.length) {
     const nMirror = advisory.filter((p) => p.group === 'mirrors').length;
-    const nClaude = advisory.length - nMirror;
+    const nClaude = advisory.filter((p) => p.source === DOC_CLAUDE_MD).length;
     const what = [nMirror ? `${nMirror} 处镜像` : '', nClaude ? `${nClaude} 处来自 CLAUDE.md` : ''].filter(Boolean).join('、');
+    const why = [nMirror ? `镜像：${enforcement.reason}` : '', nClaude ? `CLAUDE.md：${claudeEnforcement.reason}` : ''].filter(Boolean).join('；');
     const follow = [nMirror ? '镜像用 node .github/scripts/drift-pins.mjs --write 补齐' : '', nClaude ? 'CLAUDE.md 同步改正' : ''].filter(Boolean).join('，');
-    return result(id, titleOf(id), 'WARN', `${what}不一致，只报告不阻塞：${enforcement.reason}。由 manager 的 L0 跟进：${follow}；其余检查一致`, [...advisory.map(line), ...extra]);
+    return result(id, titleOf(id), 'WARN', `${what}不一致，只报告不阻塞（${why}）。由 manager 的 L0 跟进：${follow}；其余检查一致`, [...advisory.map(line), ...extra]);
   }
   return result(id, titleOf(id), 'PASS', `${describeStats(r)}${r.notes.length ? `（${r.notes.join('；')}）` : ''}`);
 }

@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { stripYamlComment, workflowCodeLines, workflowTriggerBlock, spdxProblem, needsSpdx } from '../fork-checks.mjs';
-import { classifyPath, eolStyle, findSignoffs, globToRegExp, matchesAny, parseArgs, parseNameStatusZ, GUARDED_PATTERNS } from '../fork-lib.mjs';
+import { classifyPath, eolStyle, findSignoffs, globToRegExp, matchesAny, parseArgs, parseNameStatusZ, reportToGitHub, result, GUARDED_PATTERNS } from '../fork-lib.mjs';
 
 describe('globs and path classes', () => {
   test('globToRegExp', () => {
@@ -92,5 +92,41 @@ describe('workflow YAML helpers', () => {
   test('workflowTriggerBlock', () => {
     assert.match(workflowTriggerBlock('name: x\non:\n  push:\n  pull_request: # c\njobs: {}\n'), /push:\n\s+pull_request:/);
     assert.equal(workflowTriggerBlock('name: x\njobs: {}\n'), '');
+  });
+});
+
+describe('reportToGitHub', () => {
+  /** Run reportToGitHub with stdout and the job summary captured. */
+  const capture = (results) => {
+    const lines = [];
+    const write = process.stdout.write;
+    const summary = process.env.GITHUB_STEP_SUMMARY;
+    delete process.env.GITHUB_STEP_SUMMARY;
+    process.stdout.write = (chunk) => {
+      lines.push(String(chunk));
+      return true;
+    };
+    try {
+      reportToGitHub('table\n', results);
+    } finally {
+      process.stdout.write = write;
+      if (summary !== undefined) process.env.GITHUB_STEP_SUMMARY = summary;
+    }
+    return lines;
+  };
+
+  test('a FAIL is an ::error annotation, a WARN is a ::warning annotation, PASS and SKIP are silent', () => {
+    const lines = capture([
+      result('a', 'A', 'FAIL', 'bad', ['first', 'second']),
+      result('b', 'B', 'WARN', 'report only', ['p1', 'p2']),
+      result('c', 'C', 'PASS', 'ok'),
+      result('d', 'D', 'SKIP', 'not applicable'),
+    ]);
+    assert.deepEqual(lines, ['::error title=a::bad：first\n', '::warning title=b::report only：p1\n']);
+  });
+
+  test('a WARN without problems still gets its annotation, and the text is escaped', () => {
+    const lines = capture([result('w', 'W', 'WARN', '100% done\nsecond line')]);
+    assert.deepEqual(lines, ['::warning title=w::100%25 done%0Asecond line\n']);
   });
 });

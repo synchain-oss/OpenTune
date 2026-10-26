@@ -429,6 +429,24 @@ public:
         return ok;
     }
 
+    /** True when the response is an error of this kind and reason (reason "" for none) with executed true, as an error
+        after a change is, and a detail that contains detailPart. */
+    bool failsAfterChange(const std::string& method, JsonValue params, const std::string& kind,
+                          const std::string& reason, const std::string& detailPart)
+    {
+        const auto response = request(method, std::move(params));
+        const JsonValue* data = errorData(response);
+        const bool ok =
+            data != nullptr && memberOf(*data, "kind").text() == kind
+            && (reason.empty() ? data->find("reason") == nullptr : memberOf(*data, "reason").text() == reason)
+            && memberOf(*data, "executed").isBoolean() && memberOf(*data, "executed").asBoolean()
+            && memberOf(*data, "detail").text().find(detailPart) != std::string::npos;
+        if (!ok)
+            note(method + ": expected " + kind + "(" + reason + ") with executed true and \"" + detailPart
+                 + "\" in the detail, got " + toJsonString(response));
+        return ok;
+    }
+
     const JsonValue& discovery() const noexcept { return discovery_; }
     TestClient& client() noexcept { return client_; }
 

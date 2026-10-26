@@ -296,9 +296,24 @@ void ControlDispatcher::runAfterReply(Outcome& outcome)
         notifyAfterReply(AfterReplyEvent::ExitStepStarted);
         action();
     };
-    if (!setup_.messageThread->post(std::move(step)))
+    if (!setup_.messageThread->post(std::move(step))) {
+        // The state this leaves behind: the dispatcher is in its stopping state (enterStopping() ran when the method
+        // returned) and the client has the result with `quitting: true`, but the exit step never runs, so the service,
+        // the listener, the open connections and the discovery file stay as they are. post() fails when the liveness
+        // token is dead (the service has been stopped on the message thread, which leaves nothing to clean up) or when
+        // the message queue refuses the message, for example while the application quits: then the application's own
+        // shutdown stops the service (the first statement of the processor's destructor), and until it does every
+        // request is answered with SHUTTING_DOWN.
+        //
+        // There is no cleanup that this thread can do. ControlService::stop() runs on the message thread, which is the
+        // thread that has just refused to take work, and calling it here would make the service join this very
+        // connection thread (ControlMessageThread::call() describes the same rule). So the case is only logged, in
+        // words that say what the client was told and what is left running.
         AppLogger::logNoThrow(
-            "control API: the step after the result of a method that ends the instance could not be queued");
+            "control API: the exit step of a method that ends the instance could not be queued: the client was told "
+            "that the instance quits and every request now gets SHUTTING_DOWN, but the listener and the discovery file "
+            "stay until the application's own shutdown stops the control service");
+    }
 }
 
 void ControlDispatcher::setAfterReplyObserverForTesting(std::function<void(AfterReplyEvent)> observer)

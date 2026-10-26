@@ -4157,6 +4157,7 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
 
                         if (!segments.empty()) {
                             pitchCurve->replaceCorrectionSegments(segments);
+                            pitchCurve->retainVoicedCorrectionSegments();
                         }
                     }
                 }

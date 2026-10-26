@@ -2884,7 +2884,7 @@ void scenarioEditVectors()
     }
     report.write();
     for (const char* id : kMustRunEditVectors)
-        CONTROL_CHECK(mustRunHolds(std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR), passedIds, id));
+        CONTROL_CHECK(mustRunHolds(passedIds, id));
     note(std::to_string(passedIds.size()) + " vectors passed, " + std::to_string(skipped) + " skipped");
 }
 

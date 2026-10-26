@@ -1,0 +1,81 @@
+{
+  "$schema": "../../schemas/vector.schema.json",
+  "id": "prefs/set-reference-align-mode",
+  "type": "request",
+  "description": "Switching the reference alignment mode from standardAuto to game takes effect when the call returns (no job): it changes nothing until the next AUTO Ref, so it triggers no render. Besides GLOBAL_PREFERENCE the result carries the warning EXPERIMENTAL_FEATURE, because the mode only affects that experimental feature. The revert recipe sets the previous mode.",
+  "capability": "prefs.write",
+  "since": "1.0",
+  "method": "prefs.set",
+  "session": "authenticated",
+  "given": {
+    "dirty": false,
+    "preferences": { "referenceAlignMode": "standardAuto" }
+  },
+  "request": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "prefs.set",
+    "params": { "referenceAlignMode": "game" }
+  },
+  "response": {
+    "jsonrpc": "2.0",
+    "id": 1,
+    "result": {
+      "applied": true,
+      "noOp": false,
+      "dryRun": false,
+      "changes": [
+        {
+          "entity": "preference",
+          "ref": { "preference": "referenceAlignMode" },
+          "label": { "$any": true },
+          "fields": {
+            "referenceAlignMode": {
+              "before": "standardAuto",
+              "after": "game",
+              "unit": null
+            }
+          }
+        }
+      ],
+      "created": [],
+      "removed": [],
+      "idMap": [],
+      "revisionDiff": {
+        "arrangement": null,
+        "trackState": null,
+        "contents": []
+      },
+      "tokens": {
+        "arrangementRevision": { "$any": "string" },
+        "contents": [],
+        "placements": []
+      },
+      "undo": {
+        "undoable": false,
+        "reason": "ui_parity",
+        "revert": {
+          "method": "prefs.set",
+          "params": { "referenceAlignMode": "standardAuto" }
+        }
+      },
+      "dirty": { "before": false, "after": false },
+      "ui": { "$any": true },
+      "sideEffects": {},
+      "warnings": [
+        {
+          "code": "GLOBAL_PREFERENCE",
+          "subject": null,
+          "data": { "preferences": ["referenceAlignMode"] }
+        },
+        {
+          "code": "EXPERIMENTAL_FEATURE",
+          "subject": { "preference": "referenceAlignMode" },
+          "data": null
+        }
+      ],
+      "job": null
+    }
+  },
+  "connectionAfter": "open"
+}

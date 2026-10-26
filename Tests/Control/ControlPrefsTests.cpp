@@ -2866,7 +2866,7 @@ void runVectorsOf(const char* testName, const char* directory, const std::set<st
     }
     report.write();
     for (const auto& id : mustRun)
-        CONTROL_CHECK(mustRunHolds(std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR), passedIds, id));
+        CONTROL_CHECK(mustRunHolds(passedIds, id));
     note(std::to_string(passed) + " vectors passed, " + std::to_string(skipped) + " skipped");
 }
 

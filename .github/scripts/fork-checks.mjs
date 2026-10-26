@@ -16,7 +16,10 @@
 //                            (untrusted text: only matched against fixed patterns, never executed)
 //     --base <ref>           base branch of the PR (layer and spec checks look at this range only);
 //                            locally defaults to origin/feature/control-api when it exists; with --ci
-//                            and no --base (push to dev) those two checks are SKIP
+//                            and no --base (push to dev) those two checks are SKIP. With a base, the
+//                            register of approved upstream cherry-picks (.github/upstream-backports.json)
+//                            is read from the tip of this ref (scope and layer), never from the head;
+//                            without one it is read from the head (commits that were reviewed in a PR)
 //     --head <rev>           default HEAD
 //     --head-branch <name>   branch name of the change (default: current branch)
 //     --mirror <ref>         upstream mirror ref (default origin/upstream-mirror, then upstream-mirror)
@@ -55,8 +58,11 @@ import {
   SCRIPTS_DIR,
   SPEC_COPY_PATTERNS,
   SPEC_PATTERNS,
+  UPSTREAM_BACKPORTS_PATH,
+  branchNameOfRef,
   classifyPath,
   currentBranch,
+  describeApprovedBackports,
   eolStyle,
   findSignoffs,
   formatMarkdown,
@@ -64,11 +70,14 @@ import {
   hasBom,
   isBinary,
   isMainModule,
+  judgeBackports,
   listTreeFiles,
+  loadUpstreamBackports,
   makeTempDir,
   matchesAny,
   overallStatus,
   parseArgs,
+  protectedRegisterBranch,
   readBlobs,
   removeDir,
   reportToGitHub,
@@ -364,17 +373,69 @@ export async function runChecks(opts = {}) {
 
   // The PR range (merge-base(head, base)..head) is the change set of this pull request. The default
   // base is a local convenience only: in CI a run without --base (push to dev) has no PR range.
-  let rangeMemo;
-  const prRange = () => {
-    if (rangeMemo !== undefined) return rangeMemo;
+  const prBase = () => {
     let baseRef = opts.base;
     let note = '';
     if (!baseRef && !opts.index && opts.defaultBase !== false && tryResolveCommit(top, DEFAULT_BASE_REF)) {
       baseRef = DEFAULT_BASE_REF;
       note = '（默认）';
     }
-    rangeMemo = baseRef && !opts.index ? { note, ...computePrRange({ cwd: top, head: delta.head ?? opts.head, baseRef }), baseRef } : null;
+    return baseRef ? { baseRef, note } : null;
+  };
+  let rangeMemo;
+  const prRange = () => {
+    if (rangeMemo !== undefined) return rangeMemo;
+    const b = prBase();
+    rangeMemo = b && !opts.index ? { note: b.note, ...computePrRange({ cwd: top, head: delta.head ?? opts.head, baseRef: b.baseRef }), baseRef: b.baseRef } : null;
     return rangeMemo;
+  };
+
+  // The register of approved upstream cherry-picks (.github/upstream-backports.json) decides which upstream files
+  // outside the hook table scope and layer let through.
+  //
+  // In a pull request (a base was given, or the local default base exists) it is read from the tip of the target
+  // branch, never from the PR head: otherwise a PR could edit an upstream file and add the register entry that
+  // approves the edit in the same change. Only a protected target branch is trusted (dev and feature/control-api,
+  // BACKPORT_REGISTER_BRANCHES): the register is as trustworthy as the people who can write to that branch, so a PR
+  // aimed at any other branch (feature/x, review-base/<n>, ...) gets no register at all. The upstream snapshot
+  // (delta.base) is not the target branch and has no register. If the target branch cannot be resolved there is no
+  // register either, and every such file fails.
+  //
+  // Order of integration that follows from this: the gate scripts of a PR are the ones on its target branch, and so
+  // is the register. The main line therefore only passes scope when it merges into dev if dev already has the new
+  // scripts and the register. Before the wave PR (feature/control-api into dev) a separate L0 PR, changing only
+  // .github/** and CLAUDE.md, has to bring the scripts and the register into dev. Without it the wave PR fails scope
+  // on the cherry-picked files; that is the "a PR cannot approve itself" rule working as intended, not a bug.
+  //
+  // Without a base (a push event, which only runs for dev and feature/**, or a local run without one) it is read
+  // from the head (the staged state with --index). That is safe because those branches only change through a merged
+  // PR, which was already checked against the register of its target branch (dev is protected), or through a push of
+  // the main line, which needs the manager's approval. A direct push that edits the register and an upstream file
+  // together is not possible without that approval.
+  let registerMemo;
+  const backportRegister = () => {
+    if (registerMemo) return registerMemo;
+    const b = prBase();
+    if (!b) {
+      registerMemo = loadUpstreamBackports(top, opts.index ? null : delta.head);
+      return registerMemo;
+    }
+    if (!protectedRegisterBranch(b.baseRef)) {
+      const name = branchNameOfRef(b.baseRef);
+      registerMemo = {
+        files: new Map(),
+        error: null,
+        present: false,
+        origin: `目标分支 ${b.baseRef}`,
+        unusable: `目标分支 \`${name}\` 不是受保护的 dev 或 feature/control-api`,
+      };
+      return registerMemo;
+    }
+    const sha = tryResolveCommit(top, b.baseRef);
+    registerMemo = sha
+      ? loadUpstreamBackports(top, sha, `目标分支 ${b.baseRef}（${short(sha)}）`)
+      : { files: new Map(), error: `无法解析目标分支 ${b.baseRef}，读不到它上面的登记表`, present: false, origin: `目标分支 ${b.baseRef}` };
+    return registerMemo;
   };
 
   // --- attribution copy (independent of the delta)
@@ -474,10 +535,19 @@ export async function runChecks(opts = {}) {
 
     // --- scope: the cumulative delta only touches L0 paths and the upstreamable allow-list
     if (want('scope')) {
-      const problems = delta.files.filter((f) => classifyPath(f.path) === 'other').map((f) => `${statusWord(f.status)}：${f.path}`);
+      // An upstream file outside the hook table passes only as an approved cherry-pick
+      // (.github/upstream-backports.json): registered (the register comes from the target branch, see backportRegister),
+      // its whole diff against the upstream base is the registered patch, and the file is byte-for-byte the registered blob.
+      const outside = delta.files.filter((f) => classifyPath(f.path) === 'other');
+      const register = outside.length ? backportRegister() : null;
+      const verdicts = outside.length
+        ? judgeBackports(top, register, outside.map((f) => f.path), { base: delta.base, head: opts.index ? null : delta.head })
+        : new Map();
+      const problems = outside.filter((f) => !verdicts.get(f.path).ok).map((f) => `${statusWord(f.status)}：${f.path}（${verdicts.get(f.path).detail}）`);
+      const approved = describeApprovedBackports(verdicts, register);
       add(problems.length
         ? result('scope', titleOf('scope'), 'FAIL', '增量改动了钩子表与白名单之外的路径', problems)
-        : result('scope', titleOf('scope'), 'PASS', '增量只涉及 L0 路径与可上游路径白名单'));
+        : result('scope', titleOf('scope'), 'PASS', `增量只涉及 L0 路径与可上游路径白名单${approved ? `；${approved}` : ''}`));
     }
 
     const presentBlobs = readBlobs(top, present.map((f) => blobAt(headSpec, f.path)));
@@ -575,7 +645,18 @@ export async function runChecks(opts = {}) {
     } else {
       const rangeNote = `${range.baseRef}${range.note}…HEAD 共 ${range.files.length} 个文件`;
       const multi = { baseBranch: branchOfRef(range.baseRef), headBranch, external: Boolean(opts.external) };
-      if (want('layer')) add(layerCheck(opts, range.files, rangeNote, isMultiLayerPr(multi) ? multi : null));
+      if (want('layer')) {
+        const outside = range.files.filter((f) => classifyPath(f.path) === 'other').map((f) => f.path);
+        const register = outside.length ? backportRegister() : null;
+        const verdicts = outside.length
+          ? judgeBackports(top, register, outside, { base: range.mergeBase, head: range.head })
+          : new Map();
+        let layerResult = layerCheck(opts, range.files, rangeNote, isMultiLayerPr(multi) ? multi : null, verdicts, register);
+        // A PR that touches the register is reported as a WARN on this result (not a separate check: the register
+        // only matters for the paths this check classifies, and it exists exactly when there is a PR range).
+        if (range.files.some((f) => f.path === UPSTREAM_BACKPORTS_PATH)) layerResult = warnRegisterChange(layerResult);
+        add(layerResult);
+      }
       if (want('spec-copy')) add(specCheck(opts, multi, range.files, rangeNote, { top, head: opts.index ? null : delta.head ?? tryResolveCommit(top, opts.head ?? 'HEAD') }));
     }
   }
@@ -775,7 +856,18 @@ function docConsistencyCheck(top, headRev, enforcement, claudeEnforcement) {
   return result(id, titleOf(id), 'PASS', `${describeStats(r)}${r.notes.length ? `（${r.notes.join('；')}）` : ''}`);
 }
 
-function layerCheck(opts, files, rangeNote, multi) {
+const REGISTER_CHANGE_WARNING = '改动了上游挑入登记表：新增或修改登记需要维护者书面批准，review 按【红旗】处理';
+
+/**
+ * The PR range changes .github/upstream-backports.json: never blocking, but visible. A passing or skipped result
+ * becomes a WARN; a failing one stays a FAIL and gets the warning as one more line.
+ */
+function warnRegisterChange(r) {
+  if (r.result === 'FAIL') return { ...r, problems: [...r.problems, `WARN：${REGISTER_CHANGE_WARNING}`] };
+  return { ...r, result: 'WARN', detail: `${r.detail}；${REGISTER_CHANGE_WARNING}` };
+}
+
+function layerCheck(opts, files, rangeNote, multi, backportVerdicts = new Map(), backportRegister = null) {
   const id = 'layer';
   let layer = opts.layer?.toUpperCase();
   let source = '参数';
@@ -795,11 +887,16 @@ function layerCheck(opts, files, rangeNote, multi) {
   for (const f of files) {
     const cls = classifyPath(f.path);
     if (layer === 'L0' && cls !== 'L0') problems.push(`L0 改动不得触碰${cls === 'upstreamable' ? '可上游路径' : '白名单之外的上游路径'}：${f.path}`);
-    if (layer !== 'L0' && cls === 'other') problems.push(`白名单之外的上游路径：${f.path}`);
+    if (layer !== 'L0' && cls === 'other') {
+      // Only an approved cherry-pick (.github/upstream-backports.json) may touch such a file.
+      const verdict = backportVerdicts.get(f.path);
+      if (!verdict?.ok) problems.push(`白名单之外的上游路径：${f.path}${verdict ? `（${verdict.detail}）` : ''}`);
+    }
   }
+  const approved = describeApprovedBackports(backportVerdicts, backportRegister);
   return problems.length
     ? result(id, titleOf(id), 'FAIL', `层 ${layer}（来自${source}）与改动路径不符`, problems)
-    : result(id, titleOf(id), 'PASS', `层 ${layer}（来自${source}）；${rangeNote}均符合`);
+    : result(id, titleOf(id), 'PASS', `层 ${layer}（来自${source}）；${rangeNote}均符合${approved ? `；${approved}` : ''}`);
 }
 
 /**

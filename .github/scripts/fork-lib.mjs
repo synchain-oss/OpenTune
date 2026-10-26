@@ -316,6 +316,125 @@ export function listTreeFiles(cwd, rev, dir) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Approved cherry-picks of upstream commits (.github/upstream-backports.json)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Register of upstream commits that the maintainer approved as unchanged, temporary cherry-picks. It lets
+ * the scope and layer checks accept an upstream file outside the hook table, but only while the file's diff
+ * is exactly the cherry-picked patch: the register stores `git patch-id --stable` per file.
+ */
+export const UPSTREAM_BACKPORTS_PATH = '.github/upstream-backports.json';
+
+const HEX40 = /^[0-9a-f]{40}$/;
+
+/**
+ * Parse the register. Never throws: a malformed register means "no registrations", with the reason in `error`.
+ * Shape: { "backports": [ { "upstreamCommit": <40 hex>, "files": { "<path>": <40 hex patch-id>, ... }, ... } ] }
+ * @returns {{ files: Map<string, {patchId: string, upstreamCommit: string}>, error: string|null }}
+ */
+export function parseUpstreamBackports(text) {
+  const none = (error) => ({ files: new Map(), error });
+  let doc;
+  try {
+    doc = JSON.parse(String(text).replace(/^﻿/, ''));
+  } catch (e) {
+    return none(`不是合法的 JSON：${e.message}`);
+  }
+  if (doc === null || typeof doc !== 'object' || Array.isArray(doc) || !Array.isArray(doc.backports)) {
+    return none('顶层需要是带 backports 数组的对象');
+  }
+  const files = new Map();
+  for (const [i, entry] of doc.backports.entries()) {
+    const where = `backports[${i}]`;
+    if (entry === null || typeof entry !== 'object' || Array.isArray(entry)) return none(`${where} 不是对象`);
+    if (typeof entry.upstreamCommit !== 'string' || !HEX40.test(entry.upstreamCommit)) return none(`${where}.upstreamCommit 不是 40 位小写十六进制`);
+    if (entry.files === null || typeof entry.files !== 'object' || Array.isArray(entry.files)) return none(`${where}.files 不是对象`);
+    for (const [file, patchId] of Object.entries(entry.files)) {
+      if (!file || file.startsWith('/') || file.includes('\\') || file.split('/').some((s) => s === '' || s === '.' || s === '..')) {
+        return none(`${where}.files 的路径 ${JSON.stringify(file)} 不是仓库内的相对路径（正斜杠）`);
+      }
+      if (typeof patchId !== 'string' || !HEX40.test(patchId)) return none(`${where}.files[${file}] 不是 40 位小写十六进制的 patch-id`);
+      if (files.has(file)) return none(`${file} 在登记表里出现了不止一次`);
+      files.set(file, { patchId, upstreamCommit: entry.upstreamCommit });
+    }
+  }
+  return { files, error: null };
+}
+
+/**
+ * Read the register at `rev` (null = the index). A missing file is an empty register (`present: false`); an
+ * unreadable or malformed one is an empty register with `error` set. Never throws.
+ */
+export function loadUpstreamBackports(cwd, rev) {
+  const spec = `${rev ?? ''}:${UPSTREAM_BACKPORTS_PATH}`;
+  let blob;
+  try {
+    blob = readBlobs(cwd, [spec]).get(spec);
+  } catch (e) {
+    return { files: new Map(), error: `读不到登记文件：${e.message}`, present: false };
+  }
+  if (!blob) return { files: new Map(), error: null, present: false };
+  return { ...parseUpstreamBackports(blob.toString('utf8')), present: true };
+}
+
+/**
+ * `git patch-id --stable` of one file's diff: `base`..`head`, or the index against `base` when `head` is null.
+ * The diff options are fixed so that a user's diff.* settings cannot change the hunks; null when the file has no diff.
+ */
+export function filePatchId(cwd, file, { base, head }) {
+  const args = ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--unified=3', '--diff-algorithm=myers', '--src-prefix=a/', '--dst-prefix=b/'];
+  if (head) args.push(base, head);
+  else args.push('--cached', base);
+  args.push('--', file);
+  const diff = git(args, { cwd, raw: true });
+  if (!diff.length) return null;
+  const id = git(['patch-id', '--stable'], { cwd, input: diff }).trim().split(/\s+/)[0];
+  return HEX40.test(id ?? '') ? id : null;
+}
+
+/**
+ * Judge upstream files outside the hook table against the register: approved when the file is registered and
+ * its diff over `range` has the registered patch-id. Otherwise the reason says which case it is.
+ * @returns {Map<string, {ok: true, upstreamCommit: string} | {ok: false, reason: 'unregistered'|'mismatch', detail: string}>}
+ */
+export function judgeBackports(cwd, register, paths, range) {
+  const verdicts = new Map();
+  for (const file of paths) {
+    const entry = register.files.get(file);
+    if (!entry) {
+      const why = register.error ? `登记文件有误（${register.error}），按没有登记处理` : register.present ? '不在登记表里' : '没有登记文件';
+      verdicts.set(file, { ok: false, reason: 'unregistered', detail: `未登记为已批准的上游挑入：${why}` });
+      continue;
+    }
+    let actual = null;
+    let failure = '';
+    try {
+      actual = filePatchId(cwd, file, range);
+    } catch (e) {
+      failure = `；计算 patch-id 失败：${e.message}`;
+    }
+    if (actual === entry.patchId) verdicts.set(file, { ok: true, upstreamCommit: entry.upstreamCommit });
+    else {
+      verdicts.set(file, {
+        ok: false,
+        reason: 'mismatch',
+        detail: `已登记（${short(entry.upstreamCommit)}），但改动与登记的补丁不一致（登记 ${short(entry.patchId)}，实际 ${actual ? short(actual) : '无'}${failure}）：在挑入之外又改了这个文件`,
+      });
+    }
+  }
+  return verdicts;
+}
+
+/** "已批准的上游挑入 0afb6c8（3 个文件，补丁与登记一致）" for the approved verdicts, or '' when there are none. */
+export function describeApprovedBackports(verdicts) {
+  const byCommit = new Map();
+  for (const v of verdicts.values()) if (v.ok) byCommit.set(v.upstreamCommit, (byCommit.get(v.upstreamCommit) ?? 0) + 1);
+  if (!byCommit.size) return '';
+  return `已批准的上游挑入 ${[...byCommit].map(([c, n]) => `${short(c)}（${n} 个文件）`).join('、')}，补丁与登记一致`;
+}
+
+// ---------------------------------------------------------------------------------------------
 // Text helpers
 // ---------------------------------------------------------------------------------------------
 

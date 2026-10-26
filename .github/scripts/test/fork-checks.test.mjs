@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { parseLayerFromBody, runChecks, workflowTriggerBlock, actionRefProblem } from '../fork-checks.mjs';
-import { makeTempDir, removeDir } from '../fork-lib.mjs';
+import { filePatchId, makeTempDir, removeDir } from '../fork-lib.mjs';
 import {
   FORK, GITHUB, PINNED_WORKFLOW, SCRIPTS, STRANGER, TestRepo, UPSTREAM, WEB,
   aiGeneratedLine, aiTrailer, byId, fakeClangFormat, msg, realTool,
@@ -245,6 +245,76 @@ describe('scope', () => {
     await expectStatus('scope', repo.change({ 'README.md': '# Upstream\nedit\n' }), 'FAIL');
     await expectStatus('scope', repo.change({ 'Source/Utils/Foo.cpp': 'void foo() {}\n' }), 'FAIL');
     await expectStatus('scope', repo.change({ 'newdir/file.txt': 'x\n' }), 'FAIL');
+  });
+});
+
+describe('approved upstream cherry-picks (.github/upstream-backports.json)', () => {
+  const FOO = 'Source/Utils/Foo.cpp';
+  const REGISTER = '.github/upstream-backports.json';
+  const UPSTREAM_COMMIT = 'abcdef0123456789abcdef0123456789abcdef01';
+  const picked = 'void foo()\n{\n    int y = 1;\n}\n';
+
+  const register = (files, upstreamCommit = UPSTREAM_COMMIT) => JSON.stringify({ backports: [{ upstreamCommit, files }] }, null, 2) + '\n';
+
+  /** The patch-id the register stores for FOO when it is changed to `content` on top of the upstream snapshot. */
+  function patchIdOf(content) {
+    return filePatchId(repo.dir, FOO, { base: repo.upstream, head: repo.change({ [FOO]: content }) });
+  }
+
+  test('a registered file whose diff is exactly the registered patch passes scope and layer', async () => {
+    const head = repo.change({ [FOO]: picked, [REGISTER]: register({ [FOO]: patchIdOf(picked) }) });
+    const scope = await expectStatus('scope', head, 'PASS');
+    assert.match(scope.detail, /已批准的上游挑入 abcdef0（1 个文件）/);
+    const layer = await expectStatus('layer', head, 'PASS', { layer: 'L2' });
+    assert.match(layer.detail, /已批准的上游挑入 abcdef0/);
+  });
+
+  test('a registered file changed by one more line fails: it differs from the registered patch', async () => {
+    const head = repo.change({ [FOO]: `${picked}// one more line\n`, [REGISTER]: register({ [FOO]: patchIdOf(picked) }) });
+    const scope = await expectStatus('scope', head, 'FAIL');
+    assert.match(scope.problems.join('\n'), /Source\/Utils\/Foo\.cpp（已登记（abcdef0），但改动与登记的补丁不一致.*在挑入之外又改了这个文件）/);
+    const layer = await expectStatus('layer', head, 'FAIL', { layer: 'L2' });
+    assert.match(layer.problems.join('\n'), /白名单之外的上游路径：Source\/Utils\/Foo\.cpp.*不一致/);
+  });
+
+  test('a registered file with a later extra commit on top fails too', async () => {
+    const first = repo.change({ [FOO]: picked, [REGISTER]: register({ [FOO]: patchIdOf(picked) }) });
+    const second = repo.change({ [FOO]: `${picked}// later\n` }, { parent: first });
+    await expectStatus('scope', first, 'PASS');
+    await expectStatus('scope', second, 'FAIL');
+  });
+
+  test('an upstream file that is not in the register fails, the registered one next to it does not', async () => {
+    const head = repo.change({ [FOO]: picked, 'README.md': '# Upstream\nedit\n', [REGISTER]: register({ [FOO]: patchIdOf(picked) }) });
+    const scope = await expectStatus('scope', head, 'FAIL');
+    assert.match(scope.problems.join('\n'), /README\.md（未登记为已批准的上游挑入：不在登记表里）/);
+    assert.doesNotMatch(scope.problems.join('\n'), /Foo\.cpp/);
+    await expectStatus('layer', head, 'FAIL', { layer: 'L2' });
+  });
+
+  test('no register file: the file is unregistered', async () => {
+    const scope = await expectStatus('scope', repo.change({ [FOO]: picked }), 'FAIL');
+    assert.match(scope.problems.join('\n'), /未登记为已批准的上游挑入：没有登记文件/);
+  });
+
+  test('a damaged register counts as no register and says why, without crashing the check', async () => {
+    for (const text of ['{ not json', '{"backports":[{"upstreamCommit":"abc","files":{}}]}', '[]']) {
+      const head = repo.change({ [FOO]: picked, [REGISTER]: text });
+      const scope = await expectStatus('scope', head, 'FAIL');
+      assert.match(scope.problems.join('\n'), /登记文件有误（.+），按没有登记处理/, text);
+      await expectStatus('layer', head, 'FAIL', { layer: 'L2' });
+    }
+  });
+
+  test('a registration does not make an L0 change allowed to touch the file', async () => {
+    const head = repo.change({ [FOO]: picked, [REGISTER]: register({ [FOO]: patchIdOf(picked) }) });
+    await expectStatus('layer', head, 'FAIL', { layer: 'L0' });
+  });
+
+  test('a register entry for a file the branch does not change has no effect', async () => {
+    const head = repo.change({ [REGISTER]: register({ [FOO]: patchIdOf(picked) }), 'Tests/ControlFork/a.txt': 'x\n' });
+    const scope = await expectStatus('scope', head, 'PASS');
+    assert.doesNotMatch(scope.detail, /已批准/);
   });
 });
 

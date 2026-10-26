@@ -57,6 +57,7 @@ import {
   SPEC_PATTERNS,
   classifyPath,
   currentBranch,
+  describeApprovedBackports,
   eolStyle,
   findSignoffs,
   formatMarkdown,
@@ -64,7 +65,9 @@ import {
   hasBom,
   isBinary,
   isMainModule,
+  judgeBackports,
   listTreeFiles,
+  loadUpstreamBackports,
   makeTempDir,
   matchesAny,
   overallStatus,
@@ -474,10 +477,17 @@ export async function runChecks(opts = {}) {
 
     // --- scope: the cumulative delta only touches L0 paths and the upstreamable allow-list
     if (want('scope')) {
-      const problems = delta.files.filter((f) => classifyPath(f.path) === 'other').map((f) => `${statusWord(f.status)}：${f.path}`);
+      // An upstream file outside the hook table passes only as an approved cherry-pick
+      // (.github/upstream-backports.json): registered, and its whole diff against the upstream base is the registered patch.
+      const outside = delta.files.filter((f) => classifyPath(f.path) === 'other');
+      const verdicts = outside.length
+        ? judgeBackports(top, loadUpstreamBackports(top, opts.index ? null : delta.head), outside.map((f) => f.path), { base: delta.base, head: opts.index ? null : delta.head })
+        : new Map();
+      const problems = outside.filter((f) => !verdicts.get(f.path).ok).map((f) => `${statusWord(f.status)}：${f.path}（${verdicts.get(f.path).detail}）`);
+      const approved = describeApprovedBackports(verdicts);
       add(problems.length
         ? result('scope', titleOf('scope'), 'FAIL', '增量改动了钩子表与白名单之外的路径', problems)
-        : result('scope', titleOf('scope'), 'PASS', '增量只涉及 L0 路径与可上游路径白名单'));
+        : result('scope', titleOf('scope'), 'PASS', `增量只涉及 L0 路径与可上游路径白名单${approved ? `；${approved}` : ''}`));
     }
 
     const presentBlobs = readBlobs(top, present.map((f) => blobAt(headSpec, f.path)));
@@ -575,7 +585,13 @@ export async function runChecks(opts = {}) {
     } else {
       const rangeNote = `${range.baseRef}${range.note}…HEAD 共 ${range.files.length} 个文件`;
       const multi = { baseBranch: branchOfRef(range.baseRef), headBranch, external: Boolean(opts.external) };
-      if (want('layer')) add(layerCheck(opts, range.files, rangeNote, isMultiLayerPr(multi) ? multi : null));
+      if (want('layer')) {
+        const outside = range.files.filter((f) => classifyPath(f.path) === 'other').map((f) => f.path);
+        const verdicts = outside.length
+          ? judgeBackports(top, loadUpstreamBackports(top, range.head), outside, { base: range.mergeBase, head: range.head })
+          : new Map();
+        add(layerCheck(opts, range.files, rangeNote, isMultiLayerPr(multi) ? multi : null, verdicts));
+      }
       if (want('spec-copy')) add(specCheck(opts, multi, range.files, rangeNote, { top, head: opts.index ? null : delta.head ?? tryResolveCommit(top, opts.head ?? 'HEAD') }));
     }
   }
@@ -775,7 +791,7 @@ function docConsistencyCheck(top, headRev, enforcement, claudeEnforcement) {
   return result(id, titleOf(id), 'PASS', `${describeStats(r)}${r.notes.length ? `（${r.notes.join('；')}）` : ''}`);
 }
 
-function layerCheck(opts, files, rangeNote, multi) {
+function layerCheck(opts, files, rangeNote, multi, backportVerdicts = new Map()) {
   const id = 'layer';
   let layer = opts.layer?.toUpperCase();
   let source = '参数';
@@ -795,11 +811,16 @@ function layerCheck(opts, files, rangeNote, multi) {
   for (const f of files) {
     const cls = classifyPath(f.path);
     if (layer === 'L0' && cls !== 'L0') problems.push(`L0 改动不得触碰${cls === 'upstreamable' ? '可上游路径' : '白名单之外的上游路径'}：${f.path}`);
-    if (layer !== 'L0' && cls === 'other') problems.push(`白名单之外的上游路径：${f.path}`);
+    if (layer !== 'L0' && cls === 'other') {
+      // Only an approved cherry-pick (.github/upstream-backports.json) may touch such a file.
+      const verdict = backportVerdicts.get(f.path);
+      if (!verdict?.ok) problems.push(`白名单之外的上游路径：${f.path}${verdict ? `（${verdict.detail}）` : ''}`);
+    }
   }
+  const approved = describeApprovedBackports(backportVerdicts);
   return problems.length
     ? result(id, titleOf(id), 'FAIL', `层 ${layer}（来自${source}）与改动路径不符`, problems)
-    : result(id, titleOf(id), 'PASS', `层 ${layer}（来自${source}）；${rangeNote}均符合`);
+    : result(id, titleOf(id), 'PASS', `层 ${layer}（来自${source}）；${rangeNote}均符合${approved ? `；${approved}` : ''}`);
 }
 
 /**

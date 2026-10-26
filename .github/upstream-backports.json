@@ -1,0 +1,15 @@
+{
+  "backports": [
+    {
+      "upstreamCommit": "0afb6c88d4e6c6529eb42f9b1774d2dcfe55350e",
+      "upstreamRepo": "YuFeng926/OpenTune",
+      "approved": "2026-10-26",
+      "summary": "keep the corrected pitch line when reopening a project",
+      "files": {
+        "Source/Utils/PitchCurve.cpp": "84d58f3e48815f3f40d735fd33a956dc8dd1f6c8",
+        "Source/Utils/PitchCurve.h": "e1e181c8ba12112877d2507696fdb6d65ba362c8",
+        "Source/Utils/ProjectSession.cpp": "c107ed6b3059c0b44375860244c73c2af5f5594c"
+      }
+    }
+  ]
+}

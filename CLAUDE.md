@@ -53,7 +53,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - **不修上游 bug。** 接口如实报告（告警与原因码，结果里标明不可撤销等），并在 PR 的「上游行为发现」里记录。是否给作者提 issue 由 manager 决定；任何对外内容都先给维护者过目。
 - **界面里才有的计算**：在接口层照 UI 的步骤另写一份，只调用上游现成的底层函数。有意镜像的上游函数要登记到镜像锁清单 `.github/drift-pins/<group>.txt`，并同步 `Source/Control/MIRRORS.md` 与 `Source/Control/mirror-map.json`（`ControlMirrorDriftTests` 比对规范化哈希）。
 - **范围**：只做波次 A（修音主流程）与波次 B（编排与工程）。波次 C 推迟，包括画、拉伸、切分、合并音符，单音符 EQ，包络，手绘曲线，锚点，橡皮擦，以及插入/删除时间手柄。不做界面里没有的「接口扩展」，也不做纯外观/视图设置。例外：工作区切换 `ui.setWorkspace`。它等同于走带栏的两个视图按钮，而 agent 要照界面的步骤工作，需要在编排视图与钢琴卷帘之间来回切换；它也是关闭钢琴卷帘的唯一途径。维护者要求加入。上游本来就没有的功能，统一返回 `UNSUPPORTED`。
-- **一次性例外：临时挑入的上游修复。** 维护者 2026-10-26 批准把上游提交 `0afb6c8`（重新打开工程时保留修正后的音高线）作为标注清楚的临时提交挑进 fork：原样不改，提交信息以 `fix(upstream-backport):` 开头，改动 `Source/PluginProcessor.cpp`、`Source/Utils/PitchCurve.cpp`、`Source/Utils/PitchCurve.h`、`Source/Utils/ProjectSession.cpp`。这是对「表外的上游文件一律不改」与「不修上游 bug」两条的例外，只限这一个提交；它不进上游 PR（上游已有），最终 rebase 到含它的上游时因补丁相同而自动消失；测试版的「对上游的修改」清单（`.github/release/templates/MODIFICATIONS.md`）里为它登记了一条，届时一并去掉。再有别的挑入，需要维护者另行批准。
+- **一次性例外：临时挑入的上游修复。** 维护者 2026-10-26 批准把上游提交 `0afb6c8`（重新打开工程时保留修正后的音高线）作为标注清楚的临时提交挑进 fork：原样不改，提交信息以 `fix(upstream-backport):` 开头，改动 `Source/PluginProcessor.cpp`、`Source/Utils/PitchCurve.cpp`、`Source/Utils/PitchCurve.h`、`Source/Utils/ProjectSession.cpp`。这是对「表外的上游文件一律不改」与「不修上游 bug」两条的例外，只限这一个提交；它不进上游 PR（上游已有），最终 rebase 到含它的上游时因补丁相同而自动消失；测试版的「对上游的修改」清单（`.github/release/templates/MODIFICATIONS.md`）里为它登记了一条，届时一并去掉。门禁（fork-gate 的 `scope` 与 `layer`）按 `.github/upstream-backports.json` 放行：该登记表记下每个表外文件的补丁 `git patch-id --stable`，文件的改动与登记值相等才算「原样挑入」，在挑入之外又改了这个文件、或没有登记，仍然失败；最终 rebase 丢掉这个提交时，把登记条目一并删掉。再有别的挑入，需要维护者另行批准。
 - `.gitignore` 与其他上游文件保持原样。不在任何产出里改写、摘录或另行打包上游的说明与声明类文件（测试版只按白名单打包）。
 
 ## 2. 上游代码约定（从上游现有代码归纳，新代码照此写）

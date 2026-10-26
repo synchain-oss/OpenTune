@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { stripYamlComment, workflowCodeLines, workflowTriggerBlock, spdxProblem, needsSpdx } from '../fork-checks.mjs';
-import { classifyPath, eolStyle, findSignoffs, globToRegExp, matchesAny, parseArgs, parseNameStatusZ, reportToGitHub, result, GUARDED_PATTERNS } from '../fork-lib.mjs';
+import { classifyPath, eolStyle, findSignoffs, globToRegExp, matchesAny, parseArgs, parseNameStatusZ, parseUpstreamBackports, reportToGitHub, result, GUARDED_PATTERNS } from '../fork-lib.mjs';
 
 describe('globs and path classes', () => {
   test('globToRegExp', () => {
@@ -128,5 +128,57 @@ describe('reportToGitHub', () => {
   test('a WARN without problems still gets its annotation, and the text is escaped', () => {
     const lines = capture([result('w', 'W', 'WARN', '100% done\nsecond line')]);
     assert.deepEqual(lines, ['::warning title=w::100%25 done%0Asecond line\n']);
+  });
+});
+
+describe('parseUpstreamBackports', () => {
+  const sha = (c) => c.repeat(40);
+  const entry = (files) => ({ upstreamCommit: sha('a'), files });
+
+  test('a well-formed register lists every registered file with its patch-id and commit', () => {
+    const r = parseUpstreamBackports(JSON.stringify({ backports: [entry({ 'Source/Utils/A.cpp': sha('1') }), { ...entry({ 'Source/Utils/B.h': sha('2') }), upstreamCommit: sha('b') }] }));
+    assert.equal(r.error, null);
+    assert.deepEqual([...r.files], [
+      ['Source/Utils/A.cpp', { patchId: sha('1'), upstreamCommit: sha('a') }],
+      ['Source/Utils/B.h', { patchId: sha('2'), upstreamCommit: sha('b') }],
+    ]);
+  });
+
+  test('an empty list is valid, a BOM is tolerated', () => {
+    assert.deepEqual(parseUpstreamBackports('{"backports":[]}'), { files: new Map(), error: null });
+    assert.equal(parseUpstreamBackports('\uFEFF{"backports":[]}').error, null);
+  });
+
+  test('anything malformed is "no registrations" with the reason, never an exception', () => {
+    const bad = [
+      '',
+      'not json',
+      '[]',
+      'null',
+      '{}',
+      '{"backports":{}}',
+      JSON.stringify({ backports: [null] }),
+      JSON.stringify({ backports: [{ files: {} }] }),
+      JSON.stringify({ backports: [{ upstreamCommit: 'abc', files: {} }] }),
+      JSON.stringify({ backports: [{ upstreamCommit: sha('A'), files: {} }] }),
+      JSON.stringify({ backports: [{ upstreamCommit: sha('a') }] }),
+      JSON.stringify({ backports: [entry({ 'a.cpp': 'xyz' })] }),
+      JSON.stringify({ backports: [entry({ 'a.cpp': 5 })] }),
+      JSON.stringify({ backports: [entry({ '/abs.cpp': sha('1') })] }),
+      JSON.stringify({ backports: [entry({ '../up.cpp': sha('1') })] }),
+      JSON.stringify({ backports: [entry({ 'back\\slash.cpp': sha('1') })] }),
+      JSON.stringify({ backports: [entry({ 'a.cpp': sha('1') }), entry({ 'a.cpp': sha('2') })] }),
+    ];
+    for (const text of bad) {
+      const r = parseUpstreamBackports(text);
+      assert.equal(r.files.size, 0, text);
+      assert.ok(r.error, text);
+    }
+  });
+
+  test('one bad entry voids the whole register', () => {
+    const r = parseUpstreamBackports(JSON.stringify({ backports: [entry({ 'good.cpp': sha('1') }), entry({ 'bad.cpp': 'zz' })] }));
+    assert.equal(r.files.size, 0);
+    assert.match(r.error, /backports\[1\]/);
   });
 });

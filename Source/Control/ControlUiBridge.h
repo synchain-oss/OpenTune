@@ -259,6 +259,19 @@ public:
         nothing, when not supported. Message thread. */
     virtual bool setWorkspace(bool /*arrangement*/) { return false; }
 
+    // ---- Quit ---------------------------------------------------------------------------------
+
+    /** True when requestQuit() ends the application as the close button of the editor's window does. Default:
+        false (a bridge that cannot quit). Message thread. */
+    virtual bool canQuit() const { return false; }
+
+    /** Ends the application as the close button of the window does: the window saves the plugin state it saves
+        whenever it closes (not the project file) and quits through the application's normal shutdown. It asks
+        nothing about unsaved changes, which the caller has checked already. Returns when the quit is under way (the
+        application ends after the message loop returns to its owner), so that nothing of the editor may be used
+        afterwards. Returns false, doing nothing, when canQuit() is false. Message thread. */
+    virtual bool requestQuit() { return false; }
+
     // ---- Preferences and audio device ---------------------------------------------------------
 
     /** The shared preferences were changed through the control API (prefs.set): the editor applies them the way it

@@ -362,7 +362,7 @@ void checkSessionInfo(ApiSession& api)
     // Only the capabilities this build implements completely are reported.
     CONTROL_CHECK(
         toJsonString(memberOf(info, "capabilities"))
-        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","ui.bridge","ui.onboardingClose","ui.workspace","edit.v1","history.v1","timing.v1","transport.v1","arrangement.v1","tracks.v1","project.io","prefs.write","audio.device"])");
+        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","ui.bridge","ui.onboardingClose","ui.workspace","edit.v1","history.v1","timing.v1","transport.v1","arrangement.v1","tracks.v1","project.io","prefs.write","audio.device","app.quit"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");
@@ -1251,6 +1251,11 @@ std::vector<std::string> methodsOf(const JsonValue& vector)
 /** Why this runner does not run a vector, or empty when it does. */
 std::string vectorSkipReason(const JsonValue& vector)
 {
+    // app.quit ends the instance and needs a bridge that can close its window: ControlQuitTests.cpp (AppQuitVectors).
+    for (const auto& method : methodsOf(vector))
+        if (method == "app.quit")
+            return "runs in ControlProcessorTests.AppQuitVectors: the vector needs a bridge that quits, and some end "
+                   "the instance";
     if (kReportedCapabilities.count(memberOf(vector, "capability").text()) == 0)
         return "needs capability " + memberOf(vector, "capability").text() + ", which a later part implements";
     const auto& extra = memberOf(vector, "extraCapabilities");
@@ -1810,9 +1815,10 @@ void scenarioCompleteness()
         return;
     const auto& methods = memberOf(parsed.value, "methods");
     const auto reported = dispatcher->capabilities();
-    for (const char* capability : {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "ui.bridge",
-                                   "ui.workspace", "edit.v1", "history.v1", "timing.v1", "transport.v1",
-                                   "arrangement.v1", "tracks.v1", "project.io", "prefs.write", "audio.device"})
+    for (const char* capability :
+         {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "ui.bridge", "ui.workspace", "edit.v1",
+          "history.v1", "timing.v1", "transport.v1", "arrangement.v1", "tracks.v1", "project.io", "prefs.write",
+          "audio.device", "app.quit"})
         CONTROL_CHECK(std::find(reported.begin(), reported.end(), capability) != reported.end());
 
     // The listener answers session.hello itself, so the dispatcher's method table has no entry for it.
@@ -1883,8 +1889,8 @@ void scenarioCompleteness()
     // reads, job.get, job.cancel, import.start, export.start, ui.getState, ui.dismiss, ui.setSelection,
     // ui.setWorkspace, the four methods of edit.v1, the three of the undo history, the two of timing.v1, the three of
     // transport.v1, the two of arrangement.v1, the four of tracks.v1, the four of project.io, prefs.set and the two of
-    // audio.device: 42 in all.
-    CONTROL_CHECK(indexed.size() >= 42);
+    // audio.device and app.quit: 43 in all.
+    CONTROL_CHECK(indexed.size() >= 43);
     if (!kUnimplementedReportedMethods.empty())
         note("exempt methods remain; the list must be empty before dev is merged");
     note(std::to_string(indexed.size()) + " methods of the reported capabilities are registered");

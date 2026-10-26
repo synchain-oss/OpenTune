@@ -39,7 +39,12 @@ class OpenTuneAudioProcessor;
  * 5. maps the method's Result to the response: the result object, or the error that controlMapError
  *    gives (the only place where OpenTune errors become protocol errors). `executed` is what the
  *    operation stated (controlOpError or controlOpErrorAfterChange); for any other failure of a write
- *    it is true, because the write may have changed state.
+ *    it is true, because the write may have changed state;
+ * 6. for a method that ends the instance (app.quit: ControlOpContext::endInstanceAfterReply), only after the
+ *    result was written to the connection, posts the method's exit step to the message thread. The dispatcher is
+ *    in the stopping state from the moment the method returned its result, so that every other request is answered
+ *    with SHUTTING_DOWN; the exit step stops the control service (connections close, the discovery file goes) and
+ *    quits the application.
  *
  * Methods whose schema says mainThread false and that have ControlMethod::runWithoutMessageThread
  * (job.get, job.cancel) skip step 4 as well: they run on the connection thread with the jobs registry
@@ -115,12 +120,31 @@ public:
     /** The method of this name, or nullptr when this build does not implement it. Thread-safe. */
     const ControlMethod* method(std::string_view name) const { return methods_.find(name); }
 
+    /** The two steps that follow the result of a method that ends the instance, in the order they happen. */
+    enum class AfterReplyEvent {
+        /** The result was written to the connection (ControlCompletion::respondResult() returned): the connection
+            thread, once, before the exit step is queued. */
+        ReplyWritten,
+        /** The exit step starts, before it does anything: the message thread. */
+        ExitStepStarted
+    };
+
+    /** Test seam: observer is called with each AfterReplyEvent of every method that ends the instance, on the thread
+        that the event names, so that a test can state the order. Set before the first request; any thread. */
+    void setAfterReplyObserverForTesting(std::function<void(AfterReplyEvent)> observer);
+
 private:
     struct Outcome;
 
     void execute(const ControlMethod& method, const void* parsed, Outcome& outcome);
     void executeOffMainThread(const ControlMethod& method, const void* parsed, Outcome& outcome);
     static void respond(const Outcome& outcome, const ControlCompletion& completion);
+    /** Posts the exit step of a method that ended the instance, after respond() returned. Connection thread. */
+    void runAfterReply(Outcome& outcome);
+    /** Sets the stopping flag and wakes the waiters of the facts; idempotent, any thread. */
+    void enterStopping();
+    /** Calls the observer of the test seam, if there is one. Any thread. */
+    void notifyAfterReply(AfterReplyEvent event);
     std::shared_ptr<const ControlInstanceFacts> currentFacts() const;
 
     Setup setup_;
@@ -134,6 +158,8 @@ private:
     bool redactionSecretsSet_ = false;
     ControlThreadProbe probe_;
     std::atomic<bool> stopping_{false};
+    std::mutex observerMutex_;
+    std::shared_ptr<const std::function<void(AfterReplyEvent)>> afterReplyObserver_;
     std::atomic<int> executed_{0};
     std::atomic<int> offMainThread_{0};
 };

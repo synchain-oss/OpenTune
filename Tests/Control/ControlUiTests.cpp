@@ -125,6 +125,8 @@ struct UiFixture
         , processor(startedProcessor())
     {
         bridge.view.workspace = "arrangement";
+        // The keyboard focus is in the transport bar's BPM field (TestUiBridge::commitBpmFieldOnViewSwitch()).
+        bridge.bpmFieldProcessor = processor.get();
         bridge.onDialogClosed = [this](const DialogInfo& dialog) {
             if (dialog.kind != "trackColour")
                 return;
@@ -236,8 +238,8 @@ void scenarioUiState()
         ApiSession api;
         if (!api.open(service))
             return;
-        CONTROL_CHECK(api.fails("ui.getState", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
-        CONTROL_CHECK(api.fails("ui.dismiss", jsonOf(R"({"target":"dialogs"})"), "UNSUPPORTED", "capability_missing"));
+        CONTROL_CHECK(api.fails("ui.getState", JsonValue::object(), "UNSUPPORTED", "no_editor_window"));
+        CONTROL_CHECK(api.fails("ui.dismiss", jsonOf(R"({"target":"dialogs"})"), "UNSUPPORTED", "no_editor_window"));
     }
     {
         ScopedCapabilities seam({"ui.onboardingClose"});
@@ -306,15 +308,15 @@ void scenarioUiState()
     CONTROL_CHECK(memberOf(memberOf(idle, "uiScale"), "scale").text() == "pentatonicMinor");
     CONTROL_CHECK(f.api.fails("ui.getState", jsonOf(R"({"x":1})"), "INVALID_ARGUMENT", "invalid_params"));
 
-    // A bridge that does not report its dialogs is no editor window for ui.bridge.
+    // A bridge that does not report its dialogs cannot serve ui.bridge (an editor exists, so not no_editor_window).
     f.bridge.reportsDialogs = false;
     CONTROL_CHECK(f.api.fails("ui.getState", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
     CONTROL_CHECK(f.api.fails("ui.dismiss", jsonOf(R"({"target":"onboarding"})"), "UNSUPPORTED", "capability_missing"));
     f.bridge.reportsDialogs = true;
     // Without an editor.
     f.registered.reset();
-    CONTROL_CHECK(f.api.fails("ui.getState", JsonValue::object(), "UNSUPPORTED", "capability_missing"));
-    CONTROL_CHECK(f.api.fails("ui.dismiss", jsonOf(R"({"target":"dialogs"})"), "UNSUPPORTED", "capability_missing"));
+    CONTROL_CHECK(f.api.fails("ui.getState", JsonValue::object(), "UNSUPPORTED", "no_editor_window"));
+    CONTROL_CHECK(f.api.fails("ui.dismiss", jsonOf(R"({"target":"dialogs"})"), "UNSUPPORTED", "no_editor_window"));
     CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 
@@ -396,6 +398,19 @@ void scenarioUiDismiss()
         CONTROL_CHECK(memberOf(revert, "method").text() == "track.set");
     else
         CONTROL_CHECK(revert.isNull());
+    // The round trip: the recipe, sent as it came (it needs no consent), puts the colour back that the dialog
+    // committed. The dialog is gone, so the write is not blocked, and the track is as it was before the commit.
+    if (revertible && CONTROL_CHECK(!memberOf(revert, "requiresConsent").asBoolean())) {
+        const auto reverted = f.api.result(memberOf(revert, "method").text(), memberOf(revert, "params"));
+        CONTROL_CHECK(memberOf(reverted, "applied").asBoolean() && !memberOf(reverted, "noOp").asBoolean());
+        CONTROL_CHECK(f.trackColour(1) == colourBefore);
+        const auto& revertedChanges = memberOf(reverted, "changes");
+        if (CONTROL_CHECK(revertedChanges.size() == 1)) {
+            const auto& revertedColour = memberOf(memberOf(revertedChanges.at(0), "fields"), "colour");
+            CONTROL_CHECK(memberOf(revertedColour, "before").text() == "#00FF00"
+                          && memberOf(revertedColour, "after").text() == colourBefore);
+        }
+    }
     const auto* commitWarning = findWarning(committed, "DIALOG_CLOSE_COMMITTED");
     const auto* irreversible = findWarning(committed, "IRREVERSIBLE");
     CONTROL_CHECK(commitWarning != nullptr && (irreversible == nullptr) == revertible
@@ -517,6 +532,270 @@ void scenarioUiOnboardingWithheld()
     CONTROL_CHECK(!memberOf(prevented, "noOp").asBoolean() && f.preferences().getState().shared.onboardingShown);
 }
 
+// ---- ui.setWorkspace -----------------------------------------------------------------------------------
+
+namespace {
+
+/** The write envelope of a switch from before to after: one change of the singleton workspace, the side effect
+    workspaceSwitched, nothing else touched (an empty revisionDiff, the dirty flag as it was), view state for the undo
+    (not_persisted_state) and a revert recipe that switches back. */
+void checkSwitchResult(const JsonValue& result, const std::string& before, const std::string& after, bool dirty)
+{
+    CONTROL_CHECK(memberOf(result, "applied").asBoolean() && !memberOf(result, "noOp").asBoolean()
+                  && !memberOf(result, "dryRun").asBoolean());
+    const auto& changes = memberOf(result, "changes");
+    if (CONTROL_CHECK(changes.size() == 1)) {
+        const auto& change = changes.at(0);
+        CONTROL_CHECK(memberOf(change, "entity").text() == "ui"
+                      && memberOf(memberOf(change, "ref"), "singleton").text() == "workspace");
+        const auto& field = memberOf(memberOf(change, "fields"), "workspace");
+        CONTROL_CHECK(memberOf(field, "before").text() == before && memberOf(field, "after").text() == after
+                      && memberOf(field, "unit").isNull());
+    }
+    CONTROL_CHECK(memberOf(result, "created").size() == 0 && memberOf(result, "removed").size() == 0
+                  && memberOf(result, "idMap").size() == 0);
+    const auto& diff = memberOf(result, "revisionDiff");
+    CONTROL_CHECK(memberOf(diff, "arrangement").isNull() && memberOf(diff, "trackState").isNull()
+                  && memberOf(diff, "contents").size() == 0);
+    const auto& undo = memberOf(result, "undo");
+    CONTROL_CHECK(!memberOf(undo, "undoable").asBoolean() && memberOf(undo, "reason").text() == "not_persisted_state");
+    const auto& revert = memberOf(undo, "revert");
+    CONTROL_CHECK(memberOf(revert, "method").text() == "ui.setWorkspace"
+                  && memberOf(memberOf(revert, "params"), "workspace").text() == before
+                  && memberOf(memberOf(revert, "params"), "workspace").text() != after
+                  && !memberOf(revert, "requiresConsent").asBoolean());
+    CONTROL_CHECK(memberOf(memberOf(result, "dirty"), "before").asBoolean() == dirty
+                  && memberOf(memberOf(result, "dirty"), "after").asBoolean() == dirty);
+    CONTROL_CHECK(memberOf(memberOf(result, "ui"), "workspace").text() == after);
+    const auto& effects = memberOf(result, "sideEffects");
+    CONTROL_CHECK(effects.size() == 1);
+    const auto& switched = memberOf(effects, "workspaceSwitched");
+    CONTROL_CHECK(memberOf(switched, "from").text() == before && memberOf(switched, "to").text() == after
+                  && memberOf(switched, "revert").isNull());
+    CONTROL_CHECK(memberOf(result, "warnings").size() == 0 && memberOf(result, "job").isNull());
+}
+
+/** What the window already showing the asked workspace does: nothing is recorded, nothing is reported. */
+void checkWorkspaceNoOp(const JsonValue& result, const std::string& shown, bool dirty)
+{
+    CONTROL_CHECK(memberOf(result, "applied").asBoolean() && memberOf(result, "noOp").asBoolean());
+    CONTROL_CHECK(memberOf(result, "changes").size() == 0 && memberOf(result, "sideEffects").size() == 0
+                  && memberOf(result, "warnings").size() == 0);
+    CONTROL_CHECK(memberOf(memberOf(result, "undo"), "reason").text() == "no_op"
+                  && memberOf(memberOf(result, "undo"), "revert").isNull());
+    CONTROL_CHECK(memberOf(memberOf(result, "dirty"), "before").asBoolean() == dirty
+                  && memberOf(memberOf(result, "dirty"), "after").asBoolean() == dirty);
+    CONTROL_CHECK(memberOf(memberOf(result, "ui"), "workspace").text() == shown);
+}
+
+} // namespace
+
+void scenarioUiWorkspace()
+{
+    // The interface's default cannot switch.
+    ControlUiBridge defaults;
+    CONTROL_CHECK(!defaults.setWorkspace(true) && !defaults.setWorkspace(false));
+
+    // ui.workspace comes with the method: reported after ui.bridge, registered. Without an editor the call answers
+    // UNSUPPORTED, after the params were checked.
+    const auto plain = tableCapabilities();
+    CONTROL_CHECK(reports(plain, "ui.workspace"));
+    CONTROL_CHECK(std::find(plain.begin(), plain.end(), "ui.bridge")
+                  < std::find(plain.begin(), plain.end(), "ui.workspace"));
+    {
+        auto processor = startedProcessor();
+        auto& service = processor->getControlService();
+        if (!service.isRunning())
+            return;
+        CONTROL_CHECK(reports(service.dispatcher()->capabilities(), "ui.workspace")
+                      && service.dispatcher()->implements("ui.setWorkspace"));
+        ApiSession api;
+        if (!api.open(service))
+            return;
+        CONTROL_CHECK(
+            api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "UNSUPPORTED", "no_editor_window"));
+        CONTROL_CHECK(
+            api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"mixer"})"), "INVALID_ARGUMENT", "invalid_params"));
+    }
+    {
+        // An instance that withholds the capability answers through the listener, and the window stays as it was.
+        UiFixture withheld({"ui.workspace"});
+        if (!withheld.service().isRunning() || !withheld.api.open(withheld.service()))
+            return;
+        CONTROL_CHECK(!reports(withheld.service().dispatcher()->capabilities(), "ui.workspace"));
+        CONTROL_CHECK(withheld.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "UNSUPPORTED",
+                                         "capability_missing"));
+        CONTROL_CHECK(withheld.bridge.workspaceSwitches == 0 && withheld.bridge.view.workspace == "arrangement");
+    }
+    {
+        // An instance that withholds transport.v1 has no transport.setTempo: the tempo that the switch rewrites is
+        // reported all the same, and its side effect has no revert recipe (PROTOCOL.md section 15.2 rule 2).
+        UiFixture withheld({"transport.v1"});
+        if (!withheld.service().isRunning() || !withheld.api.open(withheld.service()))
+            return;
+        CONTROL_CHECK(!reports(withheld.service().dispatcher()->capabilities(), "transport.v1"));
+        withheld.processor->setBpm(120.27);
+        const auto result = withheld.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"));
+        CONTROL_CHECK(memberOf(result, "applied").asBoolean() && withheld.bridge.view.workspace == "pianoRoll");
+        CONTROL_CHECK(checkTempoRounded(result, 120.27, 120.3, false) != nullptr);
+        CONTROL_CHECK(memberOf(memberOf(result, "dirty"), "after").asBoolean());
+    }
+
+    UiFixture f;
+    if (!f.service().isRunning() || !f.api.open(f.service()))
+        return;
+    auto& bridge = f.bridge;
+
+    // Params (methods/ui.setWorkspace.schema.json $defs.params): workspace is required, is one of two names and is the
+    // only member. Nothing changes.
+    for (const char* params :
+         {R"({})", R"({"workspace":"mixer"})", R"({"workspace":"PianoRoll"})", R"({"workspace":1})",
+          R"({"workspace":null})", R"({"workspace":"arrangement","dryRun":true})",
+          R"({"workspace":"pianoRoll","force":true})"})
+        CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(params), "INVALID_ARGUMENT", "invalid_params"));
+    CONTROL_CHECK(bridge.workspaceSwitches == 0 && bridge.view.workspace == "arrangement" && bridge.dirtyMarks == 0);
+
+    // Arrangement to piano roll: one change, the side effect, view state. Nothing but the view: no dirty mark, an
+    // empty revisionDiff, no notification of a structure change.
+    const auto toPianoRoll = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"));
+    checkSwitchResult(toPianoRoll, "arrangement", "pianoRoll", false);
+    CONTROL_CHECK(bridge.view.workspace == "pianoRoll" && bridge.workspaceSwitches == 1 && bridge.dirtyMarks == 0
+                  && bridge.structureChanges == 0);
+
+    // The same workspace again: a no-op that does not reach the editor.
+    const auto again = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"));
+    checkWorkspaceNoOp(again, "pianoRoll", false);
+    CONTROL_CHECK(bridge.workspaceSwitches == 1);
+
+    // The revert recipe, sent as it came, switches back; its own recipe switches forward again.
+    const auto& revert = memberOf(memberOf(toPianoRoll, "undo"), "revert");
+    const auto back = f.api.result(memberOf(revert, "method").text(), memberOf(revert, "params"));
+    checkSwitchResult(back, "pianoRoll", "arrangement", false);
+    CONTROL_CHECK(bridge.view.workspace == "arrangement" && bridge.workspaceSwitches == 2);
+    const auto& forward = memberOf(memberOf(back, "undo"), "revert");
+    CONTROL_CHECK(memberOf(forward, "method").text() == "ui.setWorkspace"
+                  && memberOf(memberOf(forward, "params"), "workspace").text() == "pianoRoll");
+    const auto forwardAgain = f.api.result(memberOf(forward, "method").text(), memberOf(forward, "params"));
+    checkSwitchResult(forwardAgain, "arrangement", "pianoRoll", false);
+
+    // Back to the arrangement, and asking for it while it is shown is a no-op as well. A project with unsaved changes
+    // stays so, and the switch does not mark it.
+    checkSwitchResult(f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"arrangement"})")), "pianoRoll",
+                      "arrangement", false);
+    CONTROL_CHECK(bridge.view.workspace == "arrangement");
+    bridge.project.dirty = true;
+    checkWorkspaceNoOp(f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"arrangement"})")), "arrangement", true);
+    checkSwitchResult(f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})")), "arrangement",
+                      "pianoRoll", true);
+    CONTROL_CHECK(bridge.dirtyMarks == 0);
+
+    // The tempo (upstream behaviour): the switch moves the keyboard focus, and the focus that leaves the transport
+    // bar's BPM field commits the field, which shows the tempo with one decimal; the test bridge models it
+    // (TestUiBridge::commitBpmFieldOnViewSwitch()). A tempo with more decimals is rewritten, and the result reports it
+    // as it happened. 120.27 is no value in the middle of two roundings: it becomes 120.3.
+    const auto isNear = [](double a, double b) { return std::abs(a - b) < 1e-9; };
+    const auto readBpm = [&f] {
+        return memberOf(memberOf(f.api.result("transport.get"), "transport"), "bpm").asDouble();
+    };
+    // The change that transport.setTempo reports for the same step, 120.27 to 120.3: the shape the tempo change of a
+    // switch has to have.
+    f.processor->setBpm(120.27);
+    const auto setTempo = f.api.result("transport.setTempo", jsonOf(R"({"bpm":120.3})"));
+    const JsonValue* setTempoChange = findTempoChange(setTempo);
+    const std::string referenceChange = setTempoChange != nullptr ? toJsonString(*setTempoChange) : std::string();
+    CONTROL_CHECK(setTempoChange != nullptr);
+
+    f.processor->setBpm(120.27);
+    bridge.project.dirty = false;
+    bridge.view.workspace = "arrangement";
+    const int marksBefore = bridge.dirtyMarks;
+    const auto rewritten = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"));
+    CONTROL_CHECK(memberOf(rewritten, "applied").asBoolean() && !memberOf(rewritten, "noOp").asBoolean());
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.3) && isNear(readBpm(), 120.3));
+    if (const JsonValue* tempoChange = checkTempoRounded(rewritten, 120.27, 120.3, true))
+        CONTROL_CHECK(toJsonString(*tempoChange) == referenceChange);
+    const auto& rewrittenChanges = memberOf(rewritten, "changes");
+    CONTROL_CHECK(rewrittenChanges.size() == 2 && memberOf(rewrittenChanges.at(0), "entity").text() == "ui"
+                  && memberOf(rewrittenChanges.at(1), "entity").text() == "tempo");
+    const auto& rewrittenEffects = memberOf(rewritten, "sideEffects");
+    CONTROL_CHECK(rewrittenEffects.size() == 2 && rewrittenEffects.find("workspaceSwitched") != nullptr
+                  && memberOf(memberOf(rewrittenEffects, "workspaceSwitched"), "to").text() == "pianoRoll");
+    // The tempo is saved with the project: the project was clean, the switch marked it as changed, and the result says
+    // so. Nothing else changed.
+    CONTROL_CHECK(!memberOf(memberOf(rewritten, "dirty"), "before").asBoolean()
+                  && memberOf(memberOf(rewritten, "dirty"), "after").asBoolean()
+                  && bridge.dirtyMarks == marksBefore + 1);
+    CONTROL_CHECK(memberOf(memberOf(rewritten, "ui"), "workspace").text() == "pianoRoll"
+                  && memberOf(memberOf(rewritten, "revisionDiff"), "arrangement").isNull()
+                  && memberOf(memberOf(rewritten, "revisionDiff"), "contents").size() == 0
+                  && memberOf(rewritten, "warnings").size() == 0);
+    // The undo is the switch's, and so is the revert recipe of the call; the way back of the tempo is the recipe of its
+    // side effect, which restores it when sent as it came.
+    const auto& rewrittenUndo = memberOf(rewritten, "undo");
+    CONTROL_CHECK(memberOf(rewrittenUndo, "reason").text() == "not_persisted_state"
+                  && memberOf(memberOf(rewrittenUndo, "revert"), "method").text() == "ui.setWorkspace");
+    const auto& tempoRevert = memberOf(memberOf(rewrittenEffects, "tempoRounded"), "revert");
+    CONTROL_CHECK(!f.api.result(memberOf(tempoRevert, "method").text(), memberOf(tempoRevert, "params")).isNull());
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.27) && isNear(readBpm(), 120.27));
+
+    // A tempo with one decimal is what the field shows: nothing is rewritten, the result lists neither a change of the
+    // tempo nor tempoRounded, and the project is not marked as changed.
+    f.processor->setBpm(120.3);
+    bridge.project.dirty = false;
+    const auto oneDecimal = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"arrangement"})"));
+    checkSwitchResult(oneDecimal, "pianoRoll", "arrangement", false);
+    CONTROL_CHECK(reportsNoTempoChange(oneDecimal) && isNear(f.processor->getBpm(), 120.3) && isNear(readBpm(), 120.3));
+
+    // The window shows the view already: the call does not reach the editor, the tempo stays as it is, and nothing
+    // about it is reported.
+    f.processor->setBpm(120.27);
+    bridge.project.dirty = false;
+    const auto alreadyShown = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"arrangement"})"));
+    checkWorkspaceNoOp(alreadyShown, "arrangement", false);
+    CONTROL_CHECK(reportsNoTempoChange(alreadyShown) && isNear(f.processor->getBpm(), 120.27));
+    f.processor->setBpm(120.0);
+
+    bridge.project.dirty = false;
+    bridge.view.workspace = "arrangement";
+    const int switches = bridge.workspaceSwitches;
+
+    // Busy, as every write: a modal dialog, a pointer gesture, an import, an export, a project operation. The window
+    // keeps its workspace, and the same workspace is refused too (the busy check comes first).
+    f.openDialog(dialogOf("message"));
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "BUSY", "modal_open"));
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"arrangement"})"), "BUSY", "modal_open"));
+    f.reset();
+    bridge.busy.pointerDown = true;
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "BUSY", "pointer_down"));
+    bridge.busy.pointerDown = false;
+    bridge.busy.importRunning = true;
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "BUSY", "import_in_progress"));
+    bridge.busy.importRunning = false;
+    CONTROL_CHECK(f.processor->tryAcquireExportLock());
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "BUSY", "export_in_progress"));
+    f.processor->releaseExportLock();
+    bridge.busy.operationRunning = true;
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "BUSY", "project_operation"));
+    bridge.busy.operationRunning = false;
+    CONTROL_CHECK(bridge.view.workspace == "arrangement" && bridge.workspaceSwitches == switches);
+
+    // A bridge that cannot switch (the interface's default), and one that took the call and did not switch.
+    bridge.switchesWorkspace = false;
+    CONTROL_CHECK(
+        f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "UNSUPPORTED", "capability_missing"));
+    bridge.switchesWorkspace = true;
+    bridge.swallowsWorkspaceSwitch = true;
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "INTERNAL", ""));
+    bridge.swallowsWorkspaceSwitch = false;
+    CONTROL_CHECK(bridge.view.workspace == "arrangement" && bridge.workspaceSwitches == switches);
+
+    // Without an editor.
+    f.registered.reset();
+    CONTROL_CHECK(
+        f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "UNSUPPORTED", "no_editor_window"));
+    CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
+}
+
 // ---- The specification's vectors ---------------------------------------------------------------------
 
 namespace {
@@ -530,8 +809,12 @@ struct UiVectorSkip
 
 UiVectorSkip uiVectorSkip(const JsonValue& vector, const std::vector<std::string>& reported)
 {
-    if (memberOf(vector, "capability").text() != "ui.bridge")
+    const auto capability = memberOf(vector, "capability").text();
+    if (capability != "ui.bridge" && capability != "ui.workspace")
         return {"runs in the runner of its own capability"};
+    if (capability == "ui.workspace" && memberOf(vector, "type").text() == "scenario")
+        return {"runs in the selection runner (scenarioSelectionVectors): it needs clips, the selection and the "
+                "editing scheme"};
     if (memberOf(vector, "type").text() != "request" || memberOf(vector, "session").text() != "authenticated")
         return {"only authenticated request vectors are run here"};
     if (memberOf(memberOf(vector, "request"), "method").text() == "ui.setSelection")
@@ -613,9 +896,9 @@ std::string runUiVector(const JsonValue& vector)
     return failure;
 }
 
-/** The vectors of ui/ that must run and pass headless; the vectors of ui.setSelection run in scenarioSelectionVectors,
-    and ui/dismiss-confirm-commit needs tracks.v1 for its revert recipe (scenarioUiDismiss covers the commit without
-    it). */
+/** The vectors of ui/ that must run and pass headless; the vectors of ui.setSelection and the two scenarios of
+    ui.setWorkspace run in scenarioSelectionVectors, and ui/dismiss-confirm-commit needs tracks.v1 for its revert recipe
+    (scenarioUiDismiss covers the commit without it). */
 const char* const kMustRunUiVectors[] = {
     "ui/dismiss-commits-on-close",
     "ui/dismiss-dialog",
@@ -627,6 +910,10 @@ const char* const kMustRunUiVectors[] = {
     "ui/dismiss-unknown-dialog",
     "ui/get-state-dialog",
     "ui/get-state-ok",
+    "ui/set-workspace-busy-modal",
+    "ui/set-workspace-invalid",
+    "ui/set-workspace-noop",
+    "ui/set-workspace-piano-roll",
 };
 
 } // namespace
@@ -648,6 +935,7 @@ void scenarioUiVectors()
     int skipped = 0;
     int pending = 0;
     std::set<std::string> passedIds;
+    VectorReport report("ControlProcessorTests.UiVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -656,11 +944,13 @@ void scenarioUiVectors()
         const auto id = memberOf(vector, "id").text();
         if (const auto skip = uiVectorSkip(vector, reported); !skip.reason.empty()) {
             ++(skip.pending ? pending : skipped);
+            report.skip(id, skip.reason);
             note((skip.pending ? "PENDING " : "SKIP ") + id + ": " + skip.reason);
             continue;
         }
         const auto started = Clock::now();
         const auto failure = runUiVector(vector);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty())) {
             ++passed;
             passedIds.insert(id);
@@ -668,6 +958,7 @@ void scenarioUiVectors()
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     for (const char* id : kMustRunUiVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
     if (reports(reported, "tracks.v1"))

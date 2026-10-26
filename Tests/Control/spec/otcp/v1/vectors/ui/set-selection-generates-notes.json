@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "ui/set-selection-generates-notes",
   "type": "request",
-  "description": "In the openDyne scheme, selecting a clip whose analysis has finished and whose notes were never generated makes OpenTune generate them, with no undo entry, and mark the project as changed (PROTOCOL.md section 21 rule 3): sideEffects.notesGenerated, the warnings SELECTION_GENERATED_NOTES and IRREVERSIBLE. The clip has a reference binding and experimental features are on, so reference alignment analysis is queued for both clips as well (sideEffects.referenceAnalysisQueued, warning REFERENCE_ANALYSIS_QUEUED).",
+  "description": "In the openDyne scheme, selecting a clip whose analysis has finished and whose notes were never generated makes OpenTune generate them, with no undo entry, and mark the project as changed (PROTOCOL.md section 21 rule 3): sideEffects.notesGenerated, the warnings SELECTION_GENERATED_NOTES and IRREVERSIBLE. Precondition: no clip is selected and track 0 is the active track (OpenTune always has an active track), which is the state of a new project; import.start selects the last imported clip and activates its track, so a client that imported the clips resets the selection first.",
   "capability": "ui.bridge",
   "since": "1.0",
   "method": "ui.setSelection",
@@ -10,19 +10,10 @@
   "given": {
     "dirty": false,
     "editingScheme": "openDyne",
-    "preferences": { "experimentalFeatures": true },
     "clips": [
       {
         "bind": "clip",
         "trackId": 0,
-        "startTimelineSec": 2,
-        "durationSec": 6,
-        "analysis": "ready",
-        "referenceClip": "ref"
-      },
-      {
-        "bind": "ref",
-        "trackId": 1,
         "startTimelineSec": 2,
         "durationSec": 6,
         "analysis": "ready"
@@ -48,7 +39,6 @@
           "ref": { "singleton": "selection" },
           "label": { "$any": true },
           "fields": {
-            "activeTrackId": { "before": null, "after": 0, "unit": null },
             "selectedPlacementIds": {
               "before": [],
               "after": [{ "$ref": "clip.placementId" }],
@@ -79,7 +69,10 @@
       "undo": {
         "undoable": false,
         "reason": "not_persisted_state",
-        "revert": null
+        "revert": {
+          "method": "ui.setSelection",
+          "params": { "trackId": 0 }
+        }
       },
       "dirty": { "before": false, "after": true },
       "ui": { "$any": true },
@@ -87,13 +80,6 @@
         "notesGenerated": {
           "contentId": { "$ref": "clip.contentId" },
           "noteCount": { "$any": "integer" },
-          "revert": null
-        },
-        "referenceAnalysisQueued": {
-          "contentIds": [
-            { "$ref": "clip.contentId" },
-            { "$ref": "ref.contentId" }
-          ],
           "revert": null
         }
       },
@@ -106,11 +92,6 @@
         {
           "code": "IRREVERSIBLE",
           "subject": { "contentId": { "$ref": "clip.contentId" } },
-          "data": null
-        },
-        {
-          "code": "REFERENCE_ANALYSIS_QUEUED",
-          "subject": { "placementId": { "$ref": "clip.placementId" } },
           "data": null
         }
       ],

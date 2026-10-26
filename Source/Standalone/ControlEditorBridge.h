@@ -19,7 +19,8 @@ class OpenTuneAudioProcessorEditor;
  * the service never starts and never calls the bridge.
  *
  * ControlEditorBridge.cpp covers the general part (project information, busy state, structure changes, the steps
- * after an undo or redo, the refresh after a time-grid edit, the view, the import focus, objects the editor owns);
+ * after an undo or redo, the refresh after a time-grid edit, the view, the import focus, objects the editor owns, the
+ * close of the application's window);
  * ControlEditorBridgeProject.cpp the project flows (the steps after a save or an open, the recent projects, the flag
  * of a running project operation); dialogs, tracks and preferences follow in files of their own
  * (ControlEditorBridge<Domain>.cpp).
@@ -41,7 +42,6 @@ public:
     void onStructureChanged() override;
     void onUndoRedoApplied() override;
     void onTimeGridChanged() override;
-    void onReferenceBindingChanged() override;
     void onProjectReloaded() override;
     void onProjectSaved() override;
     void onRecentProjectsChanged() override;
@@ -55,6 +55,8 @@ public:
     ProjectSession* projectSession() override;
     juce::ThreadPool* projectWorkerPool() override;
     juce::AudioDeviceManager* audioDevice() override;
+    bool canQuit() const override;
+    bool requestQuit() override;
 
     // ---- Tracks and transport (ControlEditorBridgeTracks.cpp) ----
     bool setVisibleTrackCount(int count) override;
@@ -73,12 +75,32 @@ public:
     bool select(int trackId, std::uint64_t placementId, bool openEditor) override;
     std::optional<UiScale> scaleForSelection(int trackId, std::uint64_t placementId) const override;
 
+    // ---- Workspace (ControlEditorBridgeWorkspace.cpp) ----
+    bool setWorkspace(bool arrangement) override;
+
     // ---- Preferences and audio device (ControlEditorBridgePrefs.cpp) ----
     void onPreferencesChanged() override;
     std::optional<bool> editingSchemeApplied(bool notesPrimary) const override;
     bool prepareAudioDeviceSwitch(juce::AudioDeviceManager& manager, const std::string& reason) override;
 
 private:
+    /** What a view switch must leave as it was: the project's changed mark and the tempo and time signature of the
+        transport bar (ControlEditorBridgeWorkspace.cpp). */
+    struct ViewSwitchBaseline
+    {
+        bool dirty = false;
+        double bpm = 0.0;
+        int timeSignatureNumerator = 0;
+        int timeSignatureDenominator = 0;
+    };
+
+    /** Reads the baseline before a view switch. Message thread. */
+    ViewSwitchBaseline viewSwitchBaseline() const;
+
+    /** After a view switch: takes back the project's changed mark when only the commit of the transport bar's BPM
+        field set it (see ControlEditorBridgeWorkspace.cpp). Message thread. */
+    void settleViewSwitch(const ViewSwitchBaseline& baseline);
+
     /** The placement the arrangement selects on its active track, or 0. */
     std::uint64_t activeSelection() const;
 

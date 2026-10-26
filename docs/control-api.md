@@ -30,6 +30,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 | 非官方测试版 | 尚未发布 |
 | MCP 服务（npm `@synchain/opentune-mcp`） | 尚未发布 |
 
+**已知限制（参考轨道）**：本测试版里 OpenTune 自带的实验性参考轨道仍然存在（在首选项「实验功能」打开后出现）。控制接口既不读取也不修改它，唯一的例外是 `content.getDetails` 的 `autoModes.uiButtonRuns`：它如实报告 AUTO 按钮此刻会运行什么（片段有可用的参考绑定时是 `reference`），而 `autoModes.available` 永远不含 `reference`，`content.autoTune` 也没有这个模式。rebase 到最新上游之后，参考轨道会随上游一起消失。
+
 ## 锁定的上游基点
 
 开发期间，本 fork 固定在一个上游提交上，不随上游同步：
@@ -92,17 +94,21 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 | 方法 | 能力 | 作用 |
 |---|---|---|
-| `prefs.get` | `read.v1` | 读取处理设置（A4 频率、编辑方案、混合模式、实验功能）、是否已完成首次引导、界面语言（经本协议只读）与最近工程列表。无法确定的处理设置为 null，并在 `processing.nullReasons` 里说明原因。最近工程的路径是不可信数据。 |
-| `prefs.set` | `prefs.write` | 照首选项窗口的做法修改 `tuningHz`（400–500，A4 的频率）、`editingScheme`（`openTune` 或 `openDyne`）、`hybridMode` 与 `experimentalFeatures`（显示或隐藏参考绑定等实验功能）。与当前值相同的项不算改动。 |
+| `prefs.get` | `read.v1` | 读取处理设置（A4 频率、编辑方案、混合模式、实验功能、声码器权重、渲染优先级、音高模型，以及可选值 `processing.options`）、是否已完成首次引导、界面语言（经本协议只读）与最近工程列表。无法确定的处理设置为 null，并在 `processing.nullReasons` 里说明原因。最近工程的路径是不可信数据。 |
+| `prefs.set` | `prefs.write` | 照首选项窗口的做法修改 `tuningHz`（400–500，A4 的频率）、`editingScheme`（`openTune` 或 `openDyne`）、`hybridMode` 与 `experimentalFeatures`（显示或隐藏 OpenTune 的实验功能）、`vocoderWeight`（声码器权重，取 `processing.options.vocoderWeight` 里的文件名）、`renderingPriority`（`gpuFirst` 或 `cpuFirst`）与 `f0Model`（音高模型，取 `processing.options.f0Model`）。与当前值相同的项不算改动。 |
 | `audio.get` | `audio.device` | 读取 Standalone 的音频设备：是否有设备在运行、设备类型、输出设备、采样率、缓冲区大小与输出声道对，以及当前设备类型与设备提供的可选值（`available`）。没有运行的设备时，其余成员为 null，原因是 `no_audio_device`。设备类型与设备名来自操作系统，是不可信数据。 |
 | `audio.set` | `audio.device` | 照音频设置页的做法修改 `deviceType`、`outputDevice`、`sampleRateHz`、`bufferSizeFrame`、`outputChannelPair`：给出的成员替换当前设置，设备随之重新打开，重新打开期间播放会停止。 |
 
 要点：
 
 - `tuningHz` 只影响此后的分析与渲染，不会重新计算已有结果（警告 `NOT_RETROACTIVE`）。`hybridMode` 的改动会让 OpenTune 重新渲染所有内容（`sideEffects.reRenderQueued`）。
-- OpenTune 异步地把新的编辑方案应用到编辑器，所以改动 `editingScheme` 的调用把全部改动交给一个 `prefsApply` 任务，任务在编辑器应用完方案后结束，不能取消。切换到 `openDyne` 可能让 OpenTune 为钢琴卷帘里打开的片段生成音符，这一步没有撤销条目，结果里有 `sideEffects.notesGenerated` 与警告 `SCHEME_GENERATED_NOTES`、`IRREVERSIBLE`，工程也会被标记为已修改。
-- 声码器权重、渲染优先级、音高模型与参考对齐模式在当前版本不能设置。
-- `audio.set` 只接受 `audio.get` 的 `available` 里列出的值，否则返回 `INVALID_ARGUMENT(audio_setting_unavailable)`，什么都不改。设备打不开时，服务端像设置页一样恢复原来的设置，调用以 `IO_ERROR(device_open_failed)` 失败，`executed` 为 false；原来的设置也打不开时，`executed` 为 true，且没有设备在运行（`audio.get` 会如实报告）。失败信息会说明是哪一步出了问题，以及原设置是否已恢复。
+- OpenTune 异步地把新的编辑方案应用到编辑器，所以改动 `editingScheme` 的调用把全部改动交给一个 `prefsApply` 任务，任务在编辑器应用完方案后结束，不能取消。切换到 `openDyne` 可能让 OpenTune 为钢琴卷帘里打开的片段生成音符，这一步没有撤销条目，结果里有 `sideEffects.notesGenerated` 与警告 `SCHEME_GENERATED_NOTES`、`IRREVERSIBLE`，工程也会被标记为已修改。这些音符无法随任务失败而撤回：任务在编辑器生成音符之后失败（例如声码器没有恢复）时，音符保留，工程仍标记为已修改，错误信息说明生成并保留了音符（只写内容句柄，不写文件名），`executed` 为 true。
+- `vocoderWeight` 与 `f0Model` 只接受 `prefs.get` 的 `processing.options` 里列出的值（权重文件存在才会列出），否则返回 `INVALID_ARGUMENT(option_unavailable)`，什么都不改，错误信息只写成员名、不写取值。`renderingPriority` 的取值固定。
+- OpenTune 异步地切换声码器权重与渲染优先级：处理器只把命令交给渲染运行时就返回，运行时稍后才让声码器进入「重新配置」。所以改动 `vocoderWeight` 或 `renderingPriority` 的调用同样把全部改动交给 `prefsApply` 任务，任务在声码器重新就绪、不在重新配置且运行时的控制线程空闲后结束，不能取消。改动前声码器就不可用（没有声码器，或正在重新加载）时不等待，任务在改完后立即结束。声码器在限定时间（60 秒）内没有恢复时，任务把全部改动撤回（运行时也会再次收到原来的权重或优先级并重新加载，期间 `session.info` 的 `processing.vocoderReconfiguring` 为 true，之后 `processing.vocoderReady` 表示能否加载成功），以 `MODEL_UNAVAILABLE(vocoder_not_ready)` 失败，可重试，`executed` 为 false。若运行时已经结束切换却没有声码器（权重或后端加载失败），任务不再等到上限，立即撤回全部改动，以 `MODEL_UNAVAILABLE(vocoder_load_failed)` 失败，不可重试（同一个权重会再次失败），`executed` 为 false。等待超时而撤回时 `executed` 同样是 false，但如果原来的切换只是慢，稍后仍会完成，清空缓存并重新渲染，被撤回的切换又会重新渲染一次，最终状态一致。改动 `vocoderWeight` 会让 OpenTune 在新权重加载完成后重新渲染所有内容，每次改动 `vocoderWeight` 的结果里都有 `sideEffects.reRenderQueued`，任务有没有等待声码器都一样（任务没有等待时，重新渲染在任务结束之后才开始；权重加载失败则不会重新渲染，`session.info` 的 `processing.vocoderReady` 保持 false）；改动 `renderingPriority` 不会重新渲染。
+- `f0Model`：处理器拒绝切换音高模型时，调用以 `MODEL_UNAVAILABLE(model_missing)` 失败，`executed` 为 false，同一调用里的其他改动也都不生效。当前版本的 OpenTune 只有 `fcpe` 一个模型。
+- 还原配方：`prefs.set` 的结果没有撤销条目（`ui_parity`），还原配方是用原来的值再调一次 `prefs.set`。原来的声码器权重名若无法放上线路（不是合法 UTF-8、为空或超过 64 个码点），配方里省略这一项；这次调用只改了它时，配方为 null（原因仍是 `ui_parity`，结果带警告 `IRREVERSIBLE`），不会给出没有参数的 `prefs.set`。
+- 与规范的关系：`processing.options`、`vocoderWeight`、`renderingPriority`、`f0Model` 以及原因码 `option_unavailable`、`vocoder_not_ready`、`vocoder_load_failed` 随规范 rc.6 登记（rc.7 去掉了 `referenceAlignMode`），仓库里的规范副本是 rc.7；与向量的差别（目前没有）记录在 `Source/Control/README.md` 的「Deviations from the vectors」。
+- `audio.set` 只接受 `audio.get` 的 `available` 里列出的值，否则返回 `INVALID_ARGUMENT(audio_setting_unavailable)`。设备类型和输出设备在动手之前就按清单检查，不在清单里时什么都不改；采样率、缓冲区大小和输出声道对要等将要运行的设备打开之后才能检查，所以同一次调用里前面的步骤（换设备类型、换输出设备）可能已经改过设备：这时服务端像设置页一样先把原来的设置恢复回去，再返回这个错误。设备打不开时，服务端同样恢复原来的设置，调用以 `IO_ERROR(device_open_failed)` 失败，`executed` 为 false；原来的设置也打不开时，`executed` 为 true，且没有设备在运行（`audio.get` 会如实报告）。前面的步骤已经改过设备、后面的值又不在清单里、原来的设置也恢复不了时同样如此：返回的是 `IO_ERROR(device_open_failed)`，`executed` 为 true，而不是 `INVALID_ARGUMENT`。失败信息会说明是哪一步出了问题，以及原设置是否已恢复。
 - 在 ASIO 设备上切换设备类型或输出设备之前，服务端会像设置页一样先把 ASIO 采样率恢复为系统共享渲染率；恢复无法确认时调用失败，当前设备保持不变。
 
 ## 与 OpenTune MCP Server 的关系

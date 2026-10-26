@@ -16,7 +16,6 @@
 #include "Utils/TimeCoordinate.h"
 
 #include <algorithm>
-#include <cfloat>
 #include <cmath>
 #include <cstdint>
 #include <limits>
@@ -47,6 +46,12 @@ constexpr double kTimelineEpsilon = 1.0 / TimeCoordinate::kRenderSampleRate;
 constexpr double kSampleGridTolerance = 1.0e-9;
 /** mergePlacements(): gains this close are equal. */
 constexpr float kGainTolerance = 1.0e-6f;
+/** The largest clip gain OpenTune's interface offers, as a linear factor. The interface's one bounded gain range is the
+    volume knob (Source/Standalone/UI/TrackPanelComponent.h, setRange(0.0, 4.0, 0.001) at L313-L314); the clip-gain drag
+    (ArrangementViewComponent.cpp, mouseDrag at L2446-L2447) has no bound of its own, so the API applies the interface's
+    bounded range here, mirrored by the drift pin `track-volume-range`. Zero is the lower end: the params schema keeps
+    gainLinear at 0 or more and StandaloneArrangement::setPlacementGain() floors the stored value at 0. */
+constexpr double kMaxClipGainLinear = 4.0;
 
 // ---- Shared pieces ------------------------------------------------------------------------------
 
@@ -91,43 +96,20 @@ auto findIn(Placements& placements, std::uint64_t placementId) -> decltype(&plac
 
 /** Records one change of entity placement for every clip that is in both lists and differs (PROTOCOL.md section 14.3),
     in the order of after, and touches it so that the result reports its geometryHash. */
-void describeChanges(ControlOpContext& context, ControlWriteEnvelope& envelope,
-                     const std::vector<ControlPlacementRef>& before, const std::vector<ControlPlacementRef>& after)
+void describeChanges(ControlWriteEnvelope& envelope, const std::vector<ControlPlacementRef>& before,
+                     const std::vector<ControlPlacementRef>& after)
 {
-    const auto reference = [&context](std::uint64_t id) {
-        return id != 0 ? controlPlacementId(context, id) : std::string();
-    };
     for (const auto& now : after) {
         const auto* was = findIn(before, now.placement.placementId);
         if (was == nullptr)
             continue;
-        auto fields = controlPlacementChangeFields(*was, now, reference(was->placement.referencePlacementId),
-                                                   reference(now.placement.referencePlacementId));
+        auto fields = controlPlacementChangeFields(*was, now);
         if (fields.size() == 0)
             continue;
         envelope.addChange("placement", placementRef(now.placementId), JsonValue::string(placementLabel(now)),
                            std::move(fields));
         envelope.touchPlacement(now.placement.placementId);
     }
-}
-
-/** The arrangement as it is once the clips of removedIds are gone: they are not in the list, and a clip that was bound
-   to one of them has no binding any more (StandaloneArrangement::retirePlacement() clears them). Used to predict delete
-   and split. */
-std::vector<ControlPlacementRef> withoutClips(std::vector<ControlPlacementRef> model,
-                                              const std::vector<std::uint64_t>& removedIds)
-{
-    const auto removed = [&removedIds](std::uint64_t id) {
-        return std::find(removedIds.begin(), removedIds.end(), id) != removedIds.end();
-    };
-    model.erase(
-        std::remove_if(model.begin(), model.end(),
-                       [&removed](const ControlPlacementRef& ref) { return removed(ref.placement.placementId); }),
-        model.end());
-    for (auto& ref : model)
-        if (removed(ref.placement.referencePlacementId))
-            ref.placement.referencePlacementId = 0;
-    return model;
 }
 
 /** Records a new clip of the arrangement in created and touches it; its label once it is found. */
@@ -333,8 +315,7 @@ enum class OpKind {
     SetFade,
     Split,
     Merge,
-    Delete,
-    SetReference
+    Delete
 };
 
 /** One op of arrangement.edit (methods/arrangement.edit.schema.json $defs.op*). */
@@ -347,8 +328,6 @@ struct EditOp
     ControlHandle trailing;
     /** delete: the clips. */
     std::vector<ControlHandle> placements;
-    /** setReference: the reference clip; nullopt removes the binding. */
-    std::optional<ControlHandle> reference;
     std::optional<int> toTrackId;
     std::optional<double> startTimelineSec;
     /** trim: the start edge (else the end edge). */
@@ -448,21 +427,8 @@ bool parseOp(const JsonValue& item, EditOp& out, std::string& why)
     } else if (name == "delete") {
         out.kind = OpKind::Delete;
         ok = reader.onlyMembers({"op", "placementIds"}) && parseDeleteIds(reader, item, out);
-    } else if (name == "setReference") {
-        out.kind = OpKind::SetReference;
-        const JsonValue* reference = item.find("referencePlacementId");
-        ok = reader.onlyMembers({"op", "placementId", "referencePlacementId"})
-             && readPlacement(reader, "placementId", out.placement);
-        if (ok && reference == nullptr)
-            ok = reader.fail("referencePlacementId is required (null removes the binding)");
-        else if (ok && !reference->isNull()) {
-            out.reference = reference->isString() ? controlParseHandle(ControlHandleKind::Placement, reference->text())
-                                                  : std::nullopt;
-            if (!out.reference)
-                ok = reader.fail("referencePlacementId must be a placementId or null");
-        }
     } else {
-        why = "op must be move, trim, setGain, setFade, split, merge, delete or setReference";
+        why = "op must be move, trim, setGain, setFade, split, merge or delete";
         return false;
     }
     if (!ok)
@@ -522,7 +488,7 @@ struct ResolvedOp
     const EditOp* op = nullptr;
     /** The clip of the op (merge: the leading clip). */
     ControlPlacementRef clip;
-    /** merge: the trailing clip; setReference: the reference clip. */
+    /** merge: the trailing clip. */
     std::optional<ControlPlacementRef> other;
     /** delete: the clips. */
     std::vector<ControlPlacementRef> clips;
@@ -592,41 +558,6 @@ void warnClamped(ControlWriteEnvelope& envelope, const ControlPlacementRef& clip
     data.appendMember("requested", std::move(requested));
     data.appendMember("applied", std::move(applied));
     envelope.addWarning("CLAMPED", placementRef(clip.placementId), std::move(data));
-}
-
-/** StandaloneArrangement::validateReferenceBindingUnlocked() on the model: following the reference clip's own
-    bindings leads back to the clip. */
-bool formsCycle(const std::vector<ControlPlacementRef>& model, std::uint64_t target, std::uint64_t reference)
-{
-    std::uint64_t current = reference;
-    for (std::size_t step = 0; step <= model.size() && current != 0; ++step) {
-        if (current == target)
-            return true;
-        const auto* ref = findIn(model, current);
-        current = ref != nullptr ? ref->placement.referencePlacementId : 0;
-    }
-    return false;
-}
-
-/**
- * The binding OpenTune accepts (StandaloneArrangement::validateReferenceBindingUnlocked(), behind the reference binding
- * menu of the editor): removing it always; a reference clip that is not the clip itself, is live, forms no cycle and
- * overlaps the clip in time by more than nothing.
- */
-bool referenceEligible(const std::vector<ControlPlacementRef>& model, const ControlPlacementRef& clip,
-                       std::uint64_t reference)
-{
-    if (reference == 0)
-        return true;
-    const auto* ref = findIn(model, reference);
-    if (ref == nullptr || reference == clip.placement.placementId
-        || formsCycle(model, clip.placement.placementId, reference))
-        return false;
-    const auto& a = clip.placement;
-    const auto& b = ref->placement;
-    return std::min(a.timelineEndSeconds(), b.timelineEndSeconds())
-               - std::max(a.timelineStartSeconds, b.timelineStartSeconds)
-           > 0.0;
 }
 
 /**
@@ -746,16 +677,12 @@ Result<JsonValue> runSplit(ControlOpContext& context, const EditParams& params, 
     if (params.dryRun) {
         // The two new clips get their placementIds when they are made; the prediction names the clip they replace.
         envelope.addRemoved("placement", placementRef(clip.placementId), JsonValue::string(label));
-        // Clips bound to the split clip lose their binding (StandaloneArrangement::retirePlacement()).
-        describeChanges(context, envelope, controlLivePlacements(context),
-                        withoutClips(controlLivePlacements(context), {clip.placement.placementId}));
         addWarnings();
         return envelope.predicted(context);
     }
 
     // The split key of the arrangement view: splitPlacementAtSeconds() at the clip's position on its track, then
     // SplitPlacementAction on the undo history.
-    const auto before = controlLivePlacements(context);
     const int index = processor.findPlacementIndexById(clip.trackId, clip.placement.placementId);
     const auto outcome = processor.splitPlacementAtSeconds(clip.trackId, index, at);
     if (!outcome)
@@ -773,8 +700,6 @@ Result<JsonValue> runSplit(ControlOpContext& context, const EditParams& params, 
     const auto leading = controlPlacementId(context, outcome->leadingPlacementId);
     const auto trailing = controlPlacementId(context, outcome->trailingPlacementId);
     addIdMapEntry(envelope, "split", {clip.placementId}, {leading, trailing});
-    // Clips bound to the split clip lose their binding (StandaloneArrangement::retirePlacement()).
-    describeChanges(context, envelope, before, after);
     addWarnings();
     auto merge = JsonValue::object();
     merge.appendMember("op", JsonValue::string("merge"));
@@ -810,7 +735,6 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
 
     // The merge key of the arrangement view: mergePlacements() with the leading clip's position on its track, then
     // MergePlacementAction on the undo history.
-    const auto before = controlLivePlacements(context);
     const int index = arrangement->findPlacementIndexById(leading.trackId, leading.placement.placementId);
     const auto outcome = processor.mergePlacements(leading.trackId, leading.placement.placementId,
                                                    trailing.placement.placementId, index);
@@ -828,7 +752,6 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
     addCreatedClip(envelope, after, outcome->mergedPlacementId);
     const auto merged = controlPlacementId(context, outcome->mergedPlacementId);
     addIdMapEntry(envelope, "merge", {leading.placementId, trailing.placementId}, {merged});
-    describeChanges(context, envelope, before, after);
     envelope.addWarning("UPSTREAM_UNDO_DEFECT", placementRef(leading.placementId));
     // Splitting the merged clip at the former boundary takes it back, with new placementIds, but a split snaps to an
     // analysis frame boundary. checkSplit() takes an absolute timeline position (as runSplit() passes it) and says
@@ -839,6 +762,9 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
     //    done either, IRREVERSIBLE with the check's kind and reason in data;
     //  - the check fails with NOT_READY (the pitch analysis of the merged content is still pending): a passing
     //    state, so the split recipe is given as usual and answers NOT_READY itself until the analysis is done.
+    //    That recipe is optimistic: the cut point could not be checked yet, so once the analysis is ready the split
+    //    may snap to another frame than the former boundary (the split then reports SPLIT_SNAPPED) or be refused
+    //    (split_out_of_range). It is not guaranteed to restore the former clips' boundary.
     const double boundary = trailing.placement.timelineStartSeconds;
     const auto* mergedClip = findIn(after, outcome->mergedPlacementId);
     bool giveRecipe = false;
@@ -885,7 +811,6 @@ Result<JsonValue> runDelete(ControlOpContext& context, const EditParams& params,
         return controlOpError("INTERNAL", "", "the undo history of the control API is not available");
 
     ControlWriteEnvelope envelope(context);
-    const auto before = controlLivePlacements(context);
     std::vector<std::size_t> deleted;
     std::vector<ControlOriginAction::Inner> inner;
     if (!params.dryRun) {
@@ -929,15 +854,6 @@ Result<JsonValue> runDelete(ControlOpContext& context, const EditParams& params,
         });
         envelope.addRemoved("content", contentRef(controlContentId(context, key)),
                             JsonValue::string("Content of " + placementLabel(*clip)));
-    }
-    if (params.dryRun) {
-        // Clips bound to a deleted clip lose their binding (StandaloneArrangement::retirePlacement()).
-        std::vector<std::uint64_t> ids;
-        for (const auto& clip : item.clips)
-            ids.push_back(clip.placement.placementId);
-        describeChanges(context, envelope, before, withoutClips(before, ids));
-    } else {
-        describeChanges(context, envelope, before, controlLivePlacements(context));
     }
     for (const auto& clip : item.clips) {
         envelope.addWarning("UPSTREAM_UNDO_DEFECT", placementRef(clip.placementId));
@@ -1037,17 +953,6 @@ bool applyPlanned(OpenTuneAudioProcessor& processor, StandaloneArrangement& arra
                                                                        now.fadeOutDuration),
                                     "FadeChangeAction", {track}));
             return true;
-        case OpKind::SetReference:
-            if (was.referencePlacementId == now.referencePlacementId)
-                return true;
-            // The editor's reference binding menu: setPlacementReferencePlacement(), recorded as
-            // ReferenceBindingAction.
-            if (!arrangement.setPlacementReferencePlacement(track, id, now.referencePlacementId))
-                return false;
-            inner.push_back(innerOf(std::make_unique<ReferenceBindingAction>(
-                                        processor, track, id, was.referencePlacementId, now.referencePlacementId),
-                                    "ReferenceBindingAction", {track}));
-            return true;
         case OpKind::Split:
         case OpKind::Merge:
         case OpKind::Delete:
@@ -1106,10 +1011,14 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
                 break;
             }
             case OpKind::SetGain: {
-                // The clip gain has no upper limit in OpenTune; the stored gain is a float.
+                // OpenTune's interface offers the gain range 0 to 4 linear (the volume knob, TrackPanelComponent.h
+                // L313-L314); the clip-gain drag itself has no bound (ArrangementViewComponent.cpp L2446-L2447), so the
+                // API applies the interface's bounded range and reports CLAMPED in the unit the caller named. The
+                // lower end 0 is kept by the params schema (gainLinear minimum 0) and setPlacementGain()'s floor.
                 double linear = op.gainLinear ? *op.gainLinear : std::pow(10.0, *op.gainDb / 20.0);
-                if (!(linear <= static_cast<double>(FLT_MAX))) {
-                    linear = FLT_MAX;
+                // The negated test also clamps NaN (a JSON number cannot be NaN; this only guards the arithmetic).
+                if (!(linear <= kMaxClipGainLinear)) {
+                    linear = kMaxClipGainLinear;
                     if (op.gainDb)
                         warnClamped(envelope, *clip, "gainDb", controlJsonNumber(*op.gainDb, 3),
                                     controlJsonNumber(*controlLinearToDb(linear), 3));
@@ -1133,16 +1042,6 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
                 limit("fadeOutSec", op.fadeOutSec, p.fadeOutDuration);
                 break;
             }
-            case OpKind::SetReference: {
-                const std::uint64_t reference = item.other ? item.other->placement.placementId : 0;
-                if (!referenceEligible(model, *clip, reference))
-                    return controlOpError("INVALID_ARGUMENT", "reference_ineligible",
-                                          "the reference clip is the clip itself, does not overlap it in time, or "
-                                          "would form a cycle of bindings");
-                p.referencePlacementId = reference;
-                envelope.addWarning("EXPERIMENTAL_FEATURE", placementRef(clip->placementId));
-                break;
-            }
             case OpKind::Split:
             case OpKind::Merge:
             case OpKind::Delete:
@@ -1161,7 +1060,7 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
     }
 
     if (params.dryRun) {
-        describeChanges(context, envelope, before, model);
+        describeChanges(envelope, before, model);
         warnOverlaps(envelope, model, reshaped);
         revealTracks(context, envelope, plannedReceiving, true);
         return envelope.predicted(context);
@@ -1172,7 +1071,6 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
     // the record of its fades).
     std::optional<juce::String> description;
     bool refused = false;
-    bool referenceChanged = false;
     for (const auto& step : plan) {
         const auto count = inner.size();
         if (!applyPlanned(processor, *arrangement, step, inner)) {
@@ -1181,8 +1079,6 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
         }
         if (step.trackBefore != step.trackAfter)
             receivingTracks.push_back(step.trackAfter);
-        if (step.kind == OpKind::SetReference && step.before.referencePlacementId != step.after.referencePlacementId)
-            referenceChanged = true;
         if (!description && inner.size() > count)
             description = inner.back().action->getDescription();
     }
@@ -1191,10 +1087,6 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
     if (changed) {
         pushed = pushEntry(context, history, std::move(inner), description);
         afterChange(context);
-        // The binding menu of the editor refreshes the reference context after every binding it makes.
-        if (referenceChanged)
-            if (auto* bridge = context.bridge())
-                bridge->onReferenceBindingChanged();
         revealTracks(context, envelope, receivingTracks, false);
     }
     if (refused) {
@@ -1206,7 +1098,7 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
             "made are one undo entry; read the project again");
     }
     const auto after = controlLivePlacements(context);
-    describeChanges(context, envelope, before, after);
+    describeChanges(envelope, before, after);
     warnOverlaps(envelope, after, reshaped);
     if (changed)
         envelope.setUndoable(pushed.undoId, pushed.description, pushed.names);
@@ -1232,10 +1124,8 @@ Result<JsonValue> runEdit(ControlOpContext& context, const EditParams& params)
             if (!clip.ok())
                 return clip.error();
             item.clip = clip.value();
-            const std::optional<ControlHandle> other =
-                op.kind == OpKind::Merge ? std::optional(op.trailing) : op.reference;
-            if (other) {
-                auto otherClip = controlResolvePlacement(context, *other);
+            if (op.kind == OpKind::Merge) {
+                auto otherClip = controlResolvePlacement(context, op.trailing);
                 if (!otherClip.ok())
                     return otherClip.error();
                 item.other = otherClip.value();
@@ -1375,7 +1265,6 @@ Result<JsonValue> runCopy(ControlOpContext& context, const CopyParams& params)
             placement.fadeOutDuration = source.fadeOutDuration;
             placement.name = source.name;
             placement.clipInSeconds = 0.0;
-            placement.referencePlacementId = source.referencePlacementId;
         }
         placement.placementId = 0;
         placement.contentKey = contents[i];

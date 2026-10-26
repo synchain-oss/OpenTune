@@ -40,6 +40,19 @@ JsonValue fieldChange(JsonValue before, JsonValue after, const char* unit)
     return field;
 }
 
+/** The member bpm of a tempo change: {before, after, unit bpm}, at the three decimals the tempo is reported with. */
+JsonValue tempoBpmField(double before, double after)
+{
+    return fieldChange(controlJsonNumber(before, 3), controlJsonNumber(after, 3), "bpm");
+}
+
+/** Records the change of the singleton tempo with the members in fields (bpm, timeSignature): the one builder of
+    the change that transport.setTempo and the view switches of ui.setWorkspace and ui.setSelection report. */
+void addTempoChange(ControlWriteEnvelope& envelope, JsonValue fields)
+{
+    envelope.addChange("tempo", singletonRef("tempo"), JsonValue::string("Tempo"), std::move(fields));
+}
+
 JsonValue signatureJson(int numerator, int denominator)
 {
     auto json = JsonValue::object();
@@ -133,7 +146,8 @@ Result<JsonValue> runControl(ControlOpContext& context, const ControlParams& par
     ControlWriteEnvelope envelope(context);
     const auto device = controlAudioDeviceState(context);
     const auto before = readPlayState(processor);
-    // Where the audio callback will put the position when it carries the command out; nullopt keeps the processor's.
+    // Where the audio callback will put the position when it carries pauseAtLastStart out; the other actions report
+    // the position the processor presents right after the call (nullopt: report the read at `after` below).
     std::optional<double> positionAfter;
     bool warnsNoDevice = false;
 
@@ -154,11 +168,14 @@ Result<JsonValue> runControl(ControlOpContext& context, const ControlParams& par
             processor.recordControlCall(Call::Pause);
             break;
         case Action::Stop:
-            // stopRequested(): the audio callback stops and rewinds to 0.
+            // stopRequested(): OpenTuneAudioProcessor::stop() freezes the presented position and asks the audio
+            // callback to fade the running transport out and land it on 0 (processBlock's Stop case; stop() sets
+            // pendingCompletionTime_ to 0). The landing happens on the audio thread when that fade-out completes
+            // (kTransportRampDurationSeconds, 0.2 s on the audio thread), so a read right after the call still
+            // returns the frozen presented position. The result reports that read, exactly as transport.get does
+            // now; after the fade a read returns 0. There is no earlier value to wait for on this thread.
             processor.stop();
             processor.recordControlCall(Call::Stop);
-            if (device.running)
-                positionAfter = 0.0;
             break;
         case Action::Seek:
             // playheadPositionChangeRequested(): also the play start position of the next play-from-start.
@@ -212,7 +229,9 @@ Result<JsonValue> runControl(ControlOpContext& context, const ControlParams& par
         envelope.setNotUndoable("not_persisted_state");
     }
     auto result = envelope.committed(context);
-    result.appendMember("transport", controlTransportJson(context, positionAfter));
+    // The transport member reports the same position the change above reports: the read the call made, not a second
+    // read that the audio thread may already have moved on from (the stop landing).
+    result.appendMember("transport", controlTransportJson(context, afterPosition));
     return result;
 }
 
@@ -294,7 +313,7 @@ Result<JsonValue> runSetTempo(ControlOpContext& context, const TempoParams& para
     const int denominatorBefore = processor.getTimeSigDenominator();
     // The values equal to the current ones are not set again: the editor's fields set the processor only on an
     // edit, and the call is a no-op.
-    const bool bpmChanges = params.bpm && std::abs(*params.bpm - bpmBefore) > 1e-9;
+    const bool bpmChanges = params.bpm && controlBpmDiffers(*params.bpm, bpmBefore);
     const bool signatureChanges =
         params.numerator && (*params.numerator != numeratorBefore || *params.denominator != denominatorBefore);
     if (bpmChanges || signatureChanges) {
@@ -314,15 +333,15 @@ Result<JsonValue> runSetTempo(ControlOpContext& context, const TempoParams& para
 
     // One judgement of "the bpm changed" for the reported field and for the revert recipe, so that a field reported
     // as changed always has its value in revert.params (and the recipe is never an empty object).
-    const bool bpmChanged = std::abs(bpmAfter - bpmBefore) > 1e-9;
+    const bool bpmChanged = controlBpmDiffers(bpmAfter, bpmBefore);
     auto fields = JsonValue::object();
     if (bpmChanged)
-        fields.appendMember("bpm", fieldChange(controlJsonNumber(bpmBefore, 3), controlJsonNumber(bpmAfter, 3), "bpm"));
+        fields.appendMember("bpm", tempoBpmField(bpmBefore, bpmAfter));
     if (numeratorAfter != numeratorBefore || denominatorAfter != denominatorBefore)
         fields.appendMember("timeSignature", fieldChange(signatureJson(numeratorBefore, denominatorBefore),
                                                          signatureJson(numeratorAfter, denominatorAfter), nullptr));
     if (fields.size() != 0) {
-        envelope.addChange("tempo", singletonRef("tempo"), JsonValue::string("Tempo"), std::move(fields));
+        addTempoChange(envelope, std::move(fields));
         // No undo entry, as in the UI (ui_parity); the previous tempo and time signature restore the state. The
         // recipe carries what the call changed: a time signature only when it changed, and a time signature that
         // this method's schema cannot express (a denominator of 64, or a numerator above 32, which the project
@@ -397,6 +416,32 @@ Result<JsonValue> runSetLoop(ControlOpContext& context, const LoopParams& params
 }
 
 } // namespace
+
+bool controlBpmDiffers(double a, double b)
+{
+    return std::abs(a - b) > 1e-9;
+}
+
+void controlReportTempoRounded(ControlOpContext& context, ControlWriteEnvelope& envelope, double fromBpm, double toBpm)
+{
+    auto fields = JsonValue::object();
+    fields.appendMember("bpm", tempoBpmField(fromBpm, toBpm));
+    addTempoChange(envelope, std::move(fields));
+
+    auto effect = JsonValue::object();
+    effect.appendMember("fromBpm", controlJsonNumber(fromBpm, 3));
+    effect.appendMember("toBpm", controlJsonNumber(toBpm, 3));
+    // transport.setTempo back to the tempo from before; the instance that does not report transport.v1 has no such
+    // method, so there is nothing that could restore it (PROTOCOL.md section 15.2 rule 2).
+    JsonValue revert;
+    if (controlReportsCapability(context, "transport.v1")) {
+        auto params = JsonValue::object();
+        params.appendMember("bpm", controlJsonNumber(fromBpm, 3));
+        revert = controlRevertRecipe("transport.setTempo", std::move(params));
+    }
+    effect.appendMember("revert", std::move(revert));
+    envelope.addSideEffect("tempoRounded", std::move(effect));
+}
 
 void registerTransportOps(ControlMethodTable& table)
 {

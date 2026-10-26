@@ -139,19 +139,23 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/PrefsOps.h
         Source/Control/Ops/AudioDeviceOps.cpp
         Source/Control/Ops/AudioDeviceOps.h
-        # Reference alignment: content.analyzeReference and the job of content.autoTune in mode reference, with the
-        # alignment of OpenTune's AUTO button handed back as one undo action.
-        Source/Control/Edit/ReferenceAlignment.cpp
-        Source/Control/Edit/ReferenceAlignment.h
-        Source/Control/Ops/ReferenceOps.cpp
-        Source/Control/Ops/ReferenceOps.h
-        # Arrangement: arrangement.edit (move, trim, gain, fades, split, merge, delete, reference binding) and
+        # Arrangement: arrangement.edit (move, trim, gain, fades, split, merge, delete) and
         # arrangement.copy, through the arrangement view's setters, processor functions and undo actions.
         Source/Control/Ops/ArrangementOps.cpp
         Source/Control/Ops/ArrangementOps.h
         # Selection: ui.setSelection, through the editor's bridge, with the effects it predicts and observes.
         Source/Control/Ops/SelectionOps.cpp
         Source/Control/Ops/SelectionOps.h
+        # Workspace: ui.setWorkspace (capability ui.workspace), the two view buttons of the transport bar through the bridge.
+        Source/Control/Ops/WorkspaceOps.cpp
+        Source/Control/Ops/WorkspaceOps.h
+        # Quit: app.quit (capability app.quit), the close button of the window through the bridge, after the reply.
+        Source/Control/Ops/AppQuitOps.cpp
+        Source/Control/Ops/AppQuitOps.h
+        # Preference options: the vocoder weights and pitch models that prefs.get offers (processing.options) and prefs.set
+        # accepts, and the vocoder state and processor calls that the prefs.set job waits on and makes.
+        Source/Control/Ops/PrefsModels.cpp
+        Source/Control/Ops/PrefsModels.h
     )
 
     target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_CONTROL_SOURCES})
@@ -168,6 +172,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Standalone/ControlEditorBridgePrefs.cpp
         # Selection: a click and a double click on a clip, through the arrangement view's hook.
         Source/Standalone/ControlEditorBridgeSelection.cpp
+        # Workspace: the arrangement view or the piano roll, as the view buttons of the transport bar switch them.
+        Source/Standalone/ControlEditorBridgeWorkspace.cpp
     )
     # PUBLIC, so that every target that compiles or links the SharedCode sees the same class layouts.
     target_compile_definitions(OpenTuneStandalone PUBLIC OPENTUNE_ENABLE_CONTROL_API=1)
@@ -308,12 +314,13 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlUiTests.cpp)
         # Preferences and audio device: prefs.set (with its job), audio.get and audio.set on a fake device manager.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlPrefsTests.cpp)
-        # Reference alignment: content.analyzeReference and content.autoTune mode reference.
-        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlReferenceTests.cpp)
         # Arrangement: arrangement.edit and arrangement.copy, their undo entries and revert recipes.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlArrangementTests.cpp)
         # Selection: ui.setSelection with a test bridge that does what the editor does when a clip is clicked.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlSelectionTests.cpp)
+        # app.quit: a test bridge that records the request to close the window, and the scenarios of the call and of what
+        # it leaves behind.
+        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlQuitTests.cpp)
         if(MSVC)
             target_compile_options(OpenTuneControlProcessorTests PRIVATE /utf-8 /EHsc /bigobj)
         endif()
@@ -360,6 +367,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "Import|--control-api"
             "ImportAfterOpen|--control-api"
             "ImportCancel|--control-api"
+            "ImportRevert|--control-api"
             "JobVectors|--control-api"
             "BusyMatrix|--control-api"
             "JobDisconnect|--control-api"
@@ -417,21 +425,19 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "UiState|--control-api"
             "UiDismiss|--control-api"
             "UiOnboardingWithheld|--control-api"
+            "UiWorkspace|--control-api"
             "UiVectors|--control-api"
         )
         # Preferences and audio device (Tests/Control/ControlPrefsTests.cpp).
         list(APPEND _opentune_control_scenarios
             "PrefsRoundTrip|--control-api"
             "PrefsSchemeJob|--control-api"
+            "PrefsOptions|--control-api"
+            "PrefsVocoderJob|--control-api"
+            "PrefsVocoderOverlap|--control-api"
             "PrefsVectors|--control-api"
             "AudioDevice|--control-api"
             "AudioVectors|--control-api"
-        )
-        # Reference alignment (Tests/Control/ControlReferenceTests.cpp).
-        list(APPEND _opentune_control_scenarios
-            "Reference|--control-api"
-            "ReferenceAnalysisLimit|--control-api"
-            "ReferenceVectors|--control-api"
         )
         # Arrangement (Tests/Control/ControlArrangementTests.cpp).
         list(APPEND _opentune_control_scenarios
@@ -445,6 +451,15 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "Selection|--control-api"
             "SelectionMatrix|--control-api"
             "SelectionVectors|--control-api"
+        )
+        # app.quit (Tests/Control/ControlQuitTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "AppQuit|--control-api"
+            "AppQuitWithoutWindow|--control-api"
+            "AppQuitResult|--control-api"
+            "AppQuitSequence|--control-api"
+            "AppQuitStopping|--control-api"
+            "AppQuitVectors|--control-api"
         )
         set(_opentune_control_tests)
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
@@ -491,10 +506,13 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.UiVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.PrefsVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.AudioVectors PROPERTIES TIMEOUT 300)
-        set_tests_properties(ControlProcessorTests.ReferenceVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ArrangementVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.SelectionMatrix PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.SelectionVectors PROPERTIES TIMEOUT 300)
+        # Several processors, and the wait of up to 15 s for an instance that quits to end.
+        set_tests_properties(ControlProcessorTests.AppQuit PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.AppQuitResult PROPERTIES TIMEOUT 300)
+        set_tests_properties(ControlProcessorTests.AppQuitVectors PROPERTIES TIMEOUT 300)
         # Each scenario process gets its own test's TIMEOUT, from which its watchdog takes its bound (a margin before;
         # ScenarioWatchdog in Tests/Control/ControlProcessorTests.cpp). Keep this after every TIMEOUT of the scenarios.
         foreach(_opentune_control_test IN LISTS _opentune_control_tests)

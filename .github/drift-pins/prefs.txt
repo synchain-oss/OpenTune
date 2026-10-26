@@ -4,6 +4,7 @@
 # group: prefs
 # pinned-at: upstream/20261008-addb4f4
 # ported-to: Source/Control/Ops/PrefsOps.cpp
+# ported-to: Source/Control/Ops/PrefsModels.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
 Source/Editor/Preferences/SharedPreferencePages.cpp	tuningSlider_.onValueChange	L505-L510	stmt-v1	66f9e08b43190d050b10b42dfe24b9cbf3f56b3e85e6c08e76e52007c0ee96a6
@@ -11,3 +12,8 @@ Source/Editor/Preferences/SharedPreferencePages.cpp	schemeSelector_.onChange	L45
 Source/Editor/Preferences/SharedPreferencePages.cpp	experimentalFeaturesToggle_.onClick	L293-L296	stmt-v1	8db49147776f7c136e8dec4369bc0b20bfae1cce61afd6082793957d86da0013
 Source/Editor/Preferences/SharedPreferencePages.cpp	lightPitchCorrectionToggle_.onClick	L327-L333	stmt-v1	a17c133ad7bfcd10a053edc8f8672d073139e7506f928be064ae24794c51cc7e
 Source/Standalone/PluginEditor.cpp	auto onLightPitchCorrectionChanged	L2720-L2722	stmt-v1	bfc69ae92af42c5fdda968e455b0f3e1f766000e3ee4578eb4e67dc436ecb4ff
+Source/Editor/Preferences/SharedPreferencePages.cpp	vocoderWeightSelector_.onChange	L237-L247	stmt-v1	1f2e5b5ca8d7619a6b4c32650935861335c6ad239d55a6cdcce43e3a065d797d
+Source/Standalone/PluginEditor.cpp	auto onVocoderModelWeightChanged	L2714-L2716	stmt-v1	77b3e9be5dcb6e928d5c0d4407138b120934918a9caa6b12884b242dfa601ab0
+Source/Editor/Preferences/SharedPreferencePages.cpp	renderingPrioritySelector_.onChange	L201-L209	stmt-v1	035ba82218d936f12522457677574920be8bbe3350333a159534a7ccdef6ed39
+Source/Editor/Preferences/SharedPreferencePages.cpp	f0ModelSelector_.onChange	L276-L286	stmt-v1	0b559059442b9ad017ee4363048ac9eccd620b060009f10b330c12de97f09a90
+Source/Standalone/PluginEditor.cpp	auto onF0ModelChanged	L2717-L2719	stmt-v1	84fde8935140179daad231230128738a88745ed5441a8a24026281cb29c043d5

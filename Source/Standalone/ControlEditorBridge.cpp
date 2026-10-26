@@ -70,7 +70,7 @@ void ControlEditorBridge::onStructureChanged()
 void ControlEditorBridge::onUndoRedoApplied()
 {
     // The editor's own steps after its undo and redo (performUndoRedoAction): mark the project as changed,
-    // redraw the arrangement and refresh the reference context. The piano roll follows the new revisions on
+    // redraw the arrangement and refresh what depends on it. The piano roll follows the new revisions on
     // the editor's next heartbeat, as after the UI's own undo.
     editor_.afterUndoRedo();
 }
@@ -83,16 +83,6 @@ void ControlEditorBridge::onTimeGridChanged()
     // redrawn as after an undo of a time-grid edit (afterUndoRedo).
     editor_.pianoRoll_.onTimeGridRevisionChanged();
     editor_.arrangementView_.requestContentRedraw();
-}
-
-void ControlEditorBridge::onReferenceBindingChanged()
-{
-    // The steps the editor's reference binding menu takes after a binding is set or removed (the lambdas in
-    // OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu): redraw the arrangement, then refresh the reference
-    // context.
-    editor_.arrangementView_.requestContentRedraw();
-    editor_.referenceRefreshPending_ = true;
-    editor_.refreshReferenceContext();
 }
 
 bool ControlEditorBridge::focusPlacement(int trackId, std::uint64_t placementId)
@@ -172,6 +162,37 @@ juce::AudioDeviceManager* ControlEditorBridge::audioDevice()
     // The Standalone application's device manager, as the editor reaches it.
     auto* holder = juce::StandalonePluginHolder::getInstance();
     return holder != nullptr ? &holder->deviceManager : nullptr;
+}
+
+namespace {
+
+/** The Standalone window that hosts the editor and its plug-in holder, or nullptr when the editor is not (yet, or any
+    more) in one: the only place from which the application can be ended as the close button does. */
+juce::StandaloneFilterWindow* standaloneWindowOf(juce::Component& editor)
+{
+    if (juce::StandalonePluginHolder::getInstance() == nullptr)
+        return nullptr;
+    return dynamic_cast<juce::StandaloneFilterWindow*>(editor.getTopLevelComponent());
+}
+
+} // namespace
+
+bool ControlEditorBridge::canQuit() const
+{
+    return standaloneWindowOf(editor_) != nullptr;
+}
+
+bool ControlEditorBridge::requestQuit()
+{
+    // DocumentWindow::closeButtonPressed(), virtual: the window's own close button handler. The stock
+    // StandaloneFilterWindow saves the plug-in state (StandalonePluginHolder::savePluginState()) and ends the
+    // application (JUCEApplicationBase::quit()), which runs the normal shutdown. Calling the window's handler keeps
+    // the behaviour of whatever the window does when its close button is pressed, without a copy of it here.
+    auto* window = standaloneWindowOf(editor_);
+    if (window == nullptr)
+        return false;
+    static_cast<juce::DocumentWindow*>(window)->closeButtonPressed();
+    return true;
 }
 
 } // namespace OpenTune

@@ -28,17 +28,20 @@ namespace OpenTune {
  *   (ui_parity); the revert recipe deletes the new track and needs the end user's consent.
  * - track.delete (methods/track.delete.schema.json): the steps of the track menu's Delete Track
  *   (trackDeleteRequested): StandaloneArrangement::removeTrackAndShift() removes the track's clips and moves every
- *   later track down, then the panel and the arrangement show one track fewer. It cannot be undone
- *   (no_upstream_undo, IRREVERSIBLE) and needs confirm; the only shown track and hidden tracks cannot be deleted.
- *   A clip of another track whose reference binding named a removed clip loses the binding (the UI leaves it
- *   dangling) and is listed in danglingReferences. The deletion is a barrier in the undo and redo histories
- *   (ControlHistory::onTrackDeleted(), PROTOCOL.md section 15.3 rule 6). OpenTune does not retire the contents of
- *   the removed clips (it leaks them); the control API reports a content that no clip shows any more as removed
- *   (ControlHistory::markContentsRemoved()) and does not repair the leak.
+ *   later shown track down, then the panel and the arrangement show one track fewer. Hidden slots keep their
+ *   position, their clips and their mix. It cannot be undone (no_upstream_undo, IRREVERSIBLE) and needs confirm; the
+ *   only shown track and hidden tracks cannot be deleted.
+ *   The deletion is a barrier in the undo and redo histories
+ *   (ControlHistory::onTrackDeleted(), PROTOCOL.md section 15.3 rule 6): an entry that addresses the deleted track or
+ *   a shown track after it is possibly stale, while an entry that addresses only hidden tracks stays valid, since
+ *   those keep their position. The barrier also follows the clips of the shown tracks it moves down, so a later
+ *   deletion compares both the slots the entry's actions are keyed by and where its clips are then. OpenTune does not
+ *   retire the contents of the removed clips (it leaks them); the control API reports a content that no clip shows
+ *   any more as removed (ControlHistory::markContentsRemoved()) and does not repair the leak.
  *
  * Every write checks, in the order of PROTOCOL.md section 13.1: the trackId, the busy state, the expected arrangement
  * revision, then the method's own validation. The methods that change the number of shown tracks need the editor
- * (UNSUPPORTED(capability_missing) without one).
+ * (UNSUPPORTED(no_editor_window) without one).
  */
 void registerTrackOps(ControlMethodTable& table);
 

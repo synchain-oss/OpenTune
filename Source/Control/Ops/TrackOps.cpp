@@ -453,9 +453,8 @@ Result<JsonValue> runDuplicate(ControlOpContext& context, const DuplicateParams&
     const auto visible = controlEditorVisibleTrackCount(context);
     if (!visible.ok())
         return visible.error();
-    // OpenTune's Duplicate Track is offered on a shown track only, so a hidden source is refused. The registry has
-    // no reason made for a duplicate of a hidden track: track_hidden is borrowed, and its registry description only
-    // speaks of delete ("OpenTune deletes only visible tracks"). A deviation from the spec, open until 1.0 is final.
+    // OpenTune's Duplicate Track is offered on a shown track only, so a hidden source is refused with track_hidden
+    // (registry: the reason covers duplication as well as deletion).
     if (params.trackId >= visible.value())
         return controlOpError("INVALID_ARGUMENT", "track_hidden", "a hidden track cannot be duplicated");
     if (visible.value() >= controlTrackSlotCount(context))
@@ -636,36 +635,16 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
         if (ref.trackId == params.trackId)
             removed.push_back(ref);
 
-    // trackDeleteRequested(): the arrangement removes the track and moves the later ones up (their clips and mix);
-    // then the panel shows the mix of the arrangement for the tracks that remain and one track fewer.
+    // trackDeleteRequested(): the arrangement removes the track and moves only the later shown tracks down by one
+    // position (their clips and mix); a hidden slot keeps its position, its clips and its mix. Then the panel shows
+    // the mix of the arrangement for the tracks that remain and one track fewer.
     if (!arrangement->removeTrackAndShift(params.trackId, visible))
         return controlOpError("INTERNAL", "", "OpenTune did not delete the track");
     bridge->onTrackMixChanged();
     bridge->setVisibleTrackCount(visible - 1);
     controlMarkDirty(context);
 
-    // A clip of another track that referred to a removed clip loses the binding: OpenTune leaves it dangling.
-    const auto removedIds = [&removed] {
-        std::set<std::uint64_t> ids;
-        for (const auto& ref : removed)
-            ids.insert(ref.placement.placementId);
-        return ids;
-    }();
-    auto clipsAfter = controlLivePlacements(context);
-    auto dangling = JsonValue::array();
-    std::set<std::uint64_t> cleared;
-    for (const auto& ref : clipsAfter) {
-        const auto reference = ref.placement.referencePlacementId;
-        if (reference == 0 || removedIds.count(reference) == 0)
-            continue;
-        if (arrangement->setPlacementReferencePlacement(ref.trackId, ref.placement.placementId, 0))
-            cleared.insert(ref.placement.placementId);
-        auto entry = JsonValue::object();
-        entry.appendMember("placementId", JsonValue::string(ref.placementId));
-        entry.appendMember("referencePlacementId", JsonValue::string(controlPlacementId(context, reference)));
-        dangling.append(std::move(entry));
-    }
-    clipsAfter = controlLivePlacements(context);
+    const auto clipsAfter = controlLivePlacements(context);
 
     // The contents that no clip shows any more left the project (OpenTune leaks their clips, see TrackOps.h).
     std::set<std::uint64_t> stillShown;
@@ -679,8 +658,11 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
     const auto epoch = controlContentEpoch(context);
     history->markContentsRemoved(leftProject, epoch);
 
-    // The barrier in the undo and redo histories (section 15.3 rule 6).
-    const auto stale = history->onTrackDeleted(processor.getUndoManager(), params.trackId, epoch);
+    // The barrier in the undo and redo histories (section 15.3 rule 6): an entry is possibly stale when it addresses
+    // the deleted track or a shown track after it, which removeTrackAndShift() moved down. A hidden track keeps its
+    // position and its clips, so an entry that addresses only hidden tracks stays valid. visible is the number of
+    // shown tracks before the deletion.
+    const auto stale = history->onTrackDeleted(processor.getUndoManager(), params.trackId, visible, epoch);
 
     // Removed: the clips, then the contents that left with them (section 14.4 rule 6).
     for (const auto& ref : removed)
@@ -692,7 +674,7 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
         envelope.addRemoved("content", contentRef(controlContentId(context, key)),
                             JsonValue::string("Content of " + placementLabel(*found)));
     }
-    // Changed: every clip that moved to another track, and every clip that lost its reference binding.
+    // Changed: every clip that moved to another track.
     for (const auto& now : clipsAfter) {
         const auto was = std::find_if(clipsBefore.begin(), clipsBefore.end(), [&now](const ControlPlacementRef& ref) {
             return ref.placement.placementId == now.placement.placementId;
@@ -701,10 +683,6 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
             continue;
         auto fields = JsonValue::object();
         addField(fields, "trackId", JsonValue::integer(was->trackId), JsonValue::integer(now.trackId), nullptr);
-        if (cleared.count(now.placement.placementId) != 0)
-            addField(fields, "referencePlacementId",
-                     JsonValue::string(controlPlacementId(context, was->placement.referencePlacementId)), JsonValue(),
-                     nullptr);
         if (fields.size() == 0)
             continue;
         envelope.addChange("placement", placementRef(now.placementId), JsonValue::string(placementLabel(now)),
@@ -713,7 +691,7 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
     }
 
     // trackIdMap: the deleted track, and every later shown track. removeTrackAndShift() moves only the shown tracks
-    // after the deleted one; hidden slots keep their position and their clips.
+    // after the deleted one down; the hidden slots keep their position, their clips and their mix.
     auto trackIdMap = JsonValue::array();
     const auto mapEntry = [](int from, JsonValue to) {
         auto entry = JsonValue::object();
@@ -735,7 +713,6 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
     envelope.setNotUndoable("no_upstream_undo");
     auto result = envelope.committed(context);
     result.appendMember("trackIdMap", std::move(trackIdMap));
-    result.appendMember("danglingReferences", std::move(dangling));
     result.appendMember("possiblyStaleEntries", std::move(staleData));
     return result;
 }

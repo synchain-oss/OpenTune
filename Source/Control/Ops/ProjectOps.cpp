@@ -140,9 +140,13 @@ Result<ProjectParts> projectParts(ControlOpContext& context)
         parts.session = parts.bridge->projectSession();
         parts.pool = parts.bridge->projectWorkerPool();
     }
+    // PROTOCOL.md section 7 rule 6: without an editor window the method fails with no_editor_window.
+    if (parts.bridge == nullptr)
+        return controlOpError("UNSUPPORTED", "no_editor_window",
+                              "project.io acts through the editor window, and no editor exists");
     if (parts.session == nullptr || parts.pool == nullptr)
         return controlOpError("UNSUPPORTED", "capability_missing",
-                              "project.io needs the editor's project session, and no editor exists");
+                              "project.io needs the editor's project session, and the editor offers none");
     return parts;
 }
 
@@ -517,7 +521,6 @@ struct OpenedFileFacts
 {
     std::vector<SkippedMedia> skippedMedia;
     int placementCount = 0;
-    std::vector<std::pair<std::uint64_t, std::uint64_t>> referenceBindings;
 };
 
 OpenedFileFacts factsOf(const ProjectSession::PreparedOpen& prepared)
@@ -543,8 +546,6 @@ OpenedFileFacts factsOf(const ProjectSession::PreparedOpen& prepared)
     }
     for (const auto& track : prepared.snapshot.tracks)
         facts.placementCount += static_cast<int>(track.placements.size());
-    for (const auto& binding : prepared.snapshot.referenceBindings)
-        facts.referenceBindings.emplace_back(binding.targetPlacementId, binding.referencePlacementId);
     return facts;
 }
 
@@ -695,16 +696,8 @@ private:
 
         int placementCount = 0;
         int contentCount = 0;
-        std::set<std::uint64_t> livePlacements;
-        for (const auto& entity : created) {
+        for (const auto& entity : created)
             (entity.placement ? placementCount : contentCount) += 1;
-            if (entity.placement)
-                livePlacements.insert(entity.placementId);
-        }
-        int lostBindings = 0;
-        for (const auto& [target, reference] : facts.referenceBindings)
-            if (livePlacements.count(target) == 0 || livePlacements.count(reference) == 0)
-                ++lostBindings;
         bool derived = false;
 
         auto result = envelope.committed(context);
@@ -729,7 +722,6 @@ private:
         }
         skipped.appendMember("media", std::move(media));
         skipped.appendMember("placementCount", JsonValue::integer(std::max(0, facts.placementCount - placementCount)));
-        skipped.appendMember("referenceBindingCount", JsonValue::integer(lostBindings));
         result.appendMember("skipped", std::move(skipped));
         auto cleared = JsonValue::object();
         cleared.appendMember("undoCount", JsonValue::integer(undoCount));

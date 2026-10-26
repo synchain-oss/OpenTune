@@ -524,7 +524,11 @@ Result<JsonValue> runAudioSet(ControlOpContext& context, const AudioSetRequest& 
     if (auto busy = controlCheckBusy(context))
         return *busy;
     auto* bridge = context.bridge();
-    auto* manager = bridge != nullptr ? bridge->audioDevice() : nullptr;
+    // PROTOCOL.md section 7 rule 6: without an editor window the method fails with no_editor_window.
+    if (bridge == nullptr)
+        return controlOpError("UNSUPPORTED", "no_editor_window",
+                              "audio.set acts through the editor window, and no editor exists");
+    auto* manager = bridge->audioDevice();
     if (manager == nullptr)
         return controlOpError("UNSUPPORTED", "capability_missing",
                               "audio.device needs the editor's audio device manager, and none exists");

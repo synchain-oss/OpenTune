@@ -84,8 +84,8 @@ public:
     virtual void onUndoRedoApplied() {}
 
     /** A project was opened or the project was reloaded: the editor does what it does after its own open (updates the
-        recent-projects menu and the title, refreshes the track panel, the arrangement, the piano roll and the
-        reference context from the new project). Default: nothing. */
+        recent-projects menu and the title, refreshes the track panel, the arrangement and the piano roll from the
+        new project). Default: nothing. */
     virtual void onProjectReloaded() {}
 
     /** The project was saved to its file (project.save, project.saveAs): the editor does what it does after its own
@@ -109,11 +109,6 @@ public:
         the new grid of the content it shows and redraws) and redraws the arrangement, which draws clips through
         their grids. Default: nothing. */
     virtual void onTimeGridChanged() {}
-
-    /** The reference binding of a clip was set or removed through the control API (arrangement.edit setReference):
-        the editor does what it does after its own binding menu (redraws the arrangement and refreshes the reference
-        context, which feeds the piano roll and can queue reference alignment analysis). Default: nothing. */
-    virtual void onReferenceBindingChanged() {}
 
     // ---- View changes that a write makes as the UI does ----------------------------------------
 
@@ -238,11 +233,11 @@ public:
 
     /** Selects as the arrangement view does when the user clicks. With a placementId, the clip on trackId becomes the
         only selected clip and trackId the active track, as a click on the clip does: the piano roll shows the clip
-        (in the openDyne scheme it generates the notes of a clip whose notes were never generated), the editor
-        refreshes its reference context (which can queue reference alignment analysis) and the transport bar shows the
-        clip's key; with openEditor also as a double click, which switches to the piano roll. With placementId 0,
-        trackId becomes the active track with no clip selected and the piano roll shows nothing. Returns false,
-        changing nothing, when not supported. */
+        (in the openDyne scheme it generates the notes of a clip whose notes were never generated) and the transport
+        bar shows the clip's key; with openEditor also as a double click, which switches to the piano roll (a switch can
+        rewrite the tempo, see setWorkspace(), which the caller reads from the processor). With no clip
+        (placementId 0), trackId becomes the active track with no clip selected and the piano roll shows nothing.
+        Returns false, changing nothing, when not supported. */
     virtual bool select(int /*trackId*/, std::uint64_t /*placementId*/, bool /*openEditor*/) { return false; }
 
     /** The scale the transport bar would show once the clip is selected (the content's detected key, or the
@@ -251,6 +246,31 @@ public:
     {
         return std::nullopt;
     }
+
+    // ---- Workspace ----------------------------------------------------------------------------
+
+    /** Switches the window to the arrangement view (arrangement true) or to the piano roll (false), as the two view
+        buttons of the transport bar do. Only the view changes: no content, key, note, clip or track is touched and
+        nothing is generated or queued. One exception, which the caller reports as it happened (the processor's tempo
+        before and after the call): the switch moves the keyboard focus, and the focus that the transport bar's BPM
+        field loses commits the field, which shows the tempo with one decimal, so a tempo with more decimals is
+        rewritten and the project is marked as changed (upstream behaviour, not corrected). Does nothing when the
+        window already shows that view. The workspace that results report is viewState(). Returns false, changing
+        nothing, when not supported. Message thread. */
+    virtual bool setWorkspace(bool /*arrangement*/) { return false; }
+
+    // ---- Quit ---------------------------------------------------------------------------------
+
+    /** True when requestQuit() ends the application as the close button of the editor's window does. Default:
+        false (a bridge that cannot quit). Message thread. */
+    virtual bool canQuit() const { return false; }
+
+    /** Ends the application as the close button of the window does: the window saves the plugin state it saves
+        whenever it closes (not the project file) and quits through the application's normal shutdown. It asks
+        nothing about unsaved changes, which the caller has checked already. Returns when the quit is under way (the
+        application ends after the message loop returns to its owner), so that nothing of the editor may be used
+        afterwards. Returns false, doing nothing, when canQuit() is false. Message thread. */
+    virtual bool requestQuit() { return false; }
 
     // ---- Preferences and audio device ---------------------------------------------------------
 

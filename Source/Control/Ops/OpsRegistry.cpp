@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "OpsRegistry.h"
 
+#include "AppQuitOps.h"
 #include "AppReadOps.h"
 #include "ArrangementOps.h"
 #include "AudioDeviceOps.h"
@@ -14,7 +15,6 @@
 #include "PrefsOps.h"
 #include "ProjectOps.h"
 #include "ProjectReadOps.h"
-#include "ReferenceOps.h"
 #include "SelectionOps.h"
 #include "SessionOps.h"
 #include "TimingOps.h"
@@ -22,6 +22,7 @@
 #include "TransportOps.h"
 #include "UiOps.h"
 #include "UndoOps.h"
+#include "WorkspaceOps.h"
 
 #include "Control/ContentHandles.h"
 
@@ -97,17 +98,18 @@ void registerControlMethods(ControlMethodTable& table)
     registerExportOps(table);         // export.start
     registerUiOps(table);             // ui.getState, ui.dismiss
     registerSelectionOps(table);      // ui.setSelection
+    registerWorkspaceOps(table);      // ui.setWorkspace
     registerContentTuneOps(table);    // content.setKey, content.autoTune
     registerContentEditOps(table);    // content.editNotes, content.setPitchShift
     registerUndoOps(table);           // edit.getHistory, edit.undo, edit.redo
     registerTimingOps(table);         // content.shiftTiming, content.editTimeGrid
     registerTransportOps(table);      // transport.control, transport.setTempo, transport.setLoop
     registerArrangementOps(table);    // arrangement.edit, arrangement.copy
-    registerReferenceOps(table);      // content.analyzeReference
     registerTrackOps(table);          // track.set, track.add, track.duplicate, track.delete
     registerProjectOps(table);        // project.save, project.saveAs, project.open, project.clearRecent
     registerPrefsOps(table);          // prefs.set
     registerAudioDeviceOps(table);    // audio.get, audio.set
+    registerAppQuitOps(table);        // app.quit
 }
 
 ControlOpContext::ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiBridge* bridge,
@@ -157,6 +159,12 @@ ControlOpEnvironment ControlOpContext::environment()
     environment.jobs = jobs_;
     environment.history = history_;
     return environment;
+}
+
+void ControlOpContext::endInstanceAfterReply(std::function<void()> action)
+{
+    requireMessageThread();
+    endInstanceAction_ = std::move(action);
 }
 
 void ControlOpContext::requireMessageThread()

@@ -24,6 +24,10 @@ ControlOriginAction::ControlOriginAction(std::shared_ptr<ControlHistory> history
     , description_(std::move(description))
     , inner_(std::move(inner))
 {
+    // The positions the clips are at start as the slots the actions are keyed by (see Inner::followed).
+    for (auto& entry : inner_)
+        if (entry.followed.empty())
+            entry.followed = entry.tracks;
     if (history_ != nullptr) {
         barrierGeneration_ = history_->barrierGeneration();
         history_->add(this);
@@ -38,20 +42,35 @@ ControlOriginAction::~ControlOriginAction()
 
 void ControlOriginAction::undo()
 {
-    bool tookEffect = false;
+    bool executed = false;
     for (auto it = inner_.rbegin(); it != inner_.rend(); ++it)
-        tookEffect = apply(*it, true) || tookEffect;
-    lastStepTookEffect_ = tookEffect;
+        executed = applyAndFollow(*it, true) || executed;
+    lastStepTookEffect_ = executed;
     onRedoSide_ = true;
 }
 
 void ControlOriginAction::redo()
 {
-    bool tookEffect = false;
+    bool executed = false;
     for (auto& inner : inner_)
-        tookEffect = apply(inner, false) || tookEffect;
-    lastStepTookEffect_ = tookEffect;
+        executed = applyAndFollow(inner, false) || executed;
+    lastStepTookEffect_ = executed;
     onRedoSide_ = false;
+}
+
+bool ControlOriginAction::applyAndFollow(Inner& inner, bool undo)
+{
+    const bool executed = apply(inner, undo);
+    if (executed) {
+        // The action was executed (not blocked by a mask), so it may have written to the slots it is keyed by and a
+        // clip may now be at any of them. apply() cannot tell whether the upstream action then rejected the change
+        // itself; that only costs a deletion report that was not needed. followed approximates where the clips are:
+        // take the slots in (without duplicates), so that a deletion that hits a slot is never missed.
+        for (const int slot : inner.tracks)
+            if (std::find(inner.followed.begin(), inner.followed.end(), slot) == inner.followed.end())
+                inner.followed.push_back(slot);
+    }
+    return executed;
 }
 
 bool ControlOriginAction::apply(Inner& inner, bool undo)
@@ -114,15 +133,33 @@ bool ControlOriginAction::masked(const ContentKey& content, ControlContentAspect
     return std::find(masked_.begin(), masked_.end(), std::make_pair(content, aspect)) != masked_.end();
 }
 
-bool ControlOriginAction::onTrackDeleted(int deletedTrack)
+bool ControlOriginAction::onTrackDeleted(int deletedTrack, int visibleCount)
 {
-    // The deleted track's clips are gone and every later track moved down by one position, so an action keyed by
-    // one of these positions may now address another track. An action that addresses no track (a note edit
-    // addresses its content) or only earlier tracks is unaffected.
-    const bool addresses = std::any_of(inner_.begin(), inner_.end(), [deletedTrack](const Inner& inner) {
-        return std::any_of(inner.tracks.begin(), inner.tracks.end(),
-                           [deletedTrack](int track) { return track >= deletedTrack; });
-    });
+    // The deleted track's clips are gone and every later shown track moved down by one position, so an action keyed
+    // by one of these positions may now address another track. A hidden track (visibleCount and above) keeps its
+    // position and its clips, and every track before the deleted one keeps its position. Two lists are compared, and
+    // either one makes the entry possibly stale:
+    // - tracks: the slots the wrapped OpenTune action is keyed by. They are fixed inside the action, so undo() and
+    //   redo() write to these slots after any number of deletions; they are compared as they were recorded.
+    // - followed: where the clips of the action are now. The clips of the shown tracks after the deleted one moved
+    //   down with their tracks, so these are renumbered for the deletions that follow.
+    // An action that addresses no track (a note edit addresses its content) or only tracks that did not move is
+    // unaffected.
+    const auto moved = [&](int track) { return track >= deletedTrack && track < visibleCount; };
+    bool addresses = false;
+    for (auto& inner : inner_) {
+        for (const int track : inner.tracks)
+            if (moved(track))
+                addresses = true;
+        for (int& track : inner.followed) {
+            if (!moved(track))
+                continue;
+            addresses = true;
+            // A track equal to the deleted one cannot be followed: its clip was removed with the track.
+            if (track > deletedTrack)
+                --track;
+        }
+    }
     if (!addresses || possiblyStale_)
         return false;
     possiblyStale_ = true;
@@ -237,7 +274,7 @@ void ControlHistory::onChangeWithoutEntry(UndoManager& manager, const ContentKey
 }
 
 ControlHistory::StaleCounts ControlHistory::onTrackDeleted(const UndoManager& manager, int deletedTrack,
-                                                           std::uint64_t epoch)
+                                                           int visibleCount, std::uint64_t epoch)
 {
     prune(manager, epoch);
     StaleCounts counts;
@@ -250,7 +287,7 @@ ControlHistory::StaleCounts ControlHistory::onTrackDeleted(const UndoManager& ma
         const bool redoSide = action->onRedoSide();
         if (action->barrierGeneration() == barrierGeneration_ && !action->belowStaleMark())
             ++(redoSide ? freshControlRedo : freshControlUndo);
-        if (action->onTrackDeleted(deletedTrack))
+        if (action->onTrackDeleted(deletedTrack, visibleCount))
             ++(redoSide ? counts.redo : counts.undo);
     }
     // Entries of the UI that were not possibly stale before: the positions at or above the last mark, except those
@@ -374,8 +411,6 @@ std::string controlUndoActionName(const UndoAction& action)
         return "TrimPlacementAction";
     if (dynamic_cast<const FadeChangeAction*>(&action) != nullptr)
         return "FadeChangeAction";
-    if (dynamic_cast<const ReferenceBindingAction*>(&action) != nullptr)
-        return "ReferenceBindingAction";
     return "UndoAction";
 }
 

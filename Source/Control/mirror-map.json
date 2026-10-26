@@ -507,19 +507,13 @@
           "symbols": [
             "runGetDetails"
           ]
-        },
-        {
-          "file": "Source/Control/Ops/SelectionOps.cpp",
-          "symbols": [
-            "predictReference"
-          ]
         }
       ],
       "tests": [
         "ControlProcessorTests.Details"
       ],
-      "note": "Which mode the AUTO button runs (autoModes.uiButtonRuns).",
-      "noteZh": "AUTO 按钮运行哪种模式（autoModes.uiButtonRuns）。"
+      "note": "Which mode the AUTO button runs (autoModes.uiButtonRuns): snapping in the openDyne scheme, else the reference alignment while the clip's binding can run it (the click takes that path through shouldRunReferenceAuto(), whatever the experimental setting), else regeneration. A read of upstream state that ends with the reference alignment when this fork is rebased.",
+      "noteZh": "AUTO 按钮运行哪种模式（autoModes.uiButtonRuns）：openDyne 方案下为吸附；否则，只要该片段的绑定能运行参考对齐就是参考对齐（点击经 shouldRunReferenceAuto() 走这条路，与实验功能开关无关）；再否则为重新生成。这是对上游状态的读取，本 fork 重新 rebase 到去掉参考对齐的上游后随之消失。"
     },
     {
       "id": "undo-add-action",
@@ -1145,12 +1139,6 @@
           "symbols": [
             "SeedJob::step"
           ]
-        },
-        {
-          "file": "Source/Control/Ops/SelectionOps.cpp",
-          "symbols": [
-            "preheatWouldQueue"
-          ]
         }
       ],
       "tests": [
@@ -1329,6 +1317,96 @@
       "noteZh": "lastResolvedScaleRootNote_ 与 lastResolvedScaleType_（界面调式类型 1..8）是编辑器最近为所选片段应用的调式；ui.getState 把它们报告为 uiScale。"
     },
     {
+      "id": "workspace-track-view",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/UI/TransportBarComponent.cpp",
+        "symbol": "TransportBarComponent::onTrackViewClicked",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "d4e1f1d9ba880e538909bb031116ab8766ea21ed0d734a0990cf44afa66dccb5"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeWorkspace.cpp",
+          "symbols": [
+            "ControlEditorBridge::setWorkspace"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/WorkspaceOps.cpp",
+          "symbols": [
+            "runSetWorkspace"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiWorkspace",
+        "ControlProcessorTests.UiVectors",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "The arrangement view button: it re-asserts its toggle state when the arrangement is shown already; otherwise it sets the workspace state of the transport bar (setWorkspaceView) and tells the listener, the editor, with viewToggled. ui.setWorkspace with arrangement makes the same two calls and does nothing when the arrangement is shown.",
+      "noteZh": "编排视图按钮：已经在编排视图时只重新确认自己的切换状态；否则设置走带栏的工作区状态（setWorkspaceView），再用 viewToggled 通知监听者，也就是编辑器。ui.setWorkspace 选 arrangement 时做同样的两次调用，已经在编排视图时什么也不做。"
+    },
+    {
+      "id": "workspace-piano-view",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/UI/TransportBarComponent.cpp",
+        "symbol": "TransportBarComponent::onPianoViewClicked",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "1b7b68ac0379f505acd0b1279f9ec66a8e300266cc42507d78cba88af4dfcacc"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeWorkspace.cpp",
+          "symbols": [
+            "ControlEditorBridge::setWorkspace"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/WorkspaceOps.cpp",
+          "symbols": [
+            "runSetWorkspace"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiWorkspace",
+        "ControlProcessorTests.UiVectors",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "The piano roll button: it re-asserts its toggle state when the piano roll is shown already; otherwise it sets the workspace state of the transport bar (setWorkspaceView) and tells the listener, the editor, with viewToggled. ui.setWorkspace with pianoRoll makes the same two calls and does nothing when the piano roll is shown.",
+      "noteZh": "钢琴卷帘按钮：已经在钢琴卷帘时只重新确认自己的切换状态；否则设置走带栏的工作区状态（setWorkspaceView），再用 viewToggled 通知监听者，也就是编辑器。ui.setWorkspace 选 pianoRoll 时做同样的两次调用，已经在钢琴卷帘时什么也不做。"
+    },
+    {
+      "id": "workspace-view-toggled",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::viewToggled",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "8b4b38da1bcef0091eab876c4d76f111356c9546eb609829338258a9201ebbac"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeWorkspace.cpp",
+          "symbols": [
+            "ControlEditorBridge::setWorkspace"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiWorkspace",
+        "ControlProcessorTests.UiVectors",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "What the editor does when the view changes: it captures the timeline camera of the outgoing view, runs the piano roll's heartbeat tick when the piano roll comes, switches the visibility and the keyboard focus of the two views, and hands the camera to the incoming one. ui.setWorkspace relies on it changing the view only (no content, key, note, clip or track, nothing generated or queued), in either editing scheme, so that revisionDiff stays empty and dirty does not change; a change of this function needs that checked again.",
+      "noteZh": "视图切换时编辑器做的事：取下离开视图的时间轴相机，切到钢琴卷帘时先运行它的心跳收束，切换两个视图的可见性与键盘焦点，再把相机交给进入的视图。ui.setWorkspace 依赖它只改变视图（不碰内容、调式、音符、片段或轨道，不生成也不排队任何东西），两种编辑方案都一样，所以 revisionDiff 为空、dirty 不变；这个函数改动后需要重新核对。"
+    },
+    {
       "id": "selection-click",
       "group": "selection",
       "upstream": {
@@ -1442,33 +1520,6 @@
       ],
       "note": "In the openDyne scheme, showing a content whose notes were never generated and whose pitch analysis is ready generates its notes (generateNotesOnly with the editor's parameters) and marks the project as changed. The merge of the generated notes is pinned in auto-notes-only.",
       "noteZh": "openDyne 方案下，显示一个从未生成音符且音高分析已就绪的内容时会生成音符（用编辑器的参数调用 generateNotesOnly），并把工程标记为已修改。生成音符的合并由 auto-notes-only 锁定。"
-    },
-    {
-      "id": "selection-reference-context",
-      "group": "selection",
-      "upstream": {
-        "file": "Source/Standalone/PluginEditor.cpp",
-        "symbol": "OpenTuneAudioProcessorEditor::refreshReferenceContext",
-        "kind": "function",
-        "normalization": "fn-v1",
-        "sha256": "33e612c69ed09783083878291bd2f299e3a55b728baa576806b5533ea03d565e"
-      },
-      "control": [
-        {
-          "file": "Source/Control/Ops/SelectionOps.cpp",
-          "symbols": [
-            "captureReference",
-            "predictReference",
-            "preheatWouldQueue"
-          ]
-        }
-      ],
-      "tests": [
-        "ControlProcessorTests.SelectionMatrix",
-        "ControlProcessorTests.SelectionVectors"
-      ],
-      "note": "After a selection the editor preheats the reference alignment of the clip and its bound reference, when a binding resolves and experimental features are on. The binding (evaluateAutoRefUiState, none in the openDyne scheme) is pinned in auto-button-mode, the preheat (preheatReferenceAlignmentFeatures) in time-seed-preheat.",
-      "noteZh": "选择之后，若参考绑定可解析且实验功能已开启，编辑器会预热该片段及其绑定参考的对齐分析。绑定（evaluateAutoRefUiState，openDyne 方案下没有）由 auto-button-mode 锁定，预热（preheatReferenceAlignmentFeatures）由 time-seed-preheat 锁定。"
     },
     {
       "id": "selection-double-click",
@@ -1635,6 +1686,153 @@
       ],
       "note": "The processor callback of the hybrid toggle makes every content render again (invalidateAllContentCaches); prefs.set hybridMode calls it too and reports reRenderQueued.",
       "noteZh": "混合模式开关的 processor 回调让所有内容重新渲染（invalidateAllContentCaches）；prefs.set 的 hybridMode 也调用它，并报告 reRenderQueued。"
+    },
+    {
+      "id": "prefs-vocoder-weight",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "vocoderWeightSelector_.onChange",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "1f2e5b5ca8d7619a6b4c32650935861335c6ad239d55a6cdcce43e3a065d797d"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions",
+        "ControlProcessorTests.PrefsVocoderJob",
+        "ControlProcessorTests.PrefsVocoderOverlap"
+      ],
+      "note": "The weight selector stores the vocoder weight (AppPreferences::setVocoderModelWeight), calls the processor callback below and has the editor apply the preferences; prefs.set vocoderWeight does the same, as a job that waits for the vocoder.",
+      "noteZh": "声码器权重下拉框用 AppPreferences::setVocoderModelWeight 保存权重，调用下面的 processor 回调，并让编辑器应用偏好；prefs.set 的 vocoderWeight 做同样的事，但作为等待声码器的 job。"
+    },
+    {
+      "id": "prefs-vocoder-weight-processor",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "auto onVocoderModelWeightChanged",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "77b3e9be5dcb6e928d5c0d4407138b120934918a9caa6b12884b242dfa601ab0"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsModels.cpp",
+          "symbols": [
+            "controlSetVocoderWeight"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "recordDelta"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions",
+        "ControlProcessorTests.PrefsVocoderJob"
+      ],
+      "note": "The processor callback of the weight selector asks the processor for the new weight (setVocoderModelWeight), which makes every content render again once the runtime has switched; prefs.set vocoderWeight calls it too and reports reRenderQueued.",
+      "noteZh": "权重下拉框的 processor 回调向 processor 请求新权重（setVocoderModelWeight），运行时切换完成后所有内容重新渲染；prefs.set 的 vocoderWeight 也调用它，并报告 reRenderQueued。"
+    },
+    {
+      "id": "prefs-rendering-priority",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "renderingPrioritySelector_.onChange",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "035ba82218d936f12522457677574920be8bbe3350333a159534a7ccdef6ed39"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsModels.cpp",
+          "symbols": [
+            "controlResetInferenceBackend"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions",
+        "ControlProcessorTests.PrefsVocoderJob",
+        "ControlProcessorTests.PrefsVocoderOverlap"
+      ],
+      "note": "The priority selector stores the rendering priority (AppPreferences::setRenderingPriority), resets the inference backend through the processor (resetInferenceBackend(forceCpu), passed to the preferences page as an inline lambda in showPreferencesDialog) and has the editor apply the preferences; prefs.set renderingPriority does the same and reports no render.",
+      "noteZh": "优先级下拉框用 AppPreferences::setRenderingPriority 保存渲染优先级，经 processor 重置推理后端（resetInferenceBackend(forceCpu)，在 showPreferencesDialog 里以内联 lambda 传给偏好页），并让编辑器应用偏好；prefs.set 的 renderingPriority 做同样的事，不报告重新渲染。"
+    },
+    {
+      "id": "prefs-f0-model",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "f0ModelSelector_.onChange",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "0b559059442b9ad017ee4363048ac9eccd620b060009f10b330c12de97f09a90"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions"
+      ],
+      "note": "The pitch-model selector first asks the processor to switch (the processor callback below) and, only when that succeeds, stores the model (AppPreferences::setF0ModelType) and has the editor apply the preferences; prefs.set f0Model does the same in that order and fails with MODEL_UNAVAILABLE when the processor refuses.",
+      "noteZh": "音高模型下拉框先请求 processor 切换（下面的 processor 回调），成功后才用 AppPreferences::setF0ModelType 保存并让编辑器应用偏好；prefs.set 的 f0Model 按同样顺序执行，processor 拒绝时返回 MODEL_UNAVAILABLE。"
+    },
+    {
+      "id": "prefs-f0-model-processor",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "auto onF0ModelChanged",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "84fde8935140179daad231230128738a88745ed5441a8a24026281cb29c043d5"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsModels.cpp",
+          "symbols": [
+            "controlSetF0Model"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions"
+      ],
+      "note": "The processor callback of the pitch-model selector is setF0ModelType, whose result says whether the model was switched; prefs.set f0Model calls it and treats false as a refusal.",
+      "noteZh": "音高模型下拉框的 processor 回调是 setF0ModelType，其返回值表示模型是否已切换；prefs.set 的 f0Model 调用它，并把 false 当作拒绝。"
     },
     {
       "id": "audio-list-types",
@@ -1943,31 +2141,6 @@
       "noteZh": "选择声道对时只启用该对的声道（最多两个输出声道），并不再使用默认声道。"
     },
     {
-      "id": "reference-align-commit",
-      "group": "reference",
-      "upstream": {
-        "file": "Source/PluginProcessor.cpp",
-        "symbol": "OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement",
-        "kind": "function",
-        "normalization": "fn-v1",
-        "sha256": "711ecb99018d5e3c882de86ccd837586ac40a0e331da99b9bbd888c7900df7b7"
-      },
-      "control": [
-        {
-          "file": "Source/Control/Edit/ReferenceAlignment.cpp",
-          "symbols": [
-            "controlAlignToReference"
-          ]
-        }
-      ],
-      "tests": [
-        "ControlProcessorTests.Reference",
-        "ControlProcessorTests.ReferenceVectors"
-      ],
-      "note": "AUTO with a reference clip: the overlap of the two clips, ReferenceAutoAlign::align(), the affected frame range, the corrected pitch curve, the commit and the PianoRollEditAction described \"AUTO (Ref)\"; the API hands the action back to put it in its own undo entry.",
-      "noteZh": "带参考片段的 AUTO：两个片段的重叠、ReferenceAutoAlign::align()、受影响的帧范围、修正后的音高曲线、提交，以及描述为 \"AUTO (Ref)\" 的 PianoRollEditAction；接口把该动作取回，放进自己的撤销条目。"
-    },
-    {
       "id": "track-add",
       "group": "tracks",
       "upstream": {
@@ -2085,14 +2258,22 @@
             "kMaxVolumeLinear",
             "requestedVolume"
           ]
+        },
+        {
+          "file": "Source/Control/Ops/ArrangementOps.cpp",
+          "symbols": [
+            "kMaxClipGainLinear",
+            "runInPlace"
+          ]
         }
       ],
       "tests": [
         "ControlProcessorTests.Tracks",
-        "ControlProcessorTests.TrackVectors"
+        "ControlProcessorTests.TrackVectors",
+        "ControlProcessorTests.Arrangement"
       ],
-      "note": "The track volume knob covers the linear range 0 to 4; track.set limits a larger volume to it (CLAMPED).",
-      "noteZh": "轨道音量旋钮的线性范围是 0 到 4；track.set 把更大的音量限制到该范围（CLAMPED）。"
+      "note": "The volume knob of the interface covers the linear range 0 to 4; track.set limits a larger volume to it and arrangement.edit op setGain limits a larger clip gain to it (CLAMPED).",
+      "noteZh": "界面的音量旋钮覆盖 0 到 4 的线性范围；track.set 把更大的轨道音量限制到该范围，arrangement.edit 的 setGain 把更大的片段增益也限制到该范围（CLAMPED）。"
     },
     {
       "id": "arrangement-trim-left",
@@ -2218,80 +2399,6 @@
       ],
       "note": "OpenTune merges two adjacent clips of one track that show adjacent parts of one source with equal gain and name; op merge checks those conditions first (merge_not_possible) and reports a later refusal with the same reason.",
       "noteZh": "OpenTune 合并同一轨道上相邻、显示同一音源相邻部分且增益与名称相同的两个片段；op merge 预先检查这些条件（merge_not_possible），之后的拒绝也用同一原因报告。"
-    },
-    {
-      "id": "arrangement-reference-binding",
-      "group": "arrangement",
-      "upstream": {
-        "file": "Source/StandaloneArrangement.cpp",
-        "symbol": "StandaloneArrangement::validateReferenceBindingUnlocked",
-        "kind": "function",
-        "normalization": "fn-v1",
-        "sha256": "49e5e10056f7931b919b8e051cebc7fc6e76ec20f3d6b3c0c7529701f494d16a"
-      },
-      "control": [
-        {
-          "file": "Source/Control/Ops/ArrangementOps.cpp",
-          "symbols": [
-            "referenceEligible",
-            "formsCycle"
-          ]
-        }
-      ],
-      "tests": [
-        "ControlProcessorTests.Arrangement",
-        "ControlProcessorTests.ArrangementVectors"
-      ],
-      "note": "A clip may take as reference another live clip that overlaps it in time and does not lead back to it; op setReference checks that on the arrangement as the earlier ops of the call leave it (reference_ineligible).",
-      "noteZh": "片段只能以另一个时间上重叠、且不会绕回自身的在用片段为参考；op setReference 按本次调用中前面各 op 执行后的编排做同样的检查（reference_ineligible）。"
-    },
-    {
-      "id": "arrangement-reference-binding-clear",
-      "group": "arrangement",
-      "upstream": {
-        "file": "Source/Standalone/PluginEditor.cpp",
-        "symbol": "menu.addItem(juce::String::fromUTF8(u8\"\\u4E0D\\u4F7F\\u7528\\u53C2\\u8003Clip\")",
-        "kind": "statement",
-        "normalization": "stmt-v1",
-        "sha256": "9b6d98824824ae34a5a64242d3c133f755c45e229f2b61e81f3f15550d6c10b6"
-      },
-      "control": [
-        {
-          "file": "Source/Standalone/ControlEditorBridge.cpp",
-          "symbols": [
-            "ControlEditorBridge::onReferenceBindingChanged"
-          ]
-        }
-      ],
-      "tests": [
-        "ControlProcessorTests.Arrangement"
-      ],
-      "note": "The reference binding menu's entry that removes a binding: after the binding and its undo entry are made and the project is marked changed, the arrangement is redrawn and the reference context is refreshed (referenceRefreshPending_, refreshReferenceContext). The bridge repeats the two trailing steps in onReferenceBindingChanged().",
-      "noteZh": "参考绑定菜单里移除绑定的菜单项：设置绑定、入撤销栈、标记工程已修改之后，重绘编排视图并刷新参考上下文（referenceRefreshPending_、refreshReferenceContext）。bridge 在 onReferenceBindingChanged() 里重复最后两步。"
-    },
-    {
-      "id": "arrangement-reference-binding-set",
-      "group": "arrangement",
-      "upstream": {
-        "file": "Source/Standalone/PluginEditor.cpp",
-        "symbol": "refMenu.addItem(label, [this, arrangement, trackId, targetPlacementId, candidate]()",
-        "kind": "statement",
-        "normalization": "stmt-v1",
-        "sha256": "ba369ebb56ec8ad2d54350829aed6e56961df8be48c015155aa84107befcae7d"
-      },
-      "control": [
-        {
-          "file": "Source/Standalone/ControlEditorBridge.cpp",
-          "symbols": [
-            "ControlEditorBridge::onReferenceBindingChanged"
-          ]
-        }
-      ],
-      "tests": [
-        "ControlProcessorTests.Arrangement"
-      ],
-      "note": "The reference binding menu's entry that sets a binding to a candidate clip: the same trailing steps as the entry that removes it (redraw the arrangement, refresh the reference context), repeated by onReferenceBindingChanged().",
-      "noteZh": "参考绑定菜单里把绑定设为候选片段的菜单项：最后几步与移除绑定的菜单项相同（重绘编排视图、刷新参考上下文），由 onReferenceBindingChanged() 重复。"
     }
   ]
 }

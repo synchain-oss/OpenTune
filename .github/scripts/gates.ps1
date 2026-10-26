@@ -208,6 +208,38 @@ function Get-LogTail($Run, [int]$Lines = 12) {
     return ((($Run.Text -split "`r?`n") | Where-Object { $_.Trim() } | Select-Object -Last $Lines) -join ' / ')
 }
 
+# The failed test names of ctest summaries (run-ctest.ps1), in order. A summary that is $null, has no `failed`
+# member or a null one adds nothing: @($s.failed) of a null member is one $null element, which would be counted as a
+# failed test (and reading a missing member stops the script under strict mode).
+function Get-FailedTestNames([object[]]$Summaries) {
+    $names = [System.Collections.Generic.List[string]]::new()
+    foreach ($s in @($Summaries)) {
+        if ($null -eq $s -or $null -eq $s.PSObject.Properties['failed']) { continue }
+        foreach ($name in @($s.failed)) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$name)) { $names.Add([string]$name) }
+        }
+    }
+    return , $names.ToArray()
+}
+
+# A member of a ctest summary (run-ctest.ps1) or $Default: a summary that is $null, has no such member or a null one
+# gives $Default, because reading a missing member stops the script under strict mode (as `failed` above).
+function Get-SummaryMember($Summary, [string]$Name, $Default = $null) {
+    if ($null -eq $Summary) { return $Default }
+    $property = $Summary.PSObject.Properties[$Name]
+    if ($null -eq $property -or $null -eq $property.Value) { return $Default }
+    return $property.Value
+}
+# A count member of a ctest summary as an integer, 0 when the summary does not have it.
+function Get-SummaryCount($Summary, [string]$Name) {
+    return [int](Get-SummaryMember $Summary $Name 0)
+}
+# The names in the excluded / failed list of a ctest summary, without the empty ones (see Get-FailedTestNames). An empty
+# list comes out of a function as $null, so a caller that needs .Count or an array wraps the call in @().
+function Get-SummaryNames($Summary, [string]$Name) {
+    return @(@(Get-SummaryMember $Summary $Name @()) | Where-Object { -not [string]::IsNullOrWhiteSpace([string]$_) })
+}
+
 function Find-Ninja {
     $cmd = Get-Command ninja -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
@@ -293,7 +325,11 @@ function Test-DataDirHook {
 function Get-IsolationVerdict($Control, $Other, [bool]$Hook) {
     $otherCount = if ($null -eq $Other) { 0 } else { [int]$Other.Count }
     if ($null -eq $Control) {
-        return [pscustomobject]@{ Status = 'SKIP'; Note = '没有名字含 Control 的测试或 ctest 未运行' }
+        # No control pass: the build has no test with "Control" in its name (the lane's default build has the control
+        # API switched off, so none is registered). ctest itself did run for the other tests when $Other is set.
+        $note = '本构建没有名字含 Control 的测试（控制接口关闭，控制层测试只在 control-on 一轮注册），所以没有可判定的控制层测试；其余上游测试的 ctest 已运行'
+        if ($otherCount -gt 0) { $note += "（它们改动了真实目录：新建 $(@($Other.Created).Count) 项、修改 $(@($Other.Changed).Count) 项、删除 $(@($Other.Removed).Count) 项；已知上游行为）" }
+        return [pscustomobject]@{ Status = 'SKIP'; Note = "$note；控制层测试的隔离见「测试数据隔离（control-on 一轮）」一行" }
     }
     if ($Control.Count -gt 0) {
         $examples = @(@($Control.Created) + @($Control.Changed) | Select-Object -First 3 | ForEach-Object { if ($_ -eq '.') { 'OpenTune' } else { "OpenTune\$_" } })
@@ -315,7 +351,11 @@ function Get-IsolationVerdict($Control, $Other, [bool]$Hook) {
 }
 function Add-IsolationRow($Control, $Other, [bool]$RanCtest) {
     $step = '测试数据隔离（真实 %APPDATA%\OpenTune）'
-    if (-not $RanCtest) { Add-Row $step 'SKIP' 'ctest 未运行'; return }
+    if (-not $RanCtest) {
+        $why = if ($script:ctestNotRunReason) { $script:ctestNotRunReason } else { '没有 ctest 结果可比对（见 configure / build / ctest 各行）' }
+        Add-Row $step 'SKIP' $why
+        return
+    }
     $v = Get-IsolationVerdict $Control $Other (Test-DataDirHook)
     Add-Row $step $v.Status $v.Note
 }
@@ -342,6 +382,8 @@ function Get-LaneCmakeArgs([string[]]$Drop = @()) {
 # and sets $script:ctestDataDiff to the change of the real data directory during ctest.
 $script:ctestDataDiff = $null
 $script:ctestControlDiff = $null
+# Why no ctest ran (configure or build failed), for the isolation row; $null when nothing says so.
+$script:ctestNotRunReason = $null
 function Invoke-BuildSteps {
     New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
     $cmakeArgs = @(Get-LaneCmakeArgs)
@@ -354,6 +396,7 @@ function Invoke-BuildSteps {
         Add-Row 'configure' 'FAIL' "exit $($configure.Code)；$(Format-Timing $configure)；日志 $($configure.Log)：$(Get-LogTail $configure)"
         Add-Row 'build' 'SKIP' 'configure 失败'
         Add-Row 'ctest' 'SKIP' 'configure 失败'
+        $script:ctestNotRunReason = 'configure 失败，ctest 未运行'
     } else {
         Add-Row 'configure' 'PASS' "Ninja Multi-Config；$(Format-Timing $configure)"
         # Targets: the Standalone app, the VST3 plug-in and every registered test except the excluded ones.
@@ -370,6 +413,7 @@ function Invoke-BuildSteps {
         if ($build.Code -ne 0) {
             Add-Row 'build' 'FAIL' "exit $($build.Code)；$(Format-Timing $build)；日志 $($build.Log)：$(Get-LogTail $build)"
             Add-Row 'ctest' 'SKIP' 'build 失败'
+            $script:ctestNotRunReason = 'build 失败，ctest 未运行'
         } else {
             Add-Row 'build' 'PASS' "$Config，--parallel $Parallel，$($targets.Count) 个目标（Standalone、VST3 与测试，不含 $($ExcludedTests -join '、')）；$(Format-Timing $build)"
             $summaryPath = Join-Path $logDir 'ctest-summary.json'
@@ -406,16 +450,18 @@ function Invoke-BuildSteps {
                 # Merge the control pass into the overall summary.
                 $ctestCodeControl = $ctestControl.Code
                 $summary = [pscustomobject]@{
-                    passed = [int]$summary.passed + [int]$sc.passed; total = [int]$summary.total + [int]$sc.total
-                    failed = @(@($summary.failed) + @($sc.failed)); excluded = @(@($summary.excluded) | Where-Object { $ExcludedTests -contains $_ })
+                    passed = (Get-SummaryCount $summary 'passed') + (Get-SummaryCount $sc 'passed')
+                    total = (Get-SummaryCount $summary 'total') + (Get-SummaryCount $sc 'total')
+                    failed = Get-FailedTestNames @($summary, $sc)
+                    excluded = @(Get-SummaryNames $summary 'excluded' | Where-Object { $ExcludedTests -contains $_ })
                 }
                 if ($ctestCodeControl -ne 0) { $ctest = [pscustomobject]@{ Code = $ctestCodeControl; Log = $ctest.Log } }
             }
             $dataNote = '每个测试设置了独立的 OPENTUNE_DATA_DIR=<build>\ot-test-data\<测试名>（是否生效见「测试数据隔离」一行）'
             if ($ctest.Code -eq 0 -and $summary) {
-                Add-Row 'ctest' 'PASS' "$($summary.passed)/$($summary.total) 通过（排除 $(@($summary.excluded) -join '、')：在锁定的 ARA SDK 2.3.0 下编不过，属上游问题）；$dataNote；$(Format-Timing $ctest)"
+                Add-Row 'ctest' 'PASS' "$(Get-SummaryCount $summary 'passed')/$(Get-SummaryCount $summary 'total') 通过（排除 $((Get-SummaryNames $summary 'excluded') -join '、')：在锁定的 ARA SDK 2.3.0 下编不过，属上游问题）；$dataNote；$(Format-Timing $ctest)"
             } elseif ($summary) {
-                Add-Row 'ctest' 'FAIL' "失败：$(@($summary.failed) -join '、')（$($summary.passed)/$($summary.total) 通过）；日志在 <build>\ot-test-data；$(Format-Timing $ctest)"
+                Add-Row 'ctest' 'FAIL' "失败：$((Get-SummaryNames $summary 'failed') -join '、')（$(Get-SummaryCount $summary 'passed')/$(Get-SummaryCount $summary 'total') 通过）；日志在 <build>\ot-test-data；$(Format-Timing $ctest)"
             } else {
                 Add-Row 'ctest' 'FAIL' "exit $($ctest.Code)；日志 $($ctest.Log)：$(Get-LogTail $ctest)"
             }
@@ -485,19 +531,19 @@ function Invoke-ControlOnSteps {
     if (Test-Path -LiteralPath $summaryOtherPath) { $so = Get-Content -LiteralPath $summaryOtherPath -Raw | ConvertFrom-Json }
     if (-not $sc) {
         Add-Row $ControlOnStep 'FAIL' "ctest exit $($ctestControl.Code)；日志 $($ctestControl.Log)：$(Get-LogTail $ctestControl)"
-    } elseif ([int]$sc.total -eq 0) {
+    } elseif ((Get-SummaryCount $sc 'total') -eq 0) {
         Add-Row $ControlOnStep 'FAIL' '运行了 0 个 Control 测试'
     } elseif ($ctestOther -and -not $so) {
         Add-Row $ControlOnStep 'FAIL' "其余测试 ctest exit $($ctestOther.Code)；日志 $($ctestOther.Log)：$(Get-LogTail $ctestOther)"
     } else {
-        $failed = @(@($sc.failed) + $(if ($so) { @($so.failed) } else { @() }))
-        $total = [int]$sc.total + $(if ($so) { [int]$so.total } else { 0 })
-        $passed = [int]$sc.passed + $(if ($so) { [int]$so.passed } else { 0 })
+        $failed = Get-FailedTestNames @($sc, $so)
+        $total = (Get-SummaryCount $sc 'total') + (Get-SummaryCount $so 'total')
+        $passed = (Get-SummaryCount $sc 'passed') + (Get-SummaryCount $so 'passed')
         $timing = "$(Format-Timing $build)；ctest（Control）$(Format-Timing $ctestControl)$(if ($ctestOther) { "；ctest（其余）$(Format-Timing $ctestOther)" })"
         if ($failed.Count -gt 0) {
             Add-Row $ControlOnStep 'FAIL' "失败：$($failed -join '、')（$passed/$total 通过）；日志在 <build>\control-on\ot-test-data*；$timing"
         } else {
-            Add-Row $ControlOnStep 'PASS' "$passed/$total 个测试通过（Control $($sc.total) 个，其余 $(if ($so) { $so.total } else { 0 }) 个；排除 $($ExcludedTests -join '、')）；构建 $($targets.Count) 个目标（Standalone、VST3 与测试，同 CI）；每个测试独立的 OPENTUNE_DATA_DIR；$timing"
+            Add-Row $ControlOnStep 'PASS' "$passed/$total 个测试通过（Control $(Get-SummaryCount $sc 'total') 个，其余 $(Get-SummaryCount $so 'total') 个；排除 $($ExcludedTests -join '、')）；构建 $($targets.Count) 个目标（Standalone、VST3 与测试，同 CI）；每个测试独立的 OPENTUNE_DATA_DIR；$timing"
         }
     }
 }

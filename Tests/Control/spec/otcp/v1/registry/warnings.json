@@ -111,7 +111,8 @@
     {
       "code": "REFERENCE_ANALYSIS_QUEUED",
       "since": "1.0",
-      "description": "Reference alignment analysis was queued as a side effect."
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7 with the reference alignment, and no longer sent. Reference alignment analysis was queued as a side effect."
     },
     {
       "code": "DIALOG_CLOSE_COMMITTED",

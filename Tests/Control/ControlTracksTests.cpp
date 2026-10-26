@@ -395,13 +395,44 @@ void checkTransportActions(Fixture& f)
     CONTROL_CHECK(near(memberOf(memberOf(atStart, "transport"), "positionTimelineSec"), 4.0));
     CONTROL_CHECK(memberOf(f.control("pauseAtLastStart"), "noOp").asBoolean());
 
-    // stop: with a running device the audio callback rewinds to 0, which the result already shows.
+    // stop: the audio callback lands the transport on 0 when its fade-out completes (0.2 s). The result reports the
+    // transport state right after the call, which is what transport.get returns now; a read after the fade returns 0.
     f.control("play");
     const auto stop = f.control("stop");
     CONTROL_CHECK(!memberOf(memberOf(stop, "transport"), "playing").asBoolean());
-    CONTROL_CHECK(near(memberOf(memberOf(stop, "transport"), "positionTimelineSec"), 0.0));
+    const auto stoppedAt = f.transport();
+    CONTROL_CHECK(near(memberOf(memberOf(stop, "transport"), "positionTimelineSec"),
+                       memberOf(stoppedAt, "positionTimelineSec").asDouble()));
+    CONTROL_CHECK(near(memberOf(memberOf(stop, "transport"), "playStartTimelineSec"), 4.0));
     CONTROL_CHECK(memberOf(memberOf(memberOf(stop, "transport"), "lastControl"), "call").text() == "stop");
     CONTROL_CHECK(f.bridge.dirtyMarks == 0);
+}
+
+/** The result of stop and the transport.get that follows it agree, a few times in a row: the position is the presented
+    one the stop froze, not a landing value constructed before the read. The test device has no audio callback, so
+    this only guards against one regression: putting `positionAfter = 0.0` back for stop. That the position reads 0
+    after the 0.2 s fade is confirmed by the real-Standalone tour. */
+void checkStopMatchesRead(Fixture& f)
+{
+    for (int i = 0; i < 5; ++i) {
+        const double seekTo = 0.25 + static_cast<double>(i) * 0.01;
+        f.control("seek", ",\"positionTimelineSec\":" + std::to_string(seekTo));
+        const auto play = f.control("play");
+        CONTROL_CHECK(memberOf(memberOf(play, "transport"), "playing").asBoolean());
+        const auto stop = f.control("stop");
+        const auto read = f.transport();
+        CONTROL_CHECK(!memberOf(read, "playing").asBoolean());
+        CONTROL_CHECK(near(memberOf(memberOf(stop, "transport"), "positionTimelineSec"),
+                           memberOf(read, "positionTimelineSec").asDouble()));
+        CONTROL_CHECK(near(memberOf(memberOf(stop, "transport"), "playStartTimelineSec"),
+                           memberOf(read, "playStartTimelineSec").asDouble()));
+        const auto change = changeOf(stop, "transport", "singleton", JsonValue::string("transport"));
+        const auto& fields = memberOf(change, "fields");
+        if (memberOf(fields, "positionTimelineSec").isObject()) {
+            CONTROL_CHECK(near(memberOf(memberOf(fields, "positionTimelineSec"), "after"),
+                               memberOf(read, "positionTimelineSec").asDouble()));
+        }
+    }
 }
 
 void checkTransportChecks(Fixture& f)
@@ -473,6 +504,35 @@ void checkTempo(Fixture& f)
     CONTROL_CHECK(memberOf(changes, "applied").asBoolean() && memberOf(memberOf(changes, "undo"), "revert").isNull()
                   && hasWarning(changes, "IRREVERSIBLE"));
     CONTROL_CHECK(f.processor->getTimeSigNumerator() == 3 && f.processor->getTimeSigDenominator() == 4);
+
+    // The same for a numerator above 32, which the schema cannot express either. A call that leaves the signature
+    // alone gets a recipe of the tempo only, and that recipe is a complete one: sent unchanged it puts the tempo
+    // back and leaves the signature as it was.
+    f.processor->setTimeSignature(40, 4);
+    const double bpmBefore = f.processor->getBpm();
+    const auto keepsBig = f.api.result("transport.setTempo", json(R"({"bpm":110})"));
+    const auto& keepsBigRevert = memberOf(memberOf(keepsBig, "undo"), "revert");
+    CONTROL_CHECK(memberOf(keepsBig, "applied").asBoolean() && !hasWarning(keepsBig, "IRREVERSIBLE")
+                  && memberOf(keepsBigRevert, "params").find("timeSignature") == nullptr
+                  && near(memberOf(memberOf(keepsBigRevert, "params"), "bpm"), bpmBefore));
+    CONTROL_CHECK(
+        memberOf(f.api.result("transport.setTempo", memberOf(keepsBigRevert, "params")), "applied").asBoolean());
+    CONTROL_CHECK(near(f.processor->getBpm(), bpmBefore) && f.processor->getTimeSigNumerator() == 40
+                  && f.processor->getTimeSigDenominator() == 4);
+    // A call that changes the signature as well leaves no recipe at all, the tempo included: a recipe has to restore
+    // the whole state, and this one could not restore the 40/4, so a recipe of the tempo alone would be a partial one.
+    // The warning says which signature could not be put back.
+    const auto both =
+        f.api.result("transport.setTempo", json(R"({"bpm":90,"timeSignature":{"numerator":3,"denominator":4}})"));
+    CONTROL_CHECK(memberOf(both, "applied").asBoolean() && memberOf(memberOf(both, "undo"), "revert").isNull()
+                  && memberOf(memberOf(both, "undo"), "reason").text() == "ui_parity");
+    CONTROL_CHECK(near(f.processor->getBpm(), 90.0) && f.processor->getTimeSigNumerator() == 3
+                  && f.processor->getTimeSigDenominator() == 4);
+    CONTROL_CHECK(warningCodes(both) == "IRREVERSIBLE");
+    const auto& irreversible = memberOf(memberOf(both, "warnings").at(0), "data");
+    CONTROL_CHECK(memberOf(irreversible, "reason").text() == "previous_time_signature_not_settable"
+                  && near(memberOf(memberOf(irreversible, "timeSignature"), "numerator"), 40.0)
+                  && near(memberOf(memberOf(irreversible, "timeSignature"), "denominator"), 4.0));
 }
 
 void checkLoop(Fixture& f)
@@ -499,6 +559,7 @@ void scenarioTransportImpl()
             return;
         checkTransportActions(f);
         checkTransportChecks(f);
+        checkStopMatchesRead(f);
         checkTempo(f);
         checkLoop(f);
     }
@@ -646,9 +707,8 @@ void checkTrackAdd(Fixture& f)
 
 void checkTrackDuplicate(Fixture& f)
 {
-    auto& arrangement = f.arrangement();
-    const auto source = f.addClip(0);
-    const auto referenced = f.addClip(1, 2.0);
+    f.addClip(0);
+    f.addClip(1, 2.0);
     settleBackgroundWork(*f.processor);
     f.setTracks(R"([{"trackId":0,"muted":true,"volumeLinear":0.5,"colour":"#ABCDEF"}])");
     const auto before = f.project();
@@ -656,8 +716,6 @@ void checkTrackDuplicate(Fixture& f)
     const auto referencedHandles = fixtureHandlesOf(before, 1, 2.0);
     if (!CONTROL_CHECK(sourceHandles.has_value() && referencedHandles.has_value()))
         return;
-    // The clip of track 1 has a reference binding to the clip of track 0; its copy keeps it.
-    CONTROL_CHECK(arrangement.setPlacementReferencePlacement(1, referenced.placementId, source.placementId));
 
     // Mode share, what OpenTune's UI does: the copy shows the same content.
     const int marks = f.bridge.dirtyMarks;
@@ -685,7 +743,7 @@ void checkTrackDuplicate(Fixture& f)
     CONTROL_CHECK(memberOf(memberOf(revert, "params"), "expectedArrangementRevision").text()
                   == f.arrangementRevision());
 
-    // The slot of the next copy is the first hidden one; a copy of track 1 keeps the reference binding.
+    // The slot of the next copy is the first hidden one.
     const auto cloned = f.api.result("track.duplicate", json(R"({"trackId":1})"));
     CONTROL_CHECK(near(memberOf(cloned, "newTrackId"), 3.0) && warningCodes(cloned).empty());
     project = f.project();
@@ -693,7 +751,7 @@ void checkTrackDuplicate(Fixture& f)
     if (!CONTROL_CHECK(clones.size() == 1))
         return;
     CONTROL_CHECK(memberOf(clones[0], "contentId").text() != referencedHandles->contentId);
-    CONTROL_CHECK(memberOf(clones[0], "referencePlacementId").text() == sourceHandles->placementId);
+    CONTROL_CHECK(clones[0].find("referencePlacementId") == nullptr);
     // Mode clone gave the copy a content of its own, listed as created, with the notes of the source.
     bool createdContent = false;
     const auto& created = memberOf(cloned, "created");
@@ -723,21 +781,20 @@ void checkTrackDelete(Fixture& f)
 {
     auto& arrangement = f.arrangement();
     f.bridge.visibleTracks = 3;
-    const auto a = f.addClip(0);
-    const auto b = f.addClip(1);
-    const auto c = f.addClip(2);
+    f.addClip(0);
+    f.addClip(1);
+    f.addClip(2);
     // A hidden slot that holds a clip: removeTrackAndShift() leaves it where it is.
     f.addClip(5);
     settleBackgroundWork(*f.processor);
-    CONTROL_CHECK(arrangement.setPlacementReferencePlacement(2, c.placementId, b.placementId));
-    f.setTracks(R"([{"trackId":2,"muted":true,"volumeLinear":0.5,"colour":"#112233"}])");
+    f.setTracks(R"([{"trackId":2,"muted":true,"volumeLinear":0.5,"colour":"#112233"},)"
+                R"({"trackId":5,"muted":true,"volumeLinear":0.25,"colour":"#445566"}])");
     const auto before = f.project();
     const auto bHandles = fixtureHandlesOf(before, 1, 2.0);
     const auto cHandles = fixtureHandlesOf(before, 2, 2.0);
     const auto hiddenHandles = fixtureHandlesOf(before, 5, 2.0);
     if (!CONTROL_CHECK(bHandles.has_value() && cHandles.has_value() && hiddenHandles.has_value()))
         return;
-    (void)a;
 
     // The checks first; none of them changes anything.
     const auto revision = f.arrangementRevision();
@@ -760,15 +817,18 @@ void checkTrackDelete(Fixture& f)
     CONTROL_CHECK(memberOf(placementsOn(project, 1)[0], "placementId").text() == cHandles->placementId);
     CONTROL_CHECK(arrangement.isTrackMuted(1) && near(arrangement.getTrackVolume(1), 0.5)
                   && !arrangement.isTrackMuted(2) && near(arrangement.getTrackVolume(2), 1.0));
-    // trackIdMap, the removed clip and content, the binding that went with the clip.
+    // trackIdMap, the removed clip and content.
     const auto& map = memberOf(deleted, "trackIdMap");
-    CONTROL_CHECK(map.size() == 2 && memberOf(map.at(0), "after").isNull() && near(memberOf(map.at(1), "after"), 1.0));
-    // The clip of the hidden slot stays on its track: it is not in trackIdMap and has no change entry.
+    CONTROL_CHECK(map.size() == 2 && memberOf(map.at(0), "after").isNull() && near(memberOf(map.at(0), "before"), 1.0)
+                  && near(memberOf(map.at(1), "before"), 2.0) && near(memberOf(map.at(1), "after"), 1.0));
+    // The clip of the hidden slot stays on its track, with its mix, and is not in trackIdMap or in changes.
     for (std::size_t i = 0; i < map.size(); ++i)
         CONTROL_CHECK(!near(memberOf(map.at(i), "before"), 5.0));
     const auto hiddenClips = placementsOn(project, 5);
     CONTROL_CHECK(hiddenClips.size() == 1
                   && memberOf(hiddenClips[0], "placementId").text() == hiddenHandles->placementId);
+    CONTROL_CHECK(arrangement.isTrackMuted(5) && near(arrangement.getTrackVolume(5), 0.25)
+                  && !memberOf(trackOf(project, 5), "visible").asBoolean());
     CONTROL_CHECK(
         changeOf(deleted, "placement", "placementId", JsonValue::string(hiddenHandles->placementId)).isNull());
     const auto& removed = memberOf(deleted, "removed");
@@ -776,9 +836,8 @@ void checkTrackDelete(Fixture& f)
                   && memberOf(removed.at(1), "entity").text() == "content");
     CONTROL_CHECK(memberOf(memberOf(removed.at(1), "ref"), "contentId").text() == bHandles->contentId);
     CONTROL_CHECK(!listsContent(project, bHandles->contentId));
-    CONTROL_CHECK(memberOf(placementsOn(project, 1)[0], "referencePlacementId").isNull());
-    CONTROL_CHECK(memberOf(memberOf(deleted, "danglingReferences").at(0), "referencePlacementId").text()
-                  == bHandles->placementId);
+    // The retired members of the result are gone.
+    CONTROL_CHECK(deleted.find("danglingReferences") == nullptr);
     const auto moved = changeOf(deleted, "placement", "placementId", JsonValue::string(cHandles->placementId));
     CONTROL_CHECK(near(memberOf(memberOf(memberOf(moved, "fields"), "trackId"), "after"), 1.0));
     CONTROL_CHECK(memberOf(memberOf(deleted, "undo"), "reason").text() == "no_upstream_undo"
@@ -806,7 +865,6 @@ void checkTrackDeleteSharedContent(Fixture& f)
     // The content is shown by a clip of track 0 as well, so deleting track 2 removes the clip and not the content.
     const auto deleted = f.deleteTrack(2);
     CONTROL_CHECK(memberOf(deleted, "removed").size() == 1 && listsContent(f.project(), before->contentId));
-    CONTROL_CHECK(memberOf(deleted, "danglingReferences").size() == 0);
 }
 
 void scenarioTracksImpl()
@@ -845,12 +903,12 @@ void scenarioTracksImpl()
             return;
         f.addClip(0);
         settleBackgroundWork(*f.processor);
-        CONTROL_CHECK(f.api.fails("track.add", json("{}"), "UNSUPPORTED", "capability_missing"));
-        CONTROL_CHECK(f.api.fails("track.duplicate", json(R"({"trackId":0})"), "UNSUPPORTED", "capability_missing"));
+        CONTROL_CHECK(f.api.fails("track.add", json("{}"), "UNSUPPORTED", "no_editor_window"));
+        CONTROL_CHECK(f.api.fails("track.duplicate", json(R"({"trackId":0})"), "UNSUPPORTED", "no_editor_window"));
         CONTROL_CHECK(f.api.fails("track.delete",
                                   json("{\"trackId\":0,\"expectedArrangementRevision\":"
                                        + quoted(f.arrangementRevision()) + ",\"confirm\":true}"),
-                                  "UNSUPPORTED", "capability_missing"));
+                                  "UNSUPPORTED", "no_editor_window"));
         CONTROL_CHECK(!memberOf(f.setTracks(R"([{"trackId":0,"muted":true}])"), "noOp").asBoolean());
         CONTROL_CHECK(f.arrangement().isTrackMuted(0));
     }
@@ -888,6 +946,37 @@ std::string pushApiMove(Fixture& f, const Clip& clip, int track, double oldStart
     inner[0].name = "MultiMovePlacementAction";
     inner[0].content = clip.key;
     inner[0].tracks = {track};
+    const auto undoId = f.service().history()->nextUndoId(f.instanceShort);
+    f.service().history()->record(
+        f.processor->getUndoManager(),
+        std::make_unique<ControlOriginAction>(f.service().history(), undoId, description, std::move(inner)));
+    return undoId;
+}
+
+/** Pushes a clip move across tracks recorded through the API, as arrangement.edit records it: the clip is on `to`
+    now, `from` is where it was; the action keeps both slots for good, and the entry addresses both. Returns its
+    undoId. */
+std::string pushApiCrossMove(Fixture& f, const Clip& clip, int from, int to, double oldStart = 1.0)
+{
+    double newStart = 0.0;
+    StandaloneArrangement::Placement placement;
+    if (f.arrangement().getPlacementById(to, clip.placementId, placement))
+        newStart = placement.timelineStartSeconds;
+    MultiMovePlacementAction::Entry entry;
+    entry.sourceTrackId = from;
+    entry.targetTrackId = to;
+    entry.placementId = clip.placementId;
+    entry.oldStartSeconds = oldStart;
+    entry.newStartSeconds = newStart;
+    auto action = std::make_unique<MultiMovePlacementAction>(
+        *f.processor, std::vector<MultiMovePlacementAction::Entry>{entry}, PlacementKey{from, clip.placementId},
+        PlacementKey{to, clip.placementId});
+    std::vector<ControlOriginAction::Inner> inner(1);
+    const auto description = action->getDescription();
+    inner[0].action = std::move(action);
+    inner[0].name = "MultiMovePlacementAction";
+    inner[0].content = clip.key;
+    inner[0].tracks = {from, to};
     const auto undoId = f.service().history()->nextUndoId(f.instanceShort);
     f.service().history()->record(
         f.processor->getUndoManager(),
@@ -952,11 +1041,78 @@ void checkBarrierApiEntry(Fixture& f)
     const auto redone = f.api.result(memberOf(recipe, "method").text(), memberOf(recipe, "params"));
     CONTROL_CHECK(memberOf(redone, "applied").asBoolean() && !hasWarning(redone, "UNDO_ENTRY_POSSIBLY_STALE"));
 
-    // Another deletion makes the confirmed entry possibly stale again, and counts it.
+    // Another deletion makes the confirmed entry possibly stale again, and counts it: the first deletion moved the
+    // track the entry's clip is on from 2 to 1, and the barrier followed it (the slot the action is keyed by stays 2,
+    // which is no longer shown, so only the followed position is in range).
     f.bridge.visibleTracks = 2;
     const auto again = f.deleteTrack(0);
     CONTROL_CHECK(near(memberOf(memberOf(again, "possiblyStaleEntries"), "undo"), 1.0));
     CONTROL_CHECK(memberOf(memberOf(historyOf(f), "undoTop"), "possiblyStale").asBoolean());
+}
+
+/** A clip move across tracks (3 to 0) and two deletions. The first deletion moves the shown tracks after it down, and
+    the barrier renumbers where the clips are; but the OpenTune action keeps its recorded slots, so its undo() still
+    moves the clip to slot 3. The second deletion removes slot 3: the entry is possibly stale again, although neither
+    renumbered position (2 and 0) is among the tracks that deletion removed or moved. */
+void checkBarrierMoveAcrossTracks(Fixture& f)
+{
+    f.bridge.visibleTracks = 5;
+    const auto a = f.addClip(0);
+    settleBackgroundWork(*f.processor);
+    const auto move = pushApiCrossMove(f, a, 3, 0);
+    CONTROL_CHECK(!memberOf(memberOf(historyOf(f), "undoTop"), "possiblyStale").asBoolean());
+
+    // Deleting track 1 (5 shown) moves the shown tracks 2 to 4 down: slot 3 of the entry is among them.
+    const auto first = f.deleteTrack(1);
+    CONTROL_CHECK(near(memberOf(memberOf(first, "possiblyStaleEntries"), "undo"), 1.0) && f.bridge.visibleTracks == 4);
+    auto top = memberOf(historyOf(f), "undoTop");
+    CONTROL_CHECK(memberOf(top, "undoId").text() == move && memberOf(top, "possiblyStale").asBoolean());
+    // The end user forces the undo and then the redo: the entry is confirmed.
+    const auto forced = f.api.result("edit.undo", json(R"({"force":true})"));
+    CONTROL_CHECK(memberOf(forced, "applied").asBoolean()
+                  && !memberOf(memberOf(forced, "entry"), "possiblyStale").asBoolean());
+    const auto redone = f.api.result("edit.redo", json(undoParams(move)));
+    CONTROL_CHECK(memberOf(redone, "applied").asBoolean() && !hasWarning(redone, "UNDO_ENTRY_POSSIBLY_STALE"));
+    top = memberOf(historyOf(f), "undoTop");
+    CONTROL_CHECK(memberOf(top, "undoId").text() == move && !memberOf(top, "possiblyStale").asBoolean());
+
+    // Deleting slot 3 (4 shown) removes the slot the action still writes to: possibly stale again, and counted.
+    const auto second = f.deleteTrack(3);
+    CONTROL_CHECK(near(memberOf(memberOf(second, "possiblyStaleEntries"), "undo"), 1.0));
+    top = memberOf(historyOf(f), "undoTop");
+    CONTROL_CHECK(memberOf(top, "undoId").text() == move && memberOf(top, "possiblyStale").asBoolean());
+}
+
+/** A clip move across tracks (5 to 0), two deletions of track 1, a forced undo, a deletion that moves the clip, a
+    forced redo that finds nothing to move, and a last deletion that moves the clip down again. The slot of the action
+    (5) and the renumbered position of the clip ({2, 0} after the third deletion: the value without the merge below,
+    not what followed holds then) name neither the deleted track nor a track after it, yet the clip is moved: the
+    entry must be reported (section 15.3 rule 6: too often rather than too rarely). A step in which the action was
+    executed (not blocked by a mask) merges the slots of the action into the followed positions. */
+void checkBarrierFollowedCoversSlots(Fixture& f)
+{
+    f.bridge.visibleTracks = 8;
+    const auto a = f.addClip(0);
+    settleBackgroundWork(*f.processor);
+    const auto move = pushApiCrossMove(f, a, 5, 0);
+
+    f.deleteTrack(1);
+    f.deleteTrack(1);
+    CONTROL_CHECK(f.bridge.visibleTracks == 6);
+    // The forced undo moves the clip from 0 to slot 5.
+    const auto undone = f.api.result("edit.undo", json(R"({"force":true})"));
+    CONTROL_CHECK(memberOf(undone, "applied").asBoolean());
+    // Deleting track 2 (6 shown) moves slot 5, where the clip is now, down to 4.
+    const auto third = f.deleteTrack(2);
+    CONTROL_CHECK(near(memberOf(memberOf(third, "possiblyStaleEntries"), "redo"), 1.0));
+    // The forced redo finds no clip at slot 5 and changes nothing; the entry is confirmed all the same.
+    f.api.result("edit.redo", json(R"({"force":true})"));
+    CONTROL_CHECK(!memberOf(memberOf(historyOf(f), "undoTop"), "possiblyStale").asBoolean());
+    // Deleting track 3 (5 shown) moves the clip from 4 to 3: the entry is possibly stale.
+    const auto last = f.deleteTrack(3);
+    CONTROL_CHECK(near(memberOf(memberOf(last, "possiblyStaleEntries"), "undo"), 1.0));
+    const auto top = memberOf(historyOf(f), "undoTop");
+    CONTROL_CHECK(memberOf(top, "undoId").text() == move && memberOf(top, "possiblyStale").asBoolean());
 }
 
 void checkBarrierLaterTrack(Fixture& f)
@@ -972,6 +1128,43 @@ void checkBarrierLaterTrack(Fixture& f)
                   && warningCodes(deleted) == "IRREVERSIBLE");
     CONTROL_CHECK(!memberOf(memberOf(historyOf(f), "undoTop"), "possiblyStale").asBoolean());
     const auto undone = f.api.result("edit.undo", json(undoParams(moveOfA)));
+    CONTROL_CHECK(memberOf(undone, "applied").asBoolean() && !memberOf(undone, "noOp").asBoolean()
+                  && warningCodes(undone).empty());
+}
+
+/** An entry of the API that addresses a hidden track: removeTrackAndShift() moves only the shown tracks, so a track
+    deletion leaves the hidden slot, its clip and its mix where they are, and the entry is not possibly stale
+    (PROTOCOL.md section 15.3 rule 6: only a deletion that removed the entry's track or moved it down counts). */
+void checkBarrierHiddenTrack(Fixture& f)
+{
+    f.bridge.visibleTracks = 3;
+    const auto hidden = f.addClip(5);
+    settleBackgroundWork(*f.processor);
+    const auto hiddenBefore = fixtureHandlesOf(f.project(), 5, 2.0);
+    if (!CONTROL_CHECK(hiddenBefore.has_value()))
+        return;
+    f.setTracks(R"([{"trackId":5,"muted":true,"volumeLinear":0.25,"colour":"#445566"}])");
+    const auto moveOfHidden = pushApiMove(f, hidden, 5);
+    CONTROL_CHECK(!memberOf(memberOf(historyOf(f), "undoTop"), "possiblyStale").asBoolean());
+
+    // Deleting a shown track moves track 2 down; hidden track 5 keeps its position, its clip and its mix.
+    const auto deleted = f.deleteTrack(1);
+    CONTROL_CHECK(near(memberOf(memberOf(deleted, "possiblyStaleEntries"), "undo"), 0.0)
+                  && near(memberOf(memberOf(deleted, "possiblyStaleEntries"), "redo"), 0.0));
+    CONTROL_CHECK(warningCodes(deleted) == "IRREVERSIBLE");
+    auto& arrangement = f.arrangement();
+    CONTROL_CHECK(arrangement.isTrackMuted(5) && near(arrangement.getTrackVolume(5), 0.25));
+    const auto project = f.project();
+    const auto hiddenAfter = fixtureHandlesOf(project, 5, 2.0);
+    if (!CONTROL_CHECK(hiddenAfter.has_value()))
+        return;
+    CONTROL_CHECK(hiddenAfter->placementId == hiddenBefore->placementId
+                  && !memberOf(trackOf(project, 5), "visible").asBoolean());
+    CONTROL_CHECK(changeOf(deleted, "placement", "placementId", JsonValue::string(hiddenAfter->placementId)).isNull());
+    // The entry that addresses the hidden track is still on top and is applied as usual, without a force.
+    const auto top = memberOf(historyOf(f), "undoTop");
+    CONTROL_CHECK(memberOf(top, "undoId").text() == moveOfHidden && !memberOf(top, "possiblyStale").asBoolean());
+    const auto undone = f.api.result("edit.undo", json(undoParams(moveOfHidden)));
     CONTROL_CHECK(memberOf(undone, "applied").asBoolean() && !memberOf(undone, "noOp").asBoolean()
                   && warningCodes(undone).empty());
 }
@@ -1110,7 +1303,8 @@ void checkRemovedContentRevivedByUndo(Fixture& f)
 
 void scenarioTrackBarrierImpl()
 {
-    for (const auto check : {checkBarrierApiEntry, checkBarrierLaterTrack, checkBarrierUiEntry,
+    for (const auto check : {checkBarrierApiEntry, checkBarrierMoveAcrossTracks, checkBarrierFollowedCoversSlots,
+                             checkBarrierLaterTrack, checkBarrierHiddenTrack, checkBarrierUiEntry,
                              checkBarrierUndoBelowMark, checkBarrierRemovedContent, checkRemovedContentRevivedByUndo}) {
         Fixture f;
         if (f.open())
@@ -1151,6 +1345,7 @@ const char* const kMustRunVectors[] = {
     "track/duplicate-not-found",
     "track/duplicate-share",
     "track/duplicate-target-occupied",
+    "track/duplicate-track-hidden",
     "track/set-clamped",
     "track/set-colour",
     "track/set-duplicate-track",
@@ -1267,15 +1462,6 @@ std::string runVector(const JsonValue& vector)
         specs.emplace_back(spec.name, spec);
     }
     CONTROL_CHECK(settleBackgroundWork(*f.processor));
-    for (std::size_t i = 0; i < givenClips.size(); ++i)
-        if (const JsonValue* reference = givenClips.at(i).find("referenceClip")) {
-            const auto target = clips.find(memberOf(givenClips.at(i), "bind").text());
-            const auto source = clips.find(reference->text());
-            if (target == clips.end() || source == clips.end()
-                || !f.arrangement().setPlacementReferencePlacement(specs[i].second.trackId, target->second.placementId,
-                                                                   source->second.placementId))
-                return "the reference binding of " + specs[i].first + " could not be set";
-        }
 
     // given.history: the undo entries oldest first; the redo entries pushed from the top down and undone. A clip move
     // is recorded one second before the clip's start. trackDeletedAfter / laterTrackDeletedAfter: the entry is
@@ -1328,9 +1514,13 @@ std::string runVector(const JsonValue& vector)
     for (std::size_t i = 0; i < redoEntries.size(); ++i)
         if (f.processor->getUndoManager().undo() == nullptr)
             return "given.history.redo could not be established";
-    if (deletedTrack)
-        f.service().history()->onTrackDeleted(f.processor->getUndoManager(), *deletedTrack,
+    if (deletedTrack) {
+        // The deletion of given.history happened before the state the vector describes, so one more track was shown
+        // when it happened: track.delete removes only a shown track and shows one track fewer afterwards.
+        const int visibleAtDeletion = std::min(kSlots, f.bridge.visibleTracks + 1);
+        f.service().history()->onTrackDeleted(f.processor->getUndoManager(), *deletedTrack, visibleAtDeletion,
                                               f.processor->getStandaloneContentRepository()->getContentEpoch());
+    }
     f.bridge.project.dirty = memberOf(given, "dirty").asBoolean();
 
     const auto& discovery = f.api.discovery();
@@ -1404,6 +1594,7 @@ void scenarioTrackVectorsImpl()
     std::sort(files.begin(), files.end());
     std::set<std::string> passedIds;
     int skipped = 0;
+    VectorReport report("ControlProcessorTests.TrackVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -1411,16 +1602,19 @@ void scenarioTrackVectorsImpl()
         const auto id = memberOf(parsed.value, "id").text();
         if (const auto reason = vectorSkipReason(parsed.value); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
         const auto started = Clock::now();
         const auto failure = runVector(parsed.value);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty()))
             passedIds.insert(id);
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     for (const char* id : kMustRunVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
     note(std::to_string(passedIds.size()) + " vectors passed, " + std::to_string(skipped) + " skipped");

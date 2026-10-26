@@ -399,6 +399,9 @@ void testProtocol()
     CONTROL_CHECK(controlErrorCode("INVALID_ARGUMENT", "invalid_params") == -32602);
     CONTROL_CHECK(controlErrorCode("UNSUPPORTED", "unknown_method") == -32601);
     CONTROL_CHECK(controlErrorCode("UNSUPPORTED", "capability_missing") == -32000);
+    // no_editor_window (rc.5): UNSUPPORTED is not retryable by default, and the registry says the same of this reason.
+    CONTROL_CHECK(controlErrorCode("UNSUPPORTED", "no_editor_window") == -32000);
+    CONTROL_CHECK(!controlErrorRetryable("UNSUPPORTED", "no_editor_window"));
     CONTROL_CHECK(controlErrorCode("INTERNAL", "") == -32603);
     // Retryability of the rc.3 reasons: a stretched grid is not cured by a retry, a dropped rebuild and a timed-out
     // timing analysis are, and a failed timing analysis is not.
@@ -408,6 +411,14 @@ void testProtocol()
     CONTROL_CHECK(!controlErrorRetryable("ANALYSIS_FAILED", "timing_analysis_failed"));
     CONTROL_CHECK(!controlErrorRetryable("INVALID_ARGUMENT", "nothing_to_export"));
     CONTROL_CHECK(!controlErrorRetryable("INVALID_ARGUMENT", "content_key_unset"));
+    // The preference options: a vocoder that is not back in time may be ready when asked again; a weight that could
+    // not be loaded fails again, a pitch model that cannot be switched is not cured by a retry, and neither is a value
+    // that is not on offer.
+    CONTROL_CHECK(controlErrorRetryable("MODEL_UNAVAILABLE", "vocoder_not_ready"));
+    CONTROL_CHECK(!controlErrorRetryable("MODEL_UNAVAILABLE", "vocoder_load_failed"));
+    CONTROL_CHECK(!controlErrorRetryable("MODEL_UNAVAILABLE", "model_missing"));
+    CONTROL_CHECK(!controlErrorRetryable("MODEL_UNAVAILABLE", ""));
+    CONTROL_CHECK(!controlErrorRetryable("INVALID_ARGUMENT", "option_unavailable"));
     {
         const auto line =
             controlErrorResponse({}, "BUSY", "request_limit", "x\xC3\xA9" + std::string(2000, 'y'), false);
@@ -939,6 +950,33 @@ void testInFlightRules()
     CONTROL_CHECK(responseIdText(session.readLine()) == "300");
 }
 
+/** The stand-in answers job.get for the jobs it knows and, as the dispatcher does, NOT_FOUND(job_not_found) for an id
+    that no job has. */
+void testStandInJobGet()
+{
+    ServerFixture fixture;
+    if (!fixture.start("stand-in-job-get", {}, {"session.v1", "jobs.v1"}))
+        return;
+    fixture.handler->answerJobGetAfterWait = true;
+    fixture.handler->knownJobIds = {"job-0"};
+    TestClient session;
+    CONTROL_CHECK(fixture.authenticate(session).has_value());
+
+    CONTROL_CHECK(session.sendLine(requestLine("1", "job.get", R"({"jobId":"job-0","waitMs":0})")));
+    const auto known = session.readLine();
+    const auto parsedKnown = known ? parseJson(*known) : JsonParseResult{};
+    CONTROL_CHECK(parsedKnown.ok && parsedKnown.value.find("result") != nullptr
+                  && parsedKnown.value.find("result")->find("job")->find("jobId")->text() == "job-0");
+
+    // An id that no job has; the unbound ids of the vectors are of this kind.
+    CONTROL_CHECK(session.sendLine(requestLine("2", "job.get", R"({"jobId":"j:00000000:999999","waitMs":0})")));
+    const auto unknown = session.readLine();
+    CONTROL_CHECK(isError(unknown, "NOT_FOUND", "job_not_found") && responseIdText(unknown) == "2");
+    const auto parsedUnknown = unknown ? parseJson(*unknown) : JsonParseResult{};
+    const JsonValue* data = parsedUnknown.ok ? errorData(parsedUnknown.value) : nullptr;
+    CONTROL_CHECK(data != nullptr && data->find("executed") != nullptr && !data->find("executed")->asBoolean());
+}
+
 void testLineLimits()
 {
     ServerFixture fixture;
@@ -1390,8 +1428,30 @@ public:
     /** Empty on success, otherwise what went wrong. */
     std::string run()
     {
-        if (!fixture_.start("vector"))
+        // A vector of jobs.v1 here tests the channel (duplicate ids, the in-flight limit) with waiting job.get
+        // requests; the stand-in handler reports the capability and answers a waiting job.get after its waitMs.
+        const bool jobsVector = vector_.find("capability")->text() == "jobs.v1";
+        // The stand-in reports every capability the vector needs (the main one and the extra ones that
+        // skipReason lets through), so that what is let through and what is reported agree.
+        std::vector<std::string> capabilities = {"session.v1"};
+        const auto need = [&capabilities](const std::string& capability) {
+            if (std::find(capabilities.begin(), capabilities.end(), capability) == capabilities.end())
+                capabilities.push_back(capability);
+        };
+        need(vector_.find("capability")->text());
+        if (const JsonValue* extra = vector_.find("extraCapabilities"))
+            for (std::size_t i = 0; i < extra->size(); ++i)
+                need(extra->at(i).text());
+        if (!fixture_.start("vector", {}, capabilities))
             return "the server did not start";
+        fixture_.handler->answerJobGetAfterWait = jobsVector;
+        if (const JsonValue* given = vector_.find("given"))
+            if (const JsonValue* jobs = given->find("jobs"))
+                for (std::size_t i = 0; i < jobs->size(); ++i) {
+                    const auto id = "job-" + std::to_string(i);
+                    matcher_.bindings[jobs->at(i).find("bind")->text()] = JsonValue::string(id);
+                    fixture_.handler->knownJobIds.insert(id);
+                }
         for (std::size_t i = 0; i < fixture_.discovery.size(); ++i)
             matcher_.bindings["discovery." + fixture_.discovery.keyAt(i)] = fixture_.discovery.at(i);
         std::string wrong;
@@ -1504,7 +1564,7 @@ private:
     handler; ControlProcessorTests.Vectors runs the vectors of the methods against the real dispatcher. */
 std::string skipReason(const std::string& id, const JsonValue& vector)
 {
-    const std::set<std::string> reported = {"session.v1"};
+    const std::set<std::string> reported = {"session.v1", "jobs.v1"};
     if (reported.count(vector.find("capability")->text()) == 0)
         return "needs capability " + vector.find("capability")->text() + ", which the stand-in handler does not report";
     if (const JsonValue* extra = vector.find("extraCapabilities"))
@@ -1513,7 +1573,8 @@ std::string skipReason(const std::string& id, const JsonValue& vector)
                 return "needs capability " + extra->at(i).text();
     if (const JsonValue* given = vector.find("given"))
         for (std::size_t i = 0; i < given->size(); ++i)
-            if (given->keyAt(i) != "withoutCapabilities")
+            if (given->keyAt(i) != "withoutCapabilities"
+                && !(given->keyAt(i) == "jobs" && vector.find("capability")->text() == "jobs.v1"))
                 return "precondition given." + given->keyAt(i) + " needs the dispatcher";
     if (id == "session/info-ok")
         return "checks the session.info result of the dispatcher (ControlProcessorTests.Vectors runs it)";
@@ -1531,21 +1592,31 @@ void testSessionVectors()
     CONTROL_CHECK(files.size() >= 20);
     int passed = 0;
     int skipped = 0;
+    std::set<std::string> ranIds;
+    VectorReport report("ControlUnitTests");
     for (const auto& file : files) {
         const auto vector = parsed(readFile(file));
         const std::string id = vector.find("id")->text();
         if (const auto reason = skipReason(id, vector); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
         const auto started = Clock::now();
         const std::string failure = VectorRunner(vector).run();
-        if (CONTROL_CHECK(failure.empty()))
+        report.ran(id, failure);
+        if (CONTROL_CHECK(failure.empty())) {
             ++passed;
+            ranIds.insert(id);
+        }
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
+    // The channel rules only this runner can check (the dispatcher runners have no listener).
+    for (const char* id : {"session/duplicate-id", "session/request-limit"})
+        CONTROL_CHECK(ranIds.count(id) == 1);
     note(std::to_string(passed) + " session vectors passed, " + std::to_string(skipped) + " skipped");
 }
 
@@ -1570,6 +1641,7 @@ int main(int argc, char** argv)
         {"connection limits", testConnectionLimits},
         {"flood", testFloodDoesNotDisturbSessions},
         {"in-flight rules", testInFlightRules},
+        {"stand-in job.get", testStandInJobGet},
         {"line limits", testLineLimits},
         {"idle timeout", testIdleTimeout},
         {"stop with busy connections", testStopWithBusyConnections},

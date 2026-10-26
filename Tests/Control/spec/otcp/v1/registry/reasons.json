@@ -297,6 +297,12 @@
       "description": "A project save or open is running."
     },
     {
+      "code": "job_in_progress",
+      "scope": "BUSY",
+      "since": "1.0",
+      "description": "A job that no other busy reason names has not finished: a prefsApply or timeGridSeed job. Sent by app.quit only, which does not quit while any job is unfinished; the jobs of kind import, export, projectOpen and projectSave give import_in_progress, export_in_progress and project_operation."
+    },
+    {
       "code": "session_limit",
       "scope": "BUSY",
       "since": "1.0",
@@ -350,6 +356,12 @@
       "scope": "UNSUPPORTED",
       "since": "1.0",
       "description": "The instance lacks the capability the request needs. detail names the capability."
+    },
+    {
+      "code": "no_editor_window",
+      "scope": "UNSUPPORTED",
+      "since": "1.0",
+      "description": "The method acts through the OpenTune editor window (PROTOCOL.md section 7 rule 6), and this instance has no editor window, for example in a window-less run. The request changes nothing (executed false). The method works when OpenTune Standalone is started with its window. Not retryable: the same request fails until OpenTune is started with a window."
     },
     {
       "code": "undo_unsafe_build",
@@ -436,6 +448,12 @@
       "description": "The value cannot be determined at this time."
     },
     {
+      "code": "no_project_path",
+      "scope": "null",
+      "since": "1.0",
+      "description": "The project was never saved, so it has no project file."
+    },
+    {
       "code": "grid_not_seeded",
       "scope": "NOT_READY",
       "since": "1.0",
@@ -451,7 +469,8 @@
       "code": "reference_not_bound",
       "scope": "INVALID_ARGUMENT",
       "since": "1.0",
-      "description": "AUTO in reference mode needs a reference binding on the placement, and it has none."
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7 with the reference alignment, and no longer sent. AUTO in reference mode needed a reference binding on the placement, and it had none."
     },
     {
       "code": "audio_too_long",
@@ -481,7 +500,8 @@
       "code": "placement_content_mismatch",
       "scope": "INVALID_ARGUMENT",
       "since": "1.0",
-      "description": "The request names a placement that does not show the content it names, for example AUTO in reference mode with the placement of another clip."
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7, and no longer sent: only AUTO in reference mode, which was removed, named a placement besides a content. The request named a placement that does not show the content it names."
     },
     {
       "code": "duplicate_handle",
@@ -517,7 +537,8 @@
       "code": "reference_ineligible",
       "scope": "INVALID_ARGUMENT",
       "since": "1.0",
-      "description": "The clip cannot be bound to that reference clip: it is the clip itself, it does not overlap the clip in time, or the binding would form a cycle."
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7 with the reference alignment, and no longer sent. The clip could not be bound to that reference clip: it was the clip itself, it did not overlap the clip in time, or the binding would have formed a cycle."
     },
     {
       "code": "duplicate_track",
@@ -547,7 +568,7 @@
       "code": "track_hidden",
       "scope": "INVALID_ARGUMENT",
       "since": "1.0",
-      "description": "The track is hidden; OpenTune deletes only visible tracks."
+      "description": "The track is hidden. A hidden track cannot be deleted or duplicated: OpenTune deletes and duplicates only visible tracks (track.delete, track.duplicate)."
     },
     {
       "code": "no_project_path",
@@ -602,6 +623,45 @@
       "scope": "NOT_READY",
       "since": "1.0",
       "description": "OpenTune's timing analysis of the content did not finish within the wait limit of the timeGridSeed job, so no handle was placed. Retryable: a new seed waits for the analysis again."
+    },
+    {
+      "code": "reference_analysis_stalled",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7 with the reference alignment, and no longer sent. The reference analysis of a clip could not complete, because OpenTune completes only one reference analysis in a session and a later analysis never finishes."
+    },
+    {
+      "code": "reference_analysis_timeout",
+      "scope": "NOT_READY",
+      "since": "1.0",
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7 with the reference alignment, and no longer sent. The reference analysis of a clip did not finish within the wait limit of the job, so no alignment data was stored."
+    },
+    {
+      "code": "reference_analysis_failed",
+      "scope": "ANALYSIS_FAILED",
+      "since": "1.0",
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7 with the reference alignment, and no longer sent. OpenTune's reference analysis of the clip failed, so no alignment data was stored and nothing was written."
+    },
+    {
+      "code": "option_unavailable",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The vocoder weight or the pitch model that prefs.set asks for is not among the values the instance offers (prefs.get lists them in processing.options); detail names the member. Nothing is changed (executed false). Not retryable: the same request fails until the installation offers the value."
+    },
+    {
+      "code": "vocoder_not_ready",
+      "scope": "MODEL_UNAVAILABLE",
+      "since": "1.0",
+      "description": "The vocoder was still busy (loading) when the wait limit of the prefsApply job passed after a change of the vocoder weight or the rendering priority; the implementation defines the limit. The job took its changes back (executed is true only where a preference that another write changed meanwhile kept that write's value, PROTOCOL.md section 12.7). Retryable: a new request waits for the vocoder again."
+    },
+    {
+      "code": "vocoder_load_failed",
+      "scope": "MODEL_UNAVAILABLE",
+      "since": "1.0",
+      "description": "The command to change the vocoder weight or the rendering priority was carried out, but the vocoder did not become ready, because it could not load the new weight or backend (for example a corrupt or incompatible weight file). The prefsApply job did not wait for its wait limit: it took its changes back at once (executed is true only where a preference that another write changed meanwhile kept that write's value, PROTOCOL.md section 12.7). Not retryable: the same request fails the same way until the weight file or the installation changes."
     }
   ]
 }

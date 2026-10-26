@@ -6,8 +6,9 @@
 // the openDyne scheme generates the notes of a clip whose notes were never generated, through the processor's own
 // OpenTuneAudioProcessor::generateNotesOnlyByContentKey (PianoRollComponent::ensureOpenDyneNotesIfNeeded); refreshes
 // the reference context outside openDyne, through the processor's own preheatReferenceAlignmentFeatures of the clip
-// and of the clip it is bound to (OpenTuneAudioProcessorEditor::refreshReferenceContext); shows the clip's key as the
-// scale of the UI; and switches to the piano roll for openEditor. Contents get synthetic F0 (ControlContentFixtures.h).
+// and of the clip it is bound to (OpenTuneAudioProcessorEditor::refreshReferenceContext), which the control API
+// neither predicts nor reports; shows the clip's key as the scale of the UI; and switches to the piano roll for
+// openEditor. Contents get synthetic F0 (ControlContentFixtures.h).
 // Registered with the other processor scenarios in ControlProcessorTests.cpp.
 //
 // What SelectionMatrix proves: the test bridge and the prediction in SelectionOps.cpp follow the same rules, so a
@@ -59,16 +60,6 @@ std::string quoted(const std::string& text)
     return toJsonString(JsonValue::string(text));
 }
 
-/** The object without the member name. */
-JsonValue withoutMember(const JsonValue& object, const std::string& name)
-{
-    auto out = JsonValue::object();
-    for (std::size_t i = 0; i < object.size(); ++i)
-        if (object.keyAt(i) != name)
-            out.appendMember(object.keyAt(i), object.at(i));
-    return out;
-}
-
 /** The test bridge of the editor's selection (see the top of this file). Message thread only. */
 class SelectionBridge : public TestUiBridge
 {
@@ -76,6 +67,8 @@ public:
     explicit SelectionBridge(OpenTuneAudioProcessor& processor) : processor_(processor)
     {
         view.workspace = "arrangement";
+        // The keyboard focus is in the transport bar's BPM field (TestUiBridge::commitBpmFieldOnViewSwitch()).
+        bpmFieldProcessor = &processor;
     }
 
     bool canSelect() const override { return selects; }
@@ -99,8 +92,12 @@ public:
         showInPianoRoll(placementId, placement.contentKey);
         scale = scaleOf(placement.contentKey);
         refreshReferenceContext(placementId);
-        if (openEditor)
+        // placementDoubleClicked(): the piano roll replaces the arrangement only when the arrangement is shown, and
+        // only that switch moves the keyboard focus.
+        if (openEditor && view.workspace != "pianoRoll") {
             view.workspace = "pianoRoll";
+            commitBpmFieldOnViewSwitch();
+        }
         return true;
     }
 
@@ -129,6 +126,22 @@ public:
         return true;
     }
 
+    /** The editor's syncSharedAppPreferences() after a preference changed: when the editing scheme became the
+        notes-primary one, the piano roll that shows a clip whose notes were never generated generates them
+        (PianoRollComponent::ensureOpenDyneNotesIfNeeded). The caller of the write marks the project as changed. */
+    void onPreferencesChanged() override
+    {
+        const bool notesPrimary = openDyne();
+        const bool becameNotesPrimary = notesPrimary && !appliedNotesPrimary_;
+        appliedNotesPrimary_ = notesPrimary;
+        if (becameNotesPrimary && view.pianoRollPlacementId != 0)
+            generateNotesOfPianoRoll();
+    }
+
+    /** The scheme the views run with follows the preference without a notification, as when a test sets the
+        preference before it builds its project (the editor applies the scheme of a loaded project the same way). */
+    void syncAppliedScheme() { appliedNotesPrimary_ = openDyne(); }
+
     /** canSelect(): false is a bridge without the selection. */
     bool selects = true;
     int selectCalls = 0;
@@ -151,12 +164,30 @@ private:
         view.pianoRollPlacementId = placementId;
         if (placementId == 0 || !openDyne())
             return;
+        if (generateNotesIfNeeded(key))
+            markDirty();
+    }
+
+    /** Generates the notes of the clip the piano roll shows (the scheme just became the notes-primary one). */
+    void generateNotesOfPianoRoll()
+    {
+        StandaloneArrangement::Placement placement;
+        for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId)
+            if (processor_.getPlacementById(trackId, view.pianoRollPlacementId, placement)) {
+                generateNotesIfNeeded(placement.contentKey);
+                return;
+            }
+    }
+
+    /** PianoRollComponent::ensureOpenDyneNotesIfNeeded(): the notes of a content whose notes were never generated and
+        whose F0 exists; true when it generated them. */
+    bool generateNotesIfNeeded(const ContentKey& key)
+    {
         const auto snapshot = processor_.getContentSnapshot(key);
         if (snapshot == nullptr || snapshot->noteTopologyInitialized || snapshot->pitchCurve == nullptr
             || snapshot->pitchCurve->getOriginalF0().empty())
-            return;
-        if (processor_.generateNotesOnlyByContentKey(key, generatorParams))
-            markDirty();
+            return false;
+        return processor_.generateNotesOnlyByContentKey(key, generatorParams);
     }
 
     /** OpenTuneAudioProcessorEditor::refreshReferenceContext() after evaluateAutoRefUiState(). */
@@ -196,6 +227,8 @@ private:
     }
 
     OpenTuneAudioProcessor& processor_;
+    /** The editing scheme the views run with: notes-primary or not (OpenTuneAudioProcessorEditor's applied scheme). */
+    bool appliedNotesPrimary_ = false;
 };
 
 /** A started processor with the selection bridge registered and an open session. */
@@ -232,6 +265,7 @@ struct SelectionFixture
         preferences.setAudioEditingScheme(openDyne ? AudioEditingScheme::Scheme::NotesPrimary
                                                    : AudioEditingScheme::Scheme::CorrectedF0Primary);
         preferences.setExperimentalFeaturesEnabled(experimental);
+        bridge->syncAppliedScheme();
     }
 
     /** Track 0 active with no clip selected on any track, as in a new project: an import selects the imported clip and
@@ -414,7 +448,7 @@ void checkCapabilityAndRefusals(SelectionFixture& f, const std::string& placemen
     CONTROL_CHECK(f.api.fails("ui.setSelection", selectClip(placementA), "UNSUPPORTED", "capability_missing"));
     f.bridge->selects = true;
     f.service().setUiBridge(nullptr);
-    CONTROL_CHECK(f.api.fails("ui.setSelection", selectClip(placementA), "UNSUPPORTED", "capability_missing"));
+    CONTROL_CHECK(f.api.fails("ui.setSelection", selectClip(placementA), "UNSUPPORTED", "no_editor_window"));
     f.service().setUiBridge(f.bridge.get());
     CONTROL_CHECK(f.bridge->selectCalls == 0);
 }
@@ -515,6 +549,77 @@ void scenarioSelectionImpl()
                "the revert recipe of a track");
     CONTROL_CHECK(f.arrangement().getSelectedPlacementId(0) == 0 && f.bridge->view.pianoRollPlacementId == 0);
     CONTROL_CHECK(f.bridge->selectCalls == 5);
+
+    // The tempo. The double click that switches to the piano roll moves the keyboard focus, and the focus that leaves
+    // the transport bar's BPM field commits the field, which shows the tempo with one decimal (the test bridge models
+    // it: TestUiBridge::commitBpmFieldOnViewSwitch()). The result reports it as ui.setWorkspace does. 120.27 is no
+    // value in the middle of two roundings: it becomes 120.3.
+    const auto isNear = [](double a, double b) { return std::abs(a - b) < 1e-9; };
+    const auto readBpm = [&f] {
+        return memberOf(memberOf(f.api.result("transport.get"), "transport"), "bpm").asDouble();
+    };
+    // The change that transport.setTempo reports for the same step, 120.27 to 120.3: the shape the tempo change of a
+    // view switch has to have.
+    f.processor->setBpm(120.27);
+    const auto setTempo = f.api.result("transport.setTempo", jsonOf(R"({"bpm":120.3})"));
+    const JsonValue* setTempoChange = findTempoChange(setTempo);
+    const JsonValue reference = setTempoChange != nullptr ? *setTempoChange : JsonValue();
+    CONTROL_CHECK(setTempoChange != nullptr);
+
+    f.processor->setBpm(120.27);
+    f.bridge->view.workspace = "arrangement";
+    f.bridge->project.dirty = false;
+    const int marksBefore = f.bridge->dirtyMarks;
+    const auto rewritten = f.api.result("ui.setSelection", selectClip(idB, true));
+    CONTROL_CHECK(memberOf(rewritten, "applied").asBoolean() && !memberOf(rewritten, "noOp").asBoolean());
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.3) && isNear(readBpm(), 120.3));
+    if (const JsonValue* tempoChange = checkTempoRounded(rewritten, 120.27, 120.3, true))
+        checkEqual(reference, *tempoChange, "the change of the tempo, as transport.setTempo reports it");
+    const auto& rewrittenChanges = memberOf(rewritten, "changes");
+    CONTROL_CHECK(rewrittenChanges.size() == 2 && memberOf(rewrittenChanges.at(0), "entity").text() == "selection"
+                  && memberOf(rewrittenChanges.at(1), "entity").text() == "tempo");
+    const auto& rewrittenEffects = memberOf(rewritten, "sideEffects");
+    CONTROL_CHECK(rewrittenEffects.size() == 2 && rewrittenEffects.find("workspaceSwitched") != nullptr);
+    // The tempo is saved with the project: the switch marks it as changed, and the result says so.
+    CONTROL_CHECK(!memberOf(memberOf(rewritten, "dirty"), "before").asBoolean()
+                  && memberOf(memberOf(rewritten, "dirty"), "after").asBoolean()
+                  && f.bridge->dirtyMarks == marksBefore + 1);
+    // The undo is the selection's; the way back of the tempo is the revert recipe of its side effect, sent as it came.
+    CONTROL_CHECK(memberOf(memberOf(rewritten, "undo"), "reason").text() == "not_persisted_state"
+                  && memberOf(memberOf(memberOf(rewritten, "undo"), "revert"), "method").text() == "ui.setSelection");
+    const auto& tempoRevert = memberOf(memberOf(rewrittenEffects, "tempoRounded"), "revert");
+    f.api.result(memberOf(tempoRevert, "method").text(), memberOf(tempoRevert, "params"));
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.27));
+
+    // A tempo with one decimal is what the field shows: nothing is rewritten, and the result reports nothing about the
+    // tempo (nor marks the project).
+    f.processor->setBpm(120.3);
+    f.bridge->view.workspace = "arrangement";
+    f.bridge->project.dirty = false;
+    const auto oneDecimal = f.api.result("ui.setSelection", selectClip(idA, true));
+    CONTROL_CHECK(memberOf(oneDecimal, "applied").asBoolean() && reportsNoTempoChange(oneDecimal)
+                  && memberOf(oneDecimal, "sideEffects").find("workspaceSwitched") != nullptr);
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.3) && isNear(readBpm(), 120.3));
+    CONTROL_CHECK(!memberOf(memberOf(oneDecimal, "dirty"), "after").asBoolean());
+
+    // The piano roll is shown already: the double click switches nothing, nothing moves the focus, the tempo stays as
+    // it is and nothing about it is reported, and the project is not marked.
+    f.processor->setBpm(120.27);
+    f.bridge->project.dirty = false;
+    CONTROL_CHECK(f.bridge->view.workspace == "pianoRoll");
+    const auto shown = f.api.result("ui.setSelection", selectClip(idB, true));
+    CONTROL_CHECK(memberOf(shown, "applied").asBoolean() && reportsNoTempoChange(shown)
+                  && memberOf(shown, "sideEffects").find("workspaceSwitched") == nullptr);
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.27) && isNear(readBpm(), 120.27));
+    CONTROL_CHECK(!memberOf(memberOf(shown, "dirty"), "after").asBoolean());
+
+    // dryRun predicts the switch and changes nothing, the tempo included; it does not predict the tempo, which depends
+    // on where the keyboard focus is.
+    f.bridge->view.workspace = "arrangement";
+    const auto dry = f.api.result("ui.setSelection", selectClip(idA, true, true));
+    CONTROL_CHECK(memberOf(dry, "dryRun").asBoolean() && reportsNoTempoChange(dry)
+                  && memberOf(dry, "sideEffects").find("workspaceSwitched") != nullptr);
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.27) && f.bridge->view.workspace == "arrangement");
     CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 
@@ -551,13 +656,16 @@ void runMatrixCase(bool openDyne, bool withNotes, bool withReference)
     for (const char* member : {"changes", "sideEffects", "warnings"})
         checkEqual(memberOf(predicted, member), memberOf(committed, member), name + ": " + member);
 
-    // What the case brings about: notes in openDyne for a clip without notes, the reference analysis of both clips
-    // outside openDyne for a clip with a binding (experimental features are on).
+    // What the case brings about: notes in openDyne for a clip without notes. A reference binding, which the editor
+    // reacts to outside openDyne with the experimental features on, brings about nothing the result reports.
     const bool notesExpected = openDyne && !withNotes;
-    const bool referenceExpected = !openDyne && withReference;
     const auto& sideEffects = memberOf(committed, "sideEffects");
     CONTROL_CHECK((sideEffects.find("notesGenerated") != nullptr) == notesExpected);
-    CONTROL_CHECK((sideEffects.find("referenceAnalysisQueued") != nullptr) == referenceExpected);
+    // Notes bring the two warnings of generated notes; nothing else is reported, a binding included.
+    CONTROL_CHECK(sideEffects.find("referenceAnalysisQueued") == nullptr
+                  && memberOf(committed, "warnings").size() == (notesExpected ? 2u : 0u));
+    for (std::size_t i = 0; i < memberOf(committed, "warnings").size(); ++i)
+        CONTROL_CHECK(memberOf(memberOf(committed, "warnings").at(i), "code").text() != "REFERENCE_ANALYSIS_QUEUED");
     CONTROL_CHECK(memberOf(memberOf(committed, "dirty"), "after").asBoolean() == notesExpected);
     if (notesExpected) {
         const auto after = f.processor->getContentSnapshot(clip.key);
@@ -565,8 +673,6 @@ void runMatrixCase(bool openDyne, bool withNotes, bool withReference)
                       && memberOf(memberOf(sideEffects, "notesGenerated"), "noteCount").asDouble()
                              == static_cast<double>(after->notes.size()));
     }
-    if (referenceExpected)
-        CONTROL_CHECK(memberOf(memberOf(sideEffects, "referenceAnalysisQueued"), "contentIds").size() == 2);
     const auto undo = memberOf(committed, "undo");
     CONTROL_CHECK(memberOf(undo, "reason").text() == "not_persisted_state" && !memberOf(undo, "revert").isNull());
     note(name + ": " + toJsonString(sideEffects));
@@ -576,54 +682,16 @@ void runMatrixCase(bool openDyne, bool withNotes, bool withReference)
 
 /** The ids of the vectors that must run and pass. */
 const char* const kMustRunSelectionVectors[] = {
-    "ui/set-selection-clip",      "ui/set-selection-dry-run",     "ui/set-selection-generates-notes",
-    "ui/set-selection-not-found", "ui/set-selection-open-editor",
+    "ui/set-selection-clip",
+    "ui/set-selection-dry-run",
+    "ui/set-selection-generates-notes",
+    "ui/set-selection-not-found",
+    "ui/set-selection-open-editor",
+    // The two scenarios of ui.setWorkspace that need clips, the selection and the editing scheme (its other vectors
+    // run in ControlUiTests.cpp).
+    "ui/set-workspace-arrangement",
+    "ui/set-workspace-piano-roll-opendyne",
 };
-
-/**
- * The expected response with what OpenTune does differently from the vectors' assumptions (Source/Control/README.md,
- * "Selection"):
- * - OpenTune always has an active track (track 0 in a new project), so selecting a clip on track 0 leaves it: changes
- *   list no activeTrackId (fields list only changed members), and the revert recipe selects track 0 instead of null;
- * - in the openDyne scheme the editor's reference context reports no binding (evaluateAutoRefUiState), so selecting a
- *   clip with one queues no reference alignment analysis.
- */
-JsonValue adjustedExpectation(const JsonValue& vector)
-{
-    auto response = memberOf(vector, "response");
-    const JsonValue* resultPointer = response.find("result");
-    if (resultPointer == nullptr)
-        return response;
-    auto result = *resultPointer;
-    auto changes = memberOf(result, "changes");
-    if (changes.size() == 1) {
-        auto change = changes.at(0);
-        const auto& active = memberOf(memberOf(change, "fields"), "activeTrackId");
-        if (memberOf(active, "before").isNull() && memberOf(active, "after").isNumber()
-            && memberOf(active, "after").asDouble() == 0.0)
-            change.set("fields", withoutMember(memberOf(change, "fields"), "activeTrackId"));
-        auto adjusted = JsonValue::array();
-        adjusted.append(std::move(change));
-        result.set("changes", std::move(adjusted));
-    }
-    auto undo = memberOf(result, "undo");
-    if (undo.isObject() && memberOf(undo, "revert").isNull()) {
-        undo.set("revert", revertTo("trackId", JsonValue::integer(0)));
-        result.set("undo", std::move(undo));
-    }
-    const auto& given = memberOf(vector, "given");
-    if (memberOf(given, "editingScheme").text() == "openDyne") {
-        result.set("sideEffects", withoutMember(memberOf(result, "sideEffects"), "referenceAnalysisQueued"));
-        auto warnings = JsonValue::array();
-        const auto& expected = memberOf(result, "warnings");
-        for (std::size_t i = 0; i < expected.size(); ++i)
-            if (memberOf(expected.at(i), "code").text() != "REFERENCE_ANALYSIS_QUEUED")
-                warnings.append(expected.at(i));
-        result.set("warnings", std::move(warnings));
-    }
-    response.set("result", std::move(result));
-    return response;
-}
 
 std::string runSelectionVector(const JsonValue& vector)
 {
@@ -641,7 +709,6 @@ std::string runSelectionVector(const JsonValue& vector)
         Clip clip;
     };
     std::vector<Created> created;
-    std::vector<std::pair<std::string, std::string>> references;
     const auto& clips = memberOf(given, "clips");
     for (std::size_t i = 0; i < clips.size(); ++i) {
         const auto& item = clips.at(i);
@@ -659,23 +726,7 @@ std::string runSelectionVector(const JsonValue& vector)
             spec.notes.push_back({memberOf(notes.at(n), "startContentSec").asDouble(),
                                   memberOf(notes.at(n), "endContentSec").asDouble(),
                                   memberOf(notes.at(n), "targetMidi").asDouble()});
-        if (const JsonValue* reference = item.find("referenceClip"))
-            references.emplace_back(spec.name, reference->text());
         created.push_back({spec.name, spec, fixtureAddClip(*f.processor, spec)});
-    }
-    for (const auto& [target, reference] : references) {
-        const auto find = [&created](const std::string& name) -> const Created* {
-            for (const auto& item : created)
-                if (item.bind == name)
-                    return &item;
-            return nullptr;
-        };
-        const auto* targetClip = find(target);
-        const auto* referenceClip = find(reference);
-        if (targetClip == nullptr || referenceClip == nullptr)
-            return "a referenceClip names no clip";
-        CONTROL_CHECK(f.arrangement().setPlacementReferencePlacement(
-            targetClip->spec.trackId, targetClip->clip.placementId, referenceClip->clip.placementId));
     }
     CONTROL_CHECK(settleBackgroundWork(*f.processor));
     // The vectors start with no clip selected.
@@ -697,12 +748,34 @@ std::string runSelectionVector(const JsonValue& vector)
             matcher.bindings[item.bind + ".placementId"] = JsonValue::string(handles->placementId);
         }
     }
-    const auto expected = adjustedExpectation(vector);
+    // The vectors state what OpenTune does (an active track always exists), so the expected response is the vector's
+    // own, unchanged.
+    const auto& expected = memberOf(vector, "response");
+    const bool scenario = memberOf(vector, "type").text() == "scenario";
 
     std::string failure;
     runWhilePumping(
         [&] {
             auto& connection = f.api.client();
+            if (scenario) {
+                // Send and expect steps on the main connection, as the other scenario runners run them.
+                const auto& steps = memberOf(vector, "steps");
+                for (std::size_t i = 0; i < steps.size() && failure.empty(); ++i) {
+                    const auto& step = steps.at(i);
+                    if (const JsonValue* send = step.find("send")) {
+                        const auto value = matcher.substitute(*send, failure);
+                        if (failure.empty() && !connection.sendLine(toJsonString(value)))
+                            failure = "send failed";
+                    } else if (step.find("expect") != nullptr) {
+                        failure = matcher.expectLine(connection, memberOf(step, "expect"));
+                    } else {
+                        failure = "a step other than send and expect";
+                    }
+                    if (!failure.empty())
+                        failure = "step " + std::to_string(i + 1) + ": " + failure;
+                }
+                return;
+            }
             const auto request = matcher.substitute(memberOf(vector, "request"), failure);
             if (!failure.empty())
                 return;
@@ -745,16 +818,20 @@ void scenarioSelectionVectors()
     std::sort(files.begin(), files.end());
     std::set<std::string> passedIds;
     int passed = 0;
+    VectorReport report("ControlProcessorTests.SelectionVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
             continue;
         const auto& vector = parsed.value;
-        if (memberOf(memberOf(vector, "request"), "method").text() != "ui.setSelection")
+        const bool workspaceScenario =
+            memberOf(vector, "capability").text() == "ui.workspace" && memberOf(vector, "type").text() == "scenario";
+        if (memberOf(memberOf(vector, "request"), "method").text() != "ui.setSelection" && !workspaceScenario)
             continue;
         const auto id = memberOf(vector, "id").text();
         const auto started = Clock::now();
         const auto failure = runSelectionVector(vector);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty())) {
             ++passed;
             passedIds.insert(id);
@@ -762,6 +839,7 @@ void scenarioSelectionVectors()
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     for (const char* id : kMustRunSelectionVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
     note(std::to_string(passed) + " vectors passed");

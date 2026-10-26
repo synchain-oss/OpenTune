@@ -25,7 +25,7 @@ namespace OpenTune {
  * ProcessRenderRuntime::CompletionCallbackLease): the message thread may need them to make progress.
  * stop() wakes every waiting call().
  *
- * Threading: post(), call(), isStopped() and waitingCalls() from any thread; stop() and destruction on
+ * Threading: post(), call(), isStopped(), isAlive() and waitingCalls() from any thread; stop() and destruction on
  * the message thread.
  */
 class ControlMessageThread
@@ -82,6 +82,12 @@ public:
 
     /** True after stop(). */
     bool isStopped() const;
+
+    /** True until stop(): the liveness token is alive. Read-only, the complement of isStopped(). A failed post() tells
+        the two reasons apart with it: false means the service has been stopped, so nothing is left to clean up; true
+        means the message queue refused the message (juce::MessageManager::callAsync returned false, for example while
+        the application quits) and the service is still up. */
+    bool isAlive() const;
 
     /** Number of call()s currently waiting; for diagnostics and tests. */
     int waitingCalls() const;

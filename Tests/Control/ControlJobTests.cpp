@@ -905,6 +905,12 @@ void scenarioImport()
 
     // 1. openTune scheme: one file onto track 0 at 1 s; it is focused, no notes are generated.
     preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::CorrectedF0Primary);
+    // The arrangement is shown, the keyboard focus is in the tempo field and the tempo has two decimals, which a switch
+    // of the view would round: the focus of an import loads the clip into the piano roll without switching the view
+    // (PROTOCOL.md section 21 rule 2), so the tempo stays and the result reports nothing about it (section 14.6).
+    bridge.view.workspace = "arrangement";
+    bridge.focusTempoField(*processor);
+    processor->setBpm(120.27);
     {
         const auto job = importAndWait(api, R"({"items":[{"path":)" + quoted(take1)
                                                 + R"(}],"layout":"single","trackId":0,"startTimelineSec":1})");
@@ -941,11 +947,17 @@ void scenarioImport()
         auto& arrangement = *processor->getStandaloneArrangement();
         CONTROL_CHECK(arrangement.getActiveTrackId() == 0 && arrangement.getSelectedPlacementId(0) != 0);
         CONTROL_CHECK(memberOf(memberOf(result, "ui"), "activeTrackId").asDouble() == 0);
+        // The clip is loaded into the piano roll and the view stays: no switch, no tempo rounded.
+        CONTROL_CHECK(bridge.view.pianoRollPlacementId == arrangement.getSelectedPlacementId(0)
+                      && bridge.view.workspace == "arrangement" && bridge.workspaceSwitches == 0);
+        CONTROL_CHECK(reportsNoTempoChange(result) && std::abs(processor->getBpm() - 120.27) < 1e-9);
         // project.get shows the clip with its source file.
         const auto project = api.result("project.get");
         const auto& placements = memberOf(project, "placements");
         CONTROL_CHECK(placements.size() == 1 && memberOf(placements.at(0), "sourcePath").text() == take1);
     }
+    bridge.focusElsewhere();
+    processor->setBpm(120.0);
 
     // 2. openDyne scheme, sequential onto the first track without clips (track 1, hidden: revealed); the
     //    focus makes OpenTune generate the notes of the last clip.

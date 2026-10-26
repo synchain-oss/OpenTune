@@ -126,7 +126,7 @@ struct UiFixture
     {
         bridge.view.workspace = "arrangement";
         // The keyboard focus is in the transport bar's BPM field (TestUiBridge::commitBpmFieldOnViewSwitch()).
-        bridge.bpmFieldProcessor = processor.get();
+        bridge.focusTempoField(*processor);
         bridge.onDialogClosed = [this](const DialogInfo& dialog) {
             if (dialog.kind != "trackColour")
                 return;
@@ -771,6 +771,28 @@ void scenarioUiWorkspace()
     const auto alreadyShown = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"arrangement"})"));
     checkWorkspaceNoOp(alreadyShown, "arrangement", false);
     CONTROL_CHECK(reportsNoTempoChange(alreadyShown) && isNear(f.processor->getBpm(), 120.27));
+
+    // The tempo field does not hold the keyboard focus (a window in the background, TestUiBridge::focusElsewhere()):
+    // no focus leaves the field at a switch, so the tempo with more decimals stays as it is, the result reports
+    // nothing about the tempo (checkSwitchResult() lists the view alone) and the project is not marked as changed
+    // (PROTOCOL.md section 14.6). The same in both directions.
+    bridge.focusElsewhere();
+    CONTROL_CHECK(bridge.keyboardFocus() == TestUiBridge::KeyboardFocus::elsewhere);
+    const int marksUnfocused = bridge.dirtyMarks;
+    const auto unfocusedIn = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"));
+    checkSwitchResult(unfocusedIn, "arrangement", "pianoRoll", false);
+    CONTROL_CHECK(reportsNoTempoChange(unfocusedIn) && isNear(f.processor->getBpm(), 120.27)
+                  && isNear(readBpm(), 120.27));
+    const auto unfocusedOut = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"arrangement"})"));
+    checkSwitchResult(unfocusedOut, "pianoRoll", "arrangement", false);
+    CONTROL_CHECK(reportsNoTempoChange(unfocusedOut) && isNear(f.processor->getBpm(), 120.27)
+                  && isNear(readBpm(), 120.27));
+    CONTROL_CHECK(bridge.dirtyMarks == marksUnfocused);
+    // With the focus in the field again (given.keyboardFocus tempoField) the same switch rounds it and says so.
+    bridge.focusTempoField(*f.processor);
+    CONTROL_CHECK(bridge.keyboardFocus() == TestUiBridge::KeyboardFocus::tempoField);
+    const auto refocused = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"));
+    CONTROL_CHECK(checkTempoRounded(refocused, 120.27, 120.3, true) != nullptr && isNear(f.processor->getBpm(), 120.3));
     f.processor->setBpm(120.0);
 
     bridge.project.dirty = false;
@@ -833,6 +855,18 @@ void scenarioUiWorkspace()
     bridge.swallowsWorkspaceSwitch = true;
     CONTROL_CHECK(f.api.fails("ui.setWorkspace", asksPianoRoll(), "INTERNAL", ""));
     bridge.swallowsWorkspaceSwitch = false;
+    // The focus is elsewhere: no field commits, even for a tempo with more decimals, so the same two failures promise
+    // executed false and the tempo is as it was.
+    bridge.focusElsewhere();
+    f.processor->setBpm(120.27);
+    bridge.switchesWorkspace = false;
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", asksPianoRoll(), "UNSUPPORTED", "capability_missing"));
+    bridge.switchesWorkspace = true;
+    bridge.swallowsWorkspaceSwitch = true;
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", asksPianoRoll(), "INTERNAL", ""));
+    bridge.swallowsWorkspaceSwitch = false;
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.27));
+    bridge.focusTempoField(*f.processor);
     bridge.commitsBpmFieldOnFailedSwitch = false;
     f.processor->setBpm(120.0);
     bridge.project.dirty = false;

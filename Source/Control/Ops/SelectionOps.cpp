@@ -4,6 +4,7 @@
 #include "OpsJson.h"
 #include "OpsSupport.h"
 #include "TrackSupport.h"
+#include "TransportOps.h"
 #include "WriteEnvelope.h"
 
 #include "Content/EditableContentSnapshot.h"
@@ -114,6 +115,8 @@ struct Before
     std::optional<UiScale> scale;
     /** Whether the notes of the clip's content were ever generated or edited (noteTopologyInitialized). */
     bool topologyInitialized = true;
+    /** The project's tempo: the view switch of openEditor can rewrite it (see record()). */
+    double bpm = 0.0;
 };
 
 /** The selection and its effects after the call, observed or predicted. */
@@ -124,6 +127,8 @@ struct Outcome
     std::optional<std::size_t> noteCount;
     std::optional<UiScale> scale;
     std::string workspace;
+    /** The project's tempo. */
+    double bpm = 0.0;
 };
 
 SelectionState captureSelection(ControlOpContext& context, ControlUiBridge& bridge)
@@ -147,6 +152,7 @@ Before captureBefore(ControlOpContext& context, ControlUiBridge& bridge, const T
         before.pianoRollPlacementId = view->pianoRollPlacementId;
     }
     before.scale = bridge.uiScale();
+    before.bpm = context.processor().getBpm();
     if (target.placementId != 0)
         if (const auto snapshot = controlLiveSnapshot(context, target.key))
             before.topologyInitialized = snapshot->noteTopologyInitialized;
@@ -219,6 +225,9 @@ Outcome predict(ControlOpContext& context, ControlUiBridge& bridge, const Target
             outcome.scale = scale;
     // placementDoubleClicked switches to the piano roll when the arrangement is shown.
     outcome.workspace = openEditor && before.workspace == "arrangement" ? "pianoRoll" : before.workspace;
+    // Not predicted: whether the switch rewrites the tempo depends on where the keyboard focus is (the transport bar's
+    // BPM field), which the call does not know before it switches. A committed call reports what it observed.
+    outcome.bpm = before.bpm;
     return outcome;
 }
 
@@ -235,6 +244,7 @@ Outcome observe(ControlOpContext& context, ControlUiBridge& bridge, const Target
     outcome.scale = bridge.uiScale();
     if (const auto view = bridge.viewState())
         outcome.workspace = view->workspace;
+    outcome.bpm = context.processor().getBpm();
     return outcome;
 }
 
@@ -331,6 +341,13 @@ bool record(ControlOpContext& context, ControlWriteEnvelope& envelope, const Tar
         effect.appendMember("to", JsonValue::string(after.workspace));
         effect.appendMember("revert", JsonValue());
         envelope.addSideEffect("workspaceSwitched", std::move(effect));
+        recorded = true;
+    }
+    // The switch to the piano roll moves the keyboard focus, and the focus that the transport bar's BPM field loses
+    // then commits the field, which shows the tempo with one decimal: upstream rewrites a tempo with more decimals. The
+    // change and the side effect are those of ui.setWorkspace (see WorkspaceOps.cpp).
+    if (controlBpmDiffers(before.bpm, after.bpm)) {
+        controlReportTempoRounded(context, envelope, before.bpm, after.bpm);
         recorded = true;
     }
     return recorded;

@@ -125,6 +125,8 @@ struct UiFixture
         , processor(startedProcessor())
     {
         bridge.view.workspace = "arrangement";
+        // The keyboard focus is in the transport bar's BPM field (TestUiBridge::commitBpmFieldOnViewSwitch()).
+        bridge.bpmFieldProcessor = processor.get();
         bridge.onDialogClosed = [this](const DialogInfo& dialog) {
             if (dialog.kind != "trackColour")
                 return;
@@ -625,6 +627,19 @@ void scenarioUiWorkspace()
                                          "capability_missing"));
         CONTROL_CHECK(withheld.bridge.workspaceSwitches == 0 && withheld.bridge.view.workspace == "arrangement");
     }
+    {
+        // An instance that withholds transport.v1 has no transport.setTempo: the tempo that the switch rewrites is
+        // reported all the same, and its side effect has no revert recipe (PROTOCOL.md section 15.2 rule 2).
+        UiFixture withheld({"transport.v1"});
+        if (!withheld.service().isRunning() || !withheld.api.open(withheld.service()))
+            return;
+        CONTROL_CHECK(!reports(withheld.service().dispatcher()->capabilities(), "transport.v1"));
+        withheld.processor->setBpm(120.27);
+        const auto result = withheld.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"));
+        CONTROL_CHECK(memberOf(result, "applied").asBoolean() && withheld.bridge.view.workspace == "pianoRoll");
+        CONTROL_CHECK(checkTempoRounded(result, 120.27, 120.3, false) != nullptr);
+        CONTROL_CHECK(memberOf(memberOf(result, "dirty"), "after").asBoolean());
+    }
 
     UiFixture f;
     if (!f.service().isRunning() || !f.api.open(f.service()))
@@ -673,6 +688,73 @@ void scenarioUiWorkspace()
     checkSwitchResult(f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})")), "arrangement",
                       "pianoRoll", true);
     CONTROL_CHECK(bridge.dirtyMarks == 0);
+
+    // The tempo (upstream behaviour): the switch moves the keyboard focus, and the focus that leaves the transport
+    // bar's BPM field commits the field, which shows the tempo with one decimal; the test bridge models it
+    // (TestUiBridge::commitBpmFieldOnViewSwitch()). A tempo with more decimals is rewritten, and the result reports it
+    // as it happened. 120.27 is no value in the middle of two roundings: it becomes 120.3.
+    const auto isNear = [](double a, double b) { return std::abs(a - b) < 1e-9; };
+    const auto readBpm = [&f] {
+        return memberOf(memberOf(f.api.result("transport.get"), "transport"), "bpm").asDouble();
+    };
+    // The change that transport.setTempo reports for the same step, 120.27 to 120.3: the shape the tempo change of a
+    // switch has to have.
+    f.processor->setBpm(120.27);
+    const auto setTempo = f.api.result("transport.setTempo", jsonOf(R"({"bpm":120.3})"));
+    const JsonValue* setTempoChange = findTempoChange(setTempo);
+    const std::string referenceChange = setTempoChange != nullptr ? toJsonString(*setTempoChange) : std::string();
+    CONTROL_CHECK(setTempoChange != nullptr);
+
+    f.processor->setBpm(120.27);
+    bridge.project.dirty = false;
+    bridge.view.workspace = "arrangement";
+    const int marksBefore = bridge.dirtyMarks;
+    const auto rewritten = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"));
+    CONTROL_CHECK(memberOf(rewritten, "applied").asBoolean() && !memberOf(rewritten, "noOp").asBoolean());
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.3) && isNear(readBpm(), 120.3));
+    if (const JsonValue* tempoChange = checkTempoRounded(rewritten, 120.27, 120.3, true))
+        CONTROL_CHECK(toJsonString(*tempoChange) == referenceChange);
+    const auto& rewrittenChanges = memberOf(rewritten, "changes");
+    CONTROL_CHECK(rewrittenChanges.size() == 2 && memberOf(rewrittenChanges.at(0), "entity").text() == "ui"
+                  && memberOf(rewrittenChanges.at(1), "entity").text() == "tempo");
+    const auto& rewrittenEffects = memberOf(rewritten, "sideEffects");
+    CONTROL_CHECK(rewrittenEffects.size() == 2 && rewrittenEffects.find("workspaceSwitched") != nullptr
+                  && memberOf(memberOf(rewrittenEffects, "workspaceSwitched"), "to").text() == "pianoRoll");
+    // The tempo is saved with the project: the project was clean, the switch marked it as changed, and the result says
+    // so. Nothing else changed.
+    CONTROL_CHECK(!memberOf(memberOf(rewritten, "dirty"), "before").asBoolean()
+                  && memberOf(memberOf(rewritten, "dirty"), "after").asBoolean()
+                  && bridge.dirtyMarks == marksBefore + 1);
+    CONTROL_CHECK(memberOf(memberOf(rewritten, "ui"), "workspace").text() == "pianoRoll"
+                  && memberOf(memberOf(rewritten, "revisionDiff"), "arrangement").isNull()
+                  && memberOf(memberOf(rewritten, "revisionDiff"), "contents").size() == 0
+                  && memberOf(rewritten, "warnings").size() == 0);
+    // The undo is the switch's, and so is the revert recipe of the call; the way back of the tempo is the recipe of its
+    // side effect, which restores it when sent as it came.
+    const auto& rewrittenUndo = memberOf(rewritten, "undo");
+    CONTROL_CHECK(memberOf(rewrittenUndo, "reason").text() == "not_persisted_state"
+                  && memberOf(memberOf(rewrittenUndo, "revert"), "method").text() == "ui.setWorkspace");
+    const auto& tempoRevert = memberOf(memberOf(rewrittenEffects, "tempoRounded"), "revert");
+    CONTROL_CHECK(!f.api.result(memberOf(tempoRevert, "method").text(), memberOf(tempoRevert, "params")).isNull());
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.27) && isNear(readBpm(), 120.27));
+
+    // A tempo with one decimal is what the field shows: nothing is rewritten, the result lists neither a change of the
+    // tempo nor tempoRounded, and the project is not marked as changed.
+    f.processor->setBpm(120.3);
+    bridge.project.dirty = false;
+    const auto oneDecimal = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"arrangement"})"));
+    checkSwitchResult(oneDecimal, "pianoRoll", "arrangement", false);
+    CONTROL_CHECK(reportsNoTempoChange(oneDecimal) && isNear(f.processor->getBpm(), 120.3) && isNear(readBpm(), 120.3));
+
+    // The window shows the view already: the call does not reach the editor, the tempo stays as it is, and nothing
+    // about it is reported.
+    f.processor->setBpm(120.27);
+    bridge.project.dirty = false;
+    const auto alreadyShown = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"arrangement"})"));
+    checkWorkspaceNoOp(alreadyShown, "arrangement", false);
+    CONTROL_CHECK(reportsNoTempoChange(alreadyShown) && isNear(f.processor->getBpm(), 120.27));
+    f.processor->setBpm(120.0);
+
     bridge.project.dirty = false;
     bridge.view.workspace = "arrangement";
     const int switches = bridge.workspaceSwitches;

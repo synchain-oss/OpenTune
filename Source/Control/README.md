@@ -52,7 +52,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `Edit/ControlOriginAction.*` | The undo entry of a change made through the API (upstream undo actions wrapped with an `undoId`), and `ControlHistory`: undoIds, the API's entries, the undoIds of UI entries, changes without an undo entry. |
 | `Edit/ContentEditTransaction.*` | Undo entries built from snapshots around a commit of the content commands, as the piano roll builds them (see "ContentEditTransaction"). |
 | `Edit/NoteCorrection.*` | The correction segments the piano roll rebuilds after an edit of notes, and SNAP (AUTO in the openDyne scheme), computed as the piano roll computes them and committed into a ContentEditTransaction (see "Note edits and the pitch shift"). |
-| `Ops/WorkspaceOps.*`, `../Standalone/ControlEditorBridgeWorkspace.cpp` | `ui.setWorkspace`: the two view buttons of the transport bar through the bridge, view state only (see "Workspace"). |
+| `Ops/WorkspaceOps.*`, `../Standalone/ControlEditorBridgeWorkspace.cpp` | `ui.setWorkspace`: the two view buttons of the transport bar through the bridge, view state only apart from the tempo that the focus change can rewrite (see "Workspace"). |
 | `Ops/SelectionOps.*`, `../Standalone/ControlEditorBridgeSelection.cpp` | `ui.setSelection`: the effects of a click on a clip predicted, then the click and double click through the arrangement view's hook, and the effects observed (see "Selection"). |
 | `Edit/PitchShiftLedger.*` | The steps of OpenTune's pitch shifts that the `revision` token leaves out (see "Note edits and the pitch shift"). |
 | `mirror-map.json`, `MIRRORS.md` | The upstream functions that the API mirrors, with a hash of each (machine-readable source of truth and the table generated from it); checked by `Tests/Control/ControlMirrorDriftTests.cpp` (see "Mirrors"). |
@@ -1111,7 +1111,23 @@ read in the Standalone). A view switch is view state (PROTOCOL.md section 15.2 r
 `ControlEditorBridge::settleViewSwitch()` takes the mark back when the project was unchanged before and the tempo and the
 time signature are what they were: the mark then came from that commit and there is nothing to save. A tempo that did
 change keeps the mark. The double click that `ui.setSelection` with `openEditor` makes is guarded the same way
-(`select()` in `ControlEditorBridgeSelection.cpp`). The UI's own click on a view button is not touched.
+(`select()` in `ControlEditorBridgeSelection.cpp`), and only when it really switches (`isWorkspaceView_`): with the
+piano roll shown already nothing moves the focus and nothing is settled. The UI's own click on a view button is not
+touched.
+
+**The tempo (the exception to "view state only").** The commit sets the tempo the field shows, so a project tempo with
+more than one decimal (120.27, which `transport.setTempo` or a project file can set) is rewritten to 120.3 when the focus
+was in the field, and that is a real change: the mark stays and `dirty.after` is true. It is upstream behaviour and is
+not corrected (the interface does not change how OpenTune behaves), so the operations report it. `ui.setWorkspace` and
+`ui.setSelection` with `openEditor` read the processor's tempo before and after the switch, and when it differs the result
+lists the change of the singleton `tempo` that `transport.setTempo` reports (one builder for both, `Ops/TransportOps.cpp`:
+member `bpm {before, after, unit: "bpm"}`) and the side effect `tempoRounded {fromBpm, toBpm, revert}`; `revert` is
+`transport.setTempo` with `{bpm: fromBpm}`, or `null` where the instance does not report `transport.v1`
+(PROTOCOL.md section 15.2 rule 2). The time signature is not touched (the field commits the tempo only) and not
+reported. Whether the rewrite happens depends on where the keyboard focus is, so a call can also leave the tempo as it
+was, and then nothing about the tempo is reported; `dryRun` of `ui.setSelection` does not predict it for the same
+reason. The test bridge models it (`TestUiBridge::bpmFieldProcessor`): a switch rewrites a tempo with more than one
+decimal to one decimal and marks the project as changed.
 
 **Mirrors.** `workspace-track-view` and `workspace-piano-view` (the two button handlers of the transport bar) and
 `workspace-view-toggled` (the editor's handler), all in the group `ui`.
@@ -1130,7 +1146,10 @@ notes, the revisions and the warnings are unchanged by it.
 
 Tests: `ControlProcessorTests.UiWorkspace` in `Tests/Control/ControlUiTests.cpp` (both directions, the no-op not reaching
 the editor, the params, busy for each reason, a bridge that cannot switch or does not, no editor, the revert recipe sent
-back, an unchanged dirty state, the empty `revisionDiff`, the capability right after `ui.onboardingClose`).
+back, an unchanged dirty state, the empty `revisionDiff`, the capability right after `ui.onboardingClose`, and the
+rewritten tempo: 120.27 to 120.3 with the change, `tempoRounded`, its revert recipe and `dirty.after`, and a tempo with
+one decimal reporting neither). `Selection` checks the same for `openEditor`, and that a double click with the piano roll
+shown already rewrites nothing.
 
 ## Selection
 
@@ -1161,6 +1180,7 @@ what it observed; a difference from the prediction is logged (`AppLogger`), and 
 | `notesGenerated`, warnings `SELECTION_GENERATED_NOTES` and `IRREVERSIBLE`, project marked as changed | The openDyne scheme applied (`editingSchemeApplied`), the piano roll getting another clip (`setEditedContentAndProjection` returns early otherwise), notes never generated (`noteTopologyInitialized` false) and a ready pitch analysis (`ensureOpenDyneNotesIfNeeded`); the count from `LegacyNoteGenerator` with the editor's parameters, merged as `generateNotesOnlyByContentKey` merges | `noteTopologyInitialized` false before, true after; the count of the content's notes |
 | `uiScaleChanged {before, after}` (`{root, scale}`, as `ui.getState` reports `uiScale`) | `ControlUiBridge::scaleForSelection()`: the editor's own `resolveScaleForPlacementContent()` | `uiScale()` before and after |
 | `workspaceSwitched {from, to}` | `openEditor` with the arrangement shown | the workspace of `viewState()` before and after |
+| `tempoRounded {fromBpm, toBpm, revert}` and the change of the singleton `tempo` (see "Workspace", the tempo) | not predicted: it depends on where the keyboard focus is | the processor's tempo before and after |
 
 The selection itself is the change `{entity: "selection", ref: {singleton: "selection"}}` with `activeTrackId` and
 `selectedPlacementIds` (the selected clip of the active track, as the UI snapshot reports it), each only when it

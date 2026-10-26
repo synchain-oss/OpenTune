@@ -20,6 +20,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -61,6 +62,58 @@ inline const JsonValue& memberOf(const JsonValue& object, const char* name)
     static const JsonValue none;
     const JsonValue* value = object.find(name);
     return value != nullptr ? *value : none;
+}
+
+/** The change of the singleton tempo in the changes of a write result, or null when the result lists none. */
+inline const JsonValue* findTempoChange(const JsonValue& result)
+{
+    const auto& changes = memberOf(result, "changes");
+    for (std::size_t i = 0; i < changes.size(); ++i)
+        if (memberOf(changes.at(i), "entity").text() == "tempo")
+            return &changes.at(i);
+    return nullptr;
+}
+
+/** True when a write result reports no rewritten tempo: no change of the tempo and no tempoRounded side effect. */
+inline bool reportsNoTempoChange(const JsonValue& result)
+{
+    return findTempoChange(result) == nullptr && memberOf(result, "sideEffects").find("tempoRounded") == nullptr;
+}
+
+/**
+ * Checks what a view switch (ui.setWorkspace, ui.setSelection with openEditor) reports when the transport bar's BPM
+ * field rewrote the project tempo from fromBpm to toBpm: the change of the singleton tempo with the member bpm
+ * {before, after, unit bpm} and no other member (the time signature is not reported), and the side effect tempoRounded
+ * {fromBpm, toBpm, revert}, whose revert is transport.setTempo back to fromBpm, or null (revertReported false: the
+ * instance does not report transport.v1). Returns the change of the tempo, or null when the result lists none.
+ */
+inline const JsonValue* checkTempoRounded(const JsonValue& result, double fromBpm, double toBpm, bool revertReported)
+{
+    const auto same = [](const JsonValue& value, double expected) {
+        return value.isNumber() && std::abs(value.asDouble() - expected) < 1e-9;
+    };
+    const JsonValue* change = findTempoChange(result);
+    if (!CONTROL_CHECK(change != nullptr))
+        return nullptr;
+    const auto& fields = memberOf(*change, "fields");
+    const auto& bpm = memberOf(fields, "bpm");
+    CONTROL_CHECK(memberOf(memberOf(*change, "ref"), "singleton").text() == "tempo"
+                  && memberOf(*change, "label").text() == "Tempo" && fields.size() == 1);
+    CONTROL_CHECK(same(memberOf(bpm, "before"), fromBpm) && same(memberOf(bpm, "after"), toBpm)
+                  && memberOf(bpm, "unit").text() == "bpm");
+    const auto& effects = memberOf(result, "sideEffects");
+    const auto& rounded = memberOf(effects, "tempoRounded");
+    CONTROL_CHECK(effects.find("tempoRounded") != nullptr && same(memberOf(rounded, "fromBpm"), fromBpm)
+                  && same(memberOf(rounded, "toBpm"), toBpm));
+    const auto& revert = memberOf(rounded, "revert");
+    if (revertReported)
+        CONTROL_CHECK(memberOf(revert, "method").text() == "transport.setTempo"
+                      && memberOf(revert, "params").size() == 1
+                      && same(memberOf(memberOf(revert, "params"), "bpm"), fromBpm)
+                      && !memberOf(revert, "requiresConsent").asBoolean());
+    else
+        CONTROL_CHECK(revert.isNull() && rounded.find("revert") != nullptr);
+    return change;
 }
 
 /** The discovery file at path, parsed; checks its size limit (PROTOCOL.md section 5.3). */

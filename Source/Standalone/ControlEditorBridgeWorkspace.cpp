@@ -3,7 +3,9 @@
 // window between the arrangement view and the piano roll as the two view buttons of the transport bar do. Only the
 // view changes; the editor's viewToggled() moves the timeline camera, the visibility and the keyboard focus of the two
 // views and runs the piano roll's heartbeat tick (the camera of the first F0 frame and the waveform cache), and never
-// touches a content, a key, a note, a clip or a track.
+// touches a content, a key, a note, a clip or a track. The one exception is upstream behaviour that is not corrected
+// here and that the operation reports (Control/Ops/WorkspaceOps.cpp): the keyboard focus that leaves the transport
+// bar's BPM field commits the field, which rewrites a tempo with more than one decimal (see settleViewSwitch()).
 #include "ControlEditorBridge.h"
 
 #include "PluginEditor.h"
@@ -24,11 +26,12 @@ void ControlEditorBridge::settleViewSwitch(const ViewSwitchBaseline& baseline)
 {
     // viewToggled() moves the keyboard focus, and the focus that the transport bar's BPM field loses then commits the
     // field (BpmValueField::commit -> TransportBarComponent::onBpmChanged -> OpenTuneAudioProcessorEditor::bpmChanged),
-    // which sets the tempo the field shows and marks the project as changed even when nothing was typed. A view switch
-    // leaves the project as it was (PROTOCOL.md section 15.2 rule 6), so the mark is taken back when the project was
-    // unchanged before and the tempo and the time signature are what they were: then the mark came from that commit,
-    // with nothing to save. A tempo or time signature that did change (a value typed into the field and not committed
-    // yet) is a real change and keeps the mark.
+    // which sets the tempo the field shows (the processor's tempo with one decimal) and marks the project as changed
+    // even when nothing was typed. A view switch leaves the project as it was (PROTOCOL.md section 15.2 rule 6), so the
+    // mark is taken back when the project was unchanged before and the tempo and the time signature are what they were:
+    // then the mark came from that commit, with nothing to save. A tempo or time signature that did change (a tempo
+    // with more decimals that the field rewrote, or a value typed into the field and not committed yet) is a real
+    // change and keeps the mark; the operation reports the rewritten tempo from the processor's tempo before and after.
     if (!baseline.dirty && editor_.projectSession_.isDirty() && editor_.processorRef_.getBpm() == baseline.bpm
         && editor_.processorRef_.getTimeSigNumerator() == baseline.timeSignatureNumerator
         && editor_.processorRef_.getTimeSigDenominator() == baseline.timeSignatureDenominator)

@@ -67,6 +67,8 @@ public:
     explicit SelectionBridge(OpenTuneAudioProcessor& processor) : processor_(processor)
     {
         view.workspace = "arrangement";
+        // The keyboard focus is in the transport bar's BPM field (TestUiBridge::commitBpmFieldOnViewSwitch()).
+        bpmFieldProcessor = &processor;
     }
 
     bool canSelect() const override { return selects; }
@@ -90,8 +92,12 @@ public:
         showInPianoRoll(placementId, placement.contentKey);
         scale = scaleOf(placement.contentKey);
         refreshReferenceContext(placementId);
-        if (openEditor)
+        // placementDoubleClicked(): the piano roll replaces the arrangement only when the arrangement is shown, and
+        // only that switch moves the keyboard focus.
+        if (openEditor && view.workspace != "pianoRoll") {
             view.workspace = "pianoRoll";
+            commitBpmFieldOnViewSwitch();
+        }
         return true;
     }
 
@@ -506,6 +512,77 @@ void scenarioSelectionImpl()
                "the revert recipe of a track");
     CONTROL_CHECK(f.arrangement().getSelectedPlacementId(0) == 0 && f.bridge->view.pianoRollPlacementId == 0);
     CONTROL_CHECK(f.bridge->selectCalls == 5);
+
+    // The tempo. The double click that switches to the piano roll moves the keyboard focus, and the focus that leaves
+    // the transport bar's BPM field commits the field, which shows the tempo with one decimal (the test bridge models
+    // it: TestUiBridge::commitBpmFieldOnViewSwitch()). The result reports it as ui.setWorkspace does. 120.27 is no
+    // value in the middle of two roundings: it becomes 120.3.
+    const auto isNear = [](double a, double b) { return std::abs(a - b) < 1e-9; };
+    const auto readBpm = [&f] {
+        return memberOf(memberOf(f.api.result("transport.get"), "transport"), "bpm").asDouble();
+    };
+    // The change that transport.setTempo reports for the same step, 120.27 to 120.3: the shape the tempo change of a
+    // view switch has to have.
+    f.processor->setBpm(120.27);
+    const auto setTempo = f.api.result("transport.setTempo", jsonOf(R"({"bpm":120.3})"));
+    const JsonValue* setTempoChange = findTempoChange(setTempo);
+    const JsonValue reference = setTempoChange != nullptr ? *setTempoChange : JsonValue();
+    CONTROL_CHECK(setTempoChange != nullptr);
+
+    f.processor->setBpm(120.27);
+    f.bridge->view.workspace = "arrangement";
+    f.bridge->project.dirty = false;
+    const int marksBefore = f.bridge->dirtyMarks;
+    const auto rewritten = f.api.result("ui.setSelection", selectClip(idB, true));
+    CONTROL_CHECK(memberOf(rewritten, "applied").asBoolean() && !memberOf(rewritten, "noOp").asBoolean());
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.3) && isNear(readBpm(), 120.3));
+    if (const JsonValue* tempoChange = checkTempoRounded(rewritten, 120.27, 120.3, true))
+        checkEqual(reference, *tempoChange, "the change of the tempo, as transport.setTempo reports it");
+    const auto& rewrittenChanges = memberOf(rewritten, "changes");
+    CONTROL_CHECK(rewrittenChanges.size() == 2 && memberOf(rewrittenChanges.at(0), "entity").text() == "selection"
+                  && memberOf(rewrittenChanges.at(1), "entity").text() == "tempo");
+    const auto& rewrittenEffects = memberOf(rewritten, "sideEffects");
+    CONTROL_CHECK(rewrittenEffects.size() == 2 && rewrittenEffects.find("workspaceSwitched") != nullptr);
+    // The tempo is saved with the project: the switch marks it as changed, and the result says so.
+    CONTROL_CHECK(!memberOf(memberOf(rewritten, "dirty"), "before").asBoolean()
+                  && memberOf(memberOf(rewritten, "dirty"), "after").asBoolean()
+                  && f.bridge->dirtyMarks == marksBefore + 1);
+    // The undo is the selection's; the way back of the tempo is the revert recipe of its side effect, sent as it came.
+    CONTROL_CHECK(memberOf(memberOf(rewritten, "undo"), "reason").text() == "not_persisted_state"
+                  && memberOf(memberOf(memberOf(rewritten, "undo"), "revert"), "method").text() == "ui.setSelection");
+    const auto& tempoRevert = memberOf(memberOf(rewrittenEffects, "tempoRounded"), "revert");
+    f.api.result(memberOf(tempoRevert, "method").text(), memberOf(tempoRevert, "params"));
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.27));
+
+    // A tempo with one decimal is what the field shows: nothing is rewritten, and the result reports nothing about the
+    // tempo (nor marks the project).
+    f.processor->setBpm(120.3);
+    f.bridge->view.workspace = "arrangement";
+    f.bridge->project.dirty = false;
+    const auto oneDecimal = f.api.result("ui.setSelection", selectClip(idA, true));
+    CONTROL_CHECK(memberOf(oneDecimal, "applied").asBoolean() && reportsNoTempoChange(oneDecimal)
+                  && memberOf(oneDecimal, "sideEffects").find("workspaceSwitched") != nullptr);
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.3) && isNear(readBpm(), 120.3));
+    CONTROL_CHECK(!memberOf(memberOf(oneDecimal, "dirty"), "after").asBoolean());
+
+    // The piano roll is shown already: the double click switches nothing, nothing moves the focus, the tempo stays as
+    // it is and nothing about it is reported, and the project is not marked.
+    f.processor->setBpm(120.27);
+    f.bridge->project.dirty = false;
+    CONTROL_CHECK(f.bridge->view.workspace == "pianoRoll");
+    const auto shown = f.api.result("ui.setSelection", selectClip(idB, true));
+    CONTROL_CHECK(memberOf(shown, "applied").asBoolean() && reportsNoTempoChange(shown)
+                  && memberOf(shown, "sideEffects").find("workspaceSwitched") == nullptr);
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.27) && isNear(readBpm(), 120.27));
+    CONTROL_CHECK(!memberOf(memberOf(shown, "dirty"), "after").asBoolean());
+
+    // dryRun predicts the switch and changes nothing, the tempo included; it does not predict the tempo, which depends
+    // on where the keyboard focus is.
+    f.bridge->view.workspace = "arrangement";
+    const auto dry = f.api.result("ui.setSelection", selectClip(idA, true, true));
+    CONTROL_CHECK(memberOf(dry, "dryRun").asBoolean() && reportsNoTempoChange(dry)
+                  && memberOf(dry, "sideEffects").find("workspaceSwitched") != nullptr);
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.27) && f.bridge->view.workspace == "arrangement");
     CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 

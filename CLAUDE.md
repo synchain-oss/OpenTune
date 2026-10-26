@@ -52,7 +52,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - `PianoRollComponent` / `PianoRollToolHandler` 零改动。遵守上游 `docs/code-architecture-review.md` 的约束：`PluginProcessor` 不再承担新的数据模型或通用 Router 职责。因此 processor 只增加以下内容：服务成员、启停与 getter、`ensureRuntimeInitialized`、导出锁、F0 失败原因的只读 getter 与记录函数。`ProjectSession` 留在编辑器内，经 `ControlUiBridge` 暴露窄接口。
 - **不修上游 bug。** 接口如实报告（告警与原因码，结果里标明不可撤销等），并在 PR 的「上游行为发现」里记录。是否给作者提 issue 由 manager 决定；任何对外内容都先给维护者过目。
 - **界面里才有的计算**：在接口层照 UI 的步骤另写一份，只调用上游现成的底层函数。有意镜像的上游函数要登记到镜像锁清单 `.github/drift-pins/<group>.txt`，并同步 `Source/Control/MIRRORS.md` 与 `Source/Control/mirror-map.json`（`ControlMirrorDriftTests` 比对规范化哈希）。
-- **范围**：只做波次 A（修音主流程）与波次 B（编排与工程）。波次 C 推迟，包括画、拉伸、切分、合并音符，单音符 EQ，包络，手绘曲线，锚点，橡皮擦，以及插入/删除时间手柄。不做界面里没有的「接口扩展」，也不做纯外观/视图设置。上游本来就没有的功能，统一返回 `UNSUPPORTED`。
+- **范围**：只做波次 A（修音主流程）与波次 B（编排与工程）。波次 C 推迟，包括画、拉伸、切分、合并音符，单音符 EQ，包络，手绘曲线，锚点，橡皮擦，以及插入/删除时间手柄。不做界面里没有的「接口扩展」，也不做纯外观/视图设置。例外：工作区切换 `ui.setWorkspace`。它等同于走带栏的两个视图按钮，而 agent 要照界面的步骤工作，需要在编排视图与钢琴卷帘之间来回切换；它也是关闭钢琴卷帘的唯一途径。维护者要求加入。上游本来就没有的功能，统一返回 `UNSUPPORTED`。
 - `.gitignore` 与其他上游文件保持原样。不在任何产出里改写、摘录或另行打包上游的说明与声明类文件（测试版只按白名单打包）。
 
 ## 2. 上游代码约定（从上游现有代码归纳，新代码照此写）

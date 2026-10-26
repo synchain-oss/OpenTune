@@ -19,11 +19,16 @@ JsonValue revisionPair(const std::string* before, const std::string* after)
 }
 
 /** The components of a content's versions (section 14.4), by protocol name. */
+// clang-format off
 const std::pair<const char*, std::string ControlContentVersions::*> kContentComponents[] = {
-    {"notes", &ControlContentVersions::notes},     {"pitch", &ControlContentVersions::pitch},
-    {"content", &ControlContentVersions::content}, {"grid", &ControlContentVersions::grid},
-    {"key", &ControlContentVersions::key},         {"pitchShift", &ControlContentVersions::pitchShift},
+    {"notes", &ControlContentVersions::notes},
+    {"pitch", &ControlContentVersions::pitch},
+    {"content", &ControlContentVersions::content},
+    {"grid", &ControlContentVersions::grid},
+    {"key", &ControlContentVersions::key},
+    {"pitchShift", &ControlContentVersions::pitchShift},
 };
+// clang-format on
 
 const ControlContentVersions* findVersions(const ControlWorldVersions& world, const std::string& contentId)
 {

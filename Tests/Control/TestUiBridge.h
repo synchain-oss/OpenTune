@@ -5,11 +5,13 @@
 // notifications it receives. Later parts of the control API extend it with what their tests need.
 
 #include "Control/ControlUiBridge.h"
+#include "PluginProcessor.h"
 #include "Utils/ProjectSession.h"
 
 #include <juce_core/juce_core.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -135,7 +137,8 @@ public:
     // ---- Workspace ----
 
     /** What the editor's bridge does (ControlEditorBridgeWorkspace.cpp): the view alone changes, nothing else is
-        touched, and a window that shows the view already does nothing. A bridge without the switch returns false. */
+        touched except the tempo that the BPM field rewrites (commitBpmFieldOnViewSwitch()), and a window that shows
+        the view already does nothing. A bridge without the switch returns false. */
     bool setWorkspace(bool arrangement) override
     {
         if (!switchesWorkspace)
@@ -147,8 +150,30 @@ public:
             return true;
         ++workspaceSwitches;
         view.workspace = target;
+        commitBpmFieldOnViewSwitch();
         return true;
     }
+
+    /** The transport bar's BPM field, as the editor meets it when the view really changes: the switch moves the
+        keyboard focus, the focus that leaves the field commits it (BpmValueField::commit shows the tempo with one
+        decimal, juce::String(value, 1), and sends that value to OpenTuneAudioProcessorEditor::bpmChanged), and the
+        editor sets that tempo and marks the project as changed. The editor's bridge takes the mark back when the tempo
+        is what it was (settleViewSwitch), so a tempo with one decimal changes nothing and a tempo with more decimals
+        is rewritten and keeps the mark. A test that gives the processor here has the focus in the field; null, the
+        default, is a window whose focus is elsewhere, which leaves the tempo alone. A derived bridge that switches the
+        view calls this when it does. */
+    void commitBpmFieldOnViewSwitch()
+    {
+        if (bpmFieldProcessor == nullptr)
+            return;
+        const double before = bpmFieldProcessor->getBpm();
+        bpmFieldProcessor->setBpm(juce::String(before, 1).getDoubleValue());
+        if (std::abs(bpmFieldProcessor->getBpm() - before) > 1e-9)
+            markDirty();
+    }
+
+    /** The processor whose tempo the BPM field of commitBpmFieldOnViewSwitch() commits; null: no focus in the field. */
+    OpenTuneAudioProcessor* bpmFieldProcessor = nullptr;
 
     /** setWorkspace(): false is a bridge that cannot switch. */
     bool switchesWorkspace = true;

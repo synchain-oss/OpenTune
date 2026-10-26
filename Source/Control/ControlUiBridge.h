@@ -234,7 +234,8 @@ public:
     /** Selects as the arrangement view does when the user clicks. With a placementId, the clip on trackId becomes the
         only selected clip and trackId the active track, as a click on the clip does: the piano roll shows the clip
         (in the openDyne scheme it generates the notes of a clip whose notes were never generated) and the transport
-        bar shows the clip's key; with openEditor also as a double click, which switches to the piano roll. With no clip
+        bar shows the clip's key; with openEditor also as a double click, which switches to the piano roll (a switch can
+        rewrite the tempo, see setWorkspace(), which the caller reads from the processor). With no clip
         (placementId 0), trackId becomes the active track with no clip selected and the piano roll shows nothing.
         Returns false, changing nothing, when not supported. */
     virtual bool select(int /*trackId*/, std::uint64_t /*placementId*/, bool /*openEditor*/) { return false; }
@@ -250,8 +251,12 @@ public:
 
     /** Switches the window to the arrangement view (arrangement true) or to the piano roll (false), as the two view
         buttons of the transport bar do. Only the view changes: no content, key, note, clip or track is touched and
-        nothing is generated or queued. Does nothing when the window already shows that view. The workspace that
-        results report is viewState(). Returns false, changing nothing, when not supported. Message thread. */
+        nothing is generated or queued. One exception, which the caller reports as it happened (the processor's tempo
+        before and after the call): the switch moves the keyboard focus, and the focus that the transport bar's BPM
+        field loses commits the field, which shows the tempo with one decimal, so a tempo with more decimals is
+        rewritten and the project is marked as changed (upstream behaviour, not corrected). Does nothing when the
+        window already shows that view. The workspace that results report is viewState(). Returns false, changing
+        nothing, when not supported. Message thread. */
     virtual bool setWorkspace(bool /*arrangement*/) { return false; }
 
     // ---- Preferences and audio device ---------------------------------------------------------

@@ -21,6 +21,11 @@ class ControlMethodTable;
  *   the piano roll gets another clip), with no undo entry;
  * - uiScaleChanged: the transport bar shows the clip's key (applyResolvedScaleForPlacementContent);
  * - workspaceSwitched: openEditor switched from the arrangement to the piano roll (placementDoubleClicked).
+ * - tempoRounded (and the change of the singleton tempo, as transport.setTempo reports it): the switch moved the
+ *   keyboard focus out of the transport bar's BPM field, which then committed the tempo it shows with one decimal, so a
+ *   project tempo with more decimals (120.27) became 120.3 and the project was marked as changed. Upstream behaviour,
+ *   reported as ui.setWorkspace reports it (see WorkspaceOps.h): the call compares the processor's tempo before and
+ *   after. dryRun does not predict it, because it depends on where the keyboard focus is.
  *
  * The call predicts these effects from the same state first; dryRun returns the prediction and changes nothing, the
  * selection included. A committed call reports what happened; a difference from the prediction is logged. The

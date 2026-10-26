@@ -36,11 +36,15 @@ bool ControlEditorBridge::select(int trackId, std::uint64_t placementId, bool op
     // and the scale of the transport bar).
     editor_.arrangementView_.commitControlSelection(trackId, placementId);
     // The double click that follows opens the clip in the piano roll. It switches the workspace when the arrangement is
-    // shown, which moves the keyboard focus (see ControlEditorBridgeWorkspace.cpp).
+    // shown (placementDoubleClicked() checks isWorkspaceView_), which moves the keyboard focus (see
+    // ControlEditorBridgeWorkspace.cpp). The changed mark is settled only for a double click that switches: with the
+    // piano roll shown already nothing moves the focus, and a mark set by anything else stays.
     if (openEditor) {
+        const bool switches = editor_.isWorkspaceView_;
         const auto baseline = viewSwitchBaseline();
         editor_.placementDoubleClicked(trackId, placementIndex);
-        settleViewSwitch(baseline);
+        if (switches)
+            settleViewSwitch(baseline);
     }
     return true;
 }

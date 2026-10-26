@@ -3,9 +3,11 @@
 
 #include "OpsJson.h"
 #include "OpsSupport.h"
+#include "TransportOps.h"
 #include "WriteEnvelope.h"
 
 #include "Control/ControlUiBridge.h"
+#include "PluginProcessor.h"
 
 #include <optional>
 #include <string>
@@ -88,8 +90,12 @@ Result<JsonValue> runSetWorkspace(ControlOpContext& context, const WorkspacePara
         // The window shows it already: a no-op, with nothing recorded (the envelope says no_op by itself).
         return envelope.committed(context);
 
+    // The tempo before the switch: the view switch moves the keyboard focus, and a transport bar whose BPM field loses
+    // it then rewrites the tempo with the one decimal the field shows (see ControlEditorBridgeWorkspace.cpp).
+    const double bpmBefore = context.processor().getBpm();
     if (!bridge->setWorkspace(params.arrangement))
         return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not switch the workspace");
+    const double bpmAfter = context.processor().getBpm();
     const auto after = bridge->viewState();
     if (!after || std::string(workspaceName(after->workspace)) != target)
         return controlOpError("INTERNAL", "", "the editor did not switch the workspace");
@@ -108,6 +114,10 @@ Result<JsonValue> runSetWorkspace(ControlOpContext& context, const WorkspacePara
     effect.appendMember("to", JsonValue::string(target));
     effect.appendMember("revert", JsonValue());
     envelope.addSideEffect("workspaceSwitched", std::move(effect));
+    // Upstream behaviour that the call reports as it happened: the project's tempo changed (the change of the singleton
+    // tempo, as transport.setTempo reports it, and the side effect tempoRounded with the way back).
+    if (controlBpmDiffers(bpmBefore, bpmAfter))
+        controlReportTempoRounded(context, envelope, bpmBefore, bpmAfter);
 
     envelope.setNotUndoable("not_persisted_state", revertRecipe(context, before));
     return envelope.committed(context);

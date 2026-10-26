@@ -105,8 +105,7 @@
             "backend",
             "vocoderReady",
             "vocoderReconfiguring",
-            "experimentalFeatures",
-            "referenceAlignMode"
+            "experimentalFeatures"
           ],
           "additionalProperties": false,
           "properties": {
@@ -133,10 +132,6 @@
             "vocoderReady": { "type": "boolean" },
             "vocoderReconfiguring": { "type": "boolean" },
             "experimentalFeatures": { "type": "boolean" },
-            "referenceAlignMode": {
-              "type": ["string", "null"],
-              "maxLength": 64
-            },
             "nullReasons": {
               "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
             }

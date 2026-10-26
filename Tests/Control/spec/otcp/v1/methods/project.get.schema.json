@@ -174,7 +174,6 @@
         "gainLinear",
         "fadeInSec",
         "fadeOutSec",
-        "referencePlacementId",
         "sourcePath",
         "geometryHash"
       ],
@@ -214,13 +213,6 @@
         },
         "fadeOutSec": {
           "$ref": "../schemas/common.schema.json#/$defs/secNonNegative"
-        },
-        "referencePlacementId": {
-          "description": "The placement this clip has a reference binding to; null when it has none.",
-          "anyOf": [
-            { "$ref": "../schemas/common.schema.json#/$defs/placementId" },
-            { "type": "null" }
-          ]
         },
         "sourcePath": {
           "description": "The source audio file of the clip's content; null with nullReasons.sourcePath when the instance does not know the file's path. A file that no longer exists keeps its path. Untrusted data.",

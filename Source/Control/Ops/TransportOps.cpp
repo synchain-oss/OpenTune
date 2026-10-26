@@ -40,6 +40,19 @@ JsonValue fieldChange(JsonValue before, JsonValue after, const char* unit)
     return field;
 }
 
+/** The member bpm of a tempo change: {before, after, unit bpm}, at the three decimals the tempo is reported with. */
+JsonValue tempoBpmField(double before, double after)
+{
+    return fieldChange(controlJsonNumber(before, 3), controlJsonNumber(after, 3), "bpm");
+}
+
+/** Records the change of the singleton tempo with the members in fields (bpm, timeSignature): the one builder of
+    the change that transport.setTempo and the view switches of ui.setWorkspace and ui.setSelection report. */
+void addTempoChange(ControlWriteEnvelope& envelope, JsonValue fields)
+{
+    envelope.addChange("tempo", singletonRef("tempo"), JsonValue::string("Tempo"), std::move(fields));
+}
+
 JsonValue signatureJson(int numerator, int denominator)
 {
     auto json = JsonValue::object();
@@ -300,7 +313,7 @@ Result<JsonValue> runSetTempo(ControlOpContext& context, const TempoParams& para
     const int denominatorBefore = processor.getTimeSigDenominator();
     // The values equal to the current ones are not set again: the editor's fields set the processor only on an
     // edit, and the call is a no-op.
-    const bool bpmChanges = params.bpm && std::abs(*params.bpm - bpmBefore) > 1e-9;
+    const bool bpmChanges = params.bpm && controlBpmDiffers(*params.bpm, bpmBefore);
     const bool signatureChanges =
         params.numerator && (*params.numerator != numeratorBefore || *params.denominator != denominatorBefore);
     if (bpmChanges || signatureChanges) {
@@ -320,15 +333,15 @@ Result<JsonValue> runSetTempo(ControlOpContext& context, const TempoParams& para
 
     // One judgement of "the bpm changed" for the reported field and for the revert recipe, so that a field reported
     // as changed always has its value in revert.params (and the recipe is never an empty object).
-    const bool bpmChanged = std::abs(bpmAfter - bpmBefore) > 1e-9;
+    const bool bpmChanged = controlBpmDiffers(bpmAfter, bpmBefore);
     auto fields = JsonValue::object();
     if (bpmChanged)
-        fields.appendMember("bpm", fieldChange(controlJsonNumber(bpmBefore, 3), controlJsonNumber(bpmAfter, 3), "bpm"));
+        fields.appendMember("bpm", tempoBpmField(bpmBefore, bpmAfter));
     if (numeratorAfter != numeratorBefore || denominatorAfter != denominatorBefore)
         fields.appendMember("timeSignature", fieldChange(signatureJson(numeratorBefore, denominatorBefore),
                                                          signatureJson(numeratorAfter, denominatorAfter), nullptr));
     if (fields.size() != 0) {
-        envelope.addChange("tempo", singletonRef("tempo"), JsonValue::string("Tempo"), std::move(fields));
+        addTempoChange(envelope, std::move(fields));
         // No undo entry, as in the UI (ui_parity); the previous tempo and time signature restore the state. The
         // recipe carries what the call changed: a time signature only when it changed, and a time signature that
         // this method's schema cannot express (a denominator of 64, or a numerator above 32, which the project
@@ -403,6 +416,32 @@ Result<JsonValue> runSetLoop(ControlOpContext& context, const LoopParams& params
 }
 
 } // namespace
+
+bool controlBpmDiffers(double a, double b)
+{
+    return std::abs(a - b) > 1e-9;
+}
+
+void controlReportTempoRounded(ControlOpContext& context, ControlWriteEnvelope& envelope, double fromBpm, double toBpm)
+{
+    auto fields = JsonValue::object();
+    fields.appendMember("bpm", tempoBpmField(fromBpm, toBpm));
+    addTempoChange(envelope, std::move(fields));
+
+    auto effect = JsonValue::object();
+    effect.appendMember("fromBpm", controlJsonNumber(fromBpm, 3));
+    effect.appendMember("toBpm", controlJsonNumber(toBpm, 3));
+    // transport.setTempo back to the tempo from before; the instance that does not report transport.v1 has no such
+    // method, so there is nothing that could restore it (PROTOCOL.md section 15.2 rule 2).
+    JsonValue revert;
+    if (controlReportsCapability(context, "transport.v1")) {
+        auto params = JsonValue::object();
+        params.appendMember("bpm", controlJsonNumber(fromBpm, 3));
+        revert = controlRevertRecipe("transport.setTempo", std::move(params));
+    }
+    effect.appendMember("revert", std::move(revert));
+    envelope.addSideEffect("tempoRounded", std::move(effect));
+}
 
 void registerTransportOps(ControlMethodTable& table)
 {

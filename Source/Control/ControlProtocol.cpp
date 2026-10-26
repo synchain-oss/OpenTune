@@ -52,7 +52,7 @@ constexpr MethodCapability kMethods[] = {
     {"track.duplicate", "tracks.v1"},
     {"track.delete", "tracks.v1"},
     {"ui.setSelection", "ui.bridge"},
-    {"content.analyzeReference", "reference.v1"},
+    {"ui.setWorkspace", "ui.workspace"},
     {"project.save", "project.io"},
     {"project.saveAs", "project.io"},
     {"project.open", "project.io"},
@@ -337,7 +337,7 @@ bool controlErrorRetryable(std::string_view kind, std::string_view reason)
 {
     if (kind == "NOT_READY"
         && (reason == "f0_failed" || reason == "f0_empty" || reason == "grid_not_seeded"
-            || reason == "export_dry_stretched" || reason == "reference_analysis_stalled"))
+            || reason == "export_dry_stretched"))
         return false;
     // The vocoder was still being loaded when the wait ran out; asking again can succeed. Not so for
     // vocoder_load_failed (the load ended and failed: the same weight fails again), which keeps the default, false.

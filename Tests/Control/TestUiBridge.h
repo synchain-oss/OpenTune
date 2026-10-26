@@ -5,11 +5,13 @@
 // notifications it receives. Later parts of the control API extend it with what their tests need.
 
 #include "Control/ControlUiBridge.h"
+#include "PluginProcessor.h"
 #include "Utils/ProjectSession.h"
 
 #include <juce_core/juce_core.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <functional>
 #include <optional>
@@ -58,7 +60,6 @@ public:
     ProjectSession* projectSession() override { return session; }
     juce::ThreadPool* projectWorkerPool() override { return pool; }
     void onTimeGridChanged() override { ++timeGridNotifications; }
-    void onReferenceBindingChanged() override { ++referenceBindingNotifications; }
 
     bool focusPlacement(int trackId, std::uint64_t placementId) override
     {
@@ -96,7 +97,6 @@ public:
     /** The values setProjectOperationRunning() was called with, in order. */
     std::vector<bool> operationFlagChanges;
     int timeGridNotifications = 0;
-    int referenceBindingNotifications = 0;
     int revealCalls = 0;
     /** The placements focusPlacement() was called with, in order. */
     std::vector<std::pair<int, std::uint64_t>> focused;
@@ -133,6 +133,54 @@ public:
         return true;
     }
     std::optional<UiScale> uiScale() const override { return scale; }
+
+    // ---- Workspace ----
+
+    /** What the editor's bridge does (ControlEditorBridgeWorkspace.cpp): the view alone changes, nothing else is
+        touched except the tempo that the BPM field rewrites (commitBpmFieldOnViewSwitch()), and a window that shows
+        the view already does nothing. A bridge without the switch returns false. */
+    bool setWorkspace(bool arrangement) override
+    {
+        if (!switchesWorkspace)
+            return false;
+        if (swallowsWorkspaceSwitch)
+            return true;
+        const std::string target = arrangement ? "arrangement" : "pianoRoll";
+        if (view.workspace == target)
+            return true;
+        ++workspaceSwitches;
+        view.workspace = target;
+        commitBpmFieldOnViewSwitch();
+        return true;
+    }
+
+    /** The transport bar's BPM field, as the editor meets it when the view really changes: the switch moves the
+        keyboard focus, the focus that leaves the field commits it (BpmValueField::commit shows the tempo with one
+        decimal, juce::String(value, 1), and sends that value to OpenTuneAudioProcessorEditor::bpmChanged), and the
+        editor sets that tempo and marks the project as changed. The editor's bridge takes the mark back when the tempo
+        is what it was (settleViewSwitch), so a tempo with one decimal changes nothing and a tempo with more decimals
+        is rewritten and keeps the mark. A test that gives the processor here has the focus in the field; null, the
+        default, is a window whose focus is elsewhere, which leaves the tempo alone. A derived bridge that switches the
+        view calls this when it does. */
+    void commitBpmFieldOnViewSwitch()
+    {
+        if (bpmFieldProcessor == nullptr)
+            return;
+        const double before = bpmFieldProcessor->getBpm();
+        bpmFieldProcessor->setBpm(juce::String(before, 1).getDoubleValue());
+        if (std::abs(bpmFieldProcessor->getBpm() - before) > 1e-9)
+            markDirty();
+    }
+
+    /** The processor whose tempo the BPM field of commitBpmFieldOnViewSwitch() commits; null: no focus in the field. */
+    OpenTuneAudioProcessor* bpmFieldProcessor = nullptr;
+
+    /** setWorkspace(): false is a bridge that cannot switch. */
+    bool switchesWorkspace = true;
+    /** setWorkspace() answers true and shows another view than asked for, as an editor that did not take the switch. */
+    bool swallowsWorkspaceSwitch = false;
+    /** The switches setWorkspace() made, in the number of calls that changed the view. */
+    int workspaceSwitches = 0;
 
     /** Injected dialogs, from the bottom of the stack to the top; reportsDialogs false is a bridge without them. */
     std::vector<DialogInfo> dialogs;

@@ -5,6 +5,8 @@
 # pinned-at: upstream/20261008-addb4f4
 # ported-to: Source/Standalone/ControlEditorBridgeModals.cpp
 # ported-to: Source/Control/Ops/UiOps.cpp
+# ported-to: Source/Standalone/ControlEditorBridgeWorkspace.cpp
+# ported-to: Source/Control/Ops/WorkspaceOps.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
 Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::trackColorChangeRequested	L3200-L3285	fn-v1	d94e32c47a816cde0f730ba063675e288f29e15344d7d16b1ec22fd8ccd5313b
@@ -13,3 +15,6 @@ Source/Editor/OnboardingOverlayComponent.cpp	OnboardingOverlayComponent::keyPres
 Source/Editor/OnboardingOverlayComponent.cpp	OnboardingOverlayComponent::showWorkflowChoice	L91-L105	fn-v1	8166989dc823bdcdabff1fe16b50f2ab7e14aa49285c211d3fa89ea77707ab04
 Source/Standalone/PluginEditor.cpp	!appPreferences_.getState().shared.onboardingShown	L1529-L1535	stmt-v1	f3e8e0b7262fa465ea03cf171426507552904a567147628977a8b2a9b7dabfec
 Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::applyResolvedScaleForPlacementContent	L469-L490	fn-v1	1a44cea413389d578bb28e542e65913ae31a870d22e628a08b59fae4f1da0822
+Source/Standalone/UI/TransportBarComponent.cpp	TransportBarComponent::onTrackViewClicked	L1670-L1680	fn-v1	d4e1f1d9ba880e538909bb031116ab8766ea21ed0d734a0990cf44afa66dccb5
+Source/Standalone/UI/TransportBarComponent.cpp	TransportBarComponent::onPianoViewClicked	L1682-L1692	fn-v1	1b7b68ac0379f505acd0b1279f9ec66a8e300266cc42507d78cba88af4dfcacc
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::viewToggled	L3089-L3129	fn-v1	8b4b38da1bcef0091eab876c4d76f111356c9546eb609829338258a9201ebbac

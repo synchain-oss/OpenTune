@@ -45,15 +45,14 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 | 抽出 `afterUndoRedo()`（纯重构；选项关闭时 `performUndoRedoAction` 与上游逐字相同）+ bridge 调用 | `Source/Standalone/PluginEditor.h/.cpp` | `.h` 约 2、`.cpp` 约 8 |
 | `peekUndo` / `peekRedo` / `size` / `cursor`（只读）；`clearRedo()`（**改动型，会改写历史**：清空重做栈，只在接口的写入没有撤销条目时调用，唯一调用方是 `Source/Control/Edit/ControlOriginAction.cpp`，对应规范 rc.3 第 15.3 节第 9 条，且在撤销/重做进行中不动；若规范后续版本改为「重做时只屏蔽被改动的方面」即删除，钩子回到只读） | `Source/Utils/UndoManager.h`（仅头文件，类内内联，新增行全部在 `#if`/`#endif` 之内） | 约 8（含 `#if`/`#endif`） |
 | 公开 `commitControlSelection()`，包装私有选择提交（与单击片段或空白处相同：只选中该片段，或清空选择） | `Source/Standalone/UI/ArrangementViewComponent.h/.cpp` | `.h` 约 4、`.cpp` 约 17（全部在选项宏内） |
-| 参考特征生产者 getter；记录每个内容最近一次 F0 失败原因（`requestContentRefresh` 里 6 处记录调用，加两个成员函数的定义） | `Source/PluginProcessor.*` | `.h` 约 6、`.cpp` 约 43（全部在选项宏内） |
-| 参考分析工作线程停滞的只读 getter（`isReferenceAnalysisWorkerStalled()`）与完成标记（在 `preheatReferenceAlignmentFeatures` 的 completion 里设置） | `Source/PluginProcessor.*` | `.h` 约 8、`.cpp` 约 6（全部在选项宏内） |
+| 记录每个内容最近一次 F0 失败原因（`requestContentRefresh` 里 6 处记录调用，加两个成员函数的定义） | `Source/PluginProcessor.*` | `.h` 约 5、`.cpp` 约 43（全部在选项宏内） |
 | `option()` + `include(cmake/OpenTuneControl.cmake)` | `CMakeLists.txt` | 2–5 |
 
 - **表外的上游文件一律不改。** 确需新钩子时先停下，在 PR 或返回结果的问题列表里提出。由 manager 更新本表与 `Source/Control/README.md` 的钩子清单后再做。
-- `PianoRollComponent` / `PianoRollToolHandler` 零改动。遵守上游 `docs/code-architecture-review.md` 的约束：`PluginProcessor` 不再承担新的数据模型或通用 Router 职责。因此 processor 只增加以下内容：服务成员、启停与 getter、`ensureRuntimeInitialized`、导出锁、两个只读 getter。`ProjectSession` 留在编辑器内，经 `ControlUiBridge` 暴露窄接口。
+- `PianoRollComponent` / `PianoRollToolHandler` 零改动。遵守上游 `docs/code-architecture-review.md` 的约束：`PluginProcessor` 不再承担新的数据模型或通用 Router 职责。因此 processor 只增加以下内容：服务成员、启停与 getter、`ensureRuntimeInitialized`、导出锁、F0 失败原因的只读 getter 与记录函数。`ProjectSession` 留在编辑器内，经 `ControlUiBridge` 暴露窄接口。
 - **不修上游 bug。** 接口如实报告（告警与原因码，结果里标明不可撤销等），并在 PR 的「上游行为发现」里记录。是否给作者提 issue 由 manager 决定；任何对外内容都先给维护者过目。
 - **界面里才有的计算**：在接口层照 UI 的步骤另写一份，只调用上游现成的底层函数。有意镜像的上游函数要登记到镜像锁清单 `.github/drift-pins/<group>.txt`，并同步 `Source/Control/MIRRORS.md` 与 `Source/Control/mirror-map.json`（`ControlMirrorDriftTests` 比对规范化哈希）。
-- **范围**：只做波次 A（修音主流程）与波次 B（编排与工程）。波次 C 推迟，包括画、拉伸、切分、合并音符，单音符 EQ，包络，手绘曲线，锚点，橡皮擦，以及插入/删除时间手柄。不做界面里没有的「接口扩展」，也不做纯外观/视图设置。上游本来就没有的功能，统一返回 `UNSUPPORTED`。
+- **范围**：只做波次 A（修音主流程）与波次 B（编排与工程）。波次 C 推迟，包括画、拉伸、切分、合并音符，单音符 EQ，包络，手绘曲线，锚点，橡皮擦，以及插入/删除时间手柄。不做界面里没有的「接口扩展」，也不做纯外观/视图设置。例外：工作区切换 `ui.setWorkspace`。它等同于走带栏的两个视图按钮，而 agent 要照界面的步骤工作，需要在编排视图与钢琴卷帘之间来回切换；它也是关闭钢琴卷帘的唯一途径。维护者要求加入。上游本来就没有的功能，统一返回 `UNSUPPORTED`。
 - `.gitignore` 与其他上游文件保持原样。不在任何产出里改写、摘录或另行打包上游的说明与声明类文件（测试版只按白名单打包）。
 
 ## 2. 上游代码约定（从上游现有代码归纳，新代码照此写）

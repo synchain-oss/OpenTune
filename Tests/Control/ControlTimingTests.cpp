@@ -175,7 +175,8 @@ bool isErrorOf(const JsonValue& response, const std::string& kind, const std::st
 }
 
 /** A timing analysis of the content given the way the processor stores a finished one: status, the producer this
-    instance uses, the content's audio revision as fingerprint, and onsets at the given source seconds. */
+    instance uses (standard AUTO: the processor of a test has no editor to hand it another mode), the content's audio
+    revision as fingerprint, and onsets at the given source seconds. */
 bool setTimingFeatures(OpenTuneAudioProcessor& processor, const ContentKey& key, ReferenceFeatureStatus status,
                        const std::vector<double>& onsetsSec)
 {
@@ -184,7 +185,7 @@ bool setTimingFeatures(OpenTuneAudioProcessor& processor, const ContentKey& key,
         return false;
     ReferenceFeatureSet features;
     features.status = status;
-    features.producer = processor.getReferenceFeatureProducer();
+    features.producer = ReferenceFeatureProducer::StandardAuto;
     features.inputFingerprint = static_cast<std::int64_t>(snapshot->audioRevision);
     features.analysisRevision = snapshot->referenceFeatures.analysisRevision + 1;
     features.sourceDurationSeconds = snapshot->timeGrid != nullptr ? snapshot->timeGrid->totalDurationSeconds() : 0.0;

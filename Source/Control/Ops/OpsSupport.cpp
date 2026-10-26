@@ -478,14 +478,6 @@ ControlContentVersions controlContentVersions(ControlOpContext& context, const s
                               .add(snapshot.pitchShiftSettings.semitone)
                               .add(snapshot.pitchShiftSettings.cents)
                               .token();
-    const auto& reference = snapshot.referenceFeatures;
-    versions.reference = ControlTokenHasher('f')
-                             .add(reference.analysisRevision)
-                             .add(static_cast<int>(reference.status))
-                             .add(static_cast<int>(reference.producer))
-                             .add(static_cast<std::int64_t>(reference.inputFingerprint))
-                             .add(reference.sourceDurationSeconds)
-                             .token();
     return versions;
 }
 
@@ -504,7 +496,6 @@ std::string controlArrangementRevision(ControlOpContext& context)
             .add(static_cast<double>(p.gain))
             .add(p.fadeInDuration)
             .add(p.fadeOutDuration)
-            .add(p.referencePlacementId)
             .add(std::string_view(p.name.toRawUTF8()));
     }
     return hasher.token();

@@ -33,4 +33,22 @@ namespace OpenTune {
  */
 void registerTransportOps(ControlMethodTable& table);
 
+class ControlWriteEnvelope;
+
+/** True when the two tempos are different tempos: transport.setTempo's judgement of a changed bpm, which the reported
+    change and the revert recipe both follow. */
+bool controlBpmDiffers(double a, double b);
+
+/**
+ * Records on envelope that the project's tempo changed from fromBpm to toBpm without a transport.setTempo call: the
+ * change of the singleton tempo that transport.setTempo reports (the same builder: entity tempo, ref {singleton:
+ * tempo}, member bpm {before, after, unit bpm}), and the side effect tempoRounded {fromBpm, toBpm, revert}, whose
+ * revert recipe is transport.setTempo back to fromBpm, or null where the instance does not report transport.v1
+ * (PROTOCOL.md section 15.2 rule 2). The time signature is not touched by what causes this and is not reported.
+ *
+ * Used by ui.setWorkspace and ui.setSelection: the window's view switch moves the keyboard focus, and the focus that
+ * the transport bar's BPM field loses then commits the field, which shows the tempo with one decimal. Message thread.
+ */
+void controlReportTempoRounded(ControlOpContext& context, ControlWriteEnvelope& envelope, double fromBpm, double toBpm);
+
 } // namespace OpenTune

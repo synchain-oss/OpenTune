@@ -357,45 +357,6 @@ void checkGainAndFades(Fixture& f, const Clip& a)
     CONTROL_CHECK(f.edit(f.op("setFade", a, "\"fadeInSec\":0")).isObject());
 }
 
-void checkReferences(Fixture& f, const Clip& a, const Clip& b, const Clip& c)
-{
-    // The editor's binding menu refreshes the reference context after every binding it changes: the bridge is told
-    // once per call that changed a binding, never for a prediction, a refusal or a binding that stays.
-    int& notified = f.bridge.referenceBindingNotifications;
-    const int notifiedAtStart = notified;
-    CONTROL_CHECK(
-        f.edit(f.op("setReference", a, "\"referencePlacementId\":" + quoted(f.pid(b))), ",\"dryRun\":true").isObject());
-    CONTROL_CHECK(notified == notifiedAtStart);
-    auto result = f.edit(f.op("setReference", a, "\"referencePlacementId\":" + quoted(f.pid(b))));
-    CONTROL_CHECK(notified == notifiedAtStart + 1);
-    // The same binding again changes nothing.
-    CONTROL_CHECK(f.edit(f.op("setReference", a, "\"referencePlacementId\":" + quoted(f.pid(b)))).isObject());
-    CONTROL_CHECK(notified == notifiedAtStart + 1);
-    CONTROL_CHECK(memberOf(fieldOf(changeOf(result, f.pid(a)), "referencePlacementId"), "after").text() == f.pid(b));
-    CONTROL_CHECK(warningCodes(result) == "EXPERIMENTAL_FEATURE" && innerActions(result) == "ReferenceBindingAction");
-    // The clip itself, a cycle, a clip that does not overlap in time.
-    CONTROL_CHECK(f.editFails(f.op("setReference", a, "\"referencePlacementId\":" + quoted(f.pid(a))),
-                              "INVALID_ARGUMENT", "reference_ineligible"));
-    CONTROL_CHECK(f.editFails(f.op("setReference", b, "\"referencePlacementId\":" + quoted(f.pid(a))),
-                              "INVALID_ARGUMENT", "reference_ineligible"));
-    CONTROL_CHECK(f.editFails(f.op("setReference", c, "\"referencePlacementId\":" + quoted(f.pid(a))),
-                              "INVALID_ARGUMENT", "reference_ineligible"));
-    CONTROL_CHECK(notified == notifiedAtStart + 1);
-    // A move earlier in the same call decides: c moved over a may bind to it.
-    result = f.edit(f.op("move", c, "\"startTimelineSec\":3") + ","
-                    + f.op("setReference", c, "\"referencePlacementId\":" + quoted(f.pid(a))));
-    CONTROL_CHECK(innerActions(result) == "MultiMovePlacementAction,ReferenceBindingAction");
-    CONTROL_CHECK(f.locate(c.placementId).placement.referencePlacementId == a.placementId);
-    CONTROL_CHECK(notified == notifiedAtStart + 2);
-    CONTROL_CHECK(f.edit(f.op("setReference", c, "\"referencePlacementId\":null") + ","
-                         + f.op("move", c, "\"startTimelineSec\":20"))
-                      .isObject());
-    CONTROL_CHECK(notified == notifiedAtStart + 3);
-    result = f.edit(f.op("setReference", a, "\"referencePlacementId\":null"));
-    CONTROL_CHECK(notified == notifiedAtStart + 4);
-    CONTROL_CHECK(memberOf(fieldOf(changeOf(result, f.pid(a)), "referencePlacementId"), "after").isNull());
-}
-
 void checkCallRules(Fixture& f, const Clip& a, const Clip& b)
 {
     // Several ops are one undo entry; the changes of one clip are one entry.
@@ -439,14 +400,13 @@ void checkCallRules(Fixture& f, const Clip& a, const Clip& b)
 
     // The params: closed, op rules, confirm only with delete.
     const auto revision = quoted(before);
-    for (const auto& ops :
-         {f.op("split", a, "\"atTimelineSec\":4") + "," + f.op("move", b, "\"startTimelineSec\":1"),
-          f.op("move", a, ""), f.op("setGain", a, "\"gainDb\":1,\"gainLinear\":1"), f.op("setFade", a, ""),
-          f.op("trim", a, "\"edge\":\"middle\",\"toTimelineSec\":4"), f.op("move", a, "\"startTimelineSec\":-1"),
-          f.op("move", a, "\"toTrackId\":1.5"), f.op("setReference", a, ""), std::string("{\"op\":\"rotate\"}"),
-          f.op("move", a, "\"startTimelineSec\":1,\"extra\":1"),
-          "{\"op\":\"delete\",\"placementIds\":[" + quoted(f.pid(a)) + "," + quoted(f.pid(a)) + "]}",
-          std::string("{\"op\":\"delete\",\"placementIds\":[]}")})
+    for (const auto& ops : {f.op("split", a, "\"atTimelineSec\":4") + "," + f.op("move", b, "\"startTimelineSec\":1"),
+                            f.op("move", a, ""), f.op("setGain", a, "\"gainDb\":1,\"gainLinear\":1"),
+                            f.op("setFade", a, ""), f.op("trim", a, "\"edge\":\"middle\",\"toTimelineSec\":4"),
+                            f.op("move", a, "\"startTimelineSec\":-1"), f.op("move", a, "\"toTrackId\":1.5"),
+                            std::string("{\"op\":\"rotate\"}"), f.op("move", a, "\"startTimelineSec\":1,\"extra\":1"),
+                            "{\"op\":\"delete\",\"placementIds\":[" + quoted(f.pid(a)) + "," + quoted(f.pid(a)) + "]}",
+                            std::string("{\"op\":\"delete\",\"placementIds\":[]}")})
         CONTROL_CHECK(f.api.fails("arrangement.edit",
                                   json("{\"expectedArrangementRevision\":" + revision + ",\"ops\":[" + ops + "]}"),
                                   "INVALID_ARGUMENT", "invalid_params"));
@@ -477,14 +437,6 @@ void checkSplitAndMerge(Fixture& f, const Clip& a, const Clip& c, const Clip& pe
     auto result = f.edit(f.op("split", c, "\"atTimelineSec\":23"), ",\"dryRun\":true");
     CONTROL_CHECK(entities(result, "removed") == "placement" && entities(result, "created").empty()
                   && f.revision() == before);
-
-    // A clip bound to the split clip loses its binding, and the prediction says so.
-    const auto splitBound = f.addClip("split-bound", 3, 21.0);
-    CONTROL_CHECK(settleBackgroundWork(*f.processor));
-    CONTROL_CHECK(f.arrangement().setPlacementReferencePlacement(3, splitBound.placementId, c.placementId));
-    result = f.edit(f.op("split", c, "\"atTimelineSec\":23"), ",\"dryRun\":true");
-    CONTROL_CHECK(memberOf(fieldOf(changeOf(result, f.pid(splitBound)), "referencePlacementId"), "after").isNull());
-    CONTROL_CHECK(f.locate(splitBound.placementId).placement.referencePlacementId == c.placementId);
 
     // Between two analysis frames: the cut snaps to the nearest one (SPLIT_SNAPPED).
     result = f.edit(f.op("split", c, "\"atTimelineSec\":23.004"));
@@ -554,21 +506,12 @@ void checkDelete(Fixture& f, const Clip& a, const Clip& b)
     auto result = f.edit(ids, ",\"dryRun\":true");
     CONTROL_CHECK(entities(result, "removed") == "placement,placement,content,content" && f.revision() == before);
 
-    // A third clip bound to b loses the binding with it; a prediction says so as well.
-    const auto bound = f.addClip("bound", 2, 3.0);
-    CONTROL_CHECK(settleBackgroundWork(*f.processor));
-    CONTROL_CHECK(f.arrangement().setPlacementReferencePlacement(2, bound.placementId, b.placementId));
-    result = f.edit(ids, ",\"dryRun\":true");
-    CONTROL_CHECK(memberOf(fieldOf(changeOf(result, f.pid(bound)), "referencePlacementId"), "after").isNull());
-    CONTROL_CHECK(f.locate(bound.placementId).placement.referencePlacementId == b.placementId);
     result = f.edit(ids, ",\"confirm\":true");
     CONTROL_CHECK(entities(result, "removed") == "placement,placement,content,content");
     CONTROL_CHECK(refAt(result, "removed", 2, "contentId").rfind("c:", 0) == 0);
     CONTROL_CHECK(warningCodes(result) == "UPSTREAM_UNDO_DEFECT,IRREVERSIBLE,UPSTREAM_UNDO_DEFECT,IRREVERSIBLE");
     CONTROL_CHECK(memberOf(memberOf(result, "undo"), "reason").text() == "upstream_undo_defect"
                   && memberOf(memberOf(result, "undo"), "revert").isNull());
-    const auto change = changeOf(result, f.pid(bound));
-    CONTROL_CHECK(memberOf(fieldOf(change, "referencePlacementId"), "after").isNull());
     CONTROL_CHECK(f.locate(a.placementId).trackId < 0 && f.locate(b.placementId).trackId < 0);
     // One undo entry, which edit.undo refuses.
     const auto top = memberOf(f.history(), "undoTop");
@@ -592,7 +535,6 @@ void scenarioArrangementImpl()
     checkMoves(f, a, b);
     checkTrims(f, a);
     checkGainAndFades(f, a);
-    checkReferences(f, a, b, c);
     checkCallRules(f, a, b);
     checkSplitAndMerge(f, a, c, pending);
     checkDelete(f, a, b);
@@ -606,7 +548,7 @@ void scenarioArrangementUndoImpl()
     if (!CONTROL_CHECK(f.open()))
         return;
     const auto a = f.addClip("a", 0, 2.0);
-    const auto c = f.addClip("c", 1, 2.0);
+    f.addClip("c", 1, 2.0);
     CONTROL_CHECK(settleBackgroundWork(*f.processor));
     CONTROL_CHECK(f.arrangement().setPlacementFade(0, a.placementId, 0.0, 3.0));
 
@@ -653,12 +595,6 @@ void scenarioArrangementUndoImpl()
     CONTROL_CHECK(back.trackId == 0 && near(back.placement.timelineStartSeconds, 2.0) && near(back.placement.gain, 1.0)
                   && near(back.placement.fadeInDuration, 0.0) && near(back.placement.fadeOutDuration, 3.0));
 
-    // A binding is undone.
-    result = f.edit(f.op("setReference", a, "\"referencePlacementId\":" + quoted(f.pid(c))));
-    CONTROL_CHECK(
-        f.api.result("edit.undo", json(undoParams(memberOf(memberOf(result, "undo"), "undoId").text()))).isObject());
-    CONTROL_CHECK(f.locate(a.placementId).placement.referencePlacementId == 0);
-
     // Split and merge push the UI's entries, which edit.undo refuses: OpenTune's undo does not bring the clips back.
     result = f.edit(f.op("split", a, "\"atTimelineSec\":5"));
     auto top = memberOf(f.history(), "undoTop");
@@ -687,7 +623,6 @@ void scenarioArrangementCopyImpl()
     CONTROL_CHECK(settleBackgroundWork(*f.processor));
     CONTROL_CHECK(f.arrangement().setPlacementGain(0, a.placementId, 0.5f));
     CONTROL_CHECK(f.arrangement().setPlacementFade(0, a.placementId, 0.2, 0.3));
-    CONTROL_CHECK(f.arrangement().setPlacementReferencePlacement(0, a.placementId, b.placementId));
     const auto copy = [&f](const std::string& sources, const std::string& mode, int track, double start,
                            const std::string& revisionToken = {}) {
         return json("{\"sources\":[" + sources + "],\"mode\":" + quoted(mode)
@@ -706,7 +641,7 @@ void scenarioArrangementCopyImpl()
     const auto fullId = std::stoull(fullCopy.substr(fullCopy.rfind(':') + 1));
     const auto full = f.locate(fullId);
     CONTROL_CHECK(full.trackId == 0 && near(full.placement.gain, 0.5) && near(full.placement.fadeOutDuration, 0.3)
-                  && full.placement.referencePlacementId == b.placementId && !(full.placement.contentKey == a.key));
+                  && !(full.placement.contentKey == a.key));
     const auto& undo = memberOf(result, "undo");
     CONTROL_CHECK(memberOf(undo, "reason").text() == "ui_parity"
                   && memberOf(memberOf(undo, "revert"), "requiresConsent").asBoolean());
@@ -725,8 +660,7 @@ void scenarioArrangementCopyImpl()
     const auto windowCopy = refAt(result, "created", 0, "placementId");
     const auto window = f.locate(std::stoull(windowCopy.substr(windowCopy.rfind(':') + 1)));
     CONTROL_CHECK(window.trackId == 2 && near(window.placement.clipInSeconds, 0.0)
-                  && near(window.placement.durationSeconds, 5.0) && near(window.placement.timelineStartSeconds, 10.0)
-                  && window.placement.referencePlacementId == b.placementId);
+                  && near(window.placement.durationSeconds, 5.0) && near(window.placement.timelineStartSeconds, 10.0));
     const auto snapshot = f.processor->getContentSnapshot(window.placement.contentKey);
     CONTROL_CHECK(snapshot != nullptr && snapshot->audioBuffer != nullptr
                   && near(snapshot->audioBuffer->getNumSamples() / snapshot->audioSampleRate, 5.0, 1e-3));
@@ -788,10 +722,8 @@ const char* const kMustRunVectors[] = {
     "arrangement/edit-move-hidden-track",
     "arrangement/edit-move",
     "arrangement/edit-not-found",
-    "arrangement/edit-reference-ineligible",
     "arrangement/edit-set-fade",
     "arrangement/edit-set-gain",
-    "arrangement/edit-set-reference",
     "arrangement/edit-split-merge",
     "arrangement/edit-split-not-ready",
     "arrangement/edit-split-out-of-range",

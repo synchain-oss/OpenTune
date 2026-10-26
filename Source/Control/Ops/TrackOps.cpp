@@ -644,28 +644,7 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
     bridge->setVisibleTrackCount(visible - 1);
     controlMarkDirty(context);
 
-    // A clip of another track that referred to a removed clip loses the binding: OpenTune leaves it dangling.
-    const auto removedIds = [&removed] {
-        std::set<std::uint64_t> ids;
-        for (const auto& ref : removed)
-            ids.insert(ref.placement.placementId);
-        return ids;
-    }();
-    auto clipsAfter = controlLivePlacements(context);
-    auto dangling = JsonValue::array();
-    std::set<std::uint64_t> cleared;
-    for (const auto& ref : clipsAfter) {
-        const auto reference = ref.placement.referencePlacementId;
-        if (reference == 0 || removedIds.count(reference) == 0)
-            continue;
-        if (arrangement->setPlacementReferencePlacement(ref.trackId, ref.placement.placementId, 0))
-            cleared.insert(ref.placement.placementId);
-        auto entry = JsonValue::object();
-        entry.appendMember("placementId", JsonValue::string(ref.placementId));
-        entry.appendMember("referencePlacementId", JsonValue::string(controlPlacementId(context, reference)));
-        dangling.append(std::move(entry));
-    }
-    clipsAfter = controlLivePlacements(context);
+    const auto clipsAfter = controlLivePlacements(context);
 
     // The contents that no clip shows any more left the project (OpenTune leaks their clips, see TrackOps.h).
     std::set<std::uint64_t> stillShown;
@@ -695,7 +674,7 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
         envelope.addRemoved("content", contentRef(controlContentId(context, key)),
                             JsonValue::string("Content of " + placementLabel(*found)));
     }
-    // Changed: every clip that moved to another track, and every clip that lost its reference binding.
+    // Changed: every clip that moved to another track.
     for (const auto& now : clipsAfter) {
         const auto was = std::find_if(clipsBefore.begin(), clipsBefore.end(), [&now](const ControlPlacementRef& ref) {
             return ref.placement.placementId == now.placement.placementId;
@@ -704,10 +683,6 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
             continue;
         auto fields = JsonValue::object();
         addField(fields, "trackId", JsonValue::integer(was->trackId), JsonValue::integer(now.trackId), nullptr);
-        if (cleared.count(now.placement.placementId) != 0)
-            addField(fields, "referencePlacementId",
-                     JsonValue::string(controlPlacementId(context, was->placement.referencePlacementId)), JsonValue(),
-                     nullptr);
         if (fields.size() == 0)
             continue;
         envelope.addChange("placement", placementRef(now.placementId), JsonValue::string(placementLabel(now)),
@@ -738,7 +713,6 @@ Result<JsonValue> runDelete(ControlOpContext& context, const DeleteParams& param
     envelope.setNotUndoable("no_upstream_undo");
     auto result = envelope.committed(context);
     result.appendMember("trackIdMap", std::move(trackIdMap));
-    result.appendMember("danglingReferences", std::move(dangling));
     result.appendMember("possiblyStaleEntries", std::move(staleData));
     return result;
 }

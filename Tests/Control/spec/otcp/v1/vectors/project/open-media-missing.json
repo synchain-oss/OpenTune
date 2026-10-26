@@ -124,8 +124,7 @@
                 "media": [
                   { "path": { "$any": "string" }, "reason": "missing" }
                 ],
-                "placementCount": 1,
-                "referenceBindingCount": 0
+                "placementCount": 1
               },
               "historyCleared": { "undoCount": 0, "redoCount": 0 },
               "omittedCount": { "created": 0, "removed": 0 }

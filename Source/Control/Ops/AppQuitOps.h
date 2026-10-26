@@ -41,8 +41,10 @@ class ControlMethodTable;
  * can be known: the editor is gone or its window does not close when the exit step runs, and the exit step cannot be
  * queued (ControlDispatcher::runAfterReply()). In the first the service is stopped all the same (before the window is
  * asked, never after) and OpenTune keeps running without its control API; the log says that the client was told
- * `quitting: true` and the window was not closed. In the second the dispatcher answers SHUTTING_DOWN, and the listener
- * and the discovery file stay until the application's own shutdown stops the service; the log says so.
+ * `quitting: true` and the window was not closed. In the second the dispatcher answers SHUTTING_DOWN, and the log says
+ * which of two reasons it was (ControlMessageThread::isAlive()): the message queue refused the step while the
+ * service was alive, so the listener and the discovery file stay until the application closes itself and its own
+ * shutdown stops the service; or the service had been stopped already, so nothing is left to stop.
  */
 void registerAppQuitOps(ControlMethodTable& table);
 

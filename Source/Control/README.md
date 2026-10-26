@@ -1434,7 +1434,11 @@ the call itself with `UNSUPPORTED`.
 - `AppQuit`: the capability and its place after `audio.device`, the params, `UNSAVED_CHANGES`, every BUSY reason alone
   and in the order of the checks (also an export lock held by the UI, and each job kind, several jobs and finished jobs
   that do not count), and the quit with `discardUnsaved`.
-- `AppQuitWithoutWindow`: no bridge, a bridge that cannot quit, the capability withheld.
+- `AppQuitWithoutWindow`: no bridge, a bridge that cannot quit, the capability withheld; and the two cases in which
+  the client has been told `quitting: true` but the window does not close when the exit step asks: the window refuses
+  to close, and the editor is gone by then (its bridge is unregistered between the result and the step). In both the
+  control service is stopped before the window is asked (never after), nothing is closed, the application keeps
+  running, and the log has one line saying what the client was told and why the window stayed.
 - `AppQuitResult`: the result shapes: a project never saved, the consent given for a project without changes (nothing
   discarded), discarded changes with `IRREVERSIBLE`, and a saved project with its path as it is, also with non-ASCII
   characters.

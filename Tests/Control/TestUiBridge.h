@@ -61,9 +61,13 @@ public:
     juce::ThreadPool* projectWorkerPool() override { return pool; }
     void onTimeGridChanged() override { ++timeGridNotifications; }
 
+    /** The editor's applyPlacementSelectionContext(): the clip becomes the selected clip of the active track, which
+        loads it into the piano roll without switching the view (a selection shows the clip in the piano roll even
+        while the arrangement is shown). */
     bool focusPlacement(int trackId, std::uint64_t placementId) override
     {
         focused.emplace_back(trackId, placementId);
+        view.pianoRollPlacementId = placementId;
         return true;
     }
     bool revealTracks(int count) override
@@ -181,6 +185,28 @@ public:
     bool swallowsWorkspaceSwitch = false;
     /** The switches setWorkspace() made, in the number of calls that changed the view. */
     int workspaceSwitches = 0;
+
+    // ---- Quit ----
+
+    bool canQuit() const override { return quits; }
+    /** Records the request and does not end the process; onQuitRequest lets a test look at the instance at the moment
+        the real bridge would close the window. A bridge that cannot quit does nothing and returns false. */
+    bool requestQuit() override
+    {
+        if (!quits)
+            return false;
+        ++quitRequests;
+        if (onQuitRequest)
+            onQuitRequest();
+        return true;
+    }
+
+    /** canQuit(): false is a bridge whose window cannot be closed (no Standalone window around the editor). */
+    bool quits = true;
+    /** The number of requestQuit() calls that closed the window. */
+    int quitRequests = 0;
+    /** Called inside requestQuit(), on the message thread, after the request was counted. */
+    std::function<void()> onQuitRequest;
 
     /** Injected dialogs, from the bottom of the stack to the top; reportsDialogs false is a bridge without them. */
     std::vector<DialogInfo> dialogs;

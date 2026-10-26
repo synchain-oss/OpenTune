@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "OpsRegistry.h"
 
+#include "AppQuitOps.h"
 #include "AppReadOps.h"
 #include "ArrangementOps.h"
 #include "AudioDeviceOps.h"
@@ -108,6 +109,7 @@ void registerControlMethods(ControlMethodTable& table)
     registerProjectOps(table);        // project.save, project.saveAs, project.open, project.clearRecent
     registerPrefsOps(table);          // prefs.set
     registerAudioDeviceOps(table);    // audio.get, audio.set
+    registerAppQuitOps(table);        // app.quit
 }
 
 ControlOpContext::ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiBridge* bridge,
@@ -157,6 +159,12 @@ ControlOpEnvironment ControlOpContext::environment()
     environment.jobs = jobs_;
     environment.history = history_;
     return environment;
+}
+
+void ControlOpContext::endInstanceAfterReply(std::function<void()> action)
+{
+    requireMessageThread();
+    endInstanceAction_ = std::move(action);
 }
 
 void ControlOpContext::requireMessageThread()

@@ -644,6 +644,17 @@ std::size_t ControlJobs::activeCount() const
         std::count_if(jobs_.begin(), jobs_.end(), [](const auto& entry) { return !entry.second->terminal(); }));
 }
 
+std::vector<std::string> ControlJobs::activeKinds() const
+{
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::string> kinds;
+    // jobs_ is ordered by the sequence number, which is the order the jobs were started in.
+    for (const auto& entry : jobs_)
+        if (!entry.second->terminal())
+            kinds.push_back(entry.second->kind);
+    return kinds;
+}
+
 std::size_t ControlJobs::waitingCount() const
 {
     std::lock_guard<std::mutex> lock(mutex_);

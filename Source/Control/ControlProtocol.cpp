@@ -60,6 +60,7 @@ constexpr MethodCapability kMethods[] = {
     {"prefs.set", "prefs.write"},
     {"audio.get", "audio.device"},
     {"audio.set", "audio.device"},
+    {"app.quit", "app.quit"},
 };
 
 constexpr double kMaxIntegerId = 9007199254740991.0; // 2^53 - 1

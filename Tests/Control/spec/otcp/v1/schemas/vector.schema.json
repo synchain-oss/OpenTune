@@ -308,6 +308,10 @@
           "description": "notShown, shown or showing (vectors/README.md, Preconditions).",
           "enum": ["notShown", "shown", "showing"]
         },
+        "keyboardFocus": {
+          "description": "Where the keyboard focus of the OpenTune window is: tempoField, the tempo field of the transport bar, as in a window that has just started in the foreground (vectors/README.md, Preconditions).",
+          "enum": ["tempoField"]
+        },
         "preferences": {
           "type": "object",
           "minProperties": 1,

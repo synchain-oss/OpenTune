@@ -178,42 +178,11 @@ private:
     std::vector<Entry> entries_;
 };
 
-/** The vectors that specification rc.6 added. The copy of the specification in the repository is replaced by a
-    separate change; until it holds rc.6 it does not have these files, and a runner cannot be asked to pass a vector
-    that does not exist. Once the copy is rc.6 the list is of no use and mustRunHolds() requires every vector. */
-inline const std::set<std::string>& vectorsAddedInRc6()
+/** The check behind every must-run list: the vector with this id passed. A must-run vector that is missing from the
+    copy of the specification never passes, so a renamed or deleted vector fails the list instead of being skipped. */
+inline bool mustRunHolds(const std::set<std::string>& passedIds, const std::string& id)
 {
-    static const std::set<std::string> ids = {"audio/set-device-type",
-                                              "audio/set-output-channel-pair",
-                                              "audio/set-output-device",
-                                              "content/auto-tune-regenerate-note-split",
-                                              "content/edit-notes-set-params-drift",
-                                              "content/edit-notes-set-params-vibrato-rate",
-                                              "prefs/get-options",
-                                              "prefs/set-experimental-features",
-                                              "prefs/set-f0-model-noop",
-                                              "prefs/set-option-unavailable",
-                                              "prefs/set-option-unavailable-unchanged",
-                                              "prefs/set-reference-align-mode",
-                                              "prefs/set-rendering-priority",
-                                              "prefs/set-vocoder-load-failed",
-                                              "prefs/set-vocoder-not-ready",
-                                              "prefs/set-vocoder-weight"};
-    return ids;
-}
-
-/** The check behind every must-run list: the vector with this id passed, or it is one that rc.6 added and the copy of
-    the specification in `specDir` (the OPENTUNE_CONTROL_SPEC_DIR of the build) does not have yet. A vector that the
-    copy has is always required, whatever release added it. */
-inline bool mustRunHolds(const std::filesystem::path& specDir, const std::set<std::string>& passedIds,
-                         const std::string& id)
-{
-    if (passedIds.count(id) == 1)
-        return true;
-    if (vectorsAddedInRc6().count(id) == 0)
-        return false;
-    std::error_code ignored;
-    return !std::filesystem::exists(specDir / "vectors" / std::filesystem::u8path(id + ".json"), ignored);
+    return passedIds.count(id) == 1;
 }
 
 /** Root for test files: OPENTUNE_DATA_DIR when set (ctest through the gates), otherwise a directory

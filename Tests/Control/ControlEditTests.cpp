@@ -930,20 +930,21 @@ void scenarioAutoTuneImpl()
             CONTROL_CHECK(toJsonString(memberOf(explicitKey, "keyUsed")) == R"({"root":0,"scale":"major"})");
         }
     }
-    // Mode reference checks the binding of the placement; this clip has none (the alignment itself is covered by
-    // ControlReferenceTests.cpp).
+    // Mode reference is retired: it is no mode of content.autoTune, and placementId, which only it took, is no member.
     CONTROL_CHECK(
         f.api.fails("content.autoTune",
                     jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + ",\"mode\":\"reference\",\"expectedRevision\":"
                            + jsonQuoted(f.revision()) + ",\"placementId\":" + jsonQuoted(f.placementId) + "}"),
-                    "INVALID_ARGUMENT", "reference_not_bound"));
+                    "INVALID_ARGUMENT", "invalid_params"));
     const std::string base = "{\"contentId\":" + jsonQuoted(f.contentId) + ",\"expectedRevision\":\"r1\",";
     for (const std::string params :
          {base + R"("mode":"regenerate"})", base + R"("mode":"notesOnly","key":{"root":0,"scale":"major"}})",
           base + R"("mode":"regenerate","key":"clipKey"})", base + R"("mode":"other"})",
           base + R"("mode":"regenerate","key":{"root":0,"scale":"major"},"ranges":[]})",
           base + R"("mode":"regenerate","key":{"root":0,"scale":"major"},"params":{"retuneSpeed":2}})",
-          base + R"("mode":"reference","placementId":)" + jsonQuoted(f.placementId) + R"(,"dryRun":true})"})
+          base + R"("mode":"reference"})",
+          base + R"("mode":"regenerate","key":{"root":0,"scale":"major"},"placementId":)" + jsonQuoted(f.placementId)
+              + "}"})
         CONTROL_CHECK(f.api.fails("content.autoTune", jsonOf(params), "INVALID_ARGUMENT", "invalid_params"));
 }
 
@@ -2440,9 +2441,6 @@ std::string editVectorSkipReason(const JsonValue& vector)
         const auto method = memberOf(*request, "method").text();
         if (kEditVectorMethods.count(method) == 0)
             return "uses " + method + ", which a later part implements";
-        // Mode reference needs reference.v1 and the jobs of the reference alignment: ReferenceVectors runs it.
-        if (method == "content.autoTune" && memberOf(memberOf(*request, "params"), "mode").text() == "reference")
-            return "mode reference runs in the runner of the reference alignment (ControlReferenceTests.cpp)";
     }
     const auto& given = memberOf(vector, "given");
     for (std::size_t i = 0; i < given.size(); ++i) {
@@ -2601,16 +2599,6 @@ std::string runEditVector(const JsonValue& vector)
         specs.emplace_back(spec.name, spec);
     }
     CONTROL_CHECK(settleBackgroundWork(*f.processor));
-    // Reference bindings: StandaloneArrangement::setPlacementReferencePlacement(), as the editor's menu sets one.
-    for (std::size_t i = 0; i < givenClips.size(); ++i)
-        if (const JsonValue* reference = givenClips.at(i).find("referenceClip")) {
-            const auto target = clips.find(memberOf(givenClips.at(i), "bind").text());
-            const auto source = clips.find(reference->text());
-            if (target == clips.end() || source == clips.end()
-                || !f.processor->getStandaloneArrangement()->setPlacementReferencePlacement(
-                    specs[i].second.trackId, target->second.placementId, source->second.placementId))
-                return "the reference binding of " + specs[i].first + " could not be set";
-        }
     // given.history: the undo entries oldest first; the redo entries pushed from the top down and undone.
     const auto& history = memberOf(given, "history");
     const auto& undoEntries = memberOf(history, "undo");

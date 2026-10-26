@@ -12,17 +12,16 @@ class ControlMethodTable;
  *
  * prefs.set changes the processing preferences that OpenTune's preferences window changes: the frequency of A4
  * (tuningHz), the editing scheme, the hybrid (light pitch correction) switch, the experimental features, the vocoder
- * weight, the rendering priority, the pitch model and the reference alignment mode. It makes the same calls as the
- * window does (AppPreferences setters, and the processor functions the window calls next: invalidateAllContentCaches()
- * for the hybrid switch, setVocoderModelWeight(), resetInferenceBackend() and setF0ModelType()) and then asks the
- * editor to apply the preferences (ControlUiBridge::onPreferencesChanged()).
+ * weight, the rendering priority and the pitch model. It makes the same calls as the window does (AppPreferences
+ * setters, and the processor functions the window calls next: invalidateAllContentCaches() for the hybrid switch,
+ * setVocoderModelWeight(), resetInferenceBackend() and setF0ModelType()) and then asks the editor to apply the
+ * preferences (ControlUiBridge::onPreferencesChanged()).
  *
  * - A call that changes none of the editing scheme, the vocoder weight and the rendering priority applies at once and
  *   returns the write envelope. Every changed preference is listed (entity preference), the result carries the warning
- *   GLOBAL_PREFERENCE (and EXPERIMENTAL_FEATURE for the reference alignment mode), the call has no undo entry (reason
- *   ui_parity) and its revert recipe is the same call with the previous values (null when no previous value can be
- *   sent: a stored vocoder weight whose name the wire cannot carry is left out, and nothing else changed). A value
- * equal to the current one is a no-op.
+ *   GLOBAL_PREFERENCE, the call has no undo entry (reason ui_parity) and its revert recipe is the same call with the
+ *   previous values (null when no previous value can be sent: a stored vocoder weight whose name the wire cannot
+ *   carry is left out, and nothing else changed). A value equal to the current one is a no-op.
  * - The vocoder weight and the pitch model must be among processing.options of prefs.get (the files and models that the
  *   window lists); a value that is not gives INVALID_ARGUMENT(option_unavailable) and changes nothing. The pitch model
  *   is switched first: when the processor refuses, the call fails with MODEL_UNAVAILABLE(model_missing) and nothing

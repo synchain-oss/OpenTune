@@ -102,10 +102,6 @@ JsonValue controlProcessingJson(const SharedPreferencesState& preferences, const
         json.appendMember("vocoderReconfiguring", JsonValue::boolean(runtime->vocoderReconfiguring));
     }
     json.appendMember("experimentalFeatures", JsonValue::boolean(preferences.experimentalFeaturesEnabled));
-    json.appendMember("referenceAlignMode", JsonValue::string(preferences.experimentalReferenceAlignMode
-                                                                      == ExperimentalReferenceAlignMode::Game
-                                                                  ? "game"
-                                                                  : "standardAuto"));
     if (nullReasons.size() != 0)
         json.appendMember("nullReasons", std::move(nullReasons));
     return json;

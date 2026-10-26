@@ -106,7 +106,6 @@ JsonValue controlPrefsOptionsJson()
     options.appendMember("vocoderWeight", textArray(controlVocoderWeightOptions()));
     options.appendMember("f0Model", textArray(controlF0ModelOptions()));
     options.appendMember("renderingPriority", textArray({"gpuFirst", "cpuFirst"}));
-    options.appendMember("referenceAlignMode", textArray({"standardAuto", "game"}));
     return options;
 }
 

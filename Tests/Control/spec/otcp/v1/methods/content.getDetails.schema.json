@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://otcp.invalid/v1/methods/content.getDetails.schema.json",
   "title": "content.getDetails",
-  "description": "Returns the state of one content besides its notes and curves: duration, key, pitch shift, analysis state and failure, whether the audible render is current, the time grid with its handles, the reference binding and the AUTO modes. Values that depend on a placement (render, reference, the mode the AUTO button would run) are taken through viaPlacementId: the placement named in the request, or else the first placement that shows the content. analysis.failure is f0_failed or f0_empty when the analysis failed, else null. render.current is true when the audible render reflects the current revision; exports wait for it (PROTOCOL.md section 19). autoModes.uiButtonRuns is the mode the AUTO button would run now: regenerate in the openTune scheme, snapNotes in the openDyne scheme, and reference when the clip has a reference binding, the instance reports reference.v1 and OpenTune's experimental features are on (session.info processing.experimentalFeatures), so that content.autoTune can run that mode (section 21 rule 1); autoModes.available lists the modes of content.autoTune that this content accepts now. uiButtonRuns names only modes of content.autoTune, so an instance that does not report reference.v1 names regenerate (or snapNotes) even where OpenTune's AUTO button would run reference alignment because of a reference binding left on the clip, for example by a project saved with experimental features on: a client that tells the end user what the button does checks reference.referencePlacementId, which is reported on every instance, together with the editing scheme and session.info processing.experimentalFeatures (section 21 rule 1). timeGrid.seeded is false until the time grid has handles (content.editTimeGrid op seed). timeGrid.minHandleSpacingSec is the least distance on the output clock that moves of content.editTimeGrid keep between neighbouring handles and between a handle and either end of the content; it is implementation-defined and equals that of OpenTune's time tool, and it is null with timeGrid.nullReasons.minHandleSpacingSec unavailable when the server cannot determine it.",
+  "description": "Returns the state of one content besides its notes and curves: duration, key, pitch shift, analysis state and failure, whether the audible render is current, the time grid with its handles and the AUTO modes. Values that depend on a placement (render, the mode the AUTO button would run) are taken through viaPlacementId: the placement named in the request, or else the first placement that shows the content. analysis.failure is f0_failed or f0_empty when the analysis failed, else null. render.current is true when the audible render reflects the current revision; exports wait for it (PROTOCOL.md section 19). autoModes.uiButtonRuns is the mode the AUTO button in the OpenTune window would run now: regenerate in the openTune scheme and snapNotes in the openDyne scheme, so that content.autoTune can run that mode (section 21 rule 1). A build whose window still offers the reference alignment (a build from before OpenTune's upstream project removed it) reports reference while a reference track is bound to the clip. That is not a mode of content.autoTune, so autoModes.available never lists it. A client that finds a uiButtonRuns that is not a mode of content.autoTune says that the button runs a mode the service cannot run, and does not try to run it. autoModes.available lists the modes of content.autoTune that this content accepts now. timeGrid.seeded is false until the time grid has handles (content.editTimeGrid op seed). timeGrid.minHandleSpacingSec is the least distance on the output clock that moves of content.editTimeGrid keep between neighbouring handles and between a handle and either end of the content; it is implementation-defined and equals that of OpenTune's time tool, and it is null with timeGrid.nullReasons.minHandleSpacingSec unavailable when the server cannot determine it.",
   "x-otcp": {
     "method": "content.getDetails",
     "layer": "L2",
@@ -50,7 +50,6 @@
         "analysis",
         "render",
         "timeGrid",
-        "reference",
         "autoModes"
       ],
       "properties": {
@@ -133,24 +132,6 @@
             },
             "nullReasons": {
               "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
-            }
-          }
-        },
-        "reference": {
-          "type": "object",
-          "required": ["referencePlacementId", "alignmentReady"],
-          "additionalProperties": false,
-          "properties": {
-            "referencePlacementId": {
-              "description": "The placement viaPlacementId has a reference binding to; null when it has none.",
-              "anyOf": [
-                { "$ref": "../schemas/common.schema.json#/$defs/placementId" },
-                { "type": "null" }
-              ]
-            },
-            "alignmentReady": {
-              "description": "Reference alignment data for this binding exists.",
-              "type": "boolean"
             }
           }
         },

@@ -20,8 +20,7 @@
         "vocoderWeight": { "$any": true },
         "f0Model": { "$any": true },
         "renderingPriority": { "$any": true },
-        "experimentalFeatures": { "$any": "boolean" },
-        "referenceAlignMode": { "$any": true }
+        "experimentalFeatures": { "$any": "boolean" }
       },
       "onboardingShown": { "$any": "boolean" },
       "language": { "$any": "string" },

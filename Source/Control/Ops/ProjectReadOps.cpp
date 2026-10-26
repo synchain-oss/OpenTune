@@ -77,10 +77,6 @@ JsonValue placementJson(ControlOpContext& context, const ControlPlacementRef& re
     json.appendMember("gainLinear", controlJsonNumber(std::max(0.0f, p.gain), 6));
     json.appendMember("fadeInSec", controlJsonSeconds(p.fadeInDuration));
     json.appendMember("fadeOutSec", controlJsonSeconds(p.fadeOutDuration));
-    json.appendMember("referencePlacementId",
-                      p.referencePlacementId != 0
-                          ? JsonValue::string(controlPlacementId(context, p.referencePlacementId))
-                          : JsonValue());
     // The source file of the content: SourceStore::getSnapshot() of the content's source window.
     std::string sourcePath;
     if (const auto snapshot = processor.getContentSnapshot(p.contentKey))

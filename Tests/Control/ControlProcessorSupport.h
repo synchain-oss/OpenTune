@@ -216,9 +216,22 @@ inline void holdRenderRuntimeForProcess()
     (void)held;
 }
 
-/** Constructs a processor with the API enabled and pumps messages until it listens. */
+/**
+ * Constructs a processor with the API enabled and pumps messages until it listens.
+ *
+ * Fails the scenario when juce::MessageManager::stopDispatchLoop() was called earlier in this process: the flag it sets
+ * is never reset (see ControlHeadlessSupport.h), so the message queue would refuse everything this processor posts. The
+ * case that stops the loop (ControlQuitTests.cpp, exitStepRefusedByQueue()) must run last in its process.
+ */
 inline std::unique_ptr<OpenTuneAudioProcessor> startedProcessor()
 {
+    if (auto* messages = juce::MessageManager::getInstanceWithoutCreating()) {
+        const bool loopStopped = messages->hasStopMessageBeenSent();
+        CONTROL_CHECK(!loopStopped);
+        if (loopStopped)
+            note("an earlier case of this process stopped the message loop (juce::MessageManager::stopDispatchLoop()), "
+                 "which the queue never recovers from; exitStepRefusedByQueue() must run last in its process");
+    }
     holdRenderRuntimeForProcess();
     auto processor = std::make_unique<OpenTuneAudioProcessor>();
     auto& service = processor->getControlService();

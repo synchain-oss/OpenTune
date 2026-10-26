@@ -464,14 +464,36 @@ void exitStepNotQueued()
  * The exit step cannot be queued because the message queue refuses it while the token is alive
  * (ControlDispatcher::runAfterReply()), as while the application quits. The observer calls
  * juce::MessageManager::stopDispatchLoop() as soon as the result is written, which is what JUCEApplicationBase::quit()
- * does: from then on juce::MessageManager::callAsync() returns false, so post() fails with the token still alive
- * (isAlive() true). The client has the result with quitting: true; the exit step never runs, so the window is not
- * asked and the service is not stopped; the dispatcher answers SHUTTING_DOWN; and the log says that the queue refused
- * the step and that the listener and the discovery file stay until the application closes itself.
+ * does, and returns once juce::MessageManager::hasStopMessageBeenSent() holds: from then on
+ * juce::MessageManager::callAsync() returns false, so post() fails with the token still alive (isAlive() true). The
+ * client has the result with quitting: true; the exit step never runs, so the window is not asked and the service is
+ * not stopped; the dispatcher answers SHUTTING_DOWN; and the log says that the queue refused the step and that the
+ * listener and the discovery file stay until the application closes itself.
  *
- * Run it last in its process: in JUCE 9.0.3 stopDispatchLoop() latches for the rest of the process (every message that
- * is posted afterwards is dropped; see ControlHeadlessSupport.h), so no later step of the scenario can use the queue.
- * The pump of the tests dispatches what was posted before, which is all this case needs.
+ * Why the observer waits: when the flag is set depends on the platform (JUCE 9.0.3, the vendored JUCE).
+ *  - Windows and Linux use the generic MessageManager::stopDispatchLoop() in
+ *    juce_events/messages/juce_MessageManager.cpp (juce_events/native/juce_Messaging_linux.cpp defines no
+ *    stopDispatchLoop() of its own, and the generic one is compiled for everything but macOS, iOS and Android). It
+ *    posts the quit message and then sets quitMessagePosted, from any thread, so the flag is set when the call returns.
+ *  - macOS has MessageManager::stopDispatchLoop() in juce_events/native/juce_MessageManager_mac.mm. On the message
+ *    thread it sets the flag and calls shutdownNSApp(). On any other thread, which is where the observer runs (the
+ *    connection thread that wrote the result), it only posts a QuitCallback, and the flag is set when the message
+ *    thread dispatches that callback. Without the wait, the post of the exit step would still succeed there.
+ * The wait is bounded by kEndsSessionWaitMs. It holds no lock and no lease of the processor: the observer runs on the
+ * connection thread after the result was written, outside ControlMessageThread::call() (see ControlDispatcher::
+ * handleRequest()), and ControlServer holds no mutex while a handler runs. The message thread, which is this thread,
+ * dispatches the QuitCallback meanwhile: ApiSession::request() pumps messages until the client has read the result,
+ * and the pumpMessagesUntil() right after it pumps again, whether the callback was posted before or after the client
+ * finished. On macOS QuitCallback also calls shutdownNSApp() ([NSApp stop:] and starting AppKit's periodic events),
+ * which only matters to an NSApplication run loop; the pump of these tests is CFRunLoopRunInMode() (see
+ * ControlHeadlessSupport.h), which does not dequeue NSEvents, so it does not change what the pump dispatches.
+ *
+ * Run it last in its process: quitMessagePosted is set only by the two stopDispatchLoop() implementations above (and by
+ * ~MessageManager()) and nothing resets it, so on every platform it stays set for the rest of the process: every
+ * message posted afterwards is dropped (MessageBase::post() checks it) and runDispatchLoop() returns at once. Windows
+ * is observed by the local gates, macOS by the control-sanitizers CI jobs. startedProcessor() fails the scenario when a
+ * case starts after the flag was set. The pump of the tests dispatches what was posted before, which is all this case
+ * needs.
  */
 void exitStepRefusedByQueue()
 {
@@ -483,11 +505,14 @@ void exitStepRefusedByQueue()
     const auto messageThread = service.messageThread();
     const auto discoveryFile = std::filesystem::u8path(service.discoveryFilePath());
     CONTROL_CHECK(messageThread->isAlive());
-    // stopDispatchLoop() posts the quit message and sets the flag that makes the later posts fail; it may be called
-    // from any thread, here the connection thread that writes the result.
+    // Here the connection thread that writes the result calls stopDispatchLoop() and waits (bounded, no lease held)
+    // until the flag is set; whether it was is checked below, on this thread.
     dispatcher->setAfterReplyObserverForTesting([](ControlDispatcher::AfterReplyEvent event) {
-        if (event == ControlDispatcher::AfterReplyEvent::ReplyWritten)
-            juce::MessageManager::getInstance()->stopDispatchLoop();
+        if (event != ControlDispatcher::AfterReplyEvent::ReplyWritten)
+            return;
+        auto* messages = juce::MessageManager::getInstance();
+        messages->stopDispatchLoop();
+        waitUntil([messages] { return messages->hasStopMessageBeenSent(); }, kEndsSessionWaitMs);
     });
     const auto logged = occurrences(logText(), kExitStepRefusedLog);
     const auto loggedStopping = occurrences(logText(), kExitStepServiceStoppingLog);
@@ -498,6 +523,13 @@ void exitStepRefusedByQueue()
     CONTROL_CHECK(logLine);
     if (!logLine)
         note(std::string("the log has no line with: ") + kExitStepRefusedLog);
+    // The flag never goes back, so this is also what the observer waited for; the checks below still run when it is
+    // not set, and nothing here can hang.
+    const bool stopTookEffect = juce::MessageManager::getInstance()->hasStopMessageBeenSent();
+    CONTROL_CHECK(stopTookEffect);
+    if (!stopTookEffect)
+        note("stopDispatchLoop() did not take effect within kEndsSessionWaitMs: the message queue still accepts "
+             "messages, so the exit step was not refused");
     pumpMessagesFor(kQuietPumpMs);
     CONTROL_CHECK(occurrences(logText(), kExitStepRefusedLog) == logged + 1);
     // The queue refuses, and the token is alive: that is what makes it this case and not the one of
@@ -912,8 +944,8 @@ void scenarioAppQuitStopping()
     exitStepNotQueued();
     // ... then three sessions queued behind the quit ...
     requestsQueuedBehindTheQuit();
-    // ... and last, the message queue refusing the step while the token is alive, which latches for the rest of the
-    // process (exitStepRefusedByQueue()).
+    // ... and last, the message queue refusing the step while the token is alive: the flag that stopDispatchLoop() sets
+    // is never reset, so it stays set for the rest of the process (exitStepRefusedByQueue(), startedProcessor()).
     exitStepRefusedByQueue();
 }
 

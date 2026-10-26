@@ -299,8 +299,7 @@ void ControlDispatcher::runAfterReply(Outcome& outcome)
     if (!setup_.messageThread->post(std::move(step))) {
         // The state this leaves behind: the dispatcher is in its stopping state (enterStopping() ran when the method
         // returned) and the client has the result with `quitting: true`, but the exit step never runs. post() fails
-        // for one of two reasons, which isAlive() tells apart (the token never comes back to life, so the answer is
-        // right even if the service stops between the two calls):
+        // for one of two reasons, which isAlive() tells apart:
         //  - the liveness token is dead: the service has been stopped on the message thread, which leaves nothing to
         //    clean up (the listener, the connections and the discovery file are gone or going), so the step has
         //    nothing left to do;
@@ -308,6 +307,13 @@ void ControlDispatcher::runAfterReply(Outcome& outcome)
         //    the service, the listener, the open connections and the discovery file stay as they are, until the
         //    application's own shutdown stops the service (the first statement of the processor's destructor); until
         //    it does, every request is answered with SHUTTING_DOWN.
+        //
+        // isAlive() is read after post() failed, and the token never comes back to life. So an alive token at that
+        // point was alive when post() failed, and the first log below ("refused by the message queue") is exact. A dead
+        // token is usually the first case, but it can also be the second one: the queue refused the step while the
+        // token was alive, and the service stopped before isAlive() was read. The log then says that the service is
+        // already stopping. That is still true when it is written (the service is stopping and there is nothing left to
+        // stop), so the line is harmless; only the reason that post() failed may have been the queue's refusal.
         //
         // There is no cleanup that this thread can do. ControlService::stop() runs on the message thread, which is the
         // thread that has just refused to take work, and calling it here would make the service join this very

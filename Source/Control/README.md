@@ -586,8 +586,10 @@ same processor functions:
   the project is marked as changed and hidden tracks that now hold a clip are revealed. The commit waits
   while the UI is busy; a cancellation does not wait: it stops before the next commit, and while the UI
   is busy it focuses no clip;
-- after the last commit: the last clip is focused (`focus`), and `requestContentRefresh()` asks for every
-  analysis, with note generation for `generateNotes` (OpenTune's default parameters) or, in the openDyne
+- after the last commit: the last clip is focused (`focus`): it becomes the selected clip of its track and the piano
+  roll loads it (`applyPlacementSelectionContext`), without switching the view, so the import reports no
+  `workspaceSwitched` and does not round the tempo (PROTOCOL.md section 21 rule 2). Then `requestContentRefresh()` asks
+  for every analysis, with note generation for `generateNotes` (OpenTune's default parameters) or, in the openDyne
   scheme, for the focused clip (with the editor's parameters); the job ends when every analysis has
   finished.
 
@@ -749,7 +751,9 @@ changes the content's `revision`.
   as far as allowed and reported in `clamped` and with the warning `CLAMPED`; a call that moves nothing is a
   no-op.
   - `content.shiftTiming` moves every handle whose output time lies in the range (a content range is mapped
-    through the current grid with `tauForward`) by `deltaSec`: a group drag whose dragged handle is the one
+    through the current grid with `tauForward`) by `deltaSec`. The range is a closed interval,
+    `start <= output time <= end`, as the time tool selects the handles: a handle exactly at the start and one exactly
+    at the end both move (`TimeGridOps::planShift()`). It is a group drag whose dragged handle is the one
     that leads in the direction of the move, so that the section stops at its neighbour and moves as a whole.
   - `content.editTimeGrid` op `moveHandles` moves each named handle to its output time; with several moves the
     first pass limits each one by its neighbours' targets (for one move these are the neighbours as they are,
@@ -1141,15 +1145,26 @@ member `bpm {before, after, unit: "bpm"}`) and the side effect `tempoRounded {fr
 (PROTOCOL.md section 15.2 rule 2). The time signature is not touched (the field commits the tempo only) and not
 reported. Whether the rewrite happens depends on where the keyboard focus is, so a call can also leave the tempo as it
 was, and then nothing about the tempo is reported; `dryRun` of `ui.setSelection` does not predict it for the same
-reason. The test bridge models it (`TestUiBridge::bpmFieldProcessor`): a switch rewrites a tempo with more than one
-decimal to one decimal and marks the project as changed.
+reason. The specification (PROTOCOL.md section 14.6, rc.7) says the same: the field rounds only while it holds the
+keyboard focus, as in a window in the foreground that has just started, and the instance reports `tempoRounded` and the
+change of the tempo only when the tempo differs before and after the switch (a result without them says only that the
+tempo did not change). The test bridge models both states (`TestUiBridge::focusTempoField()`, `focusElsewhere()` and
+`keyboardFocus()`): with the focus in the field a switch rewrites a tempo with more than one decimal to one decimal and
+marks the project as changed; with the focus elsewhere, as in a window in the background, it leaves the tempo and the
+mark alone and the result says nothing about the tempo.
 
 **Mirrors.** `workspace-track-view` and `workspace-piano-view` (the two button handlers of the transport bar) and
 `workspace-view-toggled` (the editor's handler), all in the group `ui`.
 
 **Vectors.** The request vectors `ui/set-workspace-piano-roll`, `-noop`, `-invalid` and `-busy-modal` run in `UiVectors`
-against the test bridge; the two scenarios `ui/set-workspace-arrangement` and `ui/set-workspace-piano-roll-opendyne` need
-clips, a selection and the editing scheme, so they run in `SelectionVectors` on the real processor (see "Selection").
+against the test bridge; the three scenarios `ui/set-workspace-arrangement`, `ui/set-workspace-piano-roll-opendyne` and
+`ui/set-workspace-tempo-rounded` need clips, a selection, the editing scheme or the keyboard focus, so they run in
+`SelectionVectors` on the real processor (see "Selection"). The last one has the precondition
+`given.keyboardFocus` `tempoField` (vectors/README.md, Preconditions), which `SelectionVectors` establishes with
+`TestUiBridge::focusTempoField()`; a vector without the member runs with the focus elsewhere (it assumes nothing about
+it), and a `keyboardFocus` value or any other `given` member that the runner cannot establish is reported as skipped
+with that reason (`selectionVectorSkip()`), never run in another state. A runner that does not establish the focus
+leaves `ui/set-workspace-tempo-rounded` red, which `kMustRunSelectionVectors` turns into a failure of the test.
 Since spec rc.7, `ui/set-workspace-piano-roll-opendyne` selects the clip in the openTune scheme, where a selection
 generates nothing, and then switches the scheme with `prefs.set`: a selection loads the clip into the piano roll even
 while the arrangement is shown (`ui.getState` reports it as `pianoRollContentId`), so the switch to openDyne generates
@@ -1166,8 +1181,9 @@ Tests: `ControlProcessorTests.UiWorkspace` in `Tests/Control/ControlUiTests.cpp`
 the editor, the params, busy for each reason, a bridge that cannot switch or does not, no editor, the revert recipe sent
 back, an unchanged dirty state, the empty `revisionDiff`, the capability right after `ui.onboardingClose`, and the
 rewritten tempo: 120.27 to 120.3 with the change, `tempoRounded`, its revert recipe and `dirty.after`, and a tempo with
-one decimal reporting neither). `Selection` checks the same for `openEditor`, and that a double click with the piano roll
-shown already rewrites nothing.
+one decimal reporting neither; with the focus elsewhere, in both directions, nothing rewritten, reported or marked, and
+with the focus back in the field the same switch rounds again). `Selection` checks the same for `openEditor`, and that a
+double click with the piano roll shown already rewrites nothing.
 
 ## Selection
 
@@ -1223,7 +1239,7 @@ state as it was, a clip, `openEditor`, the scale with `ui.getState`, the no-op, 
 prediction of dryRun equals the committed result (a binding adds no side effect and no warning), and dryRun leaves every field of the state as it was. The test bridge
 and the prediction follow the same rules, so this shows that the two copies agree, not that the prediction agrees with
 the real editor; drift of the real editor is caught by the drift pins ("Mirrors") and by checks in the real Standalone.
-`SelectionVectors` runs the vectors `ui/set-selection-*` and the two scenarios of `ui.setWorkspace` (see "Workspace"). The view's highlight and keyboard target, and the real piano
+`SelectionVectors` runs the vectors `ui/set-selection-*` and the three scenarios of `ui.setWorkspace` (see "Workspace"; it establishes `given.keyboardFocus`, and skips a vector with a `given` member it cannot establish). The view's highlight and keyboard target, and the real piano
 roll, run only in the Standalone application.
 
 ## Preferences and audio device
@@ -1416,7 +1432,10 @@ does the two steps (`StandalonePluginHolder::savePluginState()` and `JUCEApplica
 repeated in `Source/Control` and there is no mirror, drift pin or hook to register: the function that would drift is the
 one called. The processor's destructor then runs the normal shutdown, with `ControlService::stop()` already done (it is
 idempotent). `canQuit()` is true when a standalone holder and that window exist. If `requestQuit()` fails after the reply
-(the window is gone) the control API stays stopped, the application keeps running and the failure is logged.
+(the window is gone) the control API stays stopped, the application keeps running and the failure is logged. If the exit
+step cannot be queued at all (`post()` fails in `runAfterReply()`), the log says why: the message queue refused it
+while the service was alive (the listener and the discovery file stay until the application closes itself and its own
+shutdown stops the service; every request gets `SHUTTING_DOWN` meanwhile), or the service was already stopping.
 
 **`exitDeadlineMs`** (`kExitDeadlineMs` in `AppQuitOps.cpp`): the longest time in which the process ends after the reply,
 10 s, which the vectors' runners may rely on (they wait 15 s; the schema allows 60 s). Measured on the Standalone with
@@ -1450,7 +1469,12 @@ the call itself with `UNSUPPORTED`.
   `ControlDispatcher::setAfterReplyObserverForTesting()` is the seam of the ordering test: it reports
   `ReplyWritten` (connection thread) and `ExitStepStarted` (message thread), because `ControlService::stop()` joins the
   connection thread and would deliver the reply even from a step that was queued too early, so the client alone cannot
-  tell the two orders apart.
+  tell the two orders apart. `AppQuitStopping` also covers an exit step that cannot be queued, for each of the two
+  reasons that `ControlMessageThread::isAlive()` tells apart after a failed `post()`: the token is dead (the observer
+  stops the marshalling; the service is already stopping, and the log says nothing is left to stop), and the message
+  queue refuses the step while the token is alive (the observer calls `juce::MessageManager::stopDispatchLoop()`, as
+  `JUCEApplicationBase::quit()` does; the log says the listener and the discovery file stay until the application closes
+  itself). The second latches for the rest of the process in JUCE 9.0.3, so it runs last.
 - `AppQuitVectors`: all nine `app/quit-*` vectors, with their `given` established; a vector that ends the instance
   (`endsSession`) is checked as `vectors/README.md` says as far as a headless process can: the connection closes
   (15 s), the port refuses, the discovery file is gone and the test bridge saw one quit request. The exit status of the
@@ -1657,7 +1681,8 @@ contents with synthetic F0 are in `ControlContentFixtures.h`, defined in `Contro
 `Tests/Control/ControlTimingTests.cpp` holds the scenarios of the time grid, on contents with synthetic F0 whose
 grids are applied as OpenTune's content owner applies one. `Timing` runs a table of `content.shiftTiming` and
 `moveHandles` writes with hand-computed handle positions (a handle and a section moved freely, up to a
-neighbour, up to ClipStart and ClipEnd, a content range, several moves the same way and across each other), each
+neighbour, up to ClipStart and ClipEnd, a content range, a range with a handle exactly on its start, on its end or on
+both, because the range is closed, several moves the same way and across each other), each
 checked against its result (changes, `clamped`, `CLAMPED`, one undo entry, only the grid aspect, `reRenderQueued`,
 dirty, the editor's notification, tokens equal to a fresh read, `revision` unchanged) and undone back to the exact
 grid before; OpenTune's own undo and redo; `grid_changed`, `grid_not_seeded`, `duplicate_handle`,

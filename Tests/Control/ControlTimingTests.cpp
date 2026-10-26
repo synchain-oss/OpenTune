@@ -332,6 +332,29 @@ std::vector<GridCase> gridCases()
     cases.push_back({"shift one handle past its right neighbour", true, middle, 1.5, {}, {1.0, 2.97, 3.0}, {{1, 3.5}}});
     cases.push_back({"shift one handle past its left neighbour", true, middle, -1.5, {}, {1.0, 1.03, 3.0}, {{1, 0.5}}});
     cases.push_back({"shift a section of two handles", true, firstTwo, 0.5, {}, {1.5, 2.5, 3.0}, {}});
+    // The range is a closed interval (start <= position <= end, as the time tool selects the handles): a handle exactly
+    // at the start and a handle exactly at the end both move. A half-open range would leave one of them where it was.
+    cases.push_back({"shift a section whose range starts on a handle",
+                     true,
+                     R"({"startOutputSec":1.0,"endOutputSec":2.5})",
+                     0.5,
+                     {},
+                     {1.5, 2.5, 3.0},
+                     {}});
+    cases.push_back({"shift a section whose range ends on a handle",
+                     true,
+                     R"({"startOutputSec":0.5,"endOutputSec":2.0})",
+                     0.5,
+                     {},
+                     {1.5, 2.5, 3.0},
+                     {}});
+    cases.push_back({"shift a section whose range starts and ends on handles",
+                     true,
+                     R"({"startOutputSec":1.0,"endOutputSec":2.0})",
+                     0.5,
+                     {},
+                     {1.5, 2.5, 3.0},
+                     {}});
     cases.push_back({"shift a section until its leading handle meets the neighbour",
                      true,
                      firstTwo,

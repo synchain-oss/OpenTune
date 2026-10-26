@@ -127,6 +127,11 @@ bool ControlMessageThread::isStopped() const
     return !shared_->alive.load();
 }
 
+bool ControlMessageThread::isAlive() const
+{
+    return shared_->alive.load();
+}
+
 int ControlMessageThread::waitingCalls() const
 {
     std::lock_guard<std::mutex> lock(shared_->mutex);

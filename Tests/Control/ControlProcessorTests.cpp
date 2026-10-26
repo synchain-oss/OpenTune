@@ -228,7 +228,7 @@ void scenarioStartAndHello()
         // session.v1 and the capabilities of the methods the dispatcher implements.
         CONTROL_CHECK(
             toJsonString(memberOf(*hello, "capabilities"))
-            == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","ui.bridge","ui.onboardingClose","ui.workspace","edit.v1","history.v1","timing.v1","transport.v1","arrangement.v1","tracks.v1","project.io","prefs.write","audio.device"])");
+            == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","ui.bridge","ui.onboardingClose","ui.workspace","edit.v1","history.v1","timing.v1","transport.v1","arrangement.v1","tracks.v1","project.io","prefs.write","audio.device","app.quit"])");
     }
     // The runtime was initialised before the listener started: the logger writes under the data dir.
     checkLogInsideDataDirectory();
@@ -598,6 +598,12 @@ const Scenario kScenarios[] = {
     {"Selection", scenarioSelection, false},
     {"SelectionMatrix", scenarioSelectionMatrix, false},
     {"SelectionVectors", scenarioSelectionVectors, false},
+    {"AppQuit", scenarioAppQuit, false},
+    {"AppQuitWithoutWindow", scenarioAppQuitWithoutWindow, false},
+    {"AppQuitResult", scenarioAppQuitResult, false},
+    {"AppQuitSequence", scenarioAppQuitSequence, false},
+    {"AppQuitStopping", scenarioAppQuitStopping, false},
+    {"AppQuitVectors", scenarioAppQuitVectors, false},
 };
 
 /** How much earlier than the ctest TIMEOUT of its test the watchdog of a scenario ends it. */

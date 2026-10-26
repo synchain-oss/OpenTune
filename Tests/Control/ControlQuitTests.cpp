@@ -14,9 +14,11 @@
 #include "Control/ControlJobs.h"
 #include "Control/Ops/OpsRegistry.h"
 #include "PluginProcessor.h"
+#include "Utils/AppLogger.h"
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -44,12 +46,32 @@ constexpr int kLongestRunnerWaitMs = 15000;
 constexpr int kReplySeenMs = 5000;
 /** The most the vectors' own bookkeeping takes before the first request of a vector. */
 constexpr int kQuietAfterRefusalMs = 20;
+/** What the exit step logs when the window stays open although the client was told quitting: true
+    (AppQuitOps.cpp, endInstance()); the reason follows in brackets. */
+constexpr const char* kWindowNotClosedLog =
+    "the client was told quitting: true, but the OpenTune window was not closed";
+/** What the dispatcher logs when the exit step cannot be queued (ControlDispatcher::runAfterReply()). */
+constexpr const char* kExitStepNotQueuedLog = "the exit step of a method that ends the instance could not be queued";
 
 JsonValue jsonOf(const std::string& text)
 {
     auto parsed = parseJson(text);
     CONTROL_CHECK(parsed.ok);
     return parsed.value;
+}
+
+std::string logText()
+{
+    const auto file = AppLogger::getCurrentLogFile();
+    return file == juce::File{} ? std::string() : file.loadFileAsString().toStdString();
+}
+
+std::size_t occurrences(const std::string& text, const std::string& part)
+{
+    std::size_t count = 0;
+    for (auto at = text.find(part); at != std::string::npos; at = text.find(part, at + part.size()))
+        ++count;
+    return count;
 }
 
 /** Reports the incomplete capabilities (none now), and leaves out the withheld capabilities, for the dispatchers
@@ -312,6 +334,122 @@ bool startTerminalJob(QuitFixture& f, const std::string& kind, bool fails)
         kReadTimeoutMs);
 }
 
+/**
+ * The exit step finds that the window does not close, which the result could not know: the client was told quitting:
+ * true. editorGone false: the editor's window refuses when it is asked (TestUiBridge::refusesClose); true: the editor
+ * is gone when the exit step runs (its bridge is unregistered between the result and the step). Either way the control
+ * service is stopped first (the interface is down before the window is asked, never after), nothing is closed, the
+ * application keeps running, and the log says what the client was told and why the window stayed.
+ */
+void windowNotClosed(bool editorGone)
+{
+    QuitFixture f;
+    if (!f.open())
+        return;
+    auto& service = f.service();
+    const auto dispatcher = service.dispatcher();
+    const int port = service.port();
+    const auto discoveryFile = std::filesystem::u8path(service.discoveryFilePath());
+    const std::string expectedLine = std::string(kWindowNotClosedLog) + " ("
+                                     + (editorGone ? "the editor is gone" : "the editor did not close it") + ")";
+    const auto logged = occurrences(logText(), expectedLine);
+
+    // What the instance is like at the moment the window is asked (refusesClose only: an editor that is gone is not).
+    struct Asked
+    {
+        int calls = 0;
+        bool onMessageThread = false;
+        bool serviceStopped = false;
+        bool dispatcherStopping = false;
+        bool discoveryGone = false;
+    } asked;
+    if (editorGone) {
+        // The registration goes on the message thread before the exit step: both are queued from the connection thread,
+        // the first by this observer (ReplyWritten comes before runAfterReply() posts the step), and the queue is FIFO.
+        dispatcher->setAfterReplyObserverForTesting([&f](ControlDispatcher::AfterReplyEvent event) {
+            if (event == ControlDispatcher::AfterReplyEvent::ReplyWritten)
+                juce::MessageManager::callAsync([&f] { f.registered.reset(); });
+        });
+    } else {
+        f.bridge.refusesClose = true;
+        f.bridge.onQuitRequest = [&] {
+            ++asked.calls;
+            asked.onMessageThread = juce::MessageManager::existsAndIsCurrentThread();
+            asked.serviceStopped = !service.isRunning() && service.isStopping();
+            asked.dispatcherStopping = dispatcher->isStopping();
+            asked.discoveryGone = !std::filesystem::exists(discoveryFile);
+        };
+    }
+
+    // The client is told that the instance quits, as it is when the window closes.
+    checkQuitResult(f.api.result("app.quit"), false, nullptr);
+    const bool logLine =
+        pumpMessagesUntil([&] { return occurrences(logText(), expectedLine) == logged + 1; }, kEndsSessionWaitMs);
+    CONTROL_CHECK(logLine);
+    if (!logLine)
+        note("the log has no line " + expectedLine);
+    pumpMessagesFor(kQuietPumpMs);
+    CONTROL_CHECK(occurrences(logText(), expectedLine) == logged + 1);
+
+    // The window was asked once (or not at all, without an editor) and nothing was closed.
+    CONTROL_CHECK(f.bridge.quitRequests == 0 && f.bridge.refusedQuitRequests == (editorGone ? 0 : 1));
+    if (!editorGone) {
+        CONTROL_CHECK(asked.calls == 1 && asked.onMessageThread);
+        // The service was stopped before the window was asked.
+        CONTROL_CHECK(asked.serviceStopped && asked.dispatcherStopping && asked.discoveryGone);
+    }
+    // The control API is stopped all the same: connections closed, no listener, no discovery file; the application
+    // keeps running (this test is still here to look).
+    std::size_t bytes = 0;
+    bool closed = false;
+    runWhilePumping([&] { closed = f.api.client().waitClosed(kEndsSessionWaitMs, bytes); }, kEndsSessionWaitMs + 5000);
+    CONTROL_CHECK(closed && bytes == 0);
+    CONTROL_CHECK(!service.isRunning() && service.isStopping() && dispatcher->isStopping());
+    CONTROL_CHECK(!ControlSocket::connectToLoopback(port, 500).isValid());
+    CONTROL_CHECK(!std::filesystem::exists(discoveryFile));
+}
+
+/**
+ * The exit step cannot be queued (ControlDispatcher::runAfterReply()): the observer kills the liveness token of the
+ * message-thread marshalling as soon as the result is written, which makes post() return false the way a refusing
+ * message queue does. The client has the result with quitting: true; the exit step never runs, so the window is not
+ * asked; the dispatcher answers SHUTTING_DOWN; and the log says what the client was told and what stays up.
+ */
+void exitStepNotQueued()
+{
+    QuitFixture f;
+    if (!f.open())
+        return;
+    auto& service = f.service();
+    const auto dispatcher = service.dispatcher();
+    const auto messageThread = service.messageThread();
+    // ControlMessageThread::stop() takes its own lock and is safe on the connection thread that this observer runs on.
+    dispatcher->setAfterReplyObserverForTesting([messageThread](ControlDispatcher::AfterReplyEvent event) {
+        if (event == ControlDispatcher::AfterReplyEvent::ReplyWritten)
+            messageThread->stop();
+    });
+    const auto logged = occurrences(logText(), kExitStepNotQueuedLog);
+
+    checkQuitResult(f.api.result("app.quit"), false, nullptr);
+    const bool logLine = pumpMessagesUntil([&] { return occurrences(logText(), kExitStepNotQueuedLog) == logged + 1; },
+                                           kEndsSessionWaitMs);
+    CONTROL_CHECK(logLine);
+    if (!logLine)
+        note(std::string("the log has no line with: ") + kExitStepNotQueuedLog);
+    pumpMessagesFor(kQuietPumpMs);
+    CONTROL_CHECK(occurrences(logText(), kExitStepNotQueuedLog) == logged + 1);
+    // The line says what the client was told and what is left running.
+    const auto log = logText();
+    const auto line = log.find(kExitStepNotQueuedLog);
+    CONTROL_CHECK(line != std::string::npos && log.find("quits", line) != std::string::npos
+                  && log.find("SHUTTING_DOWN", line) != std::string::npos
+                  && log.find("discovery file", line) != std::string::npos);
+
+    CONTROL_CHECK(f.bridge.quitRequests == 0 && f.bridge.refusedQuitRequests == 0);
+    CONTROL_CHECK(dispatcher->isStopping());
+    CONTROL_CHECK(f.api.fails("session.info", JsonValue::object(), "SHUTTING_DOWN", ""));
+}
+
 } // namespace
 
 // ---- The checks, in order ----------------------------------------------------------------------------
@@ -465,6 +603,10 @@ void scenarioAppQuitWithoutWindow()
         CONTROL_CHECK(refuses(f, "{}", "UNSUPPORTED", "capability_missing"));
         CONTROL_CHECK(f.service().dispatcher()->executedCount() == 1 /* the session.info of refuses() */);
     }
+    // A window that does not close when the exit step asks, and an editor that is gone by then: the client was told
+    // quitting: true, the service is stopped before the window is asked, and the log says what happened.
+    windowNotClosed(false);
+    windowNotClosed(true);
 }
 
 // ---- The result ---------------------------------------------------------------------------------------
@@ -605,6 +747,9 @@ void scenarioAppQuitSequence()
 
 void scenarioAppQuitStopping()
 {
+    // First, the stopping state when the exit step cannot even be queued (its own instance, gone before the next one).
+    exitStepNotQueued();
+
     QuitFixture f;
     if (!f.open())
         return;

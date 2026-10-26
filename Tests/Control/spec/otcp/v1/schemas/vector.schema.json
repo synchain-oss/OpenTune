@@ -302,6 +302,28 @@
             "tuningHz": { "type": "number", "minimum": 400, "maximum": 500 },
             "hybridMode": { "type": "boolean" },
             "experimentalFeatures": { "type": "boolean" },
+            "vocoderWeight": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "renderingPriority": { "enum": ["gpuFirst", "cpuFirst"] },
+            "f0Model": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "referenceAlignMode": { "enum": ["standardAuto", "game"] },
+            "options": {
+              "description": "The weight files and the pitch models the installation offers (prefs.get, processing.options); vocoderWeight and f0Model name one of them.",
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": false,
+              "properties": {
+                "vocoderWeight": {
+                  "type": "array",
+                  "maxItems": 64,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+                },
+                "f0Model": {
+                  "type": "array",
+                  "maxItems": 64,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+                }
+              }
+            },
             "recentProjects": {
               "description": "Binds of given files, the most recent first.",
               "type": "array",
@@ -319,7 +341,11 @@
           "additionalProperties": false,
           "properties": {
             "running": { "type": "boolean" },
-            "failsToOpen": { "type": "boolean" }
+            "failsToOpen": { "type": "boolean" },
+            "alternatives": {
+              "description": "With running true: the machine also offers another device type and another output device of the current type (vectors/README.md, Preconditions).",
+              "type": "boolean"
+            }
           }
         }
       }

@@ -568,8 +568,15 @@ void runMatrixCase(bool openDyne, bool withNotes, bool withReference)
 
 /** The ids of the vectors that must run and pass. */
 const char* const kMustRunSelectionVectors[] = {
-    "ui/set-selection-clip",      "ui/set-selection-dry-run",     "ui/set-selection-generates-notes",
-    "ui/set-selection-not-found", "ui/set-selection-open-editor",
+    "ui/set-selection-clip",
+    "ui/set-selection-dry-run",
+    "ui/set-selection-generates-notes",
+    "ui/set-selection-not-found",
+    "ui/set-selection-open-editor",
+    // The two scenarios of ui.setWorkspace that need clips, the selection and the editing scheme (its other vectors
+    // run in ControlUiTests.cpp).
+    "ui/set-workspace-arrangement",
+    "ui/set-workspace-piano-roll-opendyne",
 };
 
 std::string runSelectionVector(const JsonValue& vector)
@@ -630,11 +637,31 @@ std::string runSelectionVector(const JsonValue& vector)
     // The vectors state what OpenTune does (an active track always exists), so the expected response is the vector's
     // own, unchanged.
     const auto& expected = memberOf(vector, "response");
+    const bool scenario = memberOf(vector, "type").text() == "scenario";
 
     std::string failure;
     runWhilePumping(
         [&] {
             auto& connection = f.api.client();
+            if (scenario) {
+                // Send and expect steps on the main connection, as the other scenario runners run them.
+                const auto& steps = memberOf(vector, "steps");
+                for (std::size_t i = 0; i < steps.size() && failure.empty(); ++i) {
+                    const auto& step = steps.at(i);
+                    if (const JsonValue* send = step.find("send")) {
+                        const auto value = matcher.substitute(*send, failure);
+                        if (failure.empty() && !connection.sendLine(toJsonString(value)))
+                            failure = "send failed";
+                    } else if (step.find("expect") != nullptr) {
+                        failure = matcher.expectLine(connection, memberOf(step, "expect"));
+                    } else {
+                        failure = "a step other than send and expect";
+                    }
+                    if (!failure.empty())
+                        failure = "step " + std::to_string(i + 1) + ": " + failure;
+                }
+                return;
+            }
             const auto request = matcher.substitute(memberOf(vector, "request"), failure);
             if (!failure.empty())
                 return;
@@ -683,7 +710,9 @@ void scenarioSelectionVectors()
         if (!CONTROL_CHECK(parsed.ok))
             continue;
         const auto& vector = parsed.value;
-        if (memberOf(memberOf(vector, "request"), "method").text() != "ui.setSelection")
+        const bool workspaceScenario =
+            memberOf(vector, "capability").text() == "ui.workspace" && memberOf(vector, "type").text() == "scenario";
+        if (memberOf(memberOf(vector, "request"), "method").text() != "ui.setSelection" && !workspaceScenario)
             continue;
         const auto id = memberOf(vector, "id").text();
         const auto started = Clock::now();

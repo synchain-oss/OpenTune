@@ -1317,6 +1317,96 @@
       "noteZh": "lastResolvedScaleRootNote_ 与 lastResolvedScaleType_（界面调式类型 1..8）是编辑器最近为所选片段应用的调式；ui.getState 把它们报告为 uiScale。"
     },
     {
+      "id": "workspace-track-view",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/UI/TransportBarComponent.cpp",
+        "symbol": "TransportBarComponent::onTrackViewClicked",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "d4e1f1d9ba880e538909bb031116ab8766ea21ed0d734a0990cf44afa66dccb5"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeWorkspace.cpp",
+          "symbols": [
+            "ControlEditorBridge::setWorkspace"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/WorkspaceOps.cpp",
+          "symbols": [
+            "runSetWorkspace"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiWorkspace",
+        "ControlProcessorTests.UiVectors",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "The arrangement view button: it re-asserts its toggle state when the arrangement is shown already; otherwise it sets the workspace state of the transport bar (setWorkspaceView) and tells the listener, the editor, with viewToggled. ui.setWorkspace with arrangement makes the same two calls and does nothing when the arrangement is shown.",
+      "noteZh": "编排视图按钮：已经在编排视图时只重新确认自己的切换状态；否则设置走带栏的工作区状态（setWorkspaceView），再用 viewToggled 通知监听者，也就是编辑器。ui.setWorkspace 选 arrangement 时做同样的两次调用，已经在编排视图时什么也不做。"
+    },
+    {
+      "id": "workspace-piano-view",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/UI/TransportBarComponent.cpp",
+        "symbol": "TransportBarComponent::onPianoViewClicked",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "1b7b68ac0379f505acd0b1279f9ec66a8e300266cc42507d78cba88af4dfcacc"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeWorkspace.cpp",
+          "symbols": [
+            "ControlEditorBridge::setWorkspace"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/WorkspaceOps.cpp",
+          "symbols": [
+            "runSetWorkspace"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiWorkspace",
+        "ControlProcessorTests.UiVectors",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "The piano roll button: it re-asserts its toggle state when the piano roll is shown already; otherwise it sets the workspace state of the transport bar (setWorkspaceView) and tells the listener, the editor, with viewToggled. ui.setWorkspace with pianoRoll makes the same two calls and does nothing when the piano roll is shown.",
+      "noteZh": "钢琴卷帘按钮：已经在钢琴卷帘时只重新确认自己的切换状态；否则设置走带栏的工作区状态（setWorkspaceView），再用 viewToggled 通知监听者，也就是编辑器。ui.setWorkspace 选 pianoRoll 时做同样的两次调用，已经在钢琴卷帘时什么也不做。"
+    },
+    {
+      "id": "workspace-view-toggled",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::viewToggled",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "8b4b38da1bcef0091eab876c4d76f111356c9546eb609829338258a9201ebbac"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeWorkspace.cpp",
+          "symbols": [
+            "ControlEditorBridge::setWorkspace"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiWorkspace",
+        "ControlProcessorTests.UiVectors",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "What the editor does when the view changes: it captures the timeline camera of the outgoing view, runs the piano roll's heartbeat tick when the piano roll comes, switches the visibility and the keyboard focus of the two views, and hands the camera to the incoming one. ui.setWorkspace relies on it changing the view only (no content, key, note, clip or track, nothing generated or queued), in either editing scheme, so that revisionDiff stays empty and dirty does not change; a change of this function needs that checked again.",
+      "noteZh": "视图切换时编辑器做的事：取下离开视图的时间轴相机，切到钢琴卷帘时先运行它的心跳收束，切换两个视图的可见性与键盘焦点，再把相机交给进入的视图。ui.setWorkspace 依赖它只改变视图（不碰内容、调式、音符、片段或轨道，不生成也不排队任何东西），两种编辑方案都一样，所以 revisionDiff 为空、dirty 不变；这个函数改动后需要重新核对。"
+    },
+    {
       "id": "selection-click",
       "group": "selection",
       "upstream": {

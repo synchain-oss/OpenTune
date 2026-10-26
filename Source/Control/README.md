@@ -52,6 +52,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `Edit/ControlOriginAction.*` | The undo entry of a change made through the API (upstream undo actions wrapped with an `undoId`), and `ControlHistory`: undoIds, the API's entries, the undoIds of UI entries, changes without an undo entry. |
 | `Edit/ContentEditTransaction.*` | Undo entries built from snapshots around a commit of the content commands, as the piano roll builds them (see "ContentEditTransaction"). |
 | `Edit/NoteCorrection.*` | The correction segments the piano roll rebuilds after an edit of notes, and SNAP (AUTO in the openDyne scheme), computed as the piano roll computes them and committed into a ContentEditTransaction (see "Note edits and the pitch shift"). |
+| `Ops/WorkspaceOps.*`, `../Standalone/ControlEditorBridgeWorkspace.cpp` | `ui.setWorkspace`: the two view buttons of the transport bar through the bridge, view state only (see "Workspace"). |
 | `Ops/SelectionOps.*`, `../Standalone/ControlEditorBridgeSelection.cpp` | `ui.setSelection`: the effects of a click on a clip predicted, then the click and double click through the arrangement view's hook, and the effects observed (see "Selection"). |
 | `Edit/PitchShiftLedger.*` | The steps of OpenTune's pitch shifts that the `revision` token leaves out (see "Note edits and the pitch shift"). |
 | `mirror-map.json`, `MIRRORS.md` | The upstream functions that the API mirrors, with a hash of each (machine-readable source of truth and the table generated from it); checked by `Tests/Control/ControlMirrorDriftTests.cpp` (see "Mirrors"). |
@@ -982,7 +983,8 @@ Tests: `Tests/Control/ControlArrangementTests.cpp` (`Arrangement`, `ArrangementU
 ## Dialogs and onboarding
 
 `ui.getState` and `ui.dismiss` (`Ops/UiOps.cpp`, capability `ui.bridge`). The third method of `ui.bridge`,
-`ui.setSelection`, is described in "Selection"; with it registered the instance reports `ui.bridge`.
+`ui.setSelection`, is described in "Selection"; with it registered the instance reports `ui.bridge`. `ui.setWorkspace`
+(capability `ui.workspace`) is described in "Workspace".
 `ui.onboardingClose`, a capability without methods of its own, is reported right after `ui.bridge`
 (`kFeatureCapabilities` in `Ops/OpsRegistry.cpp`), because every build with the editor bridge can close an overlay that
 is showing. Both methods describe the editor window and answer `UNSUPPORTED(no_editor_window)` without an editor, and
@@ -1070,6 +1072,66 @@ test bridge's dialogs and overlay (`TestUiBridge`); `UiVectors` requires an expl
 leaves the vectors of `ui.setSelection` to `SelectionVectors`. The classification and the closing of the real windows
 run only in the Standalone application.
 
+## Workspace
+
+`ui.setWorkspace` (`Ops/WorkspaceOps.cpp`, capability `ui.workspace`) switches the window between the arrangement view
+and the piano roll: `workspace` is `arrangement` or `pianoRoll`, the same two views the buttons of the transport bar
+switch to. The editor's side, `Source/Standalone/ControlEditorBridgeWorkspace.cpp` (`ControlUiBridge::setWorkspace()`),
+makes the two calls a click on a view button makes when the button is not showing that view:
+`TransportBarComponent::setWorkspaceView()` for the button's state, then `OpenTuneAudioProcessorEditor::viewToggled()`,
+the handler the transport bar's listener runs. It does nothing when the window already shows the view. No hook is needed:
+the bridge is a friend of the editor and the two functions are the ones the buttons use.
+
+**View state only.** `viewToggled()` captures the timeline camera of the outgoing view, runs the piano roll's
+`onHeartbeatTick()` when the piano roll comes (which only settles the camera of a pending initial view and builds
+waveform mipmaps and the surface), shows and hides the two views, moves the keyboard focus and hands the camera to the
+incoming view. It does not touch a content, key, note, clip or track, and it generates and queues nothing: the openDyne
+notes of a clip are generated when the clip is selected or opened (`setEditedContentAndProjection()`, see "Selection"),
+not when the view changes. So the result has an empty `revisionDiff`, the dirty state is as it was (see below), and the undo
+reason is `not_persisted_state`; the revert recipe is `ui.setWorkspace` with the previous workspace, and it is given only
+when `ui.workspace` is reported (the capability the recipe needs). A function in the chain that starts changing content
+would be caught by the mirrors below (drift pins) and by the vectors `ui/set-workspace-*`, which expect an empty
+`revisionDiff`.
+
+The result: one change `{entity: "ui", ref: {singleton: "workspace"}}` with `fields.workspace {before, after}`, the side
+effect `workspaceSwitched {from, to}` and the `ui` snapshot after the switch. Asking for the view that is shown is a
+no-op: no change, no side effect, undo reason `no_op`, nothing to revert. The order of the checks: the params
+(`INVALID_ARGUMENT(invalid_params)`, only `workspace`, only the two names), the editor (`UNSUPPORTED(no_editor_window)`
+without one, `UNSUPPORTED(capability_missing)` when the bridge does not report its state), busy (`BUSY` with the reasons
+of `ui.getState`: a modal dialog, a pointer drag, an import, an export or a project operation; the same for the view
+that is shown already). A bridge that cannot switch answers `UNSUPPORTED(capability_missing)`; one that reports a
+different workspace afterwards `INTERNAL`.
+
+**The changed mark.** `viewToggled()` also moves the keyboard focus, and the focus that the transport bar's BPM
+field loses then commits the field: `BpmValueField::commit`, `TransportBarComponent::onBpmChanged`,
+`OpenTuneAudioProcessorEditor::bpmChanged`, which sets the tempo the field shows (the processor's own, rounded to one
+decimal) and marks the project as changed even when nothing was typed. The focus ends up in the field when the view that
+had it is hidden. So on the real window every view switch left a clean project changed (the call stack of `markDirty` was
+read in the Standalone). A view switch is view state (PROTOCOL.md section 15.2 rule 6), so
+`ControlEditorBridge::settleViewSwitch()` takes the mark back when the project was unchanged before and the tempo and the
+time signature are what they were: the mark then came from that commit and there is nothing to save. A tempo that did
+change keeps the mark. The double click that `ui.setSelection` with `openEditor` makes is guarded the same way
+(`select()` in `ControlEditorBridgeSelection.cpp`). The UI's own click on a view button is not touched.
+
+**Mirrors.** `workspace-track-view` and `workspace-piano-view` (the two button handlers of the transport bar) and
+`workspace-view-toggled` (the editor's handler), all in the group `ui`.
+
+**Vectors.** The request vectors `ui/set-workspace-piano-roll`, `-noop`, `-invalid` and `-busy-modal` run in `UiVectors`
+against the test bridge; the two scenarios `ui/set-workspace-arrangement` and `ui/set-workspace-piano-roll-opendyne` need
+clips, a selection and the editing scheme, so they run in `SelectionVectors` on the real processor (see "Selection").
+The test bridge does not model what the real editor does to the open clip when the editing scheme changes, so these
+two run green headlessly; on the real window (Standalone, the vectors replayed over the discovery file) four of the five
+vectors pass, and `ui/set-workspace-piano-roll-opendyne` stops at its sixth step, before `ui.setWorkspace`: the
+`prefs.set` that switches to openDyne generates the notes of the selected clip (`SCHEME_GENERATED_NOTES`, the
+revision of the clip's notes changes), because `ui.setSelection` has loaded the clip into the piano roll even while the
+arrangement is shown (`ui.getState` reports it as `pianoRollContentId`) and a scheme change generates the notes of the
+clip that is open in the editor. The switch itself, with the clip's notes generated, was checked on the real window: the
+notes, the revisions and the warnings are unchanged by it.
+
+Tests: `ControlProcessorTests.UiWorkspace` in `Tests/Control/ControlUiTests.cpp` (both directions, the no-op not reaching
+the editor, the params, busy for each reason, a bridge that cannot switch or does not, no editor, the revert recipe sent
+back, an unchanged dirty state, the empty `revisionDiff`, the capability right after `ui.onboardingClose`).
+
 ## Selection
 
 `ui.setSelection` (`Ops/SelectionOps.cpp`, capability `ui.bridge`) selects a clip (`placementId`) or a track
@@ -1082,7 +1144,7 @@ does what the arrangement view does when the user clicks:
   (`placementSelectionChanged`: `applyPlacementSelectionContext`, which makes its track the active track, shows the clip
   in the piano roll and the clip's key in the transport bar, then `refreshReferenceContext`). With `openEditor`
   `placementDoubleClicked()` follows, as with a double click, which switches to the piano roll when the arrangement is
-  shown. The clip becomes the only selected clip even when it was part of a multi-selection (a click there keeps the
+  shown (and leaves the project unchanged as `ui.setWorkspace` does, see "Workspace", the changed mark). The clip becomes the only selected clip even when it was part of a multi-selection (a click there keeps the
   others for a drag).
 - a track: `applyPlacementSelectionContext(trackId, 0)` (the active track, no clip selected on it, the piano roll
   empty), then the hook with no clip, which runs `commitEmptyPlacementSelection()` as a click on an empty area does (the
@@ -1122,7 +1184,7 @@ state as it was, a clip, `openEditor`, the scale with `ui.getState`, the no-op, 
 prediction of dryRun equals the committed result (a binding adds no side effect and no warning), and dryRun leaves every field of the state as it was. The test bridge
 and the prediction follow the same rules, so this shows that the two copies agree, not that the prediction agrees with
 the real editor; drift of the real editor is caught by the drift pins ("Mirrors") and by checks in the real Standalone.
-`SelectionVectors` runs the vectors `ui/set-selection-*`. The view's highlight and keyboard target, and the real piano
+`SelectionVectors` runs the vectors `ui/set-selection-*` and the two scenarios of `ui.setWorkspace` (see "Workspace"). The view's highlight and keyboard target, and the real piano
 roll, run only in the Standalone application.
 
 ## Preferences and audio device
@@ -1522,14 +1584,15 @@ stack from the bottom without file choosers, the onboarding, the UI snapshot, th
 `dialogCommitted`, `DIALOG_CLOSE_COMMITTED`, the revert recipe, dirty, an unchanged colour), a stack with a file chooser
 on top or in the middle, a dialog that opens another or will not close, prevents and closes the onboarding (with the
 dialogs above it), the no-ops, busy and the params. `UiOnboardingWithheld` runs an instance without
-`ui.onboardingClose`. `UiVectors` runs the specification's `ui/*` vectors; a fixed list of them must pass, and those of
-`ui.setSelection` run in `SelectionVectors` (see "Selection").
+`ui.onboardingClose`. `UiWorkspace` runs `ui.setWorkspace` (see "Workspace"). `UiVectors` runs the specification's `ui/*`
+vectors; a fixed list of them must pass, and those of `ui.setSelection` and the scenarios of `ui.setWorkspace` run in
+`SelectionVectors` (see "Selection").
 
 ## Capabilities and protocol versions
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
-`jobs.v1`, `import.v1`, `export.v1`, `ui.bridge` with `ui.onboardingClose`, `edit.v1`, `history.v1`, `timing.v1`, `transport.v1`, `arrangement.v1`, `tracks.v1`, `project.io`, `prefs.write` and `audio.device`). The listener answers a method of an unreported capability itself with
+`jobs.v1`, `import.v1`, `export.v1`, `ui.bridge` with `ui.onboardingClose`, `ui.workspace`, `edit.v1`, `history.v1`, `timing.v1`, `transport.v1`, `arrangement.v1`, `tracks.v1`, `project.io`, `prefs.write` and `audio.device`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
@@ -1565,6 +1628,7 @@ than one step.
 | `ui.getState` | `ui.bridge` | `Ops/UiOps.cpp` (editor side in `../Standalone/ControlEditorBridgeModals.cpp`) | `ControlProcessorTests.UiState`, `.UiVectors` | `methods/ui.getState.schema.json` |
 | `ui.dismiss` | `ui.bridge`; closing a showing overlay also `ui.onboardingClose` | `Ops/UiOps.cpp` (editor side in `../Standalone/ControlEditorBridgeModals.cpp`) | `ControlProcessorTests.UiDismiss`, `.UiOnboardingWithheld`, `.UiVectors` | `methods/ui.dismiss.schema.json` |
 | `ui.setSelection` | `ui.bridge` | `Ops/SelectionOps.cpp` (editor side in `../Standalone/ControlEditorBridgeSelection.cpp`, hook in `../Standalone/UI/ArrangementViewComponent.*`) | `ControlProcessorTests.Selection`, `.SelectionMatrix`, `.SelectionVectors` | `methods/ui.setSelection.schema.json` |
+| `ui.setWorkspace` | `ui.workspace` | `Ops/WorkspaceOps.cpp` (editor side in `../Standalone/ControlEditorBridgeWorkspace.cpp`) | `ControlProcessorTests.UiWorkspace`, `.UiVectors`, `.SelectionVectors` | `methods/ui.setWorkspace.schema.json` |
 | `edit.getHistory` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.EditVectors` | `methods/edit.getHistory.schema.json` |
 | `edit.undo` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.AutoTune`, `.EditVectors` | `methods/edit.undo.schema.json` |
 | `edit.redo` | `history.v1` | `Ops/UndoOps.cpp` | `ControlProcessorTests.Undo`, `.EditVectors` | `methods/edit.redo.schema.json` |

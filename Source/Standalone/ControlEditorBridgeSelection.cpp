@@ -35,9 +35,13 @@ bool ControlEditorBridge::select(int trackId, std::uint64_t placementId, bool op
     // highlights, commits to the arrangement and reports to the editor (placementSelectionChanged: the piano roll
     // and the scale of the transport bar).
     editor_.arrangementView_.commitControlSelection(trackId, placementId);
-    // The double click that follows opens the clip in the piano roll.
-    if (openEditor)
+    // The double click that follows opens the clip in the piano roll. It switches the workspace when the arrangement is
+    // shown, which moves the keyboard focus (see ControlEditorBridgeWorkspace.cpp).
+    if (openEditor) {
+        const auto baseline = viewSwitchBaseline();
         editor_.placementDoubleClicked(trackId, placementIndex);
+        settleViewSwitch(baseline);
+    }
     return true;
 }
 

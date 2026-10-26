@@ -362,7 +362,7 @@ void checkSessionInfo(ApiSession& api)
     // Only the capabilities this build implements completely are reported.
     CONTROL_CHECK(
         toJsonString(memberOf(info, "capabilities"))
-        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","ui.bridge","ui.onboardingClose","edit.v1","history.v1","timing.v1","transport.v1","arrangement.v1","tracks.v1","project.io","prefs.write","audio.device"])");
+        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","ui.bridge","ui.onboardingClose","ui.workspace","edit.v1","history.v1","timing.v1","transport.v1","arrangement.v1","tracks.v1","project.io","prefs.write","audio.device"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");
@@ -1810,9 +1810,9 @@ void scenarioCompleteness()
         return;
     const auto& methods = memberOf(parsed.value, "methods");
     const auto reported = dispatcher->capabilities();
-    for (const char* capability :
-         {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "ui.bridge", "edit.v1", "history.v1",
-          "timing.v1", "transport.v1", "arrangement.v1", "tracks.v1", "project.io", "prefs.write", "audio.device"})
+    for (const char* capability : {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "ui.bridge",
+                                   "ui.workspace", "edit.v1", "history.v1", "timing.v1", "transport.v1",
+                                   "arrangement.v1", "tracks.v1", "project.io", "prefs.write", "audio.device"})
         CONTROL_CHECK(std::find(reported.begin(), reported.end(), capability) != reported.end());
 
     // The listener answers session.hello itself, so the dispatcher's method table has no entry for it.
@@ -1880,10 +1880,11 @@ void scenarioCompleteness()
         CONTROL_CHECK(capability == nullptr || std::string(capability) != "read.v1");
     }
     // Every method the build registers except session.hello (which the listener answers): session.info, the eight
-    // reads, job.get, job.cancel, import.start, export.start, ui.getState, ui.dismiss, ui.setSelection, the four
-    // methods of edit.v1, the three of the undo history, the two of timing.v1, the three of transport.v1, the two of
-    // arrangement.v1, the four of tracks.v1, the four of project.io, prefs.set and the two of audio.device: 41 in all.
-    CONTROL_CHECK(indexed.size() >= 41);
+    // reads, job.get, job.cancel, import.start, export.start, ui.getState, ui.dismiss, ui.setSelection,
+    // ui.setWorkspace, the four methods of edit.v1, the three of the undo history, the two of timing.v1, the three of
+    // transport.v1, the two of arrangement.v1, the four of tracks.v1, the four of project.io, prefs.set and the two of
+    // audio.device: 42 in all.
+    CONTROL_CHECK(indexed.size() >= 42);
     if (!kUnimplementedReportedMethods.empty())
         note("exempt methods remain; the list must be empty before dev is merged");
     note(std::to_string(indexed.size()) + " methods of the reported capabilities are registered");

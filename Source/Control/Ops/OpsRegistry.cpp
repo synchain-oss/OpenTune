@@ -21,6 +21,7 @@
 #include "TransportOps.h"
 #include "UiOps.h"
 #include "UndoOps.h"
+#include "WorkspaceOps.h"
 
 #include "Control/ContentHandles.h"
 
@@ -96,6 +97,7 @@ void registerControlMethods(ControlMethodTable& table)
     registerExportOps(table);         // export.start
     registerUiOps(table);             // ui.getState, ui.dismiss
     registerSelectionOps(table);      // ui.setSelection
+    registerWorkspaceOps(table);      // ui.setWorkspace
     registerContentTuneOps(table);    // content.setKey, content.autoTune
     registerContentEditOps(table);    // content.editNotes, content.setPitchShift
     registerUndoOps(table);           // edit.getHistory, edit.undo, edit.redo

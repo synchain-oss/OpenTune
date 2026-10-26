@@ -609,7 +609,12 @@ void scenarioUiState();
 void scenarioUiDismiss();
 /** target onboarding on an instance without ui.onboardingClose: prevents, does not close. */
 void scenarioUiOnboardingWithheld();
-/** The specification's vectors of ui/ (those of ui.setSelection run in scenarioSelectionVectors). */
+/** ui.setWorkspace: the capability, the params, both switches with the write envelope (one change, the side effect,
+    view state, an empty revisionDiff, dirty as it was), the revert recipe sent back, the no-op, busy, a bridge that
+    cannot switch or did not, without an editor, and an instance that withholds the capability. */
+void scenarioUiWorkspace();
+/** The specification's vectors of ui/ (those of ui.setSelection and the scenarios of ui.setWorkspace run in
+    scenarioSelectionVectors). */
 void scenarioUiVectors();
 
 // Scenarios of preferences and the audio device (ControlPrefsTests.cpp).

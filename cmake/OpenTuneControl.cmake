@@ -146,6 +146,9 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # Selection: ui.setSelection, through the editor's bridge, with the effects it predicts and observes.
         Source/Control/Ops/SelectionOps.cpp
         Source/Control/Ops/SelectionOps.h
+        # Workspace: ui.setWorkspace (capability ui.workspace), the two view buttons of the transport bar through the bridge.
+        Source/Control/Ops/WorkspaceOps.cpp
+        Source/Control/Ops/WorkspaceOps.h
         # Preference options: the vocoder weights and pitch models that prefs.get offers (processing.options) and prefs.set
         # accepts, and the vocoder state and processor calls that the prefs.set job waits on and makes.
         Source/Control/Ops/PrefsModels.cpp
@@ -166,6 +169,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Standalone/ControlEditorBridgePrefs.cpp
         # Selection: a click and a double click on a clip, through the arrangement view's hook.
         Source/Standalone/ControlEditorBridgeSelection.cpp
+        # Workspace: the arrangement view or the piano roll, as the view buttons of the transport bar switch them.
+        Source/Standalone/ControlEditorBridgeWorkspace.cpp
     )
     # PUBLIC, so that every target that compiles or links the SharedCode sees the same class layouts.
     target_compile_definitions(OpenTuneStandalone PUBLIC OPENTUNE_ENABLE_CONTROL_API=1)
@@ -414,6 +419,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "UiState|--control-api"
             "UiDismiss|--control-api"
             "UiOnboardingWithheld|--control-api"
+            "UiWorkspace|--control-api"
             "UiVectors|--control-api"
         )
         # Preferences and audio device (Tests/Control/ControlPrefsTests.cpp).

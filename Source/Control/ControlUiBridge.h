@@ -246,6 +246,14 @@ public:
         return std::nullopt;
     }
 
+    // ---- Workspace ----------------------------------------------------------------------------
+
+    /** Switches the window to the arrangement view (arrangement true) or to the piano roll (false), as the two view
+        buttons of the transport bar do. Only the view changes: no content, key, note, clip or track is touched and
+        nothing is generated or queued. Does nothing when the window already shows that view. The workspace that
+        results report is viewState(). Returns false, changing nothing, when not supported. Message thread. */
+    virtual bool setWorkspace(bool /*arrangement*/) { return false; }
+
     // ---- Preferences and audio device ---------------------------------------------------------
 
     /** The shared preferences were changed through the control API (prefs.set): the editor applies them the way it

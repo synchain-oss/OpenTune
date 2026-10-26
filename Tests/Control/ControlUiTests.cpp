@@ -530,6 +530,190 @@ void scenarioUiOnboardingWithheld()
     CONTROL_CHECK(!memberOf(prevented, "noOp").asBoolean() && f.preferences().getState().shared.onboardingShown);
 }
 
+// ---- ui.setWorkspace -----------------------------------------------------------------------------------
+
+namespace {
+
+/** The write envelope of a switch from before to after: one change of the singleton workspace, the side effect
+    workspaceSwitched, nothing else touched (an empty revisionDiff, the dirty flag as it was), view state for the undo
+    (not_persisted_state) and a revert recipe that switches back. */
+void checkSwitchResult(const JsonValue& result, const std::string& before, const std::string& after, bool dirty)
+{
+    CONTROL_CHECK(memberOf(result, "applied").asBoolean() && !memberOf(result, "noOp").asBoolean()
+                  && !memberOf(result, "dryRun").asBoolean());
+    const auto& changes = memberOf(result, "changes");
+    if (CONTROL_CHECK(changes.size() == 1)) {
+        const auto& change = changes.at(0);
+        CONTROL_CHECK(memberOf(change, "entity").text() == "ui"
+                      && memberOf(memberOf(change, "ref"), "singleton").text() == "workspace");
+        const auto& field = memberOf(memberOf(change, "fields"), "workspace");
+        CONTROL_CHECK(memberOf(field, "before").text() == before && memberOf(field, "after").text() == after
+                      && memberOf(field, "unit").isNull());
+    }
+    CONTROL_CHECK(memberOf(result, "created").size() == 0 && memberOf(result, "removed").size() == 0
+                  && memberOf(result, "idMap").size() == 0);
+    const auto& diff = memberOf(result, "revisionDiff");
+    CONTROL_CHECK(memberOf(diff, "arrangement").isNull() && memberOf(diff, "trackState").isNull()
+                  && memberOf(diff, "contents").size() == 0);
+    const auto& undo = memberOf(result, "undo");
+    CONTROL_CHECK(!memberOf(undo, "undoable").asBoolean() && memberOf(undo, "reason").text() == "not_persisted_state");
+    const auto& revert = memberOf(undo, "revert");
+    CONTROL_CHECK(memberOf(revert, "method").text() == "ui.setWorkspace"
+                  && memberOf(memberOf(revert, "params"), "workspace").text() == before
+                  && memberOf(memberOf(revert, "params"), "workspace").text() != after
+                  && !memberOf(revert, "requiresConsent").asBoolean());
+    CONTROL_CHECK(memberOf(memberOf(result, "dirty"), "before").asBoolean() == dirty
+                  && memberOf(memberOf(result, "dirty"), "after").asBoolean() == dirty);
+    CONTROL_CHECK(memberOf(memberOf(result, "ui"), "workspace").text() == after);
+    const auto& effects = memberOf(result, "sideEffects");
+    CONTROL_CHECK(effects.size() == 1);
+    const auto& switched = memberOf(effects, "workspaceSwitched");
+    CONTROL_CHECK(memberOf(switched, "from").text() == before && memberOf(switched, "to").text() == after
+                  && memberOf(switched, "revert").isNull());
+    CONTROL_CHECK(memberOf(result, "warnings").size() == 0 && memberOf(result, "job").isNull());
+}
+
+/** What the window already showing the asked workspace does: nothing is recorded, nothing is reported. */
+void checkWorkspaceNoOp(const JsonValue& result, const std::string& shown, bool dirty)
+{
+    CONTROL_CHECK(memberOf(result, "applied").asBoolean() && memberOf(result, "noOp").asBoolean());
+    CONTROL_CHECK(memberOf(result, "changes").size() == 0 && memberOf(result, "sideEffects").size() == 0
+                  && memberOf(result, "warnings").size() == 0);
+    CONTROL_CHECK(memberOf(memberOf(result, "undo"), "reason").text() == "no_op"
+                  && memberOf(memberOf(result, "undo"), "revert").isNull());
+    CONTROL_CHECK(memberOf(memberOf(result, "dirty"), "before").asBoolean() == dirty
+                  && memberOf(memberOf(result, "dirty"), "after").asBoolean() == dirty);
+    CONTROL_CHECK(memberOf(memberOf(result, "ui"), "workspace").text() == shown);
+}
+
+} // namespace
+
+void scenarioUiWorkspace()
+{
+    // The interface's default cannot switch.
+    ControlUiBridge defaults;
+    CONTROL_CHECK(!defaults.setWorkspace(true) && !defaults.setWorkspace(false));
+
+    // ui.workspace comes with the method: reported after ui.bridge, registered. Without an editor the call answers
+    // UNSUPPORTED, after the params were checked.
+    const auto plain = tableCapabilities();
+    CONTROL_CHECK(reports(plain, "ui.workspace"));
+    CONTROL_CHECK(std::find(plain.begin(), plain.end(), "ui.bridge")
+                  < std::find(plain.begin(), plain.end(), "ui.workspace"));
+    {
+        auto processor = startedProcessor();
+        auto& service = processor->getControlService();
+        if (!service.isRunning())
+            return;
+        CONTROL_CHECK(reports(service.dispatcher()->capabilities(), "ui.workspace")
+                      && service.dispatcher()->implements("ui.setWorkspace"));
+        ApiSession api;
+        if (!api.open(service))
+            return;
+        CONTROL_CHECK(
+            api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "UNSUPPORTED", "no_editor_window"));
+        CONTROL_CHECK(
+            api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"mixer"})"), "INVALID_ARGUMENT", "invalid_params"));
+    }
+    {
+        // An instance that withholds the capability answers through the listener, and the window stays as it was.
+        UiFixture withheld({"ui.workspace"});
+        if (!withheld.service().isRunning() || !withheld.api.open(withheld.service()))
+            return;
+        CONTROL_CHECK(!reports(withheld.service().dispatcher()->capabilities(), "ui.workspace"));
+        CONTROL_CHECK(withheld.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "UNSUPPORTED",
+                                         "capability_missing"));
+        CONTROL_CHECK(withheld.bridge.workspaceSwitches == 0 && withheld.bridge.view.workspace == "arrangement");
+    }
+
+    UiFixture f;
+    if (!f.service().isRunning() || !f.api.open(f.service()))
+        return;
+    auto& bridge = f.bridge;
+
+    // Params (methods/ui.setWorkspace.schema.json $defs.params): workspace is required, is one of two names and is the
+    // only member. Nothing changes.
+    for (const char* params :
+         {R"({})", R"({"workspace":"mixer"})", R"({"workspace":"PianoRoll"})", R"({"workspace":1})",
+          R"({"workspace":null})", R"({"workspace":"arrangement","dryRun":true})",
+          R"({"workspace":"pianoRoll","force":true})"})
+        CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(params), "INVALID_ARGUMENT", "invalid_params"));
+    CONTROL_CHECK(bridge.workspaceSwitches == 0 && bridge.view.workspace == "arrangement" && bridge.dirtyMarks == 0);
+
+    // Arrangement to piano roll: one change, the side effect, view state. Nothing but the view: no dirty mark, an
+    // empty revisionDiff, no notification of a structure change.
+    const auto toPianoRoll = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"));
+    checkSwitchResult(toPianoRoll, "arrangement", "pianoRoll", false);
+    CONTROL_CHECK(bridge.view.workspace == "pianoRoll" && bridge.workspaceSwitches == 1 && bridge.dirtyMarks == 0
+                  && bridge.structureChanges == 0);
+
+    // The same workspace again: a no-op that does not reach the editor.
+    const auto again = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"));
+    checkWorkspaceNoOp(again, "pianoRoll", false);
+    CONTROL_CHECK(bridge.workspaceSwitches == 1);
+
+    // The revert recipe, sent as it came, switches back; its own recipe switches forward again.
+    const auto& revert = memberOf(memberOf(toPianoRoll, "undo"), "revert");
+    const auto back = f.api.result(memberOf(revert, "method").text(), memberOf(revert, "params"));
+    checkSwitchResult(back, "pianoRoll", "arrangement", false);
+    CONTROL_CHECK(bridge.view.workspace == "arrangement" && bridge.workspaceSwitches == 2);
+    const auto& forward = memberOf(memberOf(back, "undo"), "revert");
+    CONTROL_CHECK(memberOf(forward, "method").text() == "ui.setWorkspace"
+                  && memberOf(memberOf(forward, "params"), "workspace").text() == "pianoRoll");
+    const auto forwardAgain = f.api.result(memberOf(forward, "method").text(), memberOf(forward, "params"));
+    checkSwitchResult(forwardAgain, "arrangement", "pianoRoll", false);
+
+    // Back to the arrangement, and asking for it while it is shown is a no-op as well. A project with unsaved changes
+    // stays so, and the switch does not mark it.
+    checkSwitchResult(f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"arrangement"})")), "pianoRoll",
+                      "arrangement", false);
+    CONTROL_CHECK(bridge.view.workspace == "arrangement");
+    bridge.project.dirty = true;
+    checkWorkspaceNoOp(f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"arrangement"})")), "arrangement", true);
+    checkSwitchResult(f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})")), "arrangement",
+                      "pianoRoll", true);
+    CONTROL_CHECK(bridge.dirtyMarks == 0);
+    bridge.project.dirty = false;
+    bridge.view.workspace = "arrangement";
+    const int switches = bridge.workspaceSwitches;
+
+    // Busy, as every write: a modal dialog, a pointer gesture, an import, an export, a project operation. The window
+    // keeps its workspace, and the same workspace is refused too (the busy check comes first).
+    f.openDialog(dialogOf("message"));
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "BUSY", "modal_open"));
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"arrangement"})"), "BUSY", "modal_open"));
+    f.reset();
+    bridge.busy.pointerDown = true;
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "BUSY", "pointer_down"));
+    bridge.busy.pointerDown = false;
+    bridge.busy.importRunning = true;
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "BUSY", "import_in_progress"));
+    bridge.busy.importRunning = false;
+    CONTROL_CHECK(f.processor->tryAcquireExportLock());
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "BUSY", "export_in_progress"));
+    f.processor->releaseExportLock();
+    bridge.busy.operationRunning = true;
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "BUSY", "project_operation"));
+    bridge.busy.operationRunning = false;
+    CONTROL_CHECK(bridge.view.workspace == "arrangement" && bridge.workspaceSwitches == switches);
+
+    // A bridge that cannot switch (the interface's default), and one that took the call and did not switch.
+    bridge.switchesWorkspace = false;
+    CONTROL_CHECK(
+        f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "UNSUPPORTED", "capability_missing"));
+    bridge.switchesWorkspace = true;
+    bridge.swallowsWorkspaceSwitch = true;
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "INTERNAL", ""));
+    bridge.swallowsWorkspaceSwitch = false;
+    CONTROL_CHECK(bridge.view.workspace == "arrangement" && bridge.workspaceSwitches == switches);
+
+    // Without an editor.
+    f.registered.reset();
+    CONTROL_CHECK(
+        f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "UNSUPPORTED", "no_editor_window"));
+    CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
+}
+
 // ---- The specification's vectors ---------------------------------------------------------------------
 
 namespace {
@@ -543,8 +727,12 @@ struct UiVectorSkip
 
 UiVectorSkip uiVectorSkip(const JsonValue& vector, const std::vector<std::string>& reported)
 {
-    if (memberOf(vector, "capability").text() != "ui.bridge")
+    const auto capability = memberOf(vector, "capability").text();
+    if (capability != "ui.bridge" && capability != "ui.workspace")
         return {"runs in the runner of its own capability"};
+    if (capability == "ui.workspace" && memberOf(vector, "type").text() == "scenario")
+        return {"runs in the selection runner (scenarioSelectionVectors): it needs clips, the selection and the "
+                "editing scheme"};
     if (memberOf(vector, "type").text() != "request" || memberOf(vector, "session").text() != "authenticated")
         return {"only authenticated request vectors are run here"};
     if (memberOf(memberOf(vector, "request"), "method").text() == "ui.setSelection")
@@ -626,9 +814,9 @@ std::string runUiVector(const JsonValue& vector)
     return failure;
 }
 
-/** The vectors of ui/ that must run and pass headless; the vectors of ui.setSelection run in scenarioSelectionVectors,
-    and ui/dismiss-confirm-commit needs tracks.v1 for its revert recipe (scenarioUiDismiss covers the commit without
-    it). */
+/** The vectors of ui/ that must run and pass headless; the vectors of ui.setSelection and the two scenarios of
+    ui.setWorkspace run in scenarioSelectionVectors, and ui/dismiss-confirm-commit needs tracks.v1 for its revert recipe
+    (scenarioUiDismiss covers the commit without it). */
 const char* const kMustRunUiVectors[] = {
     "ui/dismiss-commits-on-close",
     "ui/dismiss-dialog",
@@ -640,6 +828,10 @@ const char* const kMustRunUiVectors[] = {
     "ui/dismiss-unknown-dialog",
     "ui/get-state-dialog",
     "ui/get-state-ok",
+    "ui/set-workspace-busy-modal",
+    "ui/set-workspace-invalid",
+    "ui/set-workspace-noop",
+    "ui/set-workspace-piano-roll",
 };
 
 } // namespace

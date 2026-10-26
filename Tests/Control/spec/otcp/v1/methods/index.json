@@ -344,6 +344,14 @@
       "write": "yes",
       "since": "1.0",
       "schema": "defined"
+    },
+    {
+      "method": "app.quit",
+      "layer": "L8",
+      "capability": "app.quit",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
     }
   ]
 }

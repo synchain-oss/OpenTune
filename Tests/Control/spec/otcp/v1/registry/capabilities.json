@@ -85,6 +85,11 @@
       "code": "audio.device",
       "since": "1.0",
       "description": "audio.get and audio.set."
+    },
+    {
+      "code": "app.quit",
+      "since": "1.0",
+      "description": "app.quit, which quits OpenTune as the close button of its window does and needs the OpenTune editor window."
     }
   ]
 }

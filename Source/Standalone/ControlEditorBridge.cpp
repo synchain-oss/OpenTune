@@ -70,7 +70,7 @@ void ControlEditorBridge::onStructureChanged()
 void ControlEditorBridge::onUndoRedoApplied()
 {
     // The editor's own steps after its undo and redo (performUndoRedoAction): mark the project as changed,
-    // redraw the arrangement and refresh the reference context. The piano roll follows the new revisions on
+    // redraw the arrangement and refresh what depends on it. The piano roll follows the new revisions on
     // the editor's next heartbeat, as after the UI's own undo.
     editor_.afterUndoRedo();
 }
@@ -83,16 +83,6 @@ void ControlEditorBridge::onTimeGridChanged()
     // redrawn as after an undo of a time-grid edit (afterUndoRedo).
     editor_.pianoRoll_.onTimeGridRevisionChanged();
     editor_.arrangementView_.requestContentRedraw();
-}
-
-void ControlEditorBridge::onReferenceBindingChanged()
-{
-    // The steps the editor's reference binding menu takes after a binding is set or removed (the lambdas in
-    // OpenTuneAudioProcessorEditor::resolveReferenceBindingMenu): redraw the arrangement, then refresh the reference
-    // context.
-    editor_.arrangementView_.requestContentRedraw();
-    editor_.referenceRefreshPending_ = true;
-    editor_.refreshReferenceContext();
 }
 
 bool ControlEditorBridge::focusPlacement(int trackId, std::uint64_t placementId)

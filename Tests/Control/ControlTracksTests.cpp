@@ -707,9 +707,8 @@ void checkTrackAdd(Fixture& f)
 
 void checkTrackDuplicate(Fixture& f)
 {
-    auto& arrangement = f.arrangement();
-    const auto source = f.addClip(0);
-    const auto referenced = f.addClip(1, 2.0);
+    f.addClip(0);
+    f.addClip(1, 2.0);
     settleBackgroundWork(*f.processor);
     f.setTracks(R"([{"trackId":0,"muted":true,"volumeLinear":0.5,"colour":"#ABCDEF"}])");
     const auto before = f.project();
@@ -717,8 +716,6 @@ void checkTrackDuplicate(Fixture& f)
     const auto referencedHandles = fixtureHandlesOf(before, 1, 2.0);
     if (!CONTROL_CHECK(sourceHandles.has_value() && referencedHandles.has_value()))
         return;
-    // The clip of track 1 has a reference binding to the clip of track 0; its copy keeps it.
-    CONTROL_CHECK(arrangement.setPlacementReferencePlacement(1, referenced.placementId, source.placementId));
 
     // Mode share, what OpenTune's UI does: the copy shows the same content.
     const int marks = f.bridge.dirtyMarks;
@@ -746,7 +743,7 @@ void checkTrackDuplicate(Fixture& f)
     CONTROL_CHECK(memberOf(memberOf(revert, "params"), "expectedArrangementRevision").text()
                   == f.arrangementRevision());
 
-    // The slot of the next copy is the first hidden one; a copy of track 1 keeps the reference binding.
+    // The slot of the next copy is the first hidden one.
     const auto cloned = f.api.result("track.duplicate", json(R"({"trackId":1})"));
     CONTROL_CHECK(near(memberOf(cloned, "newTrackId"), 3.0) && warningCodes(cloned).empty());
     project = f.project();
@@ -754,7 +751,7 @@ void checkTrackDuplicate(Fixture& f)
     if (!CONTROL_CHECK(clones.size() == 1))
         return;
     CONTROL_CHECK(memberOf(clones[0], "contentId").text() != referencedHandles->contentId);
-    CONTROL_CHECK(memberOf(clones[0], "referencePlacementId").text() == sourceHandles->placementId);
+    CONTROL_CHECK(clones[0].find("referencePlacementId") == nullptr);
     // Mode clone gave the copy a content of its own, listed as created, with the notes of the source.
     bool createdContent = false;
     const auto& created = memberOf(cloned, "created");
@@ -784,13 +781,12 @@ void checkTrackDelete(Fixture& f)
 {
     auto& arrangement = f.arrangement();
     f.bridge.visibleTracks = 3;
-    const auto a = f.addClip(0);
-    const auto b = f.addClip(1);
-    const auto c = f.addClip(2);
+    f.addClip(0);
+    f.addClip(1);
+    f.addClip(2);
     // A hidden slot that holds a clip: removeTrackAndShift() leaves it where it is.
     f.addClip(5);
     settleBackgroundWork(*f.processor);
-    CONTROL_CHECK(arrangement.setPlacementReferencePlacement(2, c.placementId, b.placementId));
     f.setTracks(R"([{"trackId":2,"muted":true,"volumeLinear":0.5,"colour":"#112233"},)"
                 R"({"trackId":5,"muted":true,"volumeLinear":0.25,"colour":"#445566"}])");
     const auto before = f.project();
@@ -799,7 +795,6 @@ void checkTrackDelete(Fixture& f)
     const auto hiddenHandles = fixtureHandlesOf(before, 5, 2.0);
     if (!CONTROL_CHECK(bHandles.has_value() && cHandles.has_value() && hiddenHandles.has_value()))
         return;
-    (void)a;
 
     // The checks first; none of them changes anything.
     const auto revision = f.arrangementRevision();
@@ -822,7 +817,7 @@ void checkTrackDelete(Fixture& f)
     CONTROL_CHECK(memberOf(placementsOn(project, 1)[0], "placementId").text() == cHandles->placementId);
     CONTROL_CHECK(arrangement.isTrackMuted(1) && near(arrangement.getTrackVolume(1), 0.5)
                   && !arrangement.isTrackMuted(2) && near(arrangement.getTrackVolume(2), 1.0));
-    // trackIdMap, the removed clip and content, the binding that went with the clip.
+    // trackIdMap, the removed clip and content.
     const auto& map = memberOf(deleted, "trackIdMap");
     CONTROL_CHECK(map.size() == 2 && memberOf(map.at(0), "after").isNull() && near(memberOf(map.at(0), "before"), 1.0)
                   && near(memberOf(map.at(1), "before"), 2.0) && near(memberOf(map.at(1), "after"), 1.0));
@@ -841,9 +836,8 @@ void checkTrackDelete(Fixture& f)
                   && memberOf(removed.at(1), "entity").text() == "content");
     CONTROL_CHECK(memberOf(memberOf(removed.at(1), "ref"), "contentId").text() == bHandles->contentId);
     CONTROL_CHECK(!listsContent(project, bHandles->contentId));
-    CONTROL_CHECK(memberOf(placementsOn(project, 1)[0], "referencePlacementId").isNull());
-    CONTROL_CHECK(memberOf(memberOf(deleted, "danglingReferences").at(0), "referencePlacementId").text()
-                  == bHandles->placementId);
+    // The retired members of the result are gone.
+    CONTROL_CHECK(deleted.find("danglingReferences") == nullptr);
     const auto moved = changeOf(deleted, "placement", "placementId", JsonValue::string(cHandles->placementId));
     CONTROL_CHECK(near(memberOf(memberOf(memberOf(moved, "fields"), "trackId"), "after"), 1.0));
     CONTROL_CHECK(memberOf(memberOf(deleted, "undo"), "reason").text() == "no_upstream_undo"
@@ -871,7 +865,6 @@ void checkTrackDeleteSharedContent(Fixture& f)
     // The content is shown by a clip of track 0 as well, so deleting track 2 removes the clip and not the content.
     const auto deleted = f.deleteTrack(2);
     CONTROL_CHECK(memberOf(deleted, "removed").size() == 1 && listsContent(f.project(), before->contentId));
-    CONTROL_CHECK(memberOf(deleted, "danglingReferences").size() == 0);
 }
 
 void scenarioTracksImpl()
@@ -1469,15 +1462,6 @@ std::string runVector(const JsonValue& vector)
         specs.emplace_back(spec.name, spec);
     }
     CONTROL_CHECK(settleBackgroundWork(*f.processor));
-    for (std::size_t i = 0; i < givenClips.size(); ++i)
-        if (const JsonValue* reference = givenClips.at(i).find("referenceClip")) {
-            const auto target = clips.find(memberOf(givenClips.at(i), "bind").text());
-            const auto source = clips.find(reference->text());
-            if (target == clips.end() || source == clips.end()
-                || !f.arrangement().setPlacementReferencePlacement(specs[i].second.trackId, target->second.placementId,
-                                                                   source->second.placementId))
-                return "the reference binding of " + specs[i].first + " could not be set";
-        }
 
     // given.history: the undo entries oldest first; the redo entries pushed from the top down and undone. A clip move
     // is recorded one second before the clip's start. trackDeletedAfter / laterTrackDeletedAfter: the entry is

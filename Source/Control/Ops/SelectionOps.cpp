@@ -105,15 +105,6 @@ struct Target
     std::string contentId;
 };
 
-/** One content whose reference alignment data the editor's reference context asks for. */
-struct ReferenceWatch
-{
-    ContentKey key;
-    std::string contentId;
-    OriginalF0State f0 = OriginalF0State::NotRequested;
-    int analysisRevision = 0;
-};
-
 /** The state before the call. */
 struct Before
 {
@@ -123,8 +114,6 @@ struct Before
     std::optional<UiScale> scale;
     /** Whether the notes of the clip's content were ever generated or edited (noteTopologyInitialized). */
     bool topologyInitialized = true;
-    /** The clip and the clip it is bound to, when it has a reference binding that resolves. */
-    std::vector<ReferenceWatch> reference;
 };
 
 /** The selection and its effects after the call, observed or predicted. */
@@ -133,8 +122,6 @@ struct Outcome
     SelectionState selection;
     /** notesGenerated: the number of notes of the clip's content. */
     std::optional<std::size_t> noteCount;
-    /** referenceAnalysisQueued: the contents, the selected clip's first. */
-    std::vector<std::string> referenceContents;
     std::optional<UiScale> scale;
     std::string workspace;
 };
@@ -151,38 +138,6 @@ SelectionState captureSelection(ControlOpContext& context, ControlUiBridge& brid
     return state;
 }
 
-ReferenceWatch watchOf(ControlOpContext& context, const ContentKey& key)
-{
-    ReferenceWatch watch;
-    watch.key = key;
-    watch.contentId = controlContentId(context, key);
-    if (const auto snapshot = controlLiveSnapshot(context, key)) {
-        watch.f0 = snapshot->originalF0State;
-        watch.analysisRevision = snapshot->referenceFeatures.analysisRevision;
-    }
-    return watch;
-}
-
-/** The clip and the clip it is bound to, as the editor's reference context finds them: the binding that
-    OpenTuneAudioProcessor::queryAutoRefAvailability() reports and the bound clip on any track
-    (findReferencePlacementInfo in OpenTuneAudioProcessorEditor::refreshReferenceContext). */
-std::vector<ReferenceWatch> captureReference(ControlOpContext& context, const Target& target)
-{
-    if (target.placementId == 0)
-        return {};
-    auto& processor = context.processor();
-    const auto availability = processor.queryAutoRefAvailability(target.placementId);
-    if (!availability.hasReferenceBinding())
-        return {};
-    StandaloneArrangement::Placement reference;
-    bool found = false;
-    for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS && !found; ++trackId)
-        found = processor.getPlacementById(trackId, availability.referencePlacementId, reference);
-    if (!found)
-        return {};
-    return {watchOf(context, target.key), watchOf(context, reference.contentKey)};
-}
-
 Before captureBefore(ControlOpContext& context, ControlUiBridge& bridge, const Target& target)
 {
     Before before;
@@ -195,7 +150,6 @@ Before captureBefore(ControlOpContext& context, ControlUiBridge& bridge, const T
     if (target.placementId != 0)
         if (const auto snapshot = controlLiveSnapshot(context, target.key))
             before.topologyInitialized = snapshot->noteTopologyInitialized;
-    before.reference = captureReference(context, target);
     return before;
 }
 
@@ -250,52 +204,6 @@ std::optional<std::size_t> predictNotes(ControlOpContext& context, ControlUiBrid
     return mergeNotesRange(snapshot->notes, range, generated).size();
 }
 
-/** Whether OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures() would ask for the content's alignment data now:
-    its pitch analysis when that was never requested, or the analysis of the alignment data when they are neither
-    ready, failed nor being made for the current producer and audio. */
-bool preheatWouldQueue(ControlOpContext& context, const ContentKey& key)
-{
-    if (!key.isValid() || key.domainKind != DomainKind::StandaloneClip)
-        return false;
-    const auto snapshot = controlLiveSnapshot(context, key);
-    if (snapshot == nullptr)
-        return false;
-    const auto producer = context.processor().getReferenceFeatureProducer();
-    if (producer == ReferenceFeatureProducer::StandardAuto) {
-        switch (snapshot->originalF0State) {
-            case OriginalF0State::NotRequested:
-                return true;
-            case OriginalF0State::Extracting:
-            case OriginalF0State::Failed:
-                return false;
-            case OriginalF0State::Ready:
-                break;
-        }
-        if (snapshot->pitchCurve == nullptr || snapshot->pitchCurve->getOriginalF0().empty())
-            return false;
-    }
-    const auto& features = snapshot->referenceFeatures;
-    const bool current = features.producer == producer
-                         && features.inputFingerprint == static_cast<std::int64_t>(snapshot->audioRevision);
-    return !(current
-             && (features.isReady() || features.status == ReferenceFeatureStatus::Failed
-                 || features.status == ReferenceFeatureStatus::Extracting));
-}
-
-/** The contents whose alignment data the editor's reference context would ask for (refreshReferenceContext after
-    evaluateAutoRefUiState): only for a clip with a binding, with experimental features on and outside openDyne. */
-std::vector<std::string> predictReference(ControlOpContext& context, ControlUiBridge& bridge, const Before& before)
-{
-    std::vector<std::string> contents;
-    if (before.reference.empty() || openDyneApplied(context, bridge)
-        || !context.processor().getAppPreferences().getState().shared.experimentalFeaturesEnabled)
-        return contents;
-    for (const auto& watch : before.reference)
-        if (preheatWouldQueue(context, watch.key))
-            contents.push_back(watch.contentId);
-    return contents;
-}
-
 Outcome predict(ControlOpContext& context, ControlUiBridge& bridge, const Target& target, const Before& before,
                 bool openEditor)
 {
@@ -304,7 +212,6 @@ Outcome predict(ControlOpContext& context, ControlUiBridge& bridge, const Target
     if (target.placementId != 0)
         outcome.selection.selected.push_back(target.placementId);
     outcome.noteCount = predictNotes(context, bridge, target, before);
-    outcome.referenceContents = predictReference(context, bridge, before);
     // The scale the editor resolves for the clip (resolveScaleForPlacementContent); selecting a track leaves it.
     outcome.scale = before.scale;
     if (target.placementId != 0 && before.scale.has_value())
@@ -325,19 +232,6 @@ Outcome observe(ControlOpContext& context, ControlUiBridge& bridge, const Target
         if (const auto snapshot = controlLiveSnapshot(context, target.key);
             snapshot && snapshot->noteTopologyInitialized)
             outcome.noteCount = snapshot->notes.size();
-    for (const auto& watch : before.reference) {
-        const auto snapshot = controlLiveSnapshot(context, watch.key);
-        if (snapshot == nullptr)
-            continue;
-        // The pitch analysis was requested first, or the analysis of the alignment data was started
-        // (preheatReferenceAlignmentFeatures sets it to Extracting with the next analysis revision).
-        const bool f0Requested =
-            watch.f0 == OriginalF0State::NotRequested && snapshot->originalF0State != OriginalF0State::NotRequested;
-        const bool featuresStarted = snapshot->referenceFeatures.analysisRevision != watch.analysisRevision
-                                     && snapshot->referenceFeatures.status == ReferenceFeatureStatus::Extracting;
-        if (f0Requested || featuresStarted)
-            outcome.referenceContents.push_back(watch.contentId);
-    }
     outcome.scale = bridge.uiScale();
     if (const auto view = bridge.viewState())
         outcome.workspace = view->workspace;
@@ -423,21 +317,6 @@ bool record(ControlOpContext& context, ControlWriteEnvelope& envelope, const Tar
         envelope.touchContent(target.contentId);
         recorded = true;
     }
-    if (!after.referenceContents.empty()) {
-        auto ids = JsonValue::array();
-        for (const auto& id : after.referenceContents) {
-            ids.append(JsonValue::string(id));
-            envelope.touchContent(id);
-        }
-        auto effect = JsonValue::object();
-        effect.appendMember("contentIds", std::move(ids));
-        effect.appendMember("revert", JsonValue());
-        envelope.addSideEffect("referenceAnalysisQueued", std::move(effect));
-        auto subject = JsonValue::object();
-        subject.appendMember("placementId", JsonValue::string(controlPlacementId(context, target.placementId)));
-        envelope.addWarning("REFERENCE_ANALYSIS_QUEUED", std::move(subject));
-        recorded = true;
-    }
     if (before.scale && after.scale && !sameScale(before.scale, after.scale)) {
         auto effect = JsonValue::object();
         effect.appendMember("before", scaleJson(*before.scale));
@@ -478,8 +357,6 @@ std::string describe(const Outcome& outcome)
                        + std::to_string(outcome.selection.selected.size()) + " selected";
     if (outcome.noteCount)
         text += ", " + std::to_string(*outcome.noteCount) + " notes generated";
-    if (!outcome.referenceContents.empty())
-        text += ", reference analysis of " + std::to_string(outcome.referenceContents.size()) + " contents";
     if (outcome.scale)
         text += ", scale " + std::to_string(outcome.scale->rootNote) + "/" + std::to_string(outcome.scale->scaleType);
     return text + ", " + outcome.workspace;

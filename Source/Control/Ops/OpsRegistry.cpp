@@ -14,7 +14,6 @@
 #include "PrefsOps.h"
 #include "ProjectOps.h"
 #include "ProjectReadOps.h"
-#include "ReferenceOps.h"
 #include "SelectionOps.h"
 #include "SessionOps.h"
 #include "TimingOps.h"
@@ -103,7 +102,6 @@ void registerControlMethods(ControlMethodTable& table)
     registerTimingOps(table);         // content.shiftTiming, content.editTimeGrid
     registerTransportOps(table);      // transport.control, transport.setTempo, transport.setLoop
     registerArrangementOps(table);    // arrangement.edit, arrangement.copy
-    registerReferenceOps(table);      // content.analyzeReference
     registerTrackOps(table);          // track.set, track.add, track.duplicate, track.delete
     registerProjectOps(table);        // project.save, project.saveAs, project.open, project.clearRecent
     registerPrefsOps(table);          // prefs.set

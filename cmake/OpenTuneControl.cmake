@@ -139,13 +139,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Control/Ops/PrefsOps.h
         Source/Control/Ops/AudioDeviceOps.cpp
         Source/Control/Ops/AudioDeviceOps.h
-        # Reference alignment: content.analyzeReference and the job of content.autoTune in mode reference, with the
-        # alignment of OpenTune's AUTO button handed back as one undo action.
-        Source/Control/Edit/ReferenceAlignment.cpp
-        Source/Control/Edit/ReferenceAlignment.h
-        Source/Control/Ops/ReferenceOps.cpp
-        Source/Control/Ops/ReferenceOps.h
-        # Arrangement: arrangement.edit (move, trim, gain, fades, split, merge, delete, reference binding) and
+        # Arrangement: arrangement.edit (move, trim, gain, fades, split, merge, delete) and
         # arrangement.copy, through the arrangement view's setters, processor functions and undo actions.
         Source/Control/Ops/ArrangementOps.cpp
         Source/Control/Ops/ArrangementOps.h
@@ -312,8 +306,6 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlUiTests.cpp)
         # Preferences and audio device: prefs.set (with its job), audio.get and audio.set on a fake device manager.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlPrefsTests.cpp)
-        # Reference alignment: content.analyzeReference and content.autoTune mode reference.
-        target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlReferenceTests.cpp)
         # Arrangement: arrangement.edit and arrangement.copy, their undo entries and revert recipes.
         target_sources(OpenTuneControlProcessorTests PRIVATE Tests/Control/ControlArrangementTests.cpp)
         # Selection: ui.setSelection with a test bridge that does what the editor does when a clip is clicked.
@@ -435,12 +427,6 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "AudioDevice|--control-api"
             "AudioVectors|--control-api"
         )
-        # Reference alignment (Tests/Control/ControlReferenceTests.cpp).
-        list(APPEND _opentune_control_scenarios
-            "Reference|--control-api"
-            "ReferenceAnalysisLimit|--control-api"
-            "ReferenceVectors|--control-api"
-        )
         # Arrangement (Tests/Control/ControlArrangementTests.cpp).
         list(APPEND _opentune_control_scenarios
             "Arrangement|--control-api"
@@ -499,7 +485,6 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.UiVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.PrefsVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.AudioVectors PROPERTIES TIMEOUT 300)
-        set_tests_properties(ControlProcessorTests.ReferenceVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.ArrangementVectors PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.SelectionMatrix PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.SelectionVectors PROPERTIES TIMEOUT 300)

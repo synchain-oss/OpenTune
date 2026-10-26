@@ -589,8 +589,8 @@ void scenarioProjectVectors();
     the checks, busy and the editor's notifications. */
 void scenarioTransport();
 /** track.set, track.add, track.duplicate and track.delete: values, clamping, solo and audibility, the revert recipe,
-    the limits, the clip copies of both modes, the removal of a content with its last clip, the dangling reference
-    bindings, the checks and the answer without an editor. */
+    the limits, the clip copies of both modes, the removal of a content with its last clip, the checks and the answer
+    without an editor. */
 void scenarioTracks();
 /** The barrier of a track deletion in the undo history: entries recorded through the API that address a moved track,
     entries of the UI, force, the warnings, and an entry whose content left the project. */
@@ -621,10 +621,10 @@ void scenarioPrefsRoundTrip();
    editor generates, the revert recipe, the wait that ends without the editor and puts every preference back, and a job
    that the stopping control API destroys. */
 void scenarioPrefsSchemeJob();
-/** processing.options of prefs.get, and the vocoder weight, the rendering priority, the pitch model and the reference
-    alignment mode of prefs.set: values that are not on offer, no-ops, changes with their warnings and side effects, the
-    processor that refuses a pitch model, the revert recipes, all members in one call. The render runtime is replaced by
-   a test double (ControlPrefsBackend). */
+/** processing.options of prefs.get, and the vocoder weight, the rendering priority and the pitch model of prefs.set:
+    values that are not on offer, no-ops, changes with their warnings and side effects, the processor that refuses a
+    pitch model, the revert recipes, all members in one call. The render runtime is replaced by a test double
+    (ControlPrefsBackend). */
 void scenarioPrefsOptions();
 /** The wait of the prefsApply job for the vocoder after a new weight or rendering priority: no wait when the vocoder
    was not ready before the change, the wait until it is ready again, the time-out that takes the preferences back. */
@@ -639,19 +639,6 @@ void scenarioPrefsVectors();
 void scenarioAudioDevice();
 /** The specification's vectors of audio.get and audio.set, against the real dispatcher. */
 void scenarioAudioVectors();
-
-// Scenarios of the reference alignment (ControlReferenceTests.cpp).
-
-/** content.analyzeReference and content.autoTune mode reference: the analysis job, the alignment in one undo step
-    with undo and redo, the no-op of a second alignment. */
-void scenarioReference();
-/** The wait limit and its upstream cause (the analysis service completes one analysis per session), one job per
-    placement, cancellation, and the checks the jobs make again (binding removed, analysis running, clip deleted,
-    dialog open); the checks of the call. */
-void scenarioReferenceAnalysisLimit();
-/** The specification's vectors of content.analyzeReference and content.autoTune mode reference, and the details of a
-    clip with a reference binding, against the real dispatcher. */
-void scenarioReferenceVectors();
 
 // Scenarios of the arrangement (ControlArrangementTests.cpp).
 
@@ -674,8 +661,8 @@ void scenarioArrangementVectors();
 /** ui.setSelection: the capability and its methods, the params, NOT_FOUND, UNSUPPORTED without an editor, BUSY, a clip,
     a track, openEditor, the scale, the no-op, the revert recipe sent back, dryRun changing nothing. */
 void scenarioSelection();
-/** Both editing schemes, a clip with and without notes, with and without a reference binding: the prediction of dryRun
-    equals the committed result, and dryRun leaves every field of the state as it was. */
+/** Both editing schemes, a clip with and without notes: the prediction of dryRun equals the committed result, and
+   dryRun leaves every field of the state as it was. */
 void scenarioSelectionMatrix();
 /** The specification's vectors of ui.setSelection, against the real dispatcher with a test bridge that selects as the
     editor does. */

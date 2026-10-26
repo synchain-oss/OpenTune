@@ -80,8 +80,6 @@ struct PrefsRequest
     /** f0Model: a name of processing.options.f0Model (checked when the call runs), and the type it names. */
     std::optional<std::string> f0Model;
     std::optional<F0ModelType> f0Type;
-    /** referenceAlignMode: true for game, false for standardAuto. */
-    std::optional<bool> referenceGame;
 };
 
 /** A4 as the wire carries it: three decimals, like controlJsonNumber(tuningHz, 3) in prefs.get and session.info. */
@@ -133,7 +131,7 @@ bool parsePrefsSet(const JsonValue& params, PrefsRequest& out, std::string& why)
     ControlParamReader reader(params);
     std::optional<double> tuning;
     if (!reader.onlyMembers({"tuningHz", "editingScheme", "hybridMode", "experimentalFeatures", "vocoderWeight",
-                             "renderingPriority", "f0Model", "referenceAlignMode"})
+                             "renderingPriority", "f0Model"})
         || !reader.optionalNumber("tuningHz", static_cast<double>(TuningConfig::kMinTuningHz),
                                   static_cast<double>(TuningConfig::kMaxTuningHz), tuning)) {
         why = reader.why();
@@ -150,15 +148,14 @@ bool parsePrefsSet(const JsonValue& params, PrefsRequest& out, std::string& why)
         || !readBoolean(reader, "experimentalFeatures", out.experimentalFeatures)
         || !readOptionName(reader, "vocoderWeight", out.vocoderWeight)
         || !readEnumPair(reader, "renderingPriority", "gpuFirst", "cpuFirst", out.cpuFirst)
-        || !readOptionName(reader, "f0Model", out.f0Model)
-        || !readEnumPair(reader, "referenceAlignMode", "standardAuto", "game", out.referenceGame)) {
+        || !readOptionName(reader, "f0Model", out.f0Model)) {
         why = reader.why();
         return false;
     }
     if (tuning)
         out.tuningHz = roundedTuning(*tuning);
     if (!out.tuningHz && !out.notesPrimary && !out.hybridMode && !out.experimentalFeatures && !out.vocoderWeight
-        && !out.cpuFirst && !out.f0Model && !out.referenceGame) {
+        && !out.cpuFirst && !out.f0Model) {
         why = "params must have at least one member";
         return false;
     }
@@ -177,7 +174,6 @@ struct PrefsState
     std::string vocoderWeight = kDefaultVocoderWeight;
     bool cpuFirst = false;
     std::string f0Model = "fcpe";
-    bool referenceGame = false;
 };
 
 PrefsState readState(OpenTuneAudioProcessor& processor)
@@ -193,7 +189,6 @@ PrefsState readState(OpenTuneAudioProcessor& processor)
     state.vocoderWeight = shared.vocoderModelWeight;
     state.cpuFirst = shared.renderingPriority == RenderingPriority::CpuFirst;
     state.f0Model = controlF0ModelName(shared.f0ModelType);
-    state.referenceGame = shared.experimentalReferenceAlignMode == ExperimentalReferenceAlignMode::Game;
     return state;
 }
 
@@ -207,12 +202,8 @@ struct PrefsDelta
     bool vocoder = false;
     bool priority = false;
     bool f0 = false;
-    bool align = false;
 
-    bool any() const noexcept
-    {
-        return tuning || scheme || hybrid || experimental || vocoder || priority || f0 || align;
-    }
+    bool any() const noexcept { return tuning || scheme || hybrid || experimental || vocoder || priority || f0; }
     /** The editor applies the scheme asynchronously, and the runtime replaces the vocoder asynchronously after a new
         weight or a new rendering priority: a call that changes one of them is a job. */
     bool needsJob() const noexcept { return scheme || vocoder || priority; }
@@ -228,7 +219,6 @@ PrefsDelta computeDelta(const PrefsState& state, const PrefsRequest& request)
     delta.vocoder = request.vocoderWeight && *request.vocoderWeight != state.vocoderWeight;
     delta.priority = request.cpuFirst && *request.cpuFirst != state.cpuFirst;
     delta.f0 = request.f0Model && *request.f0Model != state.f0Model;
-    delta.align = request.referenceGame && *request.referenceGame != state.referenceGame;
     return delta;
 }
 
@@ -250,8 +240,6 @@ PrefsState stateAfter(const PrefsState& before, const PrefsRequest& request, con
         after.cpuFirst = *request.cpuFirst;
     if (delta.f0)
         after.f0Model = *request.f0Model;
-    if (delta.align)
-        after.referenceGame = *request.referenceGame;
     return after;
 }
 
@@ -264,16 +252,11 @@ std::optional<F0ModelType> f0TypeOf(const std::string& name)
     return std::nullopt;
 }
 
-ExperimentalReferenceAlignMode alignModeOf(bool game)
-{
-    return game ? ExperimentalReferenceAlignMode::Game : ExperimentalReferenceAlignMode::StandardAuto;
-}
-
 /**
  * Makes the changes of a request, as OpenTune's preferences window does for each control (SharedEditingPage's tuning
  * slider and scheme selector, SharedAudioPage's experimental toggle, hybrid toggle with its processor callback in
- * showPreferencesDialog, rendering priority, vocoder weight, pitch model and reference alignment mode selectors with
- * their processor callbacks), and then lets the editor apply the preferences. The pitch model comes first, as the
+ * showPreferencesDialog, rendering priority, vocoder weight and pitch model selectors with their processor callbacks),
+ * and then lets the editor apply the preferences. The pitch model comes first, as the
  * window asks the processor before it stores the model: when the processor refuses, nothing changes and the error is
  * returned. Message thread.
  */
@@ -317,14 +300,6 @@ std::optional<Error> applyDelta(ControlOpContext& context, const PrefsRequest& r
         preferences.setRenderingPriority(*request.cpuFirst ? RenderingPriority::CpuFirst : RenderingPriority::GpuFirst);
         controlResetInferenceBackend(processor, *request.cpuFirst);
     }
-    if (delta.align) {
-        // experimentalReferenceAlignModeSelector_.onChange stores the mode; the editor's
-        // syncSharedAppPreferences() (the bridge call below) hands it to the processor and flags the reference
-        // context for a refresh. The processor gets it here as well, so that a call without an editor leaves the
-        // processor and the preferences in agreement.
-        preferences.setExperimentalReferenceAlignMode(alignModeOf(*request.referenceGame));
-        processor.setExperimentalReferenceAlignMode(alignModeOf(*request.referenceGame));
-    }
     if (delta.any())
         if (auto* bridge = context.bridge())
             bridge->onPreferencesChanged();
@@ -335,9 +310,7 @@ std::optional<Error> applyDelta(ControlOpContext& context, const PrefsRequest& r
  * Puts the preferences a delta changed back to the state before it; the editor is told only when asked to. With a
  * context the runtime is asked for the previous vocoder weight, rendering priority and pitch model as well, so that
  * the stored preferences and the runtime agree again; without one (the control API is stopping) only the stored
- * preferences change. The one exception is the reference alignment mode, which the processor gets either way:
- * setExperimentalReferenceAlignMode() only assigns a member, so calling it without a context is harmless and keeps
- * processor and preferences in agreement.
+ * preferences change.
  */
 void restoreState(ControlOpContext* context, OpenTuneAudioProcessor& processor, const PrefsState& before,
                   const PrefsDelta& delta)
@@ -373,11 +346,6 @@ void restoreState(ControlOpContext* context, OpenTuneAudioProcessor& processor, 
         preferences.setRenderingPriority(before.cpuFirst ? RenderingPriority::CpuFirst : RenderingPriority::GpuFirst);
         if (context != nullptr)
             controlResetInferenceBackend(processor, before.cpuFirst);
-    }
-    if (delta.align) {
-        preferences.setExperimentalReferenceAlignMode(alignModeOf(before.referenceGame));
-        // Not guarded by context, unlike the runtime calls above: a plain member assignment (see the comment above).
-        processor.setExperimentalReferenceAlignMode(alignModeOf(before.referenceGame));
     }
     if (context != nullptr && delta.any())
         if (auto* bridge = context->bridge())
@@ -417,11 +385,10 @@ std::optional<JsonValue> wireWeight(const std::string& weight)
 
 /**
  * Records what a delta changed in the envelope: the changes, the warning GLOBAL_PREFERENCE (NOT_RETROACTIVE for the
- * tuning, EXPERIMENTAL_FEATURE for the reference alignment mode), reRenderQueued for the hybrid switch and for every
- * change of the vocoder weight, and the undo descriptor (no undo entry, as in OpenTune; the revert recipe is the same
- * call with the previous values, or null when none of them can be sent). The members come in the order of the schema:
- * the original four, then vocoderWeight, renderingPriority, f0Model and referenceAlignMode. Nothing is recorded for a
- * delta that changes nothing.
+ * tuning), reRenderQueued for the hybrid switch and for every change of the vocoder weight, and the undo descriptor
+ * (no undo entry, as in OpenTune; the revert recipe is the same call with the previous values, or null when none of
+ * them can be sent). The members come in the order of the schema: the original four, then vocoderWeight,
+ * renderingPriority and f0Model. Nothing is recorded for a delta that changes nothing.
  */
 void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope, const PrefsState& before,
                  const PrefsRequest& request, const PrefsDelta& delta)
@@ -478,21 +445,11 @@ void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope, cons
         names.append(JsonValue::string("f0Model"));
         revert.appendMember("f0Model", JsonValue::string(before.f0Model));
     }
-    if (delta.align) {
-        addPreferenceChange(envelope, "referenceAlignMode", "Reference alignment mode",
-                            JsonValue::string(before.referenceGame ? "game" : "standardAuto"),
-                            JsonValue::string(*request.referenceGame ? "game" : "standardAuto"), JsonValue());
-        names.append(JsonValue::string("referenceAlignMode"));
-        revert.appendMember("referenceAlignMode", JsonValue::string(before.referenceGame ? "game" : "standardAuto"));
-    }
     auto data = JsonValue::object();
     data.appendMember("preferences", std::move(names));
     envelope.addWarning("GLOBAL_PREFERENCE", JsonValue(), std::move(data));
     if (delta.tuning)
         envelope.addWarning("NOT_RETROACTIVE", preferenceRef("tuningHz"));
-    // The mode only decides how the next AUTO Ref analyses the reference, which is an experimental feature.
-    if (delta.align)
-        envelope.addWarning("EXPERIMENTAL_FEATURE", preferenceRef("referenceAlignMode"));
     if (delta.hybrid || delta.vocoder) {
         // The processor queued a new render of every content: invalidateAllContentCaches() for the hybrid switch; for
         // the vocoder weight the completion of setVocoderModelWeight() clears every render cache and requests a full
@@ -788,7 +745,6 @@ private:
         settle(&PrefsDelta::vocoder, &PrefsState::vocoderWeight, "vocoderWeight", current, restore, kept);
         settle(&PrefsDelta::priority, &PrefsState::cpuFirst, "renderingPriority", current, restore, kept);
         settle(&PrefsDelta::f0, &PrefsState::f0Model, "f0Model", current, restore, kept);
-        settle(&PrefsDelta::align, &PrefsState::referenceGame, "referenceAlignMode", current, restore, kept);
         restoreState(context, processor, restoreTo_, restore);
         return kept;
     }

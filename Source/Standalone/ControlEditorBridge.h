@@ -41,7 +41,6 @@ public:
     void onStructureChanged() override;
     void onUndoRedoApplied() override;
     void onTimeGridChanged() override;
-    void onReferenceBindingChanged() override;
     void onProjectReloaded() override;
     void onProjectSaved() override;
     void onRecentProjectsChanged() override;

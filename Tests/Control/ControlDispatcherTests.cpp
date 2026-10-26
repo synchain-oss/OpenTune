@@ -362,7 +362,7 @@ void checkSessionInfo(ApiSession& api)
     // Only the capabilities this build implements completely are reported.
     CONTROL_CHECK(
         toJsonString(memberOf(info, "capabilities"))
-        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","ui.bridge","ui.onboardingClose","edit.v1","history.v1","timing.v1","transport.v1","arrangement.v1","reference.v1","tracks.v1","project.io","prefs.write","audio.device"])");
+        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","ui.bridge","ui.onboardingClose","edit.v1","history.v1","timing.v1","transport.v1","arrangement.v1","tracks.v1","project.io","prefs.write","audio.device"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");
@@ -437,7 +437,7 @@ JsonValue checkProjectWithoutEditor(ApiSession& api, OpenTuneAudioProcessor& pro
         CONTROL_CHECK(near(memberOf(placement, "clipInContentSec"), 0.0, kSecTolerance));
         CONTROL_CHECK(near(memberOf(placement, "gainDb"), 0.0, kSecTolerance));
         CONTROL_CHECK(near(memberOf(placement, "gainLinear"), 1.0, kSecTolerance));
-        CONTROL_CHECK(memberOf(placement, "referencePlacementId").isNull());
+        CONTROL_CHECK(placement.find("referencePlacementId") == nullptr);
         CONTROL_CHECK(memberOf(placement, "name").text() == "sung");
         CONTROL_CHECK(memberOf(placement, "sourcePath").text() == sung.sourcePath);
         CONTROL_CHECK(!sungHandles->geometryHash.empty());
@@ -822,17 +822,6 @@ ClipSpec refSpec()
     return spec;
 }
 
-/** Gives the content of a clip reference alignment data of the given producer. */
-void applyReferenceFeatures(OpenTuneAudioProcessor& processor, const Clip& clip, ReferenceFeatureProducer producer)
-{
-    ReferenceFeatureSet features;
-    features.status = ReferenceFeatureStatus::Ready;
-    features.producer = producer;
-    auto* owner = processor.getStandaloneContentRepository()->findClip(clip.key);
-    if (CONTROL_CHECK(owner != nullptr))
-        owner->applyReferenceFeatures(features);
-}
-
 void checkDetailsOfSung(ApiSession& api, OpenTuneAudioProcessor& processor, const DetailsClips& clips,
                         const ClipHandles& handles, const ClipHandles& refHandles)
 {
@@ -874,25 +863,24 @@ void checkDetailsOfSung(ApiSession& api, OpenTuneAudioProcessor& processor, cons
         CONTROL_CHECK(near(memberOf(gridHandles.at(1), "contentSec"), 2.5, kSecTolerance));
     }
 
-    const auto& reference = memberOf(details, "reference");
-    CONTROL_CHECK(memberOf(reference, "referencePlacementId").text() == refHandles.placementId);
-    CONTROL_CHECK(!memberOf(reference, "alignmentReady").asBoolean());
+    // The reference section is retired: the result has no such member.
+    CONTROL_CHECK(details.find("reference") == nullptr);
 
-    // The scheme is openTune and the experimental features are off, so the button regenerates.
+    // The scheme is openTune and the fixture bound the clip to the reference clip, so the button runs the reference
+    // alignment, which is no mode of content.autoTune and is not listed in available (checkAutoModes has the rest).
     const auto& modes = memberOf(details, "autoModes");
     CONTROL_CHECK(memberOf(modes, "editingScheme").text() == "openTune"
-                  && memberOf(modes, "uiButtonRuns").text() == "regenerate");
-    CONTROL_CHECK(toJsonString(memberOf(modes, "available"))
-                  == R"(["regenerate","snapNotes","notesOnly","reference"])");
+                  && memberOf(modes, "uiButtonRuns").text() == "reference");
+    CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == R"(["regenerate","snapNotes","notesOnly"])");
 
     // By placement: the same content, through that placement; every member besides the placement the same.
     const auto byPlacement =
         api.result("content.getDetails", json("{\"placementId\":" + quoted(handles.placementId) + "}"));
     CONTROL_CHECK(toJsonString(byPlacement) == toJsonString(details));
-    // The reference clip is a content of its own, with no binding of its own and no time grid.
+    // The reference clip is a content of its own, with no binding of its own (its button regenerates) and no time grid.
     const auto refDetails =
         api.result("content.getDetails", json("{\"contentId\":" + quoted(refHandles.contentId) + "}"));
-    CONTROL_CHECK(memberOf(memberOf(refDetails, "reference"), "referencePlacementId").isNull());
+    CONTROL_CHECK(memberOf(memberOf(refDetails, "autoModes"), "uiButtonRuns").text() == "regenerate");
     CONTROL_CHECK(!memberOf(memberOf(refDetails, "timeGrid"), "seeded").asBoolean()
                   && memberOf(memberOf(refDetails, "timeGrid"), "handles").size() == 0
                   && memberOf(memberOf(refDetails, "timeGrid"), "identity").asBoolean());
@@ -909,105 +897,61 @@ void checkDetailsOfSung(ApiSession& api, OpenTuneAudioProcessor& processor, cons
                   != desiredBefore);
 }
 
-/** content.getDetails run on the message thread with the facts of an instance that reports reference.v1 (or, with
-    withReference false, of one that does not), as such an instance would answer. */
-JsonValue detailsAsInstanceWithReference(OpenTuneAudioProcessor& processor, const std::string& instanceId,
-                                         const std::string& contentId, bool withReference = true)
-{
-    ControlMethodTable table;
-    registerControlMethods(table);
-    const ControlMethod* method = table.find("content.getDetails");
-    if (!CONTROL_CHECK(method != nullptr))
-        return JsonValue();
-    std::shared_ptr<const void> parsed;
-    std::string why;
-    if (!CONTROL_CHECK(method->parse(json("{\"contentId\":" + quoted(contentId) + "}"), parsed, why)))
-        return JsonValue();
-    ControlInstanceFacts facts;
-    facts.instanceId = instanceId;
-    facts.capabilities = {"session.v1", "read.v1"};
-    if (withReference)
-        facts.capabilities.push_back("reference.v1");
-    ControlThreadProbe probe;
-    ControlOpContext context(processor, nullptr, facts, probe);
-    auto result = method->run(context, parsed.get());
-    if (!CONTROL_CHECK(result.ok()))
-        return JsonValue();
-    return std::move(result).value();
-}
-
-/** The reference binding and the AUTO button: alignment data of the producer in use, the scheme and the
-    experimental features. */
+/**
+ * The AUTO button (autoModes.uiButtonRuns): the mode the editor's button runs now. In the openDyne scheme it snaps
+ * notes. In the openTune scheme it runs OpenTune's reference alignment while the clip has a reference binding that
+ * resolves, which no mode of content.autoTune names, so it is reported as it is and never listed in available; without
+ * a binding it regenerates. The control API neither reads nor writes a binding: the fixture sets one with the
+ * arrangement's setter, as the window's menu does, and the details only read the state upstream keeps.
+ */
 void checkAutoModes(ApiSession& api, OpenTuneAudioProcessor& processor, const DetailsClips& clips,
                     const ClipHandles& handles)
 {
     const auto byContent = json("{\"contentId\":" + quoted(handles.contentId) + "}");
-    const auto producer = processor.getReferenceFeatureProducer();
-    const auto other = producer == ReferenceFeatureProducer::Game ? ReferenceFeatureProducer::StandardAuto
-                                                                  : ReferenceFeatureProducer::Game;
-    // Alignment data of both clips for the producer in use; data of the other producer does not count.
-    applyReferenceFeatures(processor, clips.sung, producer);
-    CONTROL_CHECK(
-        !memberOf(memberOf(api.result("content.getDetails", byContent), "reference"), "alignmentReady").asBoolean());
-    applyReferenceFeatures(processor, clips.ref, other);
-    CONTROL_CHECK(
-        !memberOf(memberOf(api.result("content.getDetails", byContent), "reference"), "alignmentReady").asBoolean());
-    applyReferenceFeatures(processor, clips.ref, producer);
-    CONTROL_CHECK(
-        memberOf(memberOf(api.result("content.getDetails", byContent), "reference"), "alignmentReady").asBoolean());
-    applyReferenceFeatures(processor, clips.sung, other);
-    CONTROL_CHECK(
-        !memberOf(memberOf(api.result("content.getDetails", byContent), "reference"), "alignmentReady").asBoolean());
-
-    // This instance reports reference.v1, so the button's mode is named reference, with the binding and the
-    // experimental features as they are.
+    const auto modesOf = [&] { return memberOf(api.result("content.getDetails", byContent), "autoModes"); };
+    const std::string offered = R"(["regenerate","snapNotes","notesOnly"])";
     auto& preferences = processor.getAppPreferences();
-    preferences.setExperimentalFeaturesEnabled(true);
-    auto modes = memberOf(api.result("content.getDetails", byContent), "autoModes");
-    CONTROL_CHECK(memberOf(modes, "uiButtonRuns").text() == "reference");
-    CONTROL_CHECK(toJsonString(memberOf(modes, "available"))
-                  == R"(["regenerate","snapNotes","notesOnly","reference"])");
+    auto& arrangement = *processor.getStandaloneArrangement();
 
-    // An instance without reference.v1 names regenerate instead (the details run directly, with the facts of such an
-    // instance).
-    {
-        const auto instance = memberOf(api.discovery(), "instanceId").text();
-        const auto without =
-            memberOf(detailsAsInstanceWithReference(processor, instance, handles.contentId, false), "autoModes");
-        CONTROL_CHECK(memberOf(without, "uiButtonRuns").text() == "regenerate");
-        CONTROL_CHECK(toJsonString(memberOf(without, "available")) == R"(["regenerate","snapNotes","notesOnly"])");
-    }
-    const auto instanceId = memberOf(api.discovery(), "instanceId").text();
-    const auto modesOf = [&] {
-        return memberOf(detailsAsInstanceWithReference(processor, instanceId, handles.contentId), "autoModes");
-    };
-    // A binding that is still there makes the AUTO button run reference alignment once the experimental
-    // features are on (evaluateAutoRefUiState), in the openTune scheme.
+    // Bound, openTune scheme: reference, whatever the experimental features say (the click takes the binding only).
+    auto modes = modesOf();
+    CONTROL_CHECK(memberOf(modes, "editingScheme").text() == "openTune"
+                  && memberOf(modes, "uiButtonRuns").text() == "reference");
+    CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == offered);
+    preferences.setExperimentalFeaturesEnabled(true);
     modes = modesOf();
     CONTROL_CHECK(memberOf(modes, "uiButtonRuns").text() == "reference");
-    CONTROL_CHECK(toJsonString(memberOf(modes, "available"))
-                  == R"(["regenerate","snapNotes","notesOnly","reference"])");
+    CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == offered);
     preferences.setExperimentalFeaturesEnabled(false);
-    modes = modesOf();
-    CONTROL_CHECK(memberOf(modes, "uiButtonRuns").text() == "regenerate");
-    CONTROL_CHECK(memberOf(modes, "available").size() == 4);
+
+    // Through the placement of the bound clip it is the same; the reference clip itself has no binding.
+    CONTROL_CHECK(memberOf(memberOf(api.result("content.getDetails",
+                                               json("{\"placementId\":" + quoted(handles.placementId) + "}")),
+                                    "autoModes"),
+                           "uiButtonRuns")
+                      .text()
+                  == "reference");
+
     // The openDyne scheme snaps notes, whatever the binding says.
-    preferences.setExperimentalFeaturesEnabled(true);
     preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::NotesPrimary);
     modes = modesOf();
     CONTROL_CHECK(memberOf(modes, "editingScheme").text() == "openDyne"
                   && memberOf(modes, "uiButtonRuns").text() == "snapNotes");
-    // Without the binding the button regenerates, and reference alignment is not offered.
+    CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == offered);
     preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::CorrectedF0Primary);
-    CONTROL_CHECK(processor.getStandaloneArrangement()->setPlacementReferencePlacement(0, clips.sung.placementId, 0));
+
+    // Unbound: the button regenerates, and nothing else is offered.
+    CONTROL_CHECK(arrangement.setPlacementReferencePlacement(0, clips.sung.placementId, 0));
     modes = modesOf();
     CONTROL_CHECK(memberOf(modes, "uiButtonRuns").text() == "regenerate");
-    CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == R"(["regenerate","snapNotes","notesOnly"])");
-    CONTROL_CHECK(
-        memberOf(memberOf(api.result("content.getDetails", byContent), "reference"), "referencePlacementId").isNull());
-    preferences.setExperimentalFeaturesEnabled(false);
-    CONTROL_CHECK(processor.getStandaloneArrangement()->setPlacementReferencePlacement(0, clips.sung.placementId,
-                                                                                       clips.ref.placementId));
+    CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == offered);
+    preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::NotesPrimary);
+    CONTROL_CHECK(memberOf(modesOf(), "uiButtonRuns").text() == "snapNotes");
+    preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::CorrectedF0Primary);
+
+    // The binding is read live: bound again, the button runs the reference alignment again.
+    CONTROL_CHECK(arrangement.setPlacementReferencePlacement(0, clips.sung.placementId, clips.ref.placementId));
+    CONTROL_CHECK(memberOf(modesOf(), "uiButtonRuns").text() == "reference");
 }
 
 /** Analysis states: the failure reason the processor recorded, and what a content without analysis offers. */
@@ -1030,7 +974,6 @@ void checkDetailsOfUnanalysed(ApiSession& api, OpenTuneAudioProcessor& processor
     for (const auto& details : {empty, plain}) {
         CONTROL_CHECK(memberOf(details, "key").isNull() && nullReason(details, "key").text() == "not_analyzed");
         CONTROL_CHECK(memberOf(memberOf(details, "autoModes"), "available").size() == 0);
-        CONTROL_CHECK(memberOf(memberOf(details, "reference"), "referencePlacementId").isNull());
         // Without a pitch curve the hop is the analysis' own, and the result says it computed it.
         CONTROL_CHECK(near(memberOf(memberOf(details, "analysis"), "hopSec"), kFrameSec, 1e-9));
         CONTROL_CHECK(containsString(memberOf(details, "derived"), "analysis.hopSec"));
@@ -1130,20 +1073,16 @@ void checkPrefs(ApiSession& api, OpenTuneAudioProcessor& processor)
     const auto& processing = memberOf(result, "processing");
     CONTROL_CHECK((memberNames(processing)
                        == std::set<std::string>{"tuningHz", "editingScheme", "hybridMode", "vocoderWeight", "f0Model",
-                                                "renderingPriority", "experimentalFeatures", "referenceAlignMode",
-                                                "options", "nullReasons"}
+                                                "renderingPriority", "experimentalFeatures", "options", "nullReasons"}
                    || memberNames(processing)
                           == std::set<std::string>{"tuningHz", "editingScheme", "hybridMode", "vocoderWeight",
-                                                   "f0Model", "renderingPriority", "experimentalFeatures",
-                                                   "referenceAlignMode", "options"}));
-    // The options the window offers: four arrays of text, the two enumerations in full. Which weight files and
-    // pitch models exist depends on the machine, so their content is checked by PrefsOptions with a models
-    // directory of its own.
+                                                   "f0Model", "renderingPriority", "experimentalFeatures", "options"}));
+    // The options the window offers: two arrays of text, the enumeration of the rendering priority in full. Which
+    // weight files and pitch models exist depends on the machine, so their content is checked by PrefsOptions with a
+    // models directory of its own.
     {
         const auto& options = memberOf(processing, "options");
-        CONTROL_CHECK(
-            (memberNames(options)
-             == std::set<std::string>{"vocoderWeight", "f0Model", "renderingPriority", "referenceAlignMode"}));
+        CONTROL_CHECK((memberNames(options) == std::set<std::string>{"vocoderWeight", "f0Model", "renderingPriority"}));
         for (const char* name : {"vocoderWeight", "f0Model"}) {
             const auto& list = memberOf(options, name);
             CONTROL_CHECK(list.isArray() && list.size() <= 64);
@@ -1151,7 +1090,6 @@ void checkPrefs(ApiSession& api, OpenTuneAudioProcessor& processor)
                 CONTROL_CHECK(list.at(i).isString() && !list.at(i).text().empty());
         }
         CONTROL_CHECK(toJsonString(memberOf(options, "renderingPriority")) == R"(["gpuFirst","cpuFirst"])");
-        CONTROL_CHECK(toJsonString(memberOf(options, "referenceAlignMode")) == R"(["standardAuto","game"])");
     }
     CONTROL_CHECK(near(memberOf(processing, "tuningHz"), TuningConfig::currentTuningHz(), 1e-3));
     CONTROL_CHECK(memberOf(processing, "editingScheme").text() == "openDyne");
@@ -1160,8 +1098,6 @@ void checkPrefs(ApiSession& api, OpenTuneAudioProcessor& processor)
     CONTROL_CHECK(memberOf(processing, "experimentalFeatures").asBoolean());
     const auto priority = memberOf(processing, "renderingPriority").text();
     CONTROL_CHECK(priority == "gpuFirst" || priority == "cpuFirst");
-    const auto alignMode = memberOf(processing, "referenceAlignMode").text();
-    CONTROL_CHECK(alignMode == "standardAuto" || alignMode == "game");
     CONTROL_CHECK(memberOf(processing, "vocoderWeight").isString()
                   || nullReason(processing, "vocoderWeight").text() == "unavailable");
     const auto language = memberOf(result, "language").text();
@@ -1397,8 +1333,7 @@ std::string runVector(const JsonValue& vector)
                                                              : AudioEditingScheme::Scheme::CorrectedF0Primary);
 
     std::vector<std::pair<std::string, ClipSpec>> specs;
-    std::vector<std::pair<std::string, std::string>> references; // clip -> clip it has a reference binding to
-    std::vector<std::vector<std::string>> handleBinds;           // per clip: the names of its grid handles
+    std::vector<std::vector<std::string>> handleBinds; // per clip: the names of its grid handles
     const auto& clips = memberOf(memberOf(vector, "given"), "clips");
     for (std::size_t i = 0; i < clips.size(); ++i) {
         const auto& given = clips.at(i);
@@ -1431,31 +1366,11 @@ std::string runVector(const JsonValue& vector)
             spec.gridHandlesContentSec.push_back(memberOf(grid.at(h), "contentSec").asDouble());
             handleBinds.back().push_back(memberOf(grid.at(h), "bind").text());
         }
-        if (const JsonValue* reference = given.find("referenceClip"))
-            references.emplace_back(spec.name, reference->text());
         specs.emplace_back(spec.name, spec);
     }
     std::vector<std::pair<std::string, Clip>> created;
     for (const auto& [bind, spec] : specs)
         created.emplace_back(bind, addClip(*processor, spec));
-    // Reference bindings: StandaloneArrangement::setPlacementReferencePlacement, as the editor's menu sets one.
-    for (const auto& [target, reference] : references) {
-        const auto find = [&created](const std::string& name) -> const Clip* {
-            for (const auto& [bind, clip] : created)
-                if (bind == name)
-                    return &clip;
-            return nullptr;
-        };
-        const Clip* targetClip = find(target);
-        const Clip* referenceClip = find(reference);
-        int targetTrack = 0;
-        for (const auto& [bind, spec] : specs)
-            if (bind == target)
-                targetTrack = spec.trackId;
-        if (CONTROL_CHECK(targetClip != nullptr && referenceClip != nullptr))
-            CONTROL_CHECK(processor->getStandaloneArrangement()->setPlacementReferencePlacement(
-                targetTrack, targetClip->placementId, referenceClip->placementId));
-    }
     for (std::size_t i = 0; i < created.size(); ++i)
         for (std::size_t h = 0; h < handleBinds[i].size() && h < created[i].second.handleIds.size(); ++h)
             matcher.bindings[handleBinds[i][h]] = JsonValue::string(created[i].second.handleIds[h]);
@@ -1895,9 +1810,9 @@ void scenarioCompleteness()
         return;
     const auto& methods = memberOf(parsed.value, "methods");
     const auto reported = dispatcher->capabilities();
-    for (const char* capability : {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "ui.bridge", "edit.v1",
-                                   "history.v1", "timing.v1", "transport.v1", "arrangement.v1", "reference.v1",
-                                   "tracks.v1", "project.io", "prefs.write", "audio.device"})
+    for (const char* capability :
+         {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "ui.bridge", "edit.v1", "history.v1",
+          "timing.v1", "transport.v1", "arrangement.v1", "tracks.v1", "project.io", "prefs.write", "audio.device"})
         CONTROL_CHECK(std::find(reported.begin(), reported.end(), capability) != reported.end());
 
     // The listener answers session.hello itself, so the dispatcher's method table has no entry for it.
@@ -1967,9 +1882,8 @@ void scenarioCompleteness()
     // Every method the build registers except session.hello (which the listener answers): session.info, the eight
     // reads, job.get, job.cancel, import.start, export.start, ui.getState, ui.dismiss, ui.setSelection, the four
     // methods of edit.v1, the three of the undo history, the two of timing.v1, the three of transport.v1, the two of
-    // arrangement.v1, content.analyzeReference, the four of tracks.v1, the four of project.io, prefs.set and the
-    // two of audio.device: 42 in all.
-    CONTROL_CHECK(indexed.size() >= 42);
+    // arrangement.v1, the four of tracks.v1, the four of project.io, prefs.set and the two of audio.device: 41 in all.
+    CONTROL_CHECK(indexed.size() >= 41);
     if (!kUnimplementedReportedMethods.empty())
         note("exempt methods remain; the list must be empty before dev is merged");
     note(std::to_string(indexed.size()) + " methods of the reported capabilities are registered");

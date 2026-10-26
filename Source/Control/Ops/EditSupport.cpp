@@ -112,8 +112,6 @@ void describeContents(const ControlEditState& before, const ControlEditState& af
         auto fields = JsonValue::object();
         addField(fields, "revision", JsonValue::string(was->revision()), JsonValue::string(now->revision()), nullptr);
         addField(fields, "gridRevision", JsonValue::string(was->grid), JsonValue::string(now->grid), nullptr);
-        addField(fields, "referenceRevision", JsonValue::string(was->reference), JsonValue::string(now->reference),
-                 nullptr);
         if (fields.size() != 0)
             envelope.addChange("content", contentRef(id), JsonValue(), std::move(fields));
         const auto* wasValues = findContent(before, id);
@@ -136,17 +134,13 @@ void describeContents(const ControlEditState& before, const ControlEditState& af
                 envelope.addChange("pitchShift", contentRef(id), JsonValue(), std::move(shift));
         }
         if (was->revision() != now->revision() || was->grid != now->grid || was->key != now->key
-            || was->pitchShift != now->pitchShift || was->reference != now->reference)
+            || was->pitchShift != now->pitchShift)
             envelope.touchContent(id);
     }
 }
 
-void describePlacements(ControlOpContext& context, const ControlEditState& before, const ControlEditState& after,
-                        ControlWriteEnvelope& envelope)
+void describePlacements(const ControlEditState& before, const ControlEditState& after, ControlWriteEnvelope& envelope)
 {
-    const auto reference = [&context](std::uint64_t id) {
-        return id != 0 ? controlPlacementId(context, id) : std::string();
-    };
     for (const auto& now : after.placements) {
         const auto* was = findPlacement(before, now.placement.placementId);
         if (was == nullptr) {
@@ -154,8 +148,7 @@ void describePlacements(ControlOpContext& context, const ControlEditState& befor
             envelope.touchPlacement(now.placement.placementId);
             continue;
         }
-        auto fields = controlPlacementChangeFields(*was, now, reference(was->placement.referencePlacementId),
-                                                   reference(now.placement.referencePlacementId));
+        auto fields = controlPlacementChangeFields(*was, now);
         if (fields.size() == 0)
             continue;
         envelope.addChange("placement", placementRef(now.placementId), JsonValue(), std::move(fields));
@@ -192,8 +185,7 @@ void describeTracks(const ControlEditState& before, const ControlEditState& afte
 
 // ---- Placement changes ------------------------------------------------------------------------------
 
-JsonValue controlPlacementChangeFields(const ControlPlacementRef& was, const ControlPlacementRef& now,
-                                       const std::string& wasReference, const std::string& nowReference)
+JsonValue controlPlacementChangeFields(const ControlPlacementRef& was, const ControlPlacementRef& now)
 {
     const auto gainDb = [](float gain) {
         const auto db = controlLinearToDb(gain);
@@ -216,8 +208,6 @@ JsonValue controlPlacementChangeFields(const ControlPlacementRef& was, const Con
              controlJsonNumber(std::max(0.0f, b.gain), 6), "linear");
     addField(fields, "fadeInSec", controlJsonSeconds(a.fadeInDuration), controlJsonSeconds(b.fadeInDuration), "sec");
     addField(fields, "fadeOutSec", controlJsonSeconds(a.fadeOutDuration), controlJsonSeconds(b.fadeOutDuration), "sec");
-    addField(fields, "referencePlacementId", wasReference.empty() ? JsonValue() : JsonValue::string(wasReference),
-             nowReference.empty() ? JsonValue() : JsonValue::string(nowReference), nullptr);
     return fields;
 }
 
@@ -446,7 +436,7 @@ void controlDescribeEffect(ControlOpContext& context, const ControlEditState& be
                            ControlWriteEnvelope& envelope)
 {
     describeContents(before, after, envelope);
-    describePlacements(context, before, after, envelope);
+    describePlacements(before, after, envelope);
     describeTracks(before, after, envelope);
     controlAddReRenderQueued(envelope, before.versions, after.versions);
 }

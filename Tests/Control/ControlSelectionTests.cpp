@@ -6,8 +6,9 @@
 // the openDyne scheme generates the notes of a clip whose notes were never generated, through the processor's own
 // OpenTuneAudioProcessor::generateNotesOnlyByContentKey (PianoRollComponent::ensureOpenDyneNotesIfNeeded); refreshes
 // the reference context outside openDyne, through the processor's own preheatReferenceAlignmentFeatures of the clip
-// and of the clip it is bound to (OpenTuneAudioProcessorEditor::refreshReferenceContext); shows the clip's key as the
-// scale of the UI; and switches to the piano roll for openEditor. Contents get synthetic F0 (ControlContentFixtures.h).
+// and of the clip it is bound to (OpenTuneAudioProcessorEditor::refreshReferenceContext), which the control API
+// neither predicts nor reports; shows the clip's key as the scale of the UI; and switches to the piano roll for
+// openEditor. Contents get synthetic F0 (ControlContentFixtures.h).
 // Registered with the other processor scenarios in ControlProcessorTests.cpp.
 //
 // What SelectionMatrix proves: the test bridge and the prediction in SelectionOps.cpp follow the same rules, so a
@@ -541,13 +542,16 @@ void runMatrixCase(bool openDyne, bool withNotes, bool withReference)
     for (const char* member : {"changes", "sideEffects", "warnings"})
         checkEqual(memberOf(predicted, member), memberOf(committed, member), name + ": " + member);
 
-    // What the case brings about: notes in openDyne for a clip without notes, the reference analysis of both clips
-    // outside openDyne for a clip with a binding (experimental features are on).
+    // What the case brings about: notes in openDyne for a clip without notes. A reference binding, which the editor
+    // reacts to outside openDyne with the experimental features on, brings about nothing the result reports.
     const bool notesExpected = openDyne && !withNotes;
-    const bool referenceExpected = !openDyne && withReference;
     const auto& sideEffects = memberOf(committed, "sideEffects");
     CONTROL_CHECK((sideEffects.find("notesGenerated") != nullptr) == notesExpected);
-    CONTROL_CHECK((sideEffects.find("referenceAnalysisQueued") != nullptr) == referenceExpected);
+    // Notes bring the two warnings of generated notes; nothing else is reported, a binding included.
+    CONTROL_CHECK(sideEffects.find("referenceAnalysisQueued") == nullptr
+                  && memberOf(committed, "warnings").size() == (notesExpected ? 2u : 0u));
+    for (std::size_t i = 0; i < memberOf(committed, "warnings").size(); ++i)
+        CONTROL_CHECK(memberOf(memberOf(committed, "warnings").at(i), "code").text() != "REFERENCE_ANALYSIS_QUEUED");
     CONTROL_CHECK(memberOf(memberOf(committed, "dirty"), "after").asBoolean() == notesExpected);
     if (notesExpected) {
         const auto after = f.processor->getContentSnapshot(clip.key);
@@ -555,8 +559,6 @@ void runMatrixCase(bool openDyne, bool withNotes, bool withReference)
                       && memberOf(memberOf(sideEffects, "notesGenerated"), "noteCount").asDouble()
                              == static_cast<double>(after->notes.size()));
     }
-    if (referenceExpected)
-        CONTROL_CHECK(memberOf(memberOf(sideEffects, "referenceAnalysisQueued"), "contentIds").size() == 2);
     const auto undo = memberOf(committed, "undo");
     CONTROL_CHECK(memberOf(undo, "reason").text() == "not_persisted_state" && !memberOf(undo, "revert").isNull());
     note(name + ": " + toJsonString(sideEffects));
@@ -586,7 +588,6 @@ std::string runSelectionVector(const JsonValue& vector)
         Clip clip;
     };
     std::vector<Created> created;
-    std::vector<std::pair<std::string, std::string>> references;
     const auto& clips = memberOf(given, "clips");
     for (std::size_t i = 0; i < clips.size(); ++i) {
         const auto& item = clips.at(i);
@@ -604,23 +605,7 @@ std::string runSelectionVector(const JsonValue& vector)
             spec.notes.push_back({memberOf(notes.at(n), "startContentSec").asDouble(),
                                   memberOf(notes.at(n), "endContentSec").asDouble(),
                                   memberOf(notes.at(n), "targetMidi").asDouble()});
-        if (const JsonValue* reference = item.find("referenceClip"))
-            references.emplace_back(spec.name, reference->text());
         created.push_back({spec.name, spec, fixtureAddClip(*f.processor, spec)});
-    }
-    for (const auto& [target, reference] : references) {
-        const auto find = [&created](const std::string& name) -> const Created* {
-            for (const auto& item : created)
-                if (item.bind == name)
-                    return &item;
-            return nullptr;
-        };
-        const auto* targetClip = find(target);
-        const auto* referenceClip = find(reference);
-        if (targetClip == nullptr || referenceClip == nullptr)
-            return "a referenceClip names no clip";
-        CONTROL_CHECK(f.arrangement().setPlacementReferencePlacement(
-            targetClip->spec.trackId, targetClip->clip.placementId, referenceClip->clip.placementId));
     }
     CONTROL_CHECK(settleBackgroundWork(*f.processor));
     // The vectors start with no clip selected.
@@ -642,8 +627,8 @@ std::string runSelectionVector(const JsonValue& vector)
             matcher.bindings[item.bind + ".placementId"] = JsonValue::string(handles->placementId);
         }
     }
-    // The vectors of rc.4 and later state what OpenTune does (an active track always exists, reference analysis is
-    // queued in the openTune scheme only), so the expected response is the vector's own, unchanged.
+    // The vectors state what OpenTune does (an active track always exists), so the expected response is the vector's
+    // own, unchanged.
     const auto& expected = memberOf(vector, "response");
 
     std::string failure;

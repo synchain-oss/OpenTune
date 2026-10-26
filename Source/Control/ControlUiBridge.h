@@ -84,8 +84,8 @@ public:
     virtual void onUndoRedoApplied() {}
 
     /** A project was opened or the project was reloaded: the editor does what it does after its own open (updates the
-        recent-projects menu and the title, refreshes the track panel, the arrangement, the piano roll and the
-        reference context from the new project). Default: nothing. */
+        recent-projects menu and the title, refreshes the track panel, the arrangement and the piano roll from the
+        new project). Default: nothing. */
     virtual void onProjectReloaded() {}
 
     /** The project was saved to its file (project.save, project.saveAs): the editor does what it does after its own
@@ -109,11 +109,6 @@ public:
         the new grid of the content it shows and redraws) and redraws the arrangement, which draws clips through
         their grids. Default: nothing. */
     virtual void onTimeGridChanged() {}
-
-    /** The reference binding of a clip was set or removed through the control API (arrangement.edit setReference):
-        the editor does what it does after its own binding menu (redraws the arrangement and refreshes the reference
-        context, which feeds the piano roll and can queue reference alignment analysis). Default: nothing. */
-    virtual void onReferenceBindingChanged() {}
 
     // ---- View changes that a write makes as the UI does ----------------------------------------
 
@@ -238,11 +233,10 @@ public:
 
     /** Selects as the arrangement view does when the user clicks. With a placementId, the clip on trackId becomes the
         only selected clip and trackId the active track, as a click on the clip does: the piano roll shows the clip
-        (in the openDyne scheme it generates the notes of a clip whose notes were never generated), the editor
-        refreshes its reference context (which can queue reference alignment analysis) and the transport bar shows the
-        clip's key; with openEditor also as a double click, which switches to the piano roll. With placementId 0,
-        trackId becomes the active track with no clip selected and the piano roll shows nothing. Returns false,
-        changing nothing, when not supported. */
+        (in the openDyne scheme it generates the notes of a clip whose notes were never generated) and the transport
+        bar shows the clip's key; with openEditor also as a double click, which switches to the piano roll. With no clip
+        (placementId 0), trackId becomes the active track with no clip selected and the piano roll shows nothing.
+        Returns false, changing nothing, when not supported. */
     virtual bool select(int /*trackId*/, std::uint64_t /*placementId*/, bool /*openEditor*/) { return false; }
 
     /** The scale the transport bar would show once the clip is selected (the content's detected key, or the

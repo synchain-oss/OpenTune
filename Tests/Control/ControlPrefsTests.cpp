@@ -265,8 +265,6 @@ public:
     void onPreferencesChanged() override
     {
         ++preferenceNotifications;
-        // What the editor's syncSharedAppPreferences() reads and hands to the processor and the reference context.
-        alignModeAtNotification = preferences->getState().shared.experimentalReferenceAlignMode;
         pendingNotesPrimary =
             AudioEditingScheme::usesNotesPrimaryScheme(preferences->getState().shared.audioEditingScheme);
         pendingSinceMs = juce::Time::getMillisecondCounter();
@@ -314,8 +312,6 @@ public:
     std::shared_ptr<ControlJobs> modalOnceJobStarted;
 
     int preferenceNotifications = 0;
-    /** The reference alignment mode the preferences held at the last notification; nullopt before the first. */
-    std::optional<ExperimentalReferenceAlignMode> alignModeAtNotification;
     std::vector<std::string> switchReasons;
     mutable int schemeQueries = 0;
     mutable bool appliedNotesPrimary = false;
@@ -374,7 +370,6 @@ void resetPreferences(OpenTuneAudioProcessor& processor, bool notesPrimary = fal
     preferences.setVocoderModelWeight(kDefaultVocoderWeight);
     preferences.setRenderingPriority(RenderingPriority::GpuFirst);
     preferences.setF0ModelType(F0ModelType::FCPE);
-    preferences.setExperimentalReferenceAlignMode(ExperimentalReferenceAlignMode::StandardAuto);
 }
 
 /** A clip with a ready analysis and no notes, on track 0 from 2 s to 8 s. */
@@ -594,8 +589,8 @@ void checkSynchronousChanges(ApiSession& api, OpenTuneAudioProcessor& processor,
              {"{}", R"({"tuningHz":380})", R"({"tuningHz":500.5})", R"({"tuningHz":"440"})",
               R"({"editingScheme":"openJazz"})", R"({"hybridMode":"yes"})", R"({"experimentalFeatures":1})",
               R"({"vocoderWeight":""})", R"({"vocoderWeight":5})", R"({"renderingPriority":"fast"})",
-              R"({"renderingPriority":1})", R"({"f0Model":""})", R"({"f0Model":true})", R"({"referenceAlignMode":"x"})",
-              R"({"referenceAlignMode":false})", R"({"hybridMode":true,"theme":"dark"})"})
+              R"({"renderingPriority":1})", R"({"f0Model":""})", R"({"f0Model":true})",
+              R"({"referenceAlignMode":"game"})", R"({"hybridMode":true,"theme":"dark"})"})
             CONTROL_CHECK(api.fails("prefs.set", json(params), "INVALID_ARGUMENT", "invalid_params"));
         CONTROL_CHECK(bridge.preferenceNotifications == notifications);
         CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
@@ -951,7 +946,7 @@ void scenarioPrefsSchemeJob()
     CONTROL_CHECK(stored.getState().shared.tuning.tuningHz == 440.0f);
 }
 
-// ---- The vocoder weight, the rendering priority, the pitch model and the reference alignment mode
+// ---- The vocoder weight, the rendering priority and the pitch model
 // ---------------------------------
 
 namespace {
@@ -1183,7 +1178,7 @@ JsonValue replayRevertAsJob(ApiSession& api, const JsonValue& result)
 /** The lists of processing.options: empty without models, in the order of the window with them. */
 void checkOptionLists(ApiSession& api, const std::filesystem::path& models)
 {
-    // Nothing on disk: nothing to choose among the weights and the pitch models; the two enumerations are complete.
+    // Nothing on disk: nothing to choose among the weights and the pitch models; the enumeration is complete.
     {
         const auto prefs = api.result("prefs.get");
         const auto& options = optionsOf(prefs);
@@ -1191,8 +1186,8 @@ void checkOptionLists(ApiSession& api, const std::filesystem::path& models)
         CONTROL_CHECK(memberOf(options, "f0Model").isArray() && memberOf(options, "f0Model").size() == 0);
         CONTROL_CHECK(
             (optionList(memberOf(options, "renderingPriority")) == std::vector<std::string>{"gpuFirst", "cpuFirst"}));
-        CONTROL_CHECK(
-            (optionList(memberOf(options, "referenceAlignMode")) == std::vector<std::string>{"standardAuto", "game"}));
+        // The reference alignment mode is retired: prefs.get does not list it.
+        CONTROL_CHECK(options.find("referenceAlignMode") == nullptr);
         // session.info reports the same processing object without the options.
         CONTROL_CHECK(memberOf(memberOf(api.result("session.info"), "processing"), "options").isNull());
     }
@@ -1490,62 +1485,8 @@ void checkPitchModel(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBr
     runtime.calls.clear();
 }
 
-/** referenceAlignMode: not a valid value, no-op, the change with its warning and the editor told, without an editor,
-    the revert recipe. */
-void checkReferenceAlignMode(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge,
-                             ControlService& service)
-{
-    auto& preferences = processor.getAppPreferences();
-    const auto baseline = api.result("prefs.get");
-    const auto notifications = bridge.preferenceNotifications;
-
-    CONTROL_CHECK(
-        api.fails("prefs.set", json(R"({"referenceAlignMode":"Game"})"), "INVALID_ARGUMENT", "invalid_params"));
-    {
-        const auto result = api.result("prefs.set", json(R"({"referenceAlignMode":"standardAuto"})"));
-        CONTROL_CHECK(memberOf(result, "noOp").asBoolean() && memberOf(result, "warnings").size() == 0);
-        CONTROL_CHECK(bridge.preferenceNotifications == notifications);
-    }
-
-    // The mode applies when the call returns: no job. The editor is told after the preference was stored (it reads the
-    // mode then and flags the reference context for a refresh). EXPERIMENTAL_FEATURE says that the mode only matters
-    // for AUTO Ref, which is experimental.
-    const auto result = api.result("prefs.set", json(R"({"referenceAlignMode":"game"})"));
-    CONTROL_CHECK(memberOf(result, "applied").asBoolean() && memberOf(result, "job").isNull());
-    CONTROL_CHECK(changeIs(result, 0, "referenceAlignMode", "Reference alignment mode",
-                           JsonValue::string("standardAuto"), JsonValue::string("game")));
-    CONTROL_CHECK((warningCodes(result) == std::vector<std::string>{"GLOBAL_PREFERENCE", "EXPERIMENTAL_FEATURE"}));
-    CONTROL_CHECK((globalPreferences(result) == std::vector<std::string>{"referenceAlignMode"}));
-    {
-        const auto& warnings = memberOf(result, "warnings");
-        const auto& subject = memberOf(warnings.at(1), "subject");
-        CONTROL_CHECK(subject.size() == 1 && memberOf(subject, "preference").text() == "referenceAlignMode");
-    }
-    CONTROL_CHECK(undoIsUiParity(result) && memberOf(result, "sideEffects").size() == 0);
-    CONTROL_CHECK(preferences.getState().shared.experimentalReferenceAlignMode == ExperimentalReferenceAlignMode::Game);
-    CONTROL_CHECK(bridge.preferenceNotifications == notifications + 1);
-    CONTROL_CHECK(bridge.alignModeAtNotification == ExperimentalReferenceAlignMode::Game);
-    CONTROL_CHECK(memberOf(memberOf(api.result("prefs.get"), "processing"), "referenceAlignMode").text() == "game");
-    const auto& params = memberOf(memberOf(memberOf(result, "undo"), "revert"), "params");
-    CONTROL_CHECK(params.size() == 1 && memberOf(params, "referenceAlignMode").text() == "standardAuto");
-    const auto reverted = replayRevert(api, result);
-    CONTROL_CHECK(memberOf(reverted, "applied").asBoolean() && hasWarning(reverted, "EXPERIMENTAL_FEATURE"));
-    CONTROL_CHECK(bridge.alignModeAtNotification == ExperimentalReferenceAlignMode::StandardAuto);
-    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
-
-    // Without an editor the preference is stored all the same.
-    service.setUiBridge(nullptr);
-    const auto alone = api.result("prefs.set", json(R"({"referenceAlignMode":"game"})"));
-    CONTROL_CHECK(memberOf(alone, "applied").asBoolean() && hasWarning(alone, "EXPERIMENTAL_FEATURE"));
-    CONTROL_CHECK(preferences.getState().shared.experimentalReferenceAlignMode == ExperimentalReferenceAlignMode::Game);
-    CONTROL_CHECK(bridge.preferenceNotifications == notifications + 2);
-    replayRevert(api, alone);
-    service.setUiBridge(&bridge);
-    CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
-}
-
-/** All eight members in one call: the order of the changes, of GLOBAL_PREFERENCE and of the revert recipe, the order of
-    the calls (the pitch model first), one reRenderQueued, and the revert recipe taking all eight back. */
+/** All seven members in one call: the order of the changes, of GLOBAL_PREFERENCE and of the revert recipe, the order of
+    the calls (the pitch model first), one reRenderQueued, and the revert recipe taking all seven back. */
 void checkAllMembers(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge, FakeRuntime& runtime,
                      const ClipHandles& clip)
 {
@@ -1557,43 +1498,40 @@ void checkAllMembers(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBr
     const auto job = runAsJob(
         api, "prefs.set",
         json(
-            R"({"referenceAlignMode":"game","f0Model":"other","renderingPriority":"cpuFirst","vocoderWeight":"zz-custom.onnx","experimentalFeatures":true,"hybridMode":false,"editingScheme":"openDyne","tuningHz":435.5})"),
+            R"({"f0Model":"other","renderingPriority":"cpuFirst","vocoderWeight":"zz-custom.onnx","experimentalFeatures":true,"hybridMode":false,"editingScheme":"openDyne","tuningHz":435.5})"),
         "prefsApply");
     CONTROL_CHECK(jobSucceeded(job));
-    // The editor is told once for the eight members.
+    // The editor is told once for the seven members.
     CONTROL_CHECK(bridge.preferenceNotifications == notifications + 1);
     const auto& result = memberOf(job, "result");
     const std::vector<std::string> order{"tuningHz",      "editingScheme",     "hybridMode", "experimentalFeatures",
-                                         "vocoderWeight", "renderingPriority", "f0Model",    "referenceAlignMode"};
+                                         "vocoderWeight", "renderingPriority", "f0Model"};
     CONTROL_CHECK(changedPreferences(result) == order);
     CONTROL_CHECK(globalPreferences(result) == order);
-    CONTROL_CHECK((warningCodes(result)
-                   == std::vector<std::string>{"GLOBAL_PREFERENCE", "NOT_RETROACTIVE", "EXPERIMENTAL_FEATURE"}));
+    CONTROL_CHECK((warningCodes(result) == std::vector<std::string>{"GLOBAL_PREFERENCE", "NOT_RETROACTIVE"}));
     CONTROL_CHECK((runtime.calls == std::vector<std::string>{"f0:2", "weight:zz-custom.onnx", "priority:cpuFirst"}));
     // The hybrid switch and the vocoder weight make one side effect, not two.
     CONTROL_CHECK(memberOf(result, "sideEffects").size() == 1);
     const auto& queued = memberOf(memberOf(memberOf(result, "sideEffects"), "reRenderQueued"), "contentIds");
     CONTROL_CHECK(queued.size() == 1 && queued.at(0).text() == clip.contentId);
     const auto& params = memberOf(memberOf(memberOf(result, "undo"), "revert"), "params");
-    CONTROL_CHECK(params.size() == 8);
+    CONTROL_CHECK(params.size() == 7);
     CONTROL_CHECK(
         numberIs(memberOf(params, "tuningHz"), 440.0) && memberOf(params, "editingScheme").text() == "openTune"
         && memberOf(params, "hybridMode").asBoolean() && !memberOf(params, "experimentalFeatures").asBoolean()
         && memberOf(params, "vocoderWeight").text() == "hifigan.onnx"
-        && memberOf(params, "renderingPriority").text() == "gpuFirst" && memberOf(params, "f0Model").text() == "fcpe"
-        && memberOf(params, "referenceAlignMode").text() == "standardAuto");
+        && memberOf(params, "renderingPriority").text() == "gpuFirst" && memberOf(params, "f0Model").text() == "fcpe");
     const auto state = preferences.getState().shared;
     CONTROL_CHECK(AudioEditingScheme::usesNotesPrimaryScheme(state.audioEditingScheme)
                   && !state.lightPitchCorrectionEnabled && state.experimentalFeaturesEnabled
                   && state.vocoderModelWeight == kWeightZ && state.renderingPriority == RenderingPriority::CpuFirst
-                  && state.f0ModelType == kOtherPitchModel
-                  && state.experimentalReferenceAlignMode == ExperimentalReferenceAlignMode::Game);
+                  && state.f0ModelType == kOtherPitchModel);
 
-    // Sent as it is, the recipe takes all eight back.
+    // Sent as it is, the recipe takes all seven back.
     runtime.calls.clear();
     const auto reverted = replayRevertAsJob(api, result);
     CONTROL_CHECK(jobSucceeded(reverted));
-    CONTROL_CHECK(memberOf(memberOf(reverted, "result"), "changes").size() == 8);
+    CONTROL_CHECK(memberOf(memberOf(reverted, "result"), "changes").size() == 7);
     CONTROL_CHECK(processingEqual(api.result("prefs.get"), baseline));
     CONTROL_CHECK(preferences.getF0ModelType() == F0ModelType::FCPE);
     CONTROL_CHECK((runtime.calls == std::vector<std::string>{"f0:1", "weight:hifigan.onnx", "priority:gpuFirst"}));
@@ -1630,7 +1568,6 @@ void scenarioPrefsOptions()
     // From here the pitch models are a fake list of three: fcpe, other and gone (not available).
     runtime.install(models, true);
     checkPitchModel(api, *processor, bridge, runtime);
-    checkReferenceAlignMode(api, *processor, bridge, service);
     checkAllMembers(api, *processor, bridge, runtime, *handles);
     resetPreferences(*processor);
     const auto dispatcher = service.dispatcher();
@@ -2600,7 +2537,7 @@ std::string preferencesSkipReason(const JsonValue& preferences)
             continue;
         }
         if (member == "tuningHz" || member == "hybridMode" || member == "experimentalFeatures"
-            || member == "vocoderWeight" || member == "renderingPriority" || member == "referenceAlignMode")
+            || member == "vocoderWeight" || member == "renderingPriority")
             continue;
         return "precondition given.preferences." + member + " is not established by this runner";
     }
@@ -2693,10 +2630,6 @@ std::string runVector(const JsonValue& vector, bool withClips)
     if (const JsonValue* priority = preferencesGiven.find("renderingPriority"))
         preferences.setRenderingPriority(priority->text() == "cpuFirst" ? RenderingPriority::CpuFirst
                                                                         : RenderingPriority::GpuFirst);
-    if (const JsonValue* mode = preferencesGiven.find("referenceAlignMode"))
-        preferences.setExperimentalReferenceAlignMode(mode->text() == "game"
-                                                          ? ExperimentalReferenceAlignMode::Game
-                                                          : ExperimentalReferenceAlignMode::StandardAuto);
     // The models of the installation (given.preferences.options) are files in a models directory of the test, and the
     // render runtime is a test double that reloads the vocoder after a short while, so that no real model is loaded and
     // no real inference backend is reset. Without options the directory is empty, as on an installation without models.
@@ -2879,10 +2812,9 @@ void scenarioPrefsVectors()
     runVectorsOf("ControlProcessorTests.PrefsVectors", "prefs", kPrefsVectorCapabilities, kPrefsVectorMethods,
                  {"prefs/get-options", "prefs/set-experimental-features", "prefs/set-f0-model-noop", "prefs/set-hybrid",
                   "prefs/set-job-failures", "prefs/set-no-op", "prefs/set-option-unavailable",
-                  "prefs/set-option-unavailable-unchanged", "prefs/set-out-of-range", "prefs/set-reference-align-mode",
-                  "prefs/set-rendering-priority", "prefs/set-scheme", "prefs/set-scheme-job", "prefs/set-tuning",
-                  "prefs/set-tuning-revert", "prefs/set-vocoder-load-failed", "prefs/set-vocoder-not-ready",
-                  "prefs/set-vocoder-weight"},
+                  "prefs/set-option-unavailable-unchanged", "prefs/set-out-of-range", "prefs/set-rendering-priority",
+                  "prefs/set-scheme", "prefs/set-scheme-job", "prefs/set-tuning", "prefs/set-tuning-revert",
+                  "prefs/set-vocoder-load-failed", "prefs/set-vocoder-not-ready", "prefs/set-vocoder-weight"},
                  true);
 }
 

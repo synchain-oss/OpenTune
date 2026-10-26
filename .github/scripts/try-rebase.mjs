@@ -55,6 +55,21 @@ function stagesOf(clone, file) {
 }
 
 /**
+ * Arguments of `git clone` for the throw-away local clone (source = the workspace repository).
+ * --no-hardlinks: a plain `git clone --local` hard-links the object files instead of copying them, and that
+ * fails with "failed to create link ... Invalid cross-device link" as soon as the temp directory is not on
+ * the same device as the workspace (it is not, on the hosted runners). The clone stays a local clone; it
+ * only copies the objects, which also keeps it fully independent of the source repository's object store.
+ * --template= : no hooks are copied into the clone.
+ * @param {string} source
+ * @param {string} dest
+ * @returns {string[]}
+ */
+export function cloneArgs(source, dest) {
+  return ['clone', '--quiet', '--local', '--no-hardlinks', '--no-checkout', '--template=', source, dest];
+}
+
+/**
  * @param {{cwd?: string, head?: string, mirror?: string, upstream?: string, keep?: boolean}} opts
  * @returns {{ok: boolean, error?: string, code?: number, ...}}
  */
@@ -94,8 +109,7 @@ export function tryRebase(opts = {}) {
   const work = makeTempDir('try-rebase');
   try {
     const clone = path.join(work, 'clone');
-    // --template= : no hooks are copied into the clone.
-    git(['clone', '--quiet', '--local', '--no-checkout', '--template=', top, clone], { env: CLEAN_ENV });
+    git(cloneArgs(top, clone), { env: CLEAN_ENV });
     g(clone, ['remote', 'remove', 'origin']);
     for (const [k, v] of [
       ['user.name', IDENTITY.name],

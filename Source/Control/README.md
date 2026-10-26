@@ -865,7 +865,10 @@ title and `refreshAllUIFromProject()`), `onRecentProjectsChanged()` and `setProj
   command (`ProjectSession::clearRecentProjects()`) does on the same preferences.
 
 Tests: `Tests/Control/ControlProjectTests.cpp` (`ProjectRoundTrip`, `ProjectJobs`, `ProjectWithoutEditor`,
-`ProjectVectors`). `ProjectVectors` runs the specification's `project/*` vectors of `project.io` and requires an
+`ProjectReopenKeepsTuning`, `ProjectVectors`). `ProjectReopenKeepsTuning` saves a project with tuned notes and
+opens it again: the correction segments and their parameters must be there right after the open (before the original
+F0 is analysed again), and the notes, their corrected flags and the corrected pitch line must be as before the save
+once the analysis is done. `ProjectVectors` runs the specification's `project/*` vectors of `project.io` and requires an
 explicit list to pass; `project/get-ok` is a read and runs in `Vectors`, and `project/save-as-no-access` is skipped
 because the runner cannot make a file whose identity is unreadable on Windows.
 
@@ -1431,7 +1434,11 @@ the call itself with `UNSUPPORTED`.
 - `AppQuit`: the capability and its place after `audio.device`, the params, `UNSAVED_CHANGES`, every BUSY reason alone
   and in the order of the checks (also an export lock held by the UI, and each job kind, several jobs and finished jobs
   that do not count), and the quit with `discardUnsaved`.
-- `AppQuitWithoutWindow`: no bridge, a bridge that cannot quit, the capability withheld.
+- `AppQuitWithoutWindow`: no bridge, a bridge that cannot quit, the capability withheld; and the two cases in which
+  the client has been told `quitting: true` but the window does not close when the exit step asks: the window refuses
+  to close, and the editor is gone by then (its bridge is unregistered between the result and the step). In both the
+  control service is stopped before the window is asked (never after), nothing is closed, the application keeps
+  running, and the log has one line saying what the client was told and why the window stayed.
 - `AppQuitResult`: the result shapes: a project never saved, the consent given for a project without changes (nothing
   discarded), discarded changes with `IRREVERSIBLE`, and a saved project with its path as it is, also with non-ASCII
   characters.
@@ -1766,7 +1773,7 @@ than one step.
 | `content.editTimeGrid` (ops `seed`, `moveHandles`) | `timing.v1` | `Ops/TimingOps.cpp` (moves in `Edit/TimeGridOps.cpp`) | `ControlProcessorTests.Timing`, `.TimeGridSeed`, `.TimingVectors` | `methods/content.editTimeGrid.schema.json` |
 | `project.save` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.save.schema.json` |
 | `project.saveAs` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.saveAs.schema.json` |
-| `project.open` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.open.schema.json` |
+| `project.open` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectReopenKeepsTuning`, `.ProjectVectors` | `methods/project.open.schema.json` |
 | `project.clearRecent` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors`, `.ProjectWithoutEditor` | `methods/project.clearRecent.schema.json` |
 | `prefs.set` | `prefs.write` | `Ops/PrefsOps.cpp` (a job of kind `prefsApply` for a change of the editing scheme, the vocoder weight or the rendering priority; `Ops/PrefsModels.cpp` for the options and the runtime calls) | `ControlProcessorTests.PrefsRoundTrip`, `.PrefsSchemeJob`, `.PrefsOptions`, `.PrefsVocoderJob`, `.PrefsVocoderOverlap`, `.PrefsVectors` | `methods/prefs.set.schema.json` |
 | `audio.get` | `audio.device` | `Ops/AudioDeviceOps.cpp` | `ControlProcessorTests.AudioDevice`, `.AudioVectors` | `methods/audio.get.schema.json` |

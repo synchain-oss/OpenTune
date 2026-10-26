@@ -123,7 +123,6 @@
             }
           }
         },
-        "referenceClip": { "$ref": "#/$defs/bindName" },
         "fadeInSec": { "$ref": "common.schema.json#/$defs/secNonNegative" },
         "fadeOutSec": { "$ref": "common.schema.json#/$defs/secNonNegative" }
       }
@@ -305,7 +304,6 @@
             "vocoderWeight": { "type": "string", "minLength": 1, "maxLength": 64 },
             "renderingPriority": { "enum": ["gpuFirst", "cpuFirst"] },
             "f0Model": { "type": "string", "minLength": 1, "maxLength": 64 },
-            "referenceAlignMode": { "enum": ["standardAuto", "game"] },
             "options": {
               "description": "The weight files and the pitch models the installation offers (prefs.get, processing.options); vocoderWeight and f0Model name one of them.",
               "type": "object",

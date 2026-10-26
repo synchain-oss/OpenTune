@@ -1,6 +1,6 @@
 # OpenTune Control Protocol (OTCP), version 1
 
-Status: `1.0.0-rc.6`, draft. This release candidate defines the transport, the session, discovery, the result-clarity conventions and every method of version 1, in layers L2 to L6 and L8 (section 22).
+Status: `1.0.0-rc.7`, draft. This release candidate defines the transport, the session, discovery, the result-clarity conventions and every method of version 1, in layers L2 to L6 and L8 (section 22).
 
 OTCP is a local control interface built into OpenTune Standalone. A client on the same computer, for example an MCP server, uses it to perform operations that a person can perform in the OpenTune window and to receive clear, structured results. OTCP is JSON-RPC 2.0 over TCP on the loopback address, one JSON message per line.
 
@@ -284,7 +284,7 @@ If an option value is invalid, the discovery directory fails its checks, the lis
 
 4. Each entry has `code`, `since` and `description`; registries are append-only within a major version (section 2.2). Every code a server sends MUST be registered for the protocol version of the session.
 5. Clients MUST accept codes they do not know (section 2.3).
-6. The capability report says which methods the instance implements; this rule says that some of those methods also need the editor window at run time. Some methods act through the OpenTune editor window, which OpenTune Standalone creates when it starts: the methods of `ui.bridge` (`ui.getState`, `ui.dismiss`, `ui.setSelection`), `track.add`, `track.duplicate`, `track.delete`, `project.save`, `project.saveAs`, `project.open` and `audio.set`. An instance reports their capabilities whether or not an editor exists. While no editor exists, for example in a window-less run of a test build, such a method fails with `UNSUPPORTED(no_editor_window)`, `executed` false, and changes nothing; where this check comes among the method's own checks is not part of the contract. The other methods work without an editor, among them `track.set`, the transport methods and `project.clearRecent`; values that only the editor holds are null in their results, with the reason `no_editor` (section 16), as `ui` of the write envelope is (section 14.6).
+6. The capability report says which methods the instance implements; this rule says that some of those methods also need the editor window at run time. Some methods act through the OpenTune editor window, which OpenTune Standalone creates when it starts: the methods of `ui.bridge` (`ui.getState`, `ui.dismiss`, `ui.setSelection`), `ui.setWorkspace`, `track.add`, `track.duplicate`, `track.delete`, `project.save`, `project.saveAs`, `project.open` and `audio.set`. An instance reports their capabilities whether or not an editor exists. While no editor exists, for example in a window-less run of a test build, such a method fails with `UNSUPPORTED(no_editor_window)`, `executed` false, and changes nothing; where this check comes among the method's own checks is not part of the contract. The other methods work without an editor, among them `track.set`, the transport methods and `project.clearRecent`; values that only the editor holds are null in their results, with the reason `no_editor` (section 16), as `ui` of the write envelope is (section 14.6).
 
 ## 8. Clocks and units
 
@@ -361,7 +361,7 @@ Members without a physical unit carry no suffix: the normalized or dimensionless
 | `arrangementRevision` (per instance) | placements are added, removed or changed in any property (14.4)        | `expectedArrangementRevision` |
 
 1. Tokens are opaque strings. Clients MUST compare them only for equality, and MUST NOT order, parse or compute them.
-2. `revision` covers the notes and their parameters, the corrected pitch curve, and the content's audio and analysis data. A change of the key, the time grid, the pitch shift, a reference binding or reference alignment data MUST NOT change `revision`. Section 14.4 maps every component of the world revision vector to these tokens. The pitch shift still moves values that reads report: OpenTune moves the notes with it, so `targetMidi` and `detectedMidi` of `content.getNotes` and `correctedMidi` of `content.getPitchCurve` include it, while notes keep their handles.
+2. `revision` covers the notes and their parameters, the corrected pitch curve, and the content's audio and analysis data. A change of the key, the time grid or the pitch shift MUST NOT change `revision`. Section 14.4 maps every component of the world revision vector to these tokens. The pitch shift still moves values that reads report: OpenTune moves the notes with it, so `targetMidi` and `detectedMidi` of `content.getNotes` and `correctedMidi` of `content.getPitchCurve` include it, while notes keep their handles.
 3. A write that takes an expected token compares it on the main thread immediately before it applies the change. On a mismatch it fails with `REVISION_CONFLICT` and the reason of the aspect: `content_changed`, `grid_changed`, `key_changed`, `geometry_changed` or `arrangement_changed`; `executed` is false.
 4. A write depends only on the aspects it declares. Changes to other aspects MUST NOT cause a conflict; for example a key change does not invalidate `expectedRevision`.
 5. Write results return in `tokens` the tokens of every object they touched, read back from a fresh snapshot after the commit. The server MUST NOT compute them, because one operation may advance a token more than once.
@@ -400,7 +400,7 @@ The job object is `common.schema.json#/$defs/job`:
 
 Jobs belong to the instance, not to a session: every session can read and cancel every job, and closing a connection never cancels a job.
 
-The shape of `result` is defined by the method that started the job (`$defs.jobResult` of its schema), not by `kind`: `content.analyzeReference` and `content.autoTune` in mode `reference` both start `referenceAnalysis` jobs, with different results. A client knows the starting method from the request whose result gave it the `jobId`; a method that returns a job that is already running (section 12.5) returns only jobs that the same method started. A client or a test runner that reads a job without knowing which method started it, for example a job another session started, accepts a result that is valid for one of the methods that start jobs of that kind.
+The shape of `result` is defined by the method that started the job (`$defs.jobResult` of its schema), not by `kind`. A client knows the starting method from the request whose result gave it the `jobId`; a method that returns a job that is already running (section 12.5) returns only jobs that the same method started. A client or a test runner that reads a job without knowing which method started it, for example a job another session started, accepts a result that is valid for one of the methods that start jobs of that kind.
 
 ### 12.2 job.get
 
@@ -418,15 +418,14 @@ The shape of `result` is defined by the method that started the job (`$defs.jobR
 4. Job not cancellable now (`cancellable` false): `UNSUPPORTED(job_not_cancellable)`; the job continues unchanged.
 5. Otherwise: the server requests cancellation and answers with `cancelRequested` true and the job as it is then. Cancellation is asynchronous: the job stops at its next cancellation point and becomes `cancelled`, or `succeeded` if it finished first. Clients follow it with `job.get`.
 
-| Kind                | Started by                                       | Cancellable                                                  | Effect of cancellation                                                                                                |
-| ------------------- | ------------------------------------------------ | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
-| `import`            | `import.start`                                   | yes                                                          | Stops before the next item is committed. Items already committed stay; the job result lists them with revert recipes. |
-| `export`            | `export.start`                                   | until the final rename of the output file                    | The temporary file is deleted; the target path is not touched.                                                        |
-| `referenceAnalysis` | `content.analyzeReference`, reference-based AUTO | yes                                                          | The analysis is discarded.                                                                                            |
-| `timeGridSeed`      | `content.editTimeGrid`                           | yes                                                          | No anchors are written.                                                                                               |
-| `projectOpen`       | `project.open`                                   | until the project file has been read and prepared; not after | The current project is untouched.                                                                                     |
-| `projectSave`       | `project.save`, `project.saveAs`                 | no                                                           | –                                                                                                                     |
-| `prefsApply`        | `prefs.set`                                      | no                                                           | –                                                                                                                     |
+| Kind           | Started by                       | Cancellable                                                  | Effect of cancellation                                                                                                |
+| -------------- | -------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| `import`       | `import.start`                   | yes                                                          | Stops before the next item is committed. Items already committed stay; the job result lists them with revert recipes. |
+| `export`       | `export.start`                   | until the final rename of the output file                    | The temporary file is deleted; the target path is not touched.                                                        |
+| `timeGridSeed` | `content.editTimeGrid`           | yes                                                          | No anchors are written.                                                                                               |
+| `projectOpen`  | `project.open`                   | until the project file has been read and prepared; not after | The current project is untouched.                                                                                     |
+| `projectSave`  | `project.save`, `project.saveAs` | no                                                           | –                                                                                                                     |
+| `prefsApply`   | `prefs.set`                      | no                                                           | –                                                                                                                     |
 
 ### 12.4 Retention
 
@@ -434,18 +433,11 @@ A terminal job is retained for at least `jobRetentionMs` (30 minutes) after `fin
 
 ### 12.5 Repeated requests
 
-`export.start` with the same normalized params as an export job that is not terminal returns that job instead of starting a second one (section 19). `import.start` with the `idempotencyKey` of an import job that is still retained returns that job, so that a client can repeat a call whose response it lost without importing the files twice (its schema defines the rule). `content.analyzeReference` for a placement for which a job that `content.analyzeReference` started is not terminal returns that job; a `referenceAnalysis` job that `content.autoTune` started is never returned by it (section 12.1). Other methods start a new job on every call unless their schema says otherwise.
+`export.start` with the same normalized params as an export job that is not terminal returns that job instead of starting a second one (section 19). `import.start` with the `idempotencyKey` of an import job that is still retained returns that job, so that a client can repeat a call whose response it lost without importing the files twice (its schema defines the rule). Other methods start a new job on every call unless their schema says otherwise.
 
-### 12.6 Reference analysis jobs
+### 12.6 (removed)
 
-A `referenceAnalysis` job (started by `content.analyzeReference`, or by `content.autoTune` in mode `reference`) needs the alignment data of the contents of both clips. OpenTune computes it in its own analysis service, and the job waits for it, up to a wait limit that the implementation chooses.
-
-1. A job whose alignment data already exists does not wait, so rules 2 and 3 do not apply to it. Rules 4 and 5 apply whether or not the job waited: rule 4 to every job that fails, rule 5 to every job of `content.autoTune`. A job of `content.autoTune` whose alignment data exists can still fail, for example with `REVISION_CONFLICT` (rule 5) or with the errors of the checks it repeats, and then changes no note.
-2. OpenTune completes only one reference analysis in a session (section 15.4 rule 8); an analysis that is requested after that never finishes. Where the server already knows that the analysis cannot complete in this session, for example because it has already seen one reference analysis complete, the job ends at once with `NOT_READY(reference_analysis_stalled)`, not retryable, and does not wait for the wait limit; only restarting OpenTune makes it work again. Otherwise the job waits until the wait limit. When the limit passes while OpenTune is still analysing, the job fails with `NOT_READY(reference_analysis_timeout)`, retryable: the analysis may still finish. When the limit passes and the analysis is queued but OpenTune is not processing it, the job fails with `NOT_READY(reference_analysis_stalled)`, not retryable.
-3. When OpenTune reports that the analysis failed, the job fails with `ANALYSIS_FAILED(reference_analysis_failed)`, not retryable.
-4. A job that fails stores no alignment data and writes nothing; `content.autoTune` changes no note.
-5. The job of `content.autoTune` repeats the check of the tokens that the call made (section 10 rule 3): in the same main-thread step in which it aligns, just before it writes, it compares the content's `revision` that the call checked with the current one, and the placement must still show the content that the call named. A change made while the job waited fails the job with `REVISION_CONFLICT(content_changed)`, and nothing is written, as an export fails with `REVISION_CONFLICT(changed_during_export)` in section 19 rule 8. The alignment data that the job waited for is no change: it is part of the `reference` component of the revision vector alone, which `revision` does not cover (section 14.4).
-6. The reasons `reference_analysis_stalled`, `reference_analysis_timeout` and `reference_analysis_failed` were added in `1.0.0-rc.4`. An implementation of this release candidate may still end these cases with `NOT_READY` or `INTERNAL` without such a reason; clients rely on the error kind and on `retryable` (section 17.1).
+Section 12.6 described the jobs of kind `referenceAnalysis`. They were removed in `1.0.0-rc.7` together with the reference alignment (CHANGELOG.md). The number is kept, so that the numbers of the later sections stay as they were.
 
 ### 12.7 Preference apply jobs
 
@@ -541,8 +533,8 @@ Exactly one of these holds for every write result; `common.schema.json#/$defs/wr
 
 Each entry is `{entity, ref, label, fields}`:
 
-- `entity` names the kind of entity: `note`, `placement`, `track`, `timeHandle`, `key`, `pitchShift`, `content`, `preference`, `tempo`, `transport`, `project`, `dialog`, `selection`, `audioDevice` (more MAY be added).
-- `ref` identifies it with handles (`common.schema.json#/$defs/entityRef`). An entity of which the instance has exactly one (`transport`, `tempo`, `project`, `selection`, `audioDevice`) is referenced as `{singleton: <entity>}`, for example `{"singleton": "tempo"}`.
+- `entity` names the kind of entity: `note`, `placement`, `track`, `timeHandle`, `key`, `pitchShift`, `content`, `preference`, `tempo`, `transport`, `project`, `dialog`, `selection`, `audioDevice`, `ui` (more MAY be added).
+- `ref` identifies it with handles (`common.schema.json#/$defs/entityRef`). An entity of which the instance has exactly one (`transport`, `tempo`, `project`, `selection`, `audioDevice`) is referenced as `{singleton: <entity>}`, for example `{"singleton": "tempo"}`. The entity `ui` is the one exception: it stands for state of the OpenTune window, and `ref` names the member group that changed, `{"singleton": "workspace"}` for the workspace the window shows (`ui.setWorkspace`).
 - `label` is a short display label generated from positions and values, or null. It never contains names taken from files or projects (section 20).
 - `fields` maps each changed member name to `{before, after, unit}`, where `unit` is the member's unit suffix in lower case (`sec`, `frame`, `midi`, `hz`, `cents`, `semitones`, `db`, `linear`, `ms`, `bytes`), `bpm` for tempo, or null for members without a unit (section 8.2).
 
@@ -556,17 +548,16 @@ A write that changes many entities MAY be paginated by its method; the method sc
 
 The world revision vector consists of the components below. The server captures it on the main thread immediately before and immediately after the write. `revisionDiff` lists only the components that differ: `{arrangement, trackState, contents[]}`, where `arrangement` and `trackState` are `{before, after}` or null, and each `contents[]` entry is `{contentId, changed}` with one `{before, after}` per changed component (`before` null for a new content, `after` null for a removed one).
 
-| Component               | Covers                                                                                        | Values                       |
-| ----------------------- | --------------------------------------------------------------------------------------------- | ---------------------------- |
-| `arrangement`           | the placements and their properties: position, length, source window, gain, fades, references | `arrangementRevision` values |
-| `trackState`            | the states of all tracks: mute, solo, volume, colour, visibility                              | opaque hash                  |
-| `contents[].notes`      | the notes and their parameters                                                                | opaque, part of `revision`   |
-| `contents[].pitch`      | the corrected pitch curve                                                                     | opaque, part of `revision`   |
-| `contents[].content`    | the content's audio and analysis data, for example a finished pitch analysis                  | opaque, part of `revision`   |
-| `contents[].grid`       | the time grid                                                                                 | `gridRevision` values        |
-| `contents[].key`        | the key                                                                                       | `keyRevision` values         |
-| `contents[].pitchShift` | the clip pitch shift                                                                          | opaque                       |
-| `contents[].reference`  | the content's reference alignment data                                                        | opaque                       |
+| Component               | Covers                                                                            | Values                       |
+| ----------------------- | --------------------------------------------------------------------------------- | ---------------------------- |
+| `arrangement`           | the placements and their properties: position, length, source window, gain, fades | `arrangementRevision` values |
+| `trackState`            | the states of all tracks: mute, solo, volume, colour, visibility                  | opaque hash                  |
+| `contents[].notes`      | the notes and their parameters                                                    | opaque, part of `revision`   |
+| `contents[].pitch`      | the corrected pitch curve                                                         | opaque, part of `revision`   |
+| `contents[].content`    | the content's audio and analysis data, for example a finished pitch analysis      | opaque, part of `revision`   |
+| `contents[].grid`       | the time grid                                                                     | `gridRevision` values        |
+| `contents[].key`        | the key                                                                           | `keyRevision` values         |
+| `contents[].pitchShift` | the clip pitch shift                                                              | opaque                       |
 
 1. `revision` changes exactly when the `notes`, `pitch` or `content` component changes; the values of these components are not `revision` values.
 2. A change of a placement's geometry, and with it of its `geometryHash`, is an `arrangement` change; `geometryHash` has no component of its own.
@@ -588,15 +579,16 @@ The world revision vector consists of the components below. The server captures 
 | Name                      | Meaning                                                                                                 |
 | ------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `notesGenerated`          | OpenTune generated notes for a content (for example on selection in the `openDyne` scheme, section 21). |
-| `referenceAnalysisQueued` | Reference alignment analysis was queued.                                                                |
 | `reRenderQueued`          | Rendering of one or more contents was queued.                                                           |
 | `uiScaleChanged`          | The scale shown in the transport bar changed.                                                           |
-| `workspaceSwitched`       | The window switched between the arrangement and the piano roll.                                         |
+| `workspaceSwitched`       | The window switched between the arrangement and the piano roll (`ui.setSelection`, `ui.setWorkspace`).  |
 | `tracksRevealed`          | Hidden tracks became visible.                                                                           |
 | `dialogClosed`            | A dialog was closed.                                                                                    |
 | `dialogCommitted`         | Closing a dialog committed its value.                                                                   |
 
 The members of each side-effect object besides `revert` are defined with the methods that produce it.
+
+The workspace the window shows changes in two ways. `ui.setSelection` with `openEditor` true opens a clip in the piano roll. `ui.setWorkspace` does what the two view buttons of the transport bar do: it switches to `arrangement` or to `pianoRoll`, so closing the piano roll is switching to `arrangement`. Both report the switch as `sideEffects.workspaceSwitched {from, to, revert: null}`; `ui.setWorkspace` also lists it in `changes` (entity `ui`, `ref` `{"singleton": "workspace"}`, member `workspace`), and its revert recipe switches back. The workspace is view state (section 15.2 rule 6): switching it never changes a content, a key, a note or a clip, never generates or queues anything and does not mark the project as changed, so `revisionDiff` is empty and `dirty` stays as it was. With no clip selected, the piano roll shows no clip, as in the window, and that is not an error.
 
 ### 14.7 Method-specific members
 
@@ -649,7 +641,6 @@ The protocol reports these behaviours of OpenTune as they are; it does not chang
 5. "Play from start" returns to the position of the last play or seek, not to 0. The transport methods document this.
 6. Track names are not shown or saved by OpenTune; tracks are identified by position only (`Track N`).
 7. When OpenTune commits notes, it shortens a note that overlaps the next one so that it ends where the next one starts. A write result reports the shortened `endContentSec`, because `after` is read back from the committed state (section 14.3); a prediction (`dryRun`) does not commit and therefore does not show it. OpenTune does not commit an edit of a note of zero duration: such an edit is predicted like any other, but its commit fails with `INTERNAL`. A later release candidate may give this case a reason of its own and let the prediction report it.
-8. OpenTune's service for reference analysis completes only one analysis per session; every later analysis of alignment data never finishes. The `referenceAnalysis` jobs report it as `NOT_READY(reference_analysis_stalled)`: at once where the server knows the session has completed its analysis, otherwise when the wait limit passes and the analysis is queued but not being processed (section 12.6). Alignment data that already exists is not affected: `content.autoTune` in mode `reference` runs for a binding whose data exists, and `content.getDetails` reports it in `reference.alignmentReady`. Restarting OpenTune is the only remedy; the protocol does not hide the defect and does not work around it.
 
 ### 15.5 Dirty flag
 
@@ -822,25 +813,27 @@ OpenTune has two editing schemes, selected in its preferences and reported as `s
 
 The scheme changes what some operations do. The protocol never hides these differences; results report what happened:
 
-1. **AUTO.** `content.autoTune` takes an explicit `mode` and never infers it from the scheme. The AUTO button in OpenTune runs regeneration in the `openTune` scheme and snapping of existing notes in the `openDyne` scheme; a clip with a reference binding may make the button run reference alignment instead. `content.getDetails` reports which mode the button would run, as a mode of `content.autoTune`. An instance that does not report `reference.v1` has no such mode, so it reports `regenerate` even where the button would run reference alignment: OpenTune does so in the `openTune` scheme, with the experimental features on, for a clip whose reference binding was left on it (for example by a project saved with the experimental features on). A client that tells the end user what the button does checks `reference.referencePlacementId` of `content.getDetails`, which every instance reports, and `session.info` `processing.experimentalFeatures`.
+1. **AUTO.** `content.autoTune` takes an explicit `mode` and never infers it from the scheme. The AUTO button in OpenTune runs regeneration in the `openTune` scheme and snapping of existing notes in the `openDyne` scheme; `content.getDetails` reports in `autoModes.uiButtonRuns` which mode the button in the OpenTune window would run now; the two above are modes of `content.autoTune`. A build whose window still offers the reference alignment (a build from before OpenTune's upstream project removed it) reports `reference` while a reference track is bound to the clip, because the button then runs it. `reference` is not a mode of `content.autoTune`, and `autoModes.available` never lists it. A client that finds a `uiButtonRuns` that is not a mode of `content.autoTune` says that the button runs a mode the service cannot run, and does not try to run it; it never takes the value for a mode it may send.
 2. **Focus on import.** `import.start` selects the last imported clip by default, as the UI does. In the `openDyne` scheme, a focused clip whose analysis finishes gets notes generated even when the request did not ask for note generation; this has no undo entry and marks the project as changed. The job result reports `notesGenerated` and `notesGeneratedBy` (`request` or `focus`). `focus: false` avoids it. The UI's import generates notes for every clip it imports in the `openDyne` scheme; `import.start` deliberately generates them only for the focused clip, or for every clip with `generateNotes`, so that the request decides which notes are generated.
-3. **Selection.** In the `openDyne` scheme, selecting or opening a clip whose analysis is finished and whose notes were never generated makes OpenTune generate them, with no undo entry, and marks the project as changed. `ui.setSelection` reports this in `sideEffects.notesGenerated` with the warning `SELECTION_GENERATED_NOTES`, and with `dryRun` it predicts it without selecting. Selecting a clip that has a reference binding, with the experimental features on, makes OpenTune queue reference analysis for the contents of both clips that have no alignment data yet, but only in the `openTune` scheme: in the `openDyne` scheme, selecting queues no reference analysis. `ui.setSelection` reports the queued analysis in `sideEffects.referenceAnalysisQueued` with the warning `REFERENCE_ANALYSIS_QUEUED`.
+3. **Selection.** In the `openDyne` scheme, selecting or opening a clip whose analysis is finished and whose notes were never generated makes OpenTune generate them, with no undo entry, and marks the project as changed. `ui.setSelection` reports this in `sideEffects.notesGenerated` with the warning `SELECTION_GENERATED_NOTES`, and with `dryRun` it predicts it without selecting.
 4. **Changing the scheme.** Switching to `openDyne` with `prefs.set` may generate notes for the clip open in the editor; the result reports it in `sideEffects.notesGenerated` with the warning `SCHEME_GENERATED_NOTES`.
 5. Other methods behave the same in both schemes unless their schema says otherwise.
 
 ## 22. Layers and method index
 
-| Layer | Content                                                               | Capabilities                                                               |
-| ----- | --------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| L2    | Reads: session, project, contents, transport, preferences, log        | `session.v1`, `read.v1`                                                    |
-| L3    | Jobs, import, export, UI state and dialogs                            | `jobs.v1`, `import.v1`, `export.v1`, `ui.bridge`                           |
-| L4    | Key, AUTO, note edits, pitch shift, undo and redo                     | `edit.v1`, `history.v1`                                                    |
-| L5    | Timing: section shifts and time-grid handles                          | `timing.v1`                                                                |
-| L6    | Arrangement, tracks, transport control, selection, reference analysis | `transport.v1`, `arrangement.v1`, `tracks.v1`, `ui.bridge`, `reference.v1` |
-| L7    | Drawing-style note, curve, EQ and envelope edits                      | not defined in this version                                                |
-| L8    | Project save and open, preference changes, audio device               | `project.io`, `prefs.write`, `audio.device`                                |
+| Layer | Content                                                                          | Capabilities                                                                               |
+| ----- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| L2    | Reads: session, project, contents, transport, preferences, log                   | `session.v1`, `read.v1`                                                                    |
+| L3    | Jobs, import, export, UI state and dialogs                                       | `jobs.v1`, `import.v1`, `export.v1`, `ui.bridge`                                           |
+| L4    | Key, AUTO, note edits, pitch shift, undo and redo                                | `edit.v1`, `history.v1`                                                                    |
+| L5    | Timing: section shifts and time-grid handles                                     | `timing.v1`                                                                                |
+| L6    | Arrangement, tracks, transport control, selection, workspace | `transport.v1`, `arrangement.v1`, `tracks.v1`, `ui.bridge`, `ui.workspace` |
+| L7    | Drawing-style note, curve, EQ and envelope edits                                 | not defined in this version                                                                |
+| L8    | Project save and open, preference changes, audio device                          | `project.io`, `prefs.write`, `audio.device`                                                |
 
 `ui.onboardingClose` is an additional capability of `ui.dismiss`: without it, `ui.dismiss` can prevent the first-run overlay but not close one that is already showing.
+
+`ui.workspace` is the capability of `ui.setWorkspace` alone. An instance that does not report it can open the piano roll (`ui.setSelection` with `openEditor`) but has no request that switches back to the arrangement view; the end user does that with the view buttons of the transport bar.
 
 Every method of version 1 (also in `methods/index.json`). Write: `yes` changes state, `conditional` changes state only for some params or as a reported side effect, `no` never does. Schema: `defined` means `methods/<method>.schema.json` is normative; `pending` means the schema is added before the `1.0.0-rc.1` tag; `planned` means it is added in a later `1.0.0` release candidate. Until its schema is defined, a method has no normative shape: an implementation MAY provide it provisionally, following this document, for development against a release candidate, and MUST change it to match the schema once the schema is defined. Since `1.0.0-rc.2` every method in this table has a defined schema.
 
@@ -852,7 +845,7 @@ Every method of version 1 (also in `methods/index.json`). Write: `yes` changes s
 | `content.getNotes`         | L2    | `read.v1`        | no          | 1.0   | defined | Notes with times, detected and target pitch, parameters.                                   |
 | `content.getPitchCurve`    | L2    | `read.v1`        | no          | 1.0   | defined | Original and corrected pitch curves, paginated.                                            |
 | `content.segmentNotes`     | L2    | `read.v1`        | no          | 1.0   | defined | Read-only note segmentation of the original pitch, for analysis.                           |
-| `content.getDetails`       | L2    | `read.v1`        | no          | 1.0   | defined | Key, pitch shift, analysis and render state, time grid, reference, AUTO modes.             |
+| `content.getDetails`       | L2    | `read.v1`        | no          | 1.0   | defined | Key, pitch shift, analysis and render state, time grid, AUTO modes.             |
 | `transport.get`            | L2    | `read.v1`        | no          | 1.0   | defined | Play state, position, tempo, time signature, loop flag.                                    |
 | `prefs.get`                | L2    | `read.v1`        | no          | 1.0   | defined | Preferences and recent projects.                                                           |
 | `app.getLog`               | L2    | `read.v1`        | no          | 1.0   | defined | Tail of OpenTune's log, redacted.                                                          |
@@ -874,14 +867,14 @@ Every method of version 1 (also in `methods/index.json`). Write: `yes` changes s
 | `transport.control`        | L6    | `transport.v1`   | yes         | 1.0   | defined | Play, pause, stop, seek.                                                                   |
 | `transport.setTempo`       | L6    | `transport.v1`   | yes         | 1.0   | defined | Tempo and time signature.                                                                  |
 | `transport.setLoop`        | L6    | `transport.v1`   | yes         | 1.0   | defined | Loop flag.                                                                                 |
-| `arrangement.edit`         | L6    | `arrangement.v1` | yes         | 1.0   | defined | Move, trim, gain, fades, split, merge, delete, reference binding.                          |
+| `arrangement.edit`         | L6    | `arrangement.v1` | yes         | 1.0   | defined | Move, trim, gain, fades, split, merge, delete.                          |
 | `arrangement.copy`         | L6    | `arrangement.v1` | yes         | 1.0   | defined | Copy or duplicate clips.                                                                   |
 | `track.set`                | L6    | `tracks.v1`      | yes         | 1.0   | defined | Mute, solo, volume, colour.                                                                |
 | `track.add`                | L6    | `tracks.v1`      | yes         | 1.0   | defined | Show more tracks.                                                                          |
 | `track.duplicate`          | L6    | `tracks.v1`      | yes         | 1.0   | defined | Duplicate a track.                                                                         |
 | `track.delete`             | L6    | `tracks.v1`      | yes         | 1.0   | defined | Delete a track (irreversible).                                                             |
 | `ui.setSelection`          | L6    | `ui.bridge`      | conditional | 1.0   | defined | Select or open a clip, with predicted side effects.                                        |
-| `content.analyzeReference` | L6    | `reference.v1`   | no          | 1.0   | defined | Reference alignment analysis as a job.                                                     |
+| `ui.setWorkspace`          | L6    | `ui.workspace`   | conditional | 1.0   | defined | Switch the window between the arrangement view and the piano roll.                         |
 | `project.save`             | L8    | `project.io`     | yes         | 1.0   | defined | Save the project as a job.                                                                 |
 | `project.saveAs`           | L8    | `project.io`     | yes         | 1.0   | defined | Save under a new path; replacing another project needs confirmation.                       |
 | `project.open`             | L8    | `project.io`     | yes         | 1.0   | defined | Open a project as a job; never saves implicitly.                                           |

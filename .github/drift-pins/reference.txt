@@ -1,9 +1,0 @@
-# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
-# SPDX-License-Identifier: AGPL-3.0-or-later
-#
-# group: reference
-# pinned-at: upstream/20261008-addb4f4
-# ported-to: Source/Control/Edit/ReferenceAlignment.cpp
-#
-# Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
-Source/PluginProcessor.cpp	OpenTuneAudioProcessor::executeReferenceAlignmentForPlacement	L4487-L4741	fn-v1	711ecb99018d5e3c882de86ccd837586ac40a0e331da99b9bbd888c7900df7b7

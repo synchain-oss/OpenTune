@@ -40,8 +40,7 @@ Result<JsonValue> runPrefsGet(ControlOpContext& context, const ControlNoParams&)
     }
 
     // processing.options is reported by prefs.get only (session.info shares controlProcessingJson() without it): what
-    // the preferences window offers for the vocoder weight, the pitch model, the rendering priority and the reference
-    // alignment mode.
+    // the preferences window offers for the vocoder weight, the pitch model and the rendering priority.
     auto processing = controlProcessingJson(shared, nullptr);
     processing.appendMember("options", controlPrefsOptionsJson());
 

@@ -5,14 +5,11 @@
 #include "OpsSupport.h"
 
 #include "Content/EditableContentSnapshot.h"
-#include "Control/Edit/ReferenceAlignment.h"
 #include "Inference/RenderCache.h"
 #include "PluginProcessor.h"
 #include "Render/ContentRenderService.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/TimeGrid.h"
-
-#include <algorithm>
 
 namespace OpenTune {
 
@@ -177,7 +174,6 @@ Result<JsonValue> runGetDetails(ControlOpContext& context, const DetailsParams& 
                                      "render.current",
                                      "render.publishedRevision",
                                      "render.desiredRevision",
-                                     "reference.alignmentReady",
                                      "autoModes.uiButtonRuns",
                                      "autoModes.available"};
     auto nullReasons = JsonValue::object();
@@ -190,47 +186,23 @@ Result<JsonValue> runGetDetails(ControlOpContext& context, const DetailsParams& 
     if (key.isNull())
         nullReasons.appendMember("key", JsonValue::string("not_analyzed"));
 
-    // The reference binding of the placement, and whether the alignment data of both clips exists for
-    // the producer this instance would use (the processor's getter of the reference feature producer).
-    auto reference = JsonValue::object();
-    const auto referenceId = via.placement.referencePlacementId;
-    bool alignmentReady = false;
-    if (referenceId != 0) {
-        for (const auto& placement : livePlacements) {
-            if (placement.placement.placementId != referenceId)
-                continue;
-            const auto referenceSnapshot = controlLiveSnapshot(context, placement.placement.contentKey);
-            // The one test content.analyzeReference and the alignment itself use.
-            alignmentReady = referenceSnapshot != nullptr && controlReferenceFeaturesCurrent(processor, snapshot)
-                             && controlReferenceFeaturesCurrent(processor, *referenceSnapshot);
-            break;
-        }
-    }
-    reference.appendMember("referencePlacementId", referenceId != 0
-                                                       ? JsonValue::string(controlPlacementId(context, referenceId))
-                                                       : JsonValue());
-    reference.appendMember("alignmentReady", JsonValue::boolean(alignmentReady));
-
-    // The mode the AUTO button runs, as the editor decides it (evaluateAutoRefUiState): snapping in the
-    // openDyne scheme; in the openTune scheme reference alignment when the experimental features are on
-    // and the clip has a reference binding that resolves (queryAutoRefAvailability, also for a binding
-    // left over from earlier), else regeneration. The modes are those of content.autoTune, so reference
-    // alignment is named only by an instance that reports reference.v1 (the specification of
-    // autoModes.uiButtonRuns); an instance without it names regeneration.
-    const auto& capabilities = context.facts().capabilities;
-    const bool referenceReported =
-        std::find(capabilities.begin(), capabilities.end(), "reference.v1") != capabilities.end();
+    // The mode the AUTO button in the window runs now, as the editor decides it
+    // (OpenTuneAudioProcessorEditor::autoTuneRequested): snapping in the openDyne scheme (evaluateAutoRefUiState
+    // returns before it asks for a binding); in the openTune scheme the reference alignment (AUTO Ref) when
+    // OpenTuneAudioProcessor::queryAutoRefAvailability() says the clip's binding can run it (shouldRunReferenceAuto
+    // is that call's canRunAutoRef(), also for a binding left over from an earlier session and with the
+    // experimental features off), else regeneration. Reference is reported as is; it is no mode of
+    // content.autoTune, so it is never listed in autoModes.available (the specification of
+    // autoModes.uiButtonRuns).
+    // This is a read of upstream state that goes away with the reference alignment when this fork is rebased onto
+    // an upstream that removed it; from then on the button runs regenerate or snapNotes only.
     const bool notesPrimary = AudioEditingScheme::usesNotesPrimaryScheme(preferences.audioEditingScheme);
-    const bool bindingRuns =
-        referenceReported && processor.queryAutoRefAvailability(via.placement.placementId).canRunAutoRef();
-    const bool referenceRuns = !notesPrimary && bindingRuns && preferences.experimentalFeaturesEnabled;
+    const bool referenceRuns =
+        !notesPrimary && processor.queryAutoRefAvailability(via.placement.placementId).canRunAutoRef();
     auto available = JsonValue::array();
-    if (snapshot.originalF0State == OriginalF0State::Ready && snapshot.hasUsableOriginalF0()) {
+    if (snapshot.originalF0State == OriginalF0State::Ready && snapshot.hasUsableOriginalF0())
         for (const char* mode : {"regenerate", "snapNotes", "notesOnly"})
             available.append(JsonValue::string(mode));
-        if (bindingRuns)
-            available.append(JsonValue::string("reference"));
-    }
     auto autoModes = JsonValue::object();
     autoModes.appendMember("editingScheme",
                            JsonValue::string(controlEditingSchemeName(preferences.audioEditingScheme)));
@@ -257,7 +229,6 @@ Result<JsonValue> runGetDetails(ControlOpContext& context, const DetailsParams& 
     result.appendMember("analysis", std::move(analysis));
     result.appendMember("render", renderJson(processor, content.key, versions));
     result.appendMember("timeGrid", timeGridJson(snapshot));
-    result.appendMember("reference", std::move(reference));
     result.appendMember("autoModes", std::move(autoModes));
     if (nullReasons.size() != 0)
         result.appendMember("nullReasons", std::move(nullReasons));

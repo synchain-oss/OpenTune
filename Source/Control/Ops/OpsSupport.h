@@ -189,8 +189,7 @@ int controlVisibleTrackCount(ControlOpContext& context, bool& derived);
  * - content: the audio and the analysis data (audio and analysis revisions and the pitch-analysis state);
  * - grid: the time grid (time-grid revision);
  * - key: the key (root, scale, origin and confidence);
- * - pitchShift: the clip pitch shift (semitones and cents);
- * - reference: the reference alignment data (revision, state, producer and fingerprint of the features).
+ * - pitchShift: the clip pitch shift (semitones and cents).
  */
 struct ControlContentVersions
 {
@@ -201,7 +200,6 @@ struct ControlContentVersions
     std::string grid;
     std::string key;
     std::string pitchShift;
-    std::string reference;
 
     /** The content's `revision` token: changes exactly when notes, pitch or content changes. */
     std::string revision() const;

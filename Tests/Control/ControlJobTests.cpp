@@ -515,7 +515,7 @@ void scenarioJobs()
     // next step.
     auto analysing = std::make_shared<FixtureJob>();
     analysing->holdCancellation = true;
-    const auto analysingId = jobs->start("referenceAnalysis", true, fixtureWork(analysing)).jobId;
+    const auto analysingId = jobs->start("timeGridSeed", true, fixtureWork(analysing)).jobId;
     CONTROL_CHECK(pumpMessagesUntil([&analysing] { return analysing->steps.load() > 0; }, kReadTimeoutMs));
     {
         const auto first = api.result("job.cancel", json(R"({"jobId":)" + quoted(analysingId) + "}"));

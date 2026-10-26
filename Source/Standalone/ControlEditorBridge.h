@@ -41,7 +41,6 @@ public:
     void onStructureChanged() override;
     void onUndoRedoApplied() override;
     void onTimeGridChanged() override;
-    void onReferenceBindingChanged() override;
     void onProjectReloaded() override;
     void onProjectSaved() override;
     void onRecentProjectsChanged() override;
@@ -73,12 +72,32 @@ public:
     bool select(int trackId, std::uint64_t placementId, bool openEditor) override;
     std::optional<UiScale> scaleForSelection(int trackId, std::uint64_t placementId) const override;
 
+    // ---- Workspace (ControlEditorBridgeWorkspace.cpp) ----
+    bool setWorkspace(bool arrangement) override;
+
     // ---- Preferences and audio device (ControlEditorBridgePrefs.cpp) ----
     void onPreferencesChanged() override;
     std::optional<bool> editingSchemeApplied(bool notesPrimary) const override;
     bool prepareAudioDeviceSwitch(juce::AudioDeviceManager& manager, const std::string& reason) override;
 
 private:
+    /** What a view switch must leave as it was: the project's changed mark and the tempo and time signature of the
+        transport bar (ControlEditorBridgeWorkspace.cpp). */
+    struct ViewSwitchBaseline
+    {
+        bool dirty = false;
+        double bpm = 0.0;
+        int timeSignatureNumerator = 0;
+        int timeSignatureDenominator = 0;
+    };
+
+    /** Reads the baseline before a view switch. Message thread. */
+    ViewSwitchBaseline viewSwitchBaseline() const;
+
+    /** After a view switch: takes back the project's changed mark when only the commit of the transport bar's BPM
+        field set it (see ControlEditorBridgeWorkspace.cpp). Message thread. */
+    void settleViewSwitch(const ViewSwitchBaseline& baseline);
+
     /** The placement the arrangement selects on its active track, or 0. */
     std::uint64_t activeSelection() const;
 

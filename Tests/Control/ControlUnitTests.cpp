@@ -411,11 +411,6 @@ void testProtocol()
     CONTROL_CHECK(!controlErrorRetryable("ANALYSIS_FAILED", "timing_analysis_failed"));
     CONTROL_CHECK(!controlErrorRetryable("INVALID_ARGUMENT", "nothing_to_export"));
     CONTROL_CHECK(!controlErrorRetryable("INVALID_ARGUMENT", "content_key_unset"));
-    // The reference analysis reasons (added with rc.4): a stalled worker needs a restart (not retryable), a slow
-    // analysis may still finish (retryable), and a failed analysis is not.
-    CONTROL_CHECK(!controlErrorRetryable("NOT_READY", "reference_analysis_stalled"));
-    CONTROL_CHECK(controlErrorRetryable("NOT_READY", "reference_analysis_timeout"));
-    CONTROL_CHECK(!controlErrorRetryable("ANALYSIS_FAILED", "reference_analysis_failed"));
     // The preference options: a vocoder that is not back in time may be ready when asked again; a weight that could
     // not be loaded fails again, a pitch model that cannot be switched is not cured by a retry, and neither is a value
     // that is not on offer.

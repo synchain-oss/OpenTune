@@ -420,8 +420,10 @@ Result<JsonValue> runSetSelection(ControlOpContext& context, const SelectionPara
     }
 
     ControlWriteEnvelope envelope(context);
+    // With openEditor the editor switches the view, which may rewrite the tempo even when the call fails afterwards
+    // (see controlViewSwitchError()); before.bpm is the tempo read before the editor was asked.
     if (!bridge->select(target.trackId, target.placementId, params.openEditor))
-        return controlOpError("INTERNAL", "", "the editor did not take the selection");
+        return controlViewSwitchError(context, before.bpm, "INTERNAL", "", "the editor did not take the selection");
     const auto observed = observe(context, *bridge, target, before);
     if (observed.noteCount.has_value())
         // As the editor's piano roll does after it generated the notes (its contentEdited listener).

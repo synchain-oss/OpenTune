@@ -76,6 +76,11 @@ public:
     bool select(int trackId, std::uint64_t placementId, bool openEditor) override
     {
         ++selectCalls;
+        if (breaksOffAfterFocusMove) {
+            // The double click moved the keyboard focus (and the BPM field committed) and then the call broke off.
+            commitBpmFieldOnViewSwitch();
+            return false;
+        }
         auto* arrangement = processor_.getStandaloneArrangement();
         // StandaloneArrangement::selectPlacement(): the active track and its selected clip, as the view commits a
         // click (commitPlacementSelection) and the editor commits a track with no clip
@@ -145,6 +150,9 @@ public:
     /** canSelect(): false is a bridge without the selection. */
     bool selects = true;
     int selectCalls = 0;
+    /** select() commits the BPM field, as the focus that the view switch moved does, and then fails, taking nothing
+        else: an editor whose call breaks off after the focus left the field. */
+    bool breaksOffAfterFocusMove = false;
     /** The parameters of the piano roll's note generation (getCurrentAutoTuneParams). */
     NoteGeneratorParams generatorParams;
 
@@ -620,6 +628,18 @@ void scenarioSelectionImpl()
     CONTROL_CHECK(memberOf(dry, "dryRun").asBoolean() && reportsNoTempoChange(dry)
                   && memberOf(dry, "sideEffects").find("workspaceSwitched") != nullptr);
     CONTROL_CHECK(isNear(f.processor->getBpm(), 120.27) && f.bridge->view.workspace == "arrangement");
+
+    // A selection that fails after the focus left the BPM field (SelectionBridge::breaksOffAfterFocusMove): the field
+    // committed, so the tempo 120.27 was rewritten to 120.3 before the error. "Nothing changed" would be false: the
+    // error says executed true and names the tempo (kind and reason as before).
+    f.bridge->breaksOffAfterFocusMove = true;
+    CONTROL_CHECK(f.api.failsAfterChange("ui.setSelection", selectClip(idA, true), "INTERNAL", "",
+                                         "the tempo changed from 120.27 to 120.3 bpm"));
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.3));
+    // With a tempo that the field leaves as it is, the failure still promises that nothing changed.
+    CONTROL_CHECK(f.api.fails("ui.setSelection", selectClip(idA, true), "INTERNAL", ""));
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.3));
+    f.bridge->breaksOffAfterFocusMove = false;
     CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 

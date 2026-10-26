@@ -738,6 +738,24 @@ void scenarioUiWorkspace()
     CONTROL_CHECK(!f.api.result(memberOf(tempoRevert, "method").text(), memberOf(tempoRevert, "params")).isNull());
     CONTROL_CHECK(isNear(f.processor->getBpm(), 120.27) && isNear(readBpm(), 120.27));
 
+    // The precision of the bpm values in the report: three decimals, as the tempo is reported everywhere. A tempo with
+    // more decimals is rewritten to one decimal, and the revert recipe restores it rounded to three: not the exact
+    // tempo, which differs by less than 0.0005. That is no limit of transport.setTempo, which stores what it is given.
+    f.api.result("transport.setTempo", jsonOf(R"({"bpm":120.12345})"));
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.12345));
+    bridge.project.dirty = false;
+    bridge.view.workspace = "arrangement";
+    const auto longTempo = f.api.result("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"));
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.1));
+    const auto& longEffect = memberOf(memberOf(longTempo, "sideEffects"), "tempoRounded");
+    CONTROL_CHECK(isNear(memberOf(longEffect, "fromBpm").asDouble(), 120.123)
+                  && isNear(memberOf(longEffect, "toBpm").asDouble(), 120.1));
+    const auto& longRevert = memberOf(longEffect, "revert");
+    CONTROL_CHECK(isNear(memberOf(memberOf(longRevert, "params"), "bpm").asDouble(), 120.123));
+    f.api.result(memberOf(longRevert, "method").text(), memberOf(longRevert, "params"));
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.123) && !isNear(f.processor->getBpm(), 120.12345)
+                  && std::abs(f.processor->getBpm() - 120.12345) < 0.0005);
+
     // A tempo with one decimal is what the field shows: nothing is rewritten, the result lists neither a change of the
     // tempo nor tempoRounded, and the project is not marked as changed.
     f.processor->setBpm(120.3);
@@ -787,6 +805,37 @@ void scenarioUiWorkspace()
     bridge.swallowsWorkspaceSwitch = true;
     CONTROL_CHECK(f.api.fails("ui.setWorkspace", jsonOf(R"({"workspace":"pianoRoll"})"), "INTERNAL", ""));
     bridge.swallowsWorkspaceSwitch = false;
+    CONTROL_CHECK(bridge.view.workspace == "arrangement" && bridge.workspaceSwitches == switches);
+
+    // The same two failures after the focus left the BPM field (TestUiBridge::commitsBpmFieldOnFailedSwitch): the field
+    // committed, so a tempo with more decimals was rewritten (120.27 became 120.3) before the error. "Nothing changed"
+    // would be false, so the error says executed true and names the tempo; kind and reason stay as they were.
+    const auto asksPianoRoll = [] { return jsonOf(R"({"workspace":"pianoRoll"})"); };
+    bridge.commitsBpmFieldOnFailedSwitch = true;
+    f.processor->setBpm(120.27);
+    bridge.switchesWorkspace = false;
+    CONTROL_CHECK(f.api.failsAfterChange("ui.setWorkspace", asksPianoRoll(), "UNSUPPORTED", "capability_missing",
+                                         "the tempo changed from 120.27 to 120.3 bpm"));
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.3));
+    bridge.switchesWorkspace = true;
+    f.processor->setBpm(120.27);
+    bridge.swallowsWorkspaceSwitch = true;
+    CONTROL_CHECK(f.api.failsAfterChange("ui.setWorkspace", asksPianoRoll(), "INTERNAL", "",
+                                         "the tempo changed from 120.27 to 120.3 bpm"));
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.3));
+    bridge.swallowsWorkspaceSwitch = false;
+    // A tempo with one decimal is what the field commits: the focus moved and nothing changed, so the same two failures
+    // keep promising executed false.
+    f.processor->setBpm(120.3);
+    bridge.switchesWorkspace = false;
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", asksPianoRoll(), "UNSUPPORTED", "capability_missing"));
+    bridge.switchesWorkspace = true;
+    bridge.swallowsWorkspaceSwitch = true;
+    CONTROL_CHECK(f.api.fails("ui.setWorkspace", asksPianoRoll(), "INTERNAL", ""));
+    bridge.swallowsWorkspaceSwitch = false;
+    bridge.commitsBpmFieldOnFailedSwitch = false;
+    f.processor->setBpm(120.0);
+    bridge.project.dirty = false;
     CONTROL_CHECK(bridge.view.workspace == "arrangement" && bridge.workspaceSwitches == switches);
 
     // Without an editor.

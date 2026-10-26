@@ -93,12 +93,15 @@ Result<JsonValue> runSetWorkspace(ControlOpContext& context, const WorkspacePara
     // The tempo before the switch: the view switch moves the keyboard focus, and a transport bar whose BPM field loses
     // it then rewrites the tempo with the one decimal the field shows (see ControlEditorBridgeWorkspace.cpp).
     const double bpmBefore = context.processor().getBpm();
+    // Both failures below come after the editor was asked, and the focus that the BPM field lost may already have
+    // rewritten the tempo: controlViewSwitchError() says "nothing changed" only while the tempo is what it was.
     if (!bridge->setWorkspace(params.arrangement))
-        return controlOpError("UNSUPPORTED", "capability_missing", "the editor does not switch the workspace");
+        return controlViewSwitchError(context, bpmBefore, "UNSUPPORTED", "capability_missing",
+                                      "the editor does not switch the workspace");
     const double bpmAfter = context.processor().getBpm();
     const auto after = bridge->viewState();
     if (!after || std::string(workspaceName(after->workspace)) != target)
-        return controlOpError("INTERNAL", "", "the editor did not switch the workspace");
+        return controlViewSwitchError(context, bpmBefore, "INTERNAL", "", "the editor did not switch the workspace");
 
     auto pair = JsonValue::object();
     pair.appendMember("before", JsonValue::string(before));

@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "ui/set-workspace-piano-roll-opendyne",
   "type": "scenario",
-  "description": "In the openDyne scheme a clip is selected whose analysis has finished and whose notes were never generated, and the window shows the arrangement view. Selecting such a clip would make OpenTune generate its notes (PROTOCOL.md section 21 rule 3), and so would opening it in the piano roll with ui.setSelection; ui.setWorkspace with pianoRoll must not. The scenario selects the clip in the openTune scheme, where selecting generates nothing, and then switches to openDyne with prefs.set; the piano roll has never been open, so the switch generates nothing either (rule 4: only the clip open in the editor). Then it switches the window to the piano roll: only the view changes, revisionDiff is empty, dirty stays false, sideEffects.workspaceSwitched is the only side effect, warnings is empty (no SELECTION_GENERATED_NOTES, no IRREVERSIBLE), and the piano roll shows the selected clip. A last read confirms that the clip still has no notes.",
+  "description": "ui.setWorkspace generates nothing and changes no content, also in the openDyne scheme. Selecting a clip loads it into the piano roll even while the window shows the arrangement view (ui.pianoRollContentId names it), so in a running window the state 'a clip without notes is shown in the piano roll in the openDyne scheme' does not exist: selecting it, or switching the scheme while it is selected, generates its notes (PROTOCOL.md section 21 rules 3 and 4). The scenario therefore selects the clip in the openTune scheme, where selecting generates nothing, and switches to openDyne with prefs.set, which generates the notes of the clip the piano roll holds and says so (sideEffects.notesGenerated, the warnings SCHEME_GENERATED_NOTES and IRREVERSIBLE, a changed notes revision, dirty true). A read captures the note count. Then ui.setWorkspace with pianoRoll changes only the view: revisionDiff is empty, dirty stays as it was (true), sideEffects.workspaceSwitched is the only side effect, warnings is empty, and the piano roll shows the selected clip. A last read confirms that the note count is the one captured.",
   "capability": "ui.workspace",
   "extraCapabilities": ["ui.bridge", "prefs.write", "jobs.v1", "read.v1"],
   "since": "1.0",
@@ -38,6 +38,7 @@
           "dirty": { "before": false, "after": false },
           "ui": {
             "workspace": "arrangement",
+            "pianoRollContentId": { "$ref": "clip.contentId" },
             "selectedPlacementIds": [{ "$ref": "clip.placementId" }]
           },
           "warnings": []
@@ -102,14 +103,49 @@
               "revisionDiff": {
                 "arrangement": null,
                 "trackState": null,
-                "contents": []
+                "contents": [
+                  {
+                    "contentId": { "$ref": "clip.contentId" },
+                    "changed": {
+                      "notes": {
+                        "before": { "$any": "string" },
+                        "after": { "$any": "string" }
+                      }
+                    }
+                  }
+                ]
               },
-              "dirty": { "before": false, "after": false },
+              "undo": {
+                "undoable": false,
+                "reason": "ui_parity",
+                "revert": {
+                  "method": "prefs.set",
+                  "params": { "editingScheme": "openTune" }
+                }
+              },
+              "dirty": { "before": false, "after": true },
+              "sideEffects": {
+                "notesGenerated": {
+                  "contentId": { "$ref": "clip.contentId" },
+                  "noteCount": { "$any": "integer" },
+                  "revert": null
+                }
+              },
               "warnings": [
                 {
                   "code": "GLOBAL_PREFERENCE",
                   "subject": null,
                   "data": { "preferences": ["editingScheme"] }
+                },
+                {
+                  "code": "SCHEME_GENERATED_NOTES",
+                  "subject": { "contentId": { "$ref": "clip.contentId" } },
+                  "data": null
+                },
+                {
+                  "code": "IRREVERSIBLE",
+                  "subject": { "contentId": { "$ref": "clip.contentId" } },
+                  "data": null
                 }
               ]
             },
@@ -122,6 +158,24 @@
       "send": {
         "jsonrpc": "2.0",
         "id": 4,
+        "method": "content.getNotes",
+        "params": { "contentId": { "$ref": "clip.contentId" } }
+      }
+    },
+    {
+      "expect": {
+        "jsonrpc": "2.0",
+        "id": 4,
+        "result": {
+          "contentId": { "$ref": "clip.contentId" },
+          "totalCount": { "$capture": "noteCount", "$any": "integer" }
+        }
+      }
+    },
+    {
+      "send": {
+        "jsonrpc": "2.0",
+        "id": 5,
         "method": "ui.setWorkspace",
         "params": { "workspace": "pianoRoll" }
       }
@@ -129,7 +183,7 @@
     {
       "expect": {
         "jsonrpc": "2.0",
-        "id": 4,
+        "id": 5,
         "result": {
           "applied": true,
           "noOp": false,
@@ -169,7 +223,7 @@
               "params": { "workspace": "arrangement" }
             }
           },
-          "dirty": { "before": false, "after": false },
+          "dirty": { "before": true, "after": true },
           "ui": {
             "workspace": "pianoRoll",
             "pianoRollContentId": { "$ref": "clip.contentId" },
@@ -190,7 +244,7 @@
     {
       "send": {
         "jsonrpc": "2.0",
-        "id": 5,
+        "id": 6,
         "method": "content.getNotes",
         "params": { "contentId": { "$ref": "clip.contentId" } }
       }
@@ -198,12 +252,10 @@
     {
       "expect": {
         "jsonrpc": "2.0",
-        "id": 5,
+        "id": 6,
         "result": {
           "contentId": { "$ref": "clip.contentId" },
-          "totalCount": 0,
-          "notes": [],
-          "nextCursor": null
+          "totalCount": { "$ref": "noteCount" }
         }
       }
     }

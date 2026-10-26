@@ -193,6 +193,9 @@ public:
     /** Number of retained jobs, and of those that are not terminal. Any thread; for tests. */
     std::size_t retainedCount() const;
     std::size_t activeCount() const;
+    /** The kinds of the jobs that are not terminal (queued or running), one entry per job, in the order the jobs were
+        started. app.quit refuses while there is one. Any thread. */
+    std::vector<std::string> activeKinds() const;
     /** Number of job.get requests waiting. Any thread; for tests. */
     std::size_t waitingCount() const;
 

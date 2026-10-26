@@ -126,6 +126,22 @@ public:
         return true;
     }
 
+    /** The editor's syncSharedAppPreferences() after a preference changed: when the editing scheme became the
+        notes-primary one, the piano roll that shows a clip whose notes were never generated generates them
+        (PianoRollComponent::ensureOpenDyneNotesIfNeeded). The caller of the write marks the project as changed. */
+    void onPreferencesChanged() override
+    {
+        const bool notesPrimary = openDyne();
+        const bool becameNotesPrimary = notesPrimary && !appliedNotesPrimary_;
+        appliedNotesPrimary_ = notesPrimary;
+        if (becameNotesPrimary && view.pianoRollPlacementId != 0)
+            generateNotesOfPianoRoll();
+    }
+
+    /** The scheme the views run with follows the preference without a notification, as when a test sets the
+        preference before it builds its project (the editor applies the scheme of a loaded project the same way). */
+    void syncAppliedScheme() { appliedNotesPrimary_ = openDyne(); }
+
     /** canSelect(): false is a bridge without the selection. */
     bool selects = true;
     int selectCalls = 0;
@@ -148,12 +164,30 @@ private:
         view.pianoRollPlacementId = placementId;
         if (placementId == 0 || !openDyne())
             return;
+        if (generateNotesIfNeeded(key))
+            markDirty();
+    }
+
+    /** Generates the notes of the clip the piano roll shows (the scheme just became the notes-primary one). */
+    void generateNotesOfPianoRoll()
+    {
+        StandaloneArrangement::Placement placement;
+        for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId)
+            if (processor_.getPlacementById(trackId, view.pianoRollPlacementId, placement)) {
+                generateNotesIfNeeded(placement.contentKey);
+                return;
+            }
+    }
+
+    /** PianoRollComponent::ensureOpenDyneNotesIfNeeded(): the notes of a content whose notes were never generated and
+        whose F0 exists; true when it generated them. */
+    bool generateNotesIfNeeded(const ContentKey& key)
+    {
         const auto snapshot = processor_.getContentSnapshot(key);
         if (snapshot == nullptr || snapshot->noteTopologyInitialized || snapshot->pitchCurve == nullptr
             || snapshot->pitchCurve->getOriginalF0().empty())
-            return;
-        if (processor_.generateNotesOnlyByContentKey(key, generatorParams))
-            markDirty();
+            return false;
+        return processor_.generateNotesOnlyByContentKey(key, generatorParams);
     }
 
     /** OpenTuneAudioProcessorEditor::refreshReferenceContext() after evaluateAutoRefUiState(). */
@@ -193,6 +227,8 @@ private:
     }
 
     OpenTuneAudioProcessor& processor_;
+    /** The editing scheme the views run with: notes-primary or not (OpenTuneAudioProcessorEditor's applied scheme). */
+    bool appliedNotesPrimary_ = false;
 };
 
 /** A started processor with the selection bridge registered and an open session. */
@@ -229,6 +265,7 @@ struct SelectionFixture
         preferences.setAudioEditingScheme(openDyne ? AudioEditingScheme::Scheme::NotesPrimary
                                                    : AudioEditingScheme::Scheme::CorrectedF0Primary);
         preferences.setExperimentalFeaturesEnabled(experimental);
+        bridge->syncAppliedScheme();
     }
 
     /** Track 0 active with no clip selected on any track, as in a new project: an import selects the imported clip and

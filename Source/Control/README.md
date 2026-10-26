@@ -586,8 +586,10 @@ same processor functions:
   the project is marked as changed and hidden tracks that now hold a clip are revealed. The commit waits
   while the UI is busy; a cancellation does not wait: it stops before the next commit, and while the UI
   is busy it focuses no clip;
-- after the last commit: the last clip is focused (`focus`), and `requestContentRefresh()` asks for every
-  analysis, with note generation for `generateNotes` (OpenTune's default parameters) or, in the openDyne
+- after the last commit: the last clip is focused (`focus`): it becomes the selected clip of its track and the piano
+  roll loads it (`applyPlacementSelectionContext`), without switching the view, so the import reports no
+  `workspaceSwitched` and does not round the tempo (PROTOCOL.md section 21 rule 2). Then `requestContentRefresh()` asks
+  for every analysis, with note generation for `generateNotes` (OpenTune's default parameters) or, in the openDyne
   scheme, for the focused clip (with the editor's parameters); the job ends when every analysis has
   finished.
 
@@ -749,7 +751,9 @@ changes the content's `revision`.
   as far as allowed and reported in `clamped` and with the warning `CLAMPED`; a call that moves nothing is a
   no-op.
   - `content.shiftTiming` moves every handle whose output time lies in the range (a content range is mapped
-    through the current grid with `tauForward`) by `deltaSec`: a group drag whose dragged handle is the one
+    through the current grid with `tauForward`) by `deltaSec`. The range is a closed interval,
+    `start <= output time <= end`, as the time tool selects the handles: a handle exactly at the start and one exactly
+    at the end both move (`TimeGridOps::planShift()`). It is a group drag whose dragged handle is the one
     that leads in the direction of the move, so that the section stops at its neighbour and moves as a whole.
   - `content.editTimeGrid` op `moveHandles` moves each named handle to its output time; with several moves the
     first pass limits each one by its neighbours' targets (for one move these are the neighbours as they are,
@@ -1670,7 +1674,8 @@ contents with synthetic F0 are in `ControlContentFixtures.h`, defined in `Contro
 `Tests/Control/ControlTimingTests.cpp` holds the scenarios of the time grid, on contents with synthetic F0 whose
 grids are applied as OpenTune's content owner applies one. `Timing` runs a table of `content.shiftTiming` and
 `moveHandles` writes with hand-computed handle positions (a handle and a section moved freely, up to a
-neighbour, up to ClipStart and ClipEnd, a content range, several moves the same way and across each other), each
+neighbour, up to ClipStart and ClipEnd, a content range, a range with a handle exactly on its start, on its end or on
+both, because the range is closed, several moves the same way and across each other), each
 checked against its result (changes, `clamped`, `CLAMPED`, one undo entry, only the grid aspect, `reRenderQueued`,
 dirty, the editor's notification, tokens equal to a fresh read, `revision` unchanged) and undone back to the exact
 grid before; OpenTune's own undo and redo; `grid_changed`, `grid_not_seeded`, `duplicate_handle`,

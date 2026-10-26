@@ -9,8 +9,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import {
+  ENVIRONMENT_SKIPS,
   checkInstaller,
   checkModels,
+  countScenario,
+  findEnvironmentSkip,
   hashPrefix,
   pinnedInstaller,
   pinnedModelsDir,
@@ -297,6 +300,173 @@ describe('renderSummary: scenario reports', () => {
       put('broken.json', '{not json');
       const got = loadScenarioReports(dir, [path.join(dir, 'smoke.json')]).map((x) => x.scenario);
       assert.deepEqual(got, ['boundary', 'launch-real']);
+    } finally {
+      removeDir(dir);
+    }
+  });
+});
+
+describe('environment SKIPs: registered SKIPs of scenario steps do not fail the run', () => {
+  const okLog = { ok: true, backend: 'CPU', f0ModelPath: `${MODELS}\\fcpe.onnx`, problems: [] };
+  const okContract = { testResults: [{ assertionResults: [{ status: 'passed', fullName: 'a' }] }] };
+  const okSmoke = { steps: [{ name: 'hello', result: 'PASS', ms: 1 }] };
+  const VOCODER = { name: 'vocoder weight: +30 cents, 2 weights', note: 'only one vocoder weight is installed, so there is nothing to switch to' };
+  const AUDIO = { name: 'audio.get and audio.set', note: 'no audio device runs in the instance, so no audio setting can be changed' };
+  const scenario = (name, steps, extra = {}) => ({ scenario: name, report: { schema: 'opentune-mcp-e2e-exe/1', scenario: name, steps: steps.map(([n, r, note]) => ({ name: n, result: r, note })), ...extra } });
+  const run = (scenarios, smoke = okSmoke) => renderSummary({ contract: okContract, smoke, scenarios, log: okLog });
+
+  test('the register holds the two known runner limits, each with a complete entry', () => {
+    const keys = ENVIRONMENT_SKIPS.map((e) => `${e.scenario} / ${e.step}`);
+    assert.deepEqual(keys, ['effects / vocoder weight: +30 cents, 2 weights', 'wave-b-tour / audio.get and audio.set']);
+    assert.equal(new Set(keys).size, keys.length, 'one entry per scenario and step');
+    for (const e of ENVIRONMENT_SKIPS) {
+      // An empty reason would match every note of the step.
+      for (const k of ['scenario', 'step', 'reason', 'why']) assert.ok(typeof e[k] === 'string' && e[k].trim().length > 0, `${e.scenario} / ${e.step}: ${k}`);
+    }
+    assert.equal(ENVIRONMENT_SKIPS.find((e) => e.scenario === 'effects').reason, VOCODER.note);
+    assert.equal(ENVIRONMENT_SKIPS.find((e) => e.scenario === 'wave-b-tour').reason, AUDIO.note);
+  });
+
+  test('the two registered SKIPs do not fail the run and are listed with scenario, step, reason and explanation', () => {
+    const r = run([
+      scenario('effects', [['a', 'PASS'], [VOCODER.name, 'SKIP', VOCODER.note]]),
+      scenario('wave-b-tour', [['b', 'PASS'], [AUDIO.name, 'SKIP', AUDIO.note]]),
+    ]);
+    assert.equal(r.failed, false, r.markdown);
+    assert.match(r.markdown, /\| 场景 effects \| 1 \| 0 \| 0 \| 0 \| 1 \| +\|/);
+    assert.match(r.markdown, /\| 场景 wave-b-tour \| 1 \| 0 \| 0 \| 0 \| 1 \| +\|/);
+    assert.match(r.markdown, /\| 项目 \| PASS \| FAIL \| SKIP \| FLAKY-SKIP \| 环境原因 SKIP \|/);
+    assert.match(r.markdown, /#### 环境原因 SKIP/);
+    for (const e of ENVIRONMENT_SKIPS) {
+      assert.ok(r.markdown.includes(`| ${e.scenario} | ${e.step} | ${e.reason} | ${e.why} |`), `${e.scenario} / ${e.step} is listed`);
+    }
+    assert.match(r.markdown, /结果：\*\*PASS\*\*/);
+    assert.doesNotMatch(r.markdown, /有未运行的步骤/);
+  });
+
+  test('without any environment SKIP there is no list and the column is 0', () => {
+    const r = run([scenario('effects', [['a', 'PASS']])]);
+    assert.equal(r.failed, false);
+    assert.doesNotMatch(r.markdown, /#### 环境原因 SKIP/);
+    assert.match(r.markdown, /\| 场景 effects \| 1 \| 0 \| 0 \| 0 \| 0 \| +\|/);
+  });
+
+  test('the same step with another reason fails (the reason is matched from its beginning, not anywhere)', () => {
+    for (const note of ['the audio device is busy', `outside: ${VOCODER.note}`, '', undefined]) {
+      const r = run([scenario('effects', [['a', 'PASS'], [VOCODER.name, 'SKIP', note]])]);
+      assert.equal(r.failed, true, String(note));
+      assert.match(r.markdown, /\| 场景 effects \| 1 \| 1 \| 1 \| 0 \| 0 \| 场景有未运行的步骤（未登记为环境原因，或原因与登记不符）：vocoder weight: \+30 cents, 2 weights \|/);
+      assert.doesNotMatch(r.markdown, /#### 环境原因 SKIP/);
+    }
+    // A reason that only goes on after the registered text is still the same reason.
+    assert.equal(run([scenario('effects', [['a', 'PASS'], [VOCODER.name, 'SKIP', `${VOCODER.note} (1 found)`]])]).failed, false);
+  });
+
+  test('a SKIP of a step that is not registered fails, also in a registered scenario', () => {
+    const r = run([scenario('effects', [['a', 'PASS'], ['some other step', 'SKIP', VOCODER.note]])]);
+    assert.equal(r.failed, true);
+    assert.match(r.markdown, /some other step/);
+    assert.equal(run([scenario('boundary', [['a', 'PASS'], ['b', 'SKIP', 'no reason registered']])]).failed, true);
+  });
+
+  test('the scenario name has to match too: a registered step in another scenario fails', () => {
+    assert.equal(run([scenario('boundary', [['a', 'PASS'], [VOCODER.name, 'SKIP', VOCODER.note]])]).failed, true);
+    assert.equal(run([scenario('effects', [['a', 'PASS'], [AUDIO.name, 'SKIP', AUDIO.note]])]).failed, true);
+    assert.equal(run([scenario('wave-b-tour', [['a', 'PASS'], [VOCODER.name, 'SKIP', VOCODER.note]])]).failed, true);
+  });
+
+  test('a FLAKY-SKIP never counts as an environment SKIP, even with the registered step and reason', () => {
+    const r = run([scenario('effects', [['a', 'PASS'], [VOCODER.name, 'FLAKY-SKIP', VOCODER.note]])]);
+    assert.equal(r.failed, true);
+    assert.match(r.markdown, /\| 场景 effects \| 1 \| 1 \| 0 \| 1 \| 0 \|/);
+    assert.doesNotMatch(r.markdown, /#### 环境原因 SKIP/);
+  });
+
+  test('only a SKIP is excused: a FAIL of a registered step still fails, and so does any other result', () => {
+    assert.equal(run([scenario('wave-b-tour', [[AUDIO.name, 'FAIL', AUDIO.note]])]).failed, true);
+    assert.equal(run([scenario('wave-b-tour', [['a', 'PASS'], [AUDIO.name, 'WARN', AUDIO.note]])]).failed, true);
+  });
+
+  test('an excused SKIP next to an unexcused one: the run fails and names only the unexcused step', () => {
+    const r = run([scenario('effects', [['a', 'PASS'], [VOCODER.name, 'SKIP', VOCODER.note], ['other', 'SKIP', 'x']])]);
+    assert.equal(r.failed, true);
+    assert.match(r.markdown, /\| 场景 effects \| 1 \| 1 \| 1 \| 0 \| 1 \| 场景有未运行的步骤（未登记为环境原因，或原因与登记不符）：other \|/);
+    assert.match(r.markdown, /#### 环境原因 SKIP/); // the excused one is still listed
+  });
+
+  test('top-level counts cannot hide a skipped step; consistent counts with an excused step stay green', () => {
+    const lying = { schema: 'opentune-mcp-e2e-exe/1', scenario: 'effects', counts: { PASS: 1, FAIL: 0, SKIP: 0, 'FLAKY-SKIP': 0 }, steps: [{ name: 'a', result: 'PASS' }, { name: 'other', result: 'SKIP', note: 'x' }] };
+    assert.equal(run([{ scenario: 'effects', report: lying }]).failed, true);
+    const honest = { schema: 'opentune-mcp-e2e-exe/1', scenario: 'effects', counts: { PASS: 1, FAIL: 0, SKIP: 1, 'FLAKY-SKIP': 0 }, steps: [{ name: 'a', result: 'PASS' }, { name: VOCODER.name, result: 'SKIP', note: VOCODER.note }] };
+    assert.equal(run([{ scenario: 'effects', report: honest }]).failed, false);
+    const extra = { ...honest, counts: { ...honest.counts, SKIP: 2 } };
+    assert.equal(run([{ scenario: 'effects', report: extra }]).failed, true);
+  });
+
+  test('the smoke scenario gets no exception, whatever its steps are called', () => {
+    for (const [name, note] of [[VOCODER.name, VOCODER.note], [AUDIO.name, AUDIO.note]]) {
+      const r = run([], { steps: [{ name: 'hello', result: 'PASS' }, { name, result: 'SKIP', note }] });
+      assert.equal(r.failed, true, name);
+      assert.match(r.markdown, /冒烟有未运行的步骤/);
+    }
+  });
+
+  test('contract vectors keep their rule: SKIPs are reported and do not fail', () => {
+    const c = { testResults: [{ assertionResults: [{ status: 'passed', fullName: 'a' }, { status: 'pending', fullName: 'b' }] }] };
+    const r = renderSummary({ contract: c, smoke: okSmoke, log: okLog });
+    assert.equal(r.failed, false);
+    assert.match(r.markdown, /\| 契约向量 \| 1 \| 0 \| 1 \| 0 \| 0 \|/);
+  });
+
+  test('findEnvironmentSkip and countScenario: the building blocks', () => {
+    assert.equal(findEnvironmentSkip('effects', { name: VOCODER.name, result: 'SKIP', note: VOCODER.note })?.scenario, 'effects');
+    assert.equal(findEnvironmentSkip('effects', { name: VOCODER.name, result: 'skip', note: VOCODER.note })?.scenario, 'effects', 'result is compared case-insensitively like countSmoke');
+    assert.equal(findEnvironmentSkip(null, { name: VOCODER.name, result: 'SKIP', note: VOCODER.note }), null);
+    assert.equal(findEnvironmentSkip('effects', { name: VOCODER.name, result: 'FLAKY-SKIP', note: VOCODER.note }), null);
+    assert.equal(findEnvironmentSkip('effects', { name: VOCODER.name, result: 'SKIP', note: 'else' }), null);
+    const c = countScenario({ steps: [{ name: 'a', result: 'PASS' }, { name: AUDIO.name, result: 'SKIP', note: AUDIO.note }, { name: 'z', result: 'SKIP' }] }, 'wave-b-tour');
+    assert.deepEqual({ pass: c.pass, skip: c.skip, envSkip: c.envSkip, flakySkip: c.flakySkip, unexcused: c.unexcused }, { pass: 1, skip: 1, envSkip: 1, flakySkip: 0, unexcused: ['z'] });
+    assert.deepEqual(c.envSkips.map((e) => e.step), [AUDIO.name]);
+  });
+
+  test('end to end with report files: the effects report has no scenario field, so its file name is the scenario name', () => {
+    const dir = makeTempDir('e2e-envskip');
+    try {
+      const put = (n, o) => fs.writeFileSync(path.join(dir, n), JSON.stringify(o));
+      // Shapes as the MCP runner writes them: overall result SKIP, counts with SKIP: 1.
+      put('effects.json', { schema: 'opentune-mcp-e2e-effects/1', result: 'SKIP', counts: { PASS: 1, FAIL: 0, SKIP: 1, 'FLAKY-SKIP': 0 }, steps: [{ name: 'a', result: 'PASS' }, { name: VOCODER.name, result: 'SKIP', ms: 1, note: VOCODER.note }] });
+      put('wave-b-tour.json', { schema: 'opentune-mcp-e2e-exe/1', scenario: 'wave-b-tour', result: 'SKIP', counts: { PASS: 1, FAIL: 0, SKIP: 1, 'FLAKY-SKIP': 0 }, steps: [{ name: 'a', result: 'PASS' }, { name: AUDIO.name, result: 'SKIP', ms: 16, note: AUDIO.note }] });
+      const scenarios = loadScenarioReports(dir);
+      assert.deepEqual(scenarios.map((s) => s.scenario), ['effects', 'wave-b-tour']);
+      const r = run(scenarios);
+      assert.equal(r.failed, false, r.markdown);
+      assert.match(r.markdown, /\| effects \| vocoder weight/);
+      assert.match(r.markdown, /\| wave-b-tour \| audio\.get and audio\.set/);
+    } finally {
+      removeDir(dir);
+    }
+  });
+
+  test('the summary command: exit 0 with registered SKIPs, exit 1 when one reason differs', () => {
+    const dir = makeTempDir('e2e-envskip-cli');
+    try {
+      const put = (n, o) => fs.writeFileSync(path.join(dir, n), JSON.stringify(o));
+      put('timings.json', [{ step: 'x', seconds: 1 }]);
+      put('contract.json', okContract);
+      put('smoke.json', { schema: 'opentune-mcp-e2e-exe/1', scenario: 'smoke', steps: [{ name: 'hello', result: 'PASS', ms: 1 }] });
+      put('log-report.json', okLog);
+      const scn = path.join(dir, 'scn');
+      fs.mkdirSync(scn);
+      const report = (note) => ({ schema: 'opentune-mcp-e2e-exe/1', scenario: 'wave-b-tour', steps: [{ name: 'a', result: 'PASS' }, { name: AUDIO.name, result: 'SKIP', note }] });
+      const summary = () => spawnSync(process.execPath, [path.join(SCRIPTS, 'e2e-windows.mjs'), 'summary', '--timings', path.join(dir, 'timings.json'), '--contract', path.join(dir, 'contract.json'), '--smoke', path.join(dir, 'smoke.json'), '--scenarios-dir', scn, '--log', path.join(dir, 'log-report.json')], { encoding: 'utf8' });
+      fs.writeFileSync(path.join(scn, 'wave-b-tour.json'), JSON.stringify(report(AUDIO.note)));
+      let r = summary();
+      assert.equal(r.status, 0, r.stdout + r.stderr);
+      assert.match(r.stdout, /#### 环境原因 SKIP/);
+      fs.writeFileSync(path.join(scn, 'wave-b-tour.json'), JSON.stringify(report('the device is gone')));
+      r = summary();
+      assert.equal(r.status, 1, r.stdout + r.stderr);
+      assert.match(r.stdout, /结果：\*\*FAIL\*\*/);
     } finally {
       removeDir(dir);
     }

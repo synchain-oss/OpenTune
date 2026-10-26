@@ -21,6 +21,8 @@ name: E2E Windows
 #   冒烟：`npm run e2e:exe`，读取 OTCP_TARGET_EXE（及 OTCP_TARGET_ARGS、OTCP_TARGET_TIMEOUT_MS、OTCP_E2E_STEP_TIMEOUT_MS），
 #         把 {"result","counts":{PASS,FAIL,SKIP,FLAKY-SKIP},"steps":[{"name","result","ms","note"}]} 写到绝对路径 OTCP_E2E_REPORT。
 # 结果统计把 PASS / FAIL / SKIP / FLAKY-SKIP 分开计数（名字含 FLAKY-SKIP 的跳过项计入 FLAKY-SKIP）。
+# 判定：契约向量的 SKIP 不计为失败；冒烟与其他场景的 SKIP / FLAKY-SKIP 计为失败，唯一的例外是 e2e-windows.mjs 里登记表
+# ENVIRONMENT_SKIPS 登记过的环境原因 SKIP（场景名、步骤名与原因都匹配）：计入「环境原因 SKIP」，不算失败，在摘要里逐条列出。
 # 首次引导：真实用户首次启动 OpenTune 时要回答一次首次引导对话框（选工作流程），对话框开着时接口的写操作得 BUSY(modal_open)。
 # 本 workflow 每次启动都用新的数据目录，所以契约与冒烟之前预置一个「已完成首次使用」的首选项模板
 # （shared.onboardingShown=1，经 OTCP_TARGET_DATA_TEMPLATE 在每次启动前复制进数据目录），并断言模板已复制进每次启动的

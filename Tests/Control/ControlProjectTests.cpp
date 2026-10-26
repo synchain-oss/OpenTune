@@ -735,9 +735,10 @@ bool setSegmentParameters(OpenTuneAudioProcessor& processor, const ContentKey& k
  * Completes the analysis of a reopened content the way OpenTuneAudioProcessor::requestContentRefresh does when the
  * extraction has finished with the preserve-corrections request that ProjectSession::commitPreparedOpen makes: a new
  * curve with the new original F0 (here the F0 the content had when it was saved: the same audio gives the same
- * analysis), the correction segments of the reopened content carried over to it, the curve given to the content
- * owner and the state Ready. The processor's own completion needs the FCPE model, which the model-less runs
- * (the build machines) do not have; with the model it runs by itself and this is not called.
+ * analysis), the correction segments of the reopened content carried over to it and trimmed to the voiced frames of
+ * the new analysis (retainVoicedCorrectionSegments), the curve given to the content owner and the state Ready. The
+ * processor's own completion needs the FCPE model, which the model-less runs (the build machines) do not have; with
+ * the model it runs by itself and this is not called.
  */
 bool completeReanalysis(OpenTuneAudioProcessor& processor, const ContentKey& key, const PitchCurveSnapshot& analysis)
 {
@@ -749,8 +750,13 @@ bool completeReanalysis(OpenTuneAudioProcessor& processor, const ContentKey& key
     curve->setHopSize(analysis.getHopSize());
     curve->setSampleRate(analysis.getSampleRate());
     curve->setOriginalF0(analysis.getOriginalF0());
-    if (!reopened.empty())
+    if (!reopened.empty()) {
         curve->replaceCorrectionSegments(reopened);
+        // The same call, in the same order, as the production path in requestContentRefresh. It runs here, so the
+        // model-less run covers what the cherry-picked change does to the carried segments; the call in the
+        // production path itself is covered only on a machine that has the model.
+        curve->retainVoicedCorrectionSegments();
+    }
     owner->applyOriginalF0(std::move(curve));
     return processor.setContentOriginalF0State(key, OriginalF0State::Ready);
 }
@@ -842,8 +848,13 @@ void scenarioProjectReopenKeepsTuning()
         int differing = 0;
         for (const int frame : frames) {
             const auto position = static_cast<std::size_t>(frame);
-            if (position < savedTuning.corrected.size() && savedTuning.corrected[position]
-                && savedTuning.original[position]
+            if (!CONTROL_CHECK(position < savedTuning.corrected.size() && position < savedTuning.original.size())) {
+                note("frame " + std::to_string(frame) + " is outside the pitch lines read before the save: "
+                     + std::to_string(savedTuning.original.size()) + " original frames, "
+                     + std::to_string(savedTuning.corrected.size()) + " corrected frames");
+                return;
+            }
+            if (savedTuning.corrected[position] && savedTuning.original[position]
                 && std::abs(*savedTuning.corrected[position] - *savedTuning.original[position]) > 0.05)
                 ++differing;
         }
@@ -910,8 +921,14 @@ void scenarioProjectReopenKeepsTuning()
     for (const auto& frames : probes)
         for (const int frame : frames) {
             const auto position = static_cast<std::size_t>(frame);
-            if (!CONTROL_CHECK(position < reopenedTuning.corrected.size() && position < savedTuning.corrected.size()))
+            if (!CONTROL_CHECK(position < reopenedTuning.corrected.size() && position < savedTuning.corrected.size()
+                               && position < savedTuning.original.size())) {
+                note("frame " + std::to_string(frame) + " is outside the pitch lines: corrected "
+                     + std::to_string(reopenedTuning.corrected.size()) + " frames after the open, corrected "
+                     + std::to_string(savedTuning.corrected.size()) + " and original "
+                     + std::to_string(savedTuning.original.size()) + " frames before the save");
                 return;
+            }
             if (!savedTuning.original[position])
                 continue;
             const bool same =

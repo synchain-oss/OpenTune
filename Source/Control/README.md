@@ -2,7 +2,7 @@
 
 # OpenTune control API (OTCP v1)
 
-> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、撤销历史（撤销识别、ControlOriginAction、没有撤销条目的写入）、ContentEditTransaction 与它镜像的上游函数、音符编辑与移调（content.editNotes、content.setPitchShift、AUTO 的 SNAP，修正段按钢琴卷帘的步骤重建，令牌扣除移调步骤）、内容写入的就绪门、忙碌检查、编辑器 bridge、导入、导出（界面与接口共用的导出锁、逐内容的就绪判定、等待伸缩重建、临时文件与最终改名）、时间网格（照时间工具的两轮夹紧移动手柄、整段平移、以 job 种子锚点、TimeGridEditAction 撤销步、它镜像的上游函数）、对话框与首次引导（ui.getState、ui.dismiss：模态窗口的分类、照 Esc 关闭、系统文件选择器、阻止或关闭首次引导、不能压下的 F0 诊断）、镜像登记（MIRRORS.md、mirror-map.json、ControlMirrorDriftTests）、AI agent 快速规则、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
+> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、撤销历史（撤销识别、ControlOriginAction、没有撤销条目的写入）、ContentEditTransaction 与它镜像的上游函数、音符编辑与移调（content.editNotes、content.setPitchShift、AUTO 的 SNAP，修正段按钢琴卷帘的步骤重建，令牌扣除移调步骤）、内容写入的就绪门、忙碌检查、编辑器 bridge、导入、导出（界面与接口共用的导出锁、逐内容的就绪判定、等待伸缩重建、临时文件与最终改名）、时间网格（照时间工具的两轮夹紧移动手柄、整段平移、以 job 种子锚点、TimeGridEditAction 撤销步、它镜像的上游函数）、对话框与首次引导（ui.getState、ui.dismiss：模态窗口的分类、照 Esc 关闭、系统文件选择器、阻止或关闭首次引导、不能压下的 F0 诊断）、应用退出（app.quit：检查顺序、先回复再退出——回复写出之后才进入退出步骤，退出走窗口关闭按钮自己的路径、exitDeadlineMs 的量测依据）、镜像登记（MIRRORS.md、mirror-map.json、ControlMirrorDriftTests）、AI agent 快速规则、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
 
 This directory holds the local control API of OpenTune Standalone: a JSON-RPC protocol over a loopback
 TCP connection (OTCP v1, specified in `Tests/Control/spec/otcp/v1/PROTOCOL.md`), with which another
@@ -54,6 +54,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `Edit/NoteCorrection.*` | The correction segments the piano roll rebuilds after an edit of notes, and SNAP (AUTO in the openDyne scheme), computed as the piano roll computes them and committed into a ContentEditTransaction (see "Note edits and the pitch shift"). |
 | `Ops/WorkspaceOps.*`, `../Standalone/ControlEditorBridgeWorkspace.cpp` | `ui.setWorkspace`: the two view buttons of the transport bar through the bridge, view state only apart from the tempo that the focus change can rewrite (see "Workspace"). |
 | `Ops/SelectionOps.*`, `../Standalone/ControlEditorBridgeSelection.cpp` | `ui.setSelection`: the effects of a click on a clip predicted, then the click and double click through the arrangement view's hook, and the effects observed (see "Selection"). |
+| `Ops/AppQuitOps.*`, `../Standalone/ControlEditorBridge.cpp` (`canQuit()`, `requestQuit()`) | `app.quit`: the checks, the result, and the end of the instance after the reply is written (the dispatcher's after-reply step); the editor's side calls the window's own close button handler (see "Quit"). |
 | `Edit/PitchShiftLedger.*` | The steps of OpenTune's pitch shifts that the `revision` token leaves out (see "Note edits and the pitch shift"). |
 | `mirror-map.json`, `MIRRORS.md` | The upstream functions that the API mirrors, with a hash of each (machine-readable source of truth and the table generated from it); checked by `Tests/Control/ControlMirrorDriftTests.cpp` (see "Mirrors"). |
 | `ControlFileIdentity.*` | File identity (volume and file id, `st_dev` and `st_ino`), "same file" by identity, and the final rename that never replaces (PROTOCOL.md sections 20.3 and 20.4); standard library and operating system only. |
@@ -81,7 +82,8 @@ later part use JUCE and the processor. `cmake/OpenTuneControl.cmake` lists all f
   synchronously (for example an operation that closes the application or destroys the processor):
   `ControlService::stop()` joins the connection thread that waits for that function, so the join would
   only end at its bounded timeout. Such an operation posts the stop with `post()` from the function and
-  returns.
+  returns; `app.quit` hands it to the dispatcher (`ControlOpContext::endInstanceAfterReply()`), which posts it
+  only after the response is written (see "Quit").
 - Methods run only through `ControlDispatcher`: every access of an operation to the processor or the
   editor bridge goes through `ControlOpContext`, which refuses any other thread than the message thread,
   in every build type.
@@ -138,6 +140,11 @@ joining the threads it owns); the listener stops (new
 requests get `SHUTTING_DOWN`, sessions answer what already arrived and close, the listener closes,
 threads are joined with a bounded wait) and deletes the discovery file; the ready file is deleted if it
 still holds this instance's content; the log gate closes. `stop()` is idempotent.
+
+**Stop by `app.quit`.** The application's own shutdown follows the same sequence; `app.quit` only starts it from the
+control API, after its response is written, by pressing the window's close button (see "Quit"). The control service
+stops first (`stop()` above, which deletes the discovery file), then the window's close handler saves the plug-in state
+and ends the application's message loop, and the processor destructor runs `stop()` again as a no-op.
 
 ## Hooks
 
@@ -201,6 +208,10 @@ hello). For each request the dispatcher then:
    `controlMapError()`, called by the dispatcher, is the only place where errors become protocol errors.
    Other OpenTune errors are mapped by their `ErrorCode` with the code's fixed text as `detail`, never the
    error's own message, which can contain paths or names from the project.
+6. writes the response, and only then, for a method that ends the instance (`app.quit`, through
+   `ControlOpContext::endInstanceAfterReply()`), posts the exit step to the message thread. The stopping state begins
+   when the method's result is decided, before the response is written, so that no request of another session
+   executes between the decision and the exit (see "Quit").
 
 A request occupies its connection thread while it waits, so the requests of one session start on the
 message thread in the order they arrived (section 3.3 rule 6), and sessions do not wait for each other.
@@ -552,7 +563,8 @@ an undo or redo (`afterUndoRedo()`), the refresh after a time-grid edit (`onTime
 `onTimeGridRevisionChanged()`, as its own commit of a grid does, and a redraw of the arrangement), the view (workspace,
 piano roll clip, selection, visible track count), the focus of an imported clip
 (`applyPlacementSelectionContext`), revealing tracks, the note generation parameters of the piano roll,
-the project session and its worker pool, and the audio device manager. The project flows are in
+the project session and its worker pool, the audio device manager, and the window's close (`canQuit()` and
+`requestQuit()`, for `app.quit`, see "Quit"). The project flows are in
 `ControlEditorBridgeProject.cpp` (see "Project files"), the dialogs and the onboarding in
 `ControlEditorBridgeModals.cpp` (see "Dialogs and onboarding"), the preferences and the audio device in
 `ControlEditorBridgePrefs.cpp` (see "Preferences and audio device"). Tracks follow in files of their own.
@@ -1138,14 +1150,17 @@ decimal to one decimal and marks the project as changed.
 **Vectors.** The request vectors `ui/set-workspace-piano-roll`, `-noop`, `-invalid` and `-busy-modal` run in `UiVectors`
 against the test bridge; the two scenarios `ui/set-workspace-arrangement` and `ui/set-workspace-piano-roll-opendyne` need
 clips, a selection and the editing scheme, so they run in `SelectionVectors` on the real processor (see "Selection").
-The test bridge does not model what the real editor does to the open clip when the editing scheme changes, so these
-two run green headlessly; on the real window (Standalone, the vectors replayed over the discovery file) four of the five
-vectors pass, and `ui/set-workspace-piano-roll-opendyne` stops at its sixth step, before `ui.setWorkspace`: the
-`prefs.set` that switches to openDyne generates the notes of the selected clip (`SCHEME_GENERATED_NOTES`, the
-revision of the clip's notes changes), because `ui.setSelection` has loaded the clip into the piano roll even while the
-arrangement is shown (`ui.getState` reports it as `pianoRollContentId`) and a scheme change generates the notes of the
-clip that is open in the editor. The switch itself, with the clip's notes generated, was checked on the real window: the
-notes, the revisions and the warnings are unchanged by it.
+Since spec rc.7, `ui/set-workspace-piano-roll-opendyne` selects the clip in the openTune scheme, where a selection
+generates nothing, and then switches the scheme with `prefs.set`: a selection loads the clip into the piano roll even
+while the arrangement is shown (`ui.getState` reports it as `pianoRollContentId`), so the switch to openDyne generates
+the notes of that clip (`SCHEME_GENERATED_NOTES`, the revision of the clip's notes changes), and `ui.setWorkspace` after
+it changes the view only. The test bridge of `SelectionVectors` models both halves: a selection, and the focus of an
+import (`TestUiBridge::focusPlacement()`), load the clip into the piano roll without changing the view, and
+`SelectionBridge::onPreferencesChanged()` generates the notes of the clip the piano roll shows when the scheme becomes
+the notes-primary one, as `PianoRollComponent::ensureOpenDyneNotesIfNeeded()` does (the write that changed the scheme
+marks the project as changed, as `prefs.set` does). The same steps were replayed on the real window (Standalone, over the
+discovery file): the switch generated the clip's notes, the warnings and the changed notes revision are as the vector
+expects, and the view switch after it left the notes, the revisions and the dirty state as they were.
 
 Tests: `ControlProcessorTests.UiWorkspace` in `Tests/Control/ControlUiTests.cpp` (both directions, the no-op not reaching
 the editor, the params, busy for each reason, a bridge that cannot switch or does not, no editor, the revert recipe sent
@@ -1201,7 +1216,8 @@ alignment since spec rc.7, so a selection lists no `reference` component and no 
 
 Tests: `Tests/Control/ControlSelectionTests.cpp` with a test bridge that selects as the editor does on the real
 processor (`generateNotesOnlyByContentKey` for the piano roll's notes, `preheatReferenceAlignmentFeatures` for the
-reference context, whose effect the result does not report). `Selection` checks the capability, the params, `NOT_FOUND`, `UNSUPPORTED`, busy, dryRun leaving the
+reference context, whose effect the result does not report; and the same note generation when `prefs.set` makes the
+scheme openDyne while the piano roll shows a clip, see "Workspace"). `Selection` checks the capability, the params, `NOT_FOUND`, `UNSUPPORTED`, busy, dryRun leaving the
 state as it was, a clip, `openEditor`, the scale with `ui.getState`, the no-op, the revert recipe sent back and a track.
 `SelectionMatrix` runs both schemes with a clip with and without notes and with and without a reference binding: the
 prediction of dryRun equals the committed result (a binding adds no side effect and no warning), and dryRun leaves every field of the state as it was. The test bridge
@@ -1357,6 +1373,92 @@ runs `prefs/set-scheme-job` with the piano roll opened on the test bridge instea
 `ui.setSelection`, whose test bridge is in `ControlSelectionTests.cpp`. Behaviour on a real device (listing, switching type and output, ASIO) cannot be
 tested headless and is checked by hand on a real installation.
 
+## Quit
+
+`app.quit` (`Ops/AppQuitOps.cpp`, capability `app.quit`) ends OpenTune the way the window's close button does, and
+answers before it does. Its result is not a write envelope (PROTOCOL.md section 14.1):
+`{quitting: true, discardedUnsavedChanges, projectPath, exitDeadlineMs, warnings}`, plus `nullReasons`
+(`projectPath: "no_project_path"`) when the project was never saved. `discardedUnsavedChanges` is true when the project
+had unsaved changes and `discardUnsaved: true` was given; `warnings` then holds `IRREVERSIBLE` with the subject
+`{singleton: "project"}`, otherwise it is empty. Nothing in the result says anything about the process after the reply.
+
+**The checks**, in this order; a failure answers with `executed` false and changes nothing:
+
+1. `SHUTTING_DOWN`, by the dispatcher, once the stopping state began.
+2. The editor: `UNSUPPORTED(no_editor_window)` without a bridge (a headless instance), `UNSUPPORTED(capability_missing)`
+   when the bridge does not close its window (`ControlUiBridge::canQuit()`) or does not report its project.
+3. `BUSY`: the five reasons of every write (`controlCheckBusy()`: pointer down, modal dialog, import, export, project
+   operation, an export lock held by the UI included), then any job of the control API that has not finished
+   (`ControlJobs::activeKinds()`), because the process would end under it. The reason of a job is the one PROTOCOL.md
+   section 13.2 names for its kind (`import_in_progress`, `export_in_progress`, `project_operation` for `projectOpen`
+   and `projectSave`) and `job_in_progress` for any other kind (`prefsApply`, `timeGridSeed`). With several jobs the
+   reasons of section 13.2 come first in the order of that section and `job_in_progress` last, whichever job started
+   first.
+4. `UNSAVED_CHANGES(project_dirty)`: the project has unsaved changes and `discardUnsaved` is not true. The flag is
+   `ProjectSession::isDirty()` through `ControlUiBridge::projectInfo()`, the one `project.open` checks for its
+   `UNSAVED_CHANGES`. The window's close button quits without asking; `app.quit` is deliberately stricter.
+
+**Reply first, then quit.** The order is a mechanism of the dispatcher, not a delay. An operation that ends the instance
+calls `ControlOpContext::endInstanceAfterReply(action)` and returns its result. In `ControlDispatcher::execute()` (the
+message thread) a successful result with such an action does two things: it enters the stopping state at once (the
+requests of other sessions that queued behind it get `SHUTTING_DOWN`, and none of them executes, so nothing changes
+between the decision and the exit), and it hands the action to the outcome. The connection thread then writes the
+response (`respond()`), and only after the write returned does it post the exit step to the message thread
+(`runAfterReply()`); the step runs `action`. A step that was queued before the reply could stop the service while the
+reply was still being written, so the order is part of the single entry point and a test checks it (below). The network
+thread holds no lease while it waits, as for every method.
+
+**The exit step** (`endInstance()` in `AppQuitOps.cpp`, message thread): `ControlService::stop()` (the connections get
+their bounded flush and close, the listener closes, the discovery file is deleted), then `ControlUiBridge::requestQuit()`.
+The editor's side, `ControlEditorBridge::requestQuit()`, calls `closeButtonPressed()` of the top-level
+`juce::StandaloneFilterWindow` through its `juce::DocumentWindow` base. That is the close button's own handler, which
+does the two steps (`StandalonePluginHolder::savePluginState()` and `JUCEApplicationBase::quit()`), so nothing of it is
+repeated in `Source/Control` and there is no mirror, drift pin or hook to register: the function that would drift is the
+one called. The processor's destructor then runs the normal shutdown, with `ControlService::stop()` already done (it is
+idempotent). `canQuit()` is true when a standalone holder and that window exist. If `requestQuit()` fails after the reply
+(the window is gone) the control API stays stopped, the application keeps running and the failure is logged.
+
+**`exitDeadlineMs`** (`kExitDeadlineMs` in `AppQuitOps.cpp`): the longest time in which the process ends after the reply,
+10 s, which the vectors' runners may rely on (they wait 15 s; the schema allows 60 s). Measured on the Standalone with
+the control API on, from the request to the end of the process: 0.50 to 0.58 s in six runs (an empty project, a dirty
+one, a project with an analysed clip and the official models loaded, after dismissing the first-run overlay); the
+connection itself closes after about 0.25 s.
+
+**Capability.** `app.quit` is reported by every instance of this build, like the other editor-bound capabilities, as
+PROTOCOL.md section 22 asks (reported exactly when implemented); an instance without a window that can be closed answers
+the call itself with `UNSUPPORTED`.
+
+**Tests and the test seam.** `Tests/Control/ControlQuitTests.cpp` (`ControlProcessorTests.AppQuit`,
+`.AppQuitWithoutWindow`, `.AppQuitResult`, `.AppQuitSequence`, `.AppQuitStopping`, `.AppQuitVectors`):
+
+- `AppQuit`: the capability and its place after `audio.device`, the params, `UNSAVED_CHANGES`, every BUSY reason alone
+  and in the order of the checks (also an export lock held by the UI, and each job kind, several jobs and finished jobs
+  that do not count), and the quit with `discardUnsaved`.
+- `AppQuitWithoutWindow`: no bridge, a bridge that cannot quit, the capability withheld.
+- `AppQuitResult`: the result shapes: a project never saved, the consent given for a project without changes (nothing
+  discarded), discarded changes with `IRREVERSIBLE`, and a saved project with its path as it is, also with non-ASCII
+  characters.
+- `AppQuitSequence` and `AppQuitStopping`: the order and the stopping state, with the test bridge's quit hook
+  (`TestUiBridge::onQuitRequest`, which runs where the window's close would) checking that the client already got its
+  reply, the service has stopped, the dispatcher is stopping, the discovery file is deleted and the listener is closed;
+  then three sessions queued behind each other (`app.quit`, a second `app.quit`, `transport.setTempo`): the later ones
+  get `SHUTTING_DOWN` or a closed connection and change nothing, and the window is closed once.
+  `ControlDispatcher::setAfterReplyObserverForTesting()` is the seam of the ordering test: it reports
+  `ReplyWritten` (connection thread) and `ExitStepStarted` (message thread), because `ControlService::stop()` joins the
+  connection thread and would deliver the reply even from a step that was queued too early, so the client alone cannot
+  tell the two orders apart.
+- `AppQuitVectors`: all nine `app/quit-*` vectors, with their `given` established; a vector that ends the instance
+  (`endsSession`) is checked as `vectors/README.md` says as far as a headless process can: the connection closes
+  (15 s), the port refuses, the discovery file is gone and the test bridge saw one quit request. The exit status of the
+  process cannot be observed headless; it was checked on the real Standalone (see below).
+
+The test bridge does not quit: `TestUiBridge::requestQuit()` counts the request (`quitRequests`) and calls the hook.
+
+**On the real window** (Standalone, a private `OPENTUNE_DATA_DIR`, `--control-api`): a clean project and a dirty one with
+`discardUnsaved` end the process with exit code 0 inside `exitDeadlineMs` with the discovery file deleted, and the window
+saved its settings as it does when the user closes it; a dirty project without `discardUnsaved` and an open first-run
+overlay are refused (`UNSAVED_CHANGES`, `BUSY(modal_open)`) and the process keeps running and answering.
+
 ## Dirty flag and revision tokens
 
 The dirty flag belongs to the editor's `ProjectSession`; without an editor it is false. Revision tokens
@@ -1428,7 +1530,7 @@ for the rest of the process in JUCE 9.0.3. Run them with `ctest -R Control`.
 
 Every runner of the specification's vectors (`Vectors`, `JobVectors`, `ExportVectors`, `EditVectors`, `TimingVectors`,
 `ProjectVectors`, `TrackVectors`, `UiVectors`, `PrefsVectors`, `AudioVectors`,
-`ArrangementVectors`, `SelectionVectors` and the session vectors of `ControlUnitTests`) records the result of each
+`ArrangementVectors`, `SelectionVectors`, `AppQuitVectors` and the session vectors of `ControlUnitTests`) records the result of each
 vector it considers. When the environment variable `OTCP_VECTOR_REPORT_DIR` names a directory (an absolute path), a
 runner writes `<directory>/<test name>.json` there, e.g. `ControlProcessorTests.TrackVectors.json`:
 `{"runner": "cpp-headless:<test name>", "commit": "<OTCP_VECTOR_REPORT_COMMIT or empty>", "vectors": [{"id", "status":
@@ -1611,11 +1713,15 @@ dialogs above it), the no-ops, busy and the params. `UiOnboardingWithheld` runs 
 vectors; a fixed list of them must pass, and those of `ui.setSelection` and the scenarios of `ui.setWorkspace` run in
 `SelectionVectors` (see "Selection").
 
+`Tests/Control/ControlQuitTests.cpp` holds the scenarios of `app.quit` (`AppQuit`, `AppQuitWithoutWindow`,
+`AppQuitResult`, `AppQuitSequence`, `AppQuitStopping`, `AppQuitVectors`), described in "Quit". `ControlDispatcherTests.cpp`
+leaves the `app.quit` vectors to `AppQuitVectors`, with the reason in its skip list.
+
 ## Capabilities and protocol versions
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
-`jobs.v1`, `import.v1`, `export.v1`, `ui.bridge` with `ui.onboardingClose`, `ui.workspace`, `edit.v1`, `history.v1`, `timing.v1`, `transport.v1`, `arrangement.v1`, `tracks.v1`, `project.io`, `prefs.write` and `audio.device`). The listener answers a method of an unreported capability itself with
+`jobs.v1`, `import.v1`, `export.v1`, `ui.bridge` with `ui.onboardingClose`, `ui.workspace`, `edit.v1`, `history.v1`, `timing.v1`, `transport.v1`, `arrangement.v1`, `tracks.v1`, `project.io`, `prefs.write`, `audio.device` and `app.quit`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
@@ -1668,6 +1774,7 @@ than one step.
 | `prefs.set` | `prefs.write` | `Ops/PrefsOps.cpp` (a job of kind `prefsApply` for a change of the editing scheme, the vocoder weight or the rendering priority; `Ops/PrefsModels.cpp` for the options and the runtime calls) | `ControlProcessorTests.PrefsRoundTrip`, `.PrefsSchemeJob`, `.PrefsOptions`, `.PrefsVocoderJob`, `.PrefsVocoderOverlap`, `.PrefsVectors` | `methods/prefs.set.schema.json` |
 | `audio.get` | `audio.device` | `Ops/AudioDeviceOps.cpp` | `ControlProcessorTests.AudioDevice`, `.AudioVectors` | `methods/audio.get.schema.json` |
 | `audio.set` | `audio.device` | `Ops/AudioDeviceOps.cpp` | `ControlProcessorTests.AudioDevice`, `.AudioVectors` | `methods/audio.set.schema.json` |
+| `app.quit` | `app.quit` | `Ops/AppQuitOps.cpp` (editor side in `../Standalone/ControlEditorBridge.cpp`; the after-reply step in `ControlDispatcher.cpp`) | `ControlProcessorTests.AppQuit`, `.AppQuitWithoutWindow`, `.AppQuitResult`, `.AppQuitSequence`, `.AppQuitStopping`, `.AppQuitVectors` | `methods/app.quit.schema.json` |
 | `transport.control` | `transport.v1` | `Ops/TransportOps.cpp` | `ControlProcessorTests.Transport`, `.TrackVectors` | `methods/transport.control.schema.json` |
 | `transport.setTempo` | `transport.v1` | `Ops/TransportOps.cpp` | `ControlProcessorTests.Transport`, `.TrackVectors` | `methods/transport.setTempo.schema.json` |
 | `transport.setLoop` | `transport.v1` | `Ops/TransportOps.cpp` | `ControlProcessorTests.Transport`, `.TrackVectors` | `methods/transport.setLoop.schema.json` |

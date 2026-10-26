@@ -76,6 +76,11 @@ public:
     bool select(int trackId, std::uint64_t placementId, bool openEditor) override
     {
         ++selectCalls;
+        if (breaksOffAfterFocusMove) {
+            // The double click moved the keyboard focus (and the BPM field committed) and then the call broke off.
+            commitBpmFieldOnViewSwitch();
+            return false;
+        }
         auto* arrangement = processor_.getStandaloneArrangement();
         // StandaloneArrangement::selectPlacement(): the active track and its selected clip, as the view commits a
         // click (commitPlacementSelection) and the editor commits a track with no clip
@@ -126,9 +131,28 @@ public:
         return true;
     }
 
+    /** The editor's syncSharedAppPreferences() after a preference changed: when the editing scheme became the
+        notes-primary one, the piano roll that shows a clip whose notes were never generated generates them
+        (PianoRollComponent::ensureOpenDyneNotesIfNeeded). The caller of the write marks the project as changed. */
+    void onPreferencesChanged() override
+    {
+        const bool notesPrimary = openDyne();
+        const bool becameNotesPrimary = notesPrimary && !appliedNotesPrimary_;
+        appliedNotesPrimary_ = notesPrimary;
+        if (becameNotesPrimary && view.pianoRollPlacementId != 0)
+            generateNotesOfPianoRoll();
+    }
+
+    /** The scheme the views run with follows the preference without a notification, as when a test sets the
+        preference before it builds its project (the editor applies the scheme of a loaded project the same way). */
+    void syncAppliedScheme() { appliedNotesPrimary_ = openDyne(); }
+
     /** canSelect(): false is a bridge without the selection. */
     bool selects = true;
     int selectCalls = 0;
+    /** select() commits the BPM field, as the focus that the view switch moved does, and then fails, taking nothing
+        else: an editor whose call breaks off after the focus left the field. */
+    bool breaksOffAfterFocusMove = false;
     /** The parameters of the piano roll's note generation (getCurrentAutoTuneParams). */
     NoteGeneratorParams generatorParams;
 
@@ -148,12 +172,30 @@ private:
         view.pianoRollPlacementId = placementId;
         if (placementId == 0 || !openDyne())
             return;
+        if (generateNotesIfNeeded(key))
+            markDirty();
+    }
+
+    /** Generates the notes of the clip the piano roll shows (the scheme just became the notes-primary one). */
+    void generateNotesOfPianoRoll()
+    {
+        StandaloneArrangement::Placement placement;
+        for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId)
+            if (processor_.getPlacementById(trackId, view.pianoRollPlacementId, placement)) {
+                generateNotesIfNeeded(placement.contentKey);
+                return;
+            }
+    }
+
+    /** PianoRollComponent::ensureOpenDyneNotesIfNeeded(): the notes of a content whose notes were never generated and
+        whose F0 exists; true when it generated them. */
+    bool generateNotesIfNeeded(const ContentKey& key)
+    {
         const auto snapshot = processor_.getContentSnapshot(key);
         if (snapshot == nullptr || snapshot->noteTopologyInitialized || snapshot->pitchCurve == nullptr
             || snapshot->pitchCurve->getOriginalF0().empty())
-            return;
-        if (processor_.generateNotesOnlyByContentKey(key, generatorParams))
-            markDirty();
+            return false;
+        return processor_.generateNotesOnlyByContentKey(key, generatorParams);
     }
 
     /** OpenTuneAudioProcessorEditor::refreshReferenceContext() after evaluateAutoRefUiState(). */
@@ -193,6 +235,8 @@ private:
     }
 
     OpenTuneAudioProcessor& processor_;
+    /** The editing scheme the views run with: notes-primary or not (OpenTuneAudioProcessorEditor's applied scheme). */
+    bool appliedNotesPrimary_ = false;
 };
 
 /** A started processor with the selection bridge registered and an open session. */
@@ -229,6 +273,7 @@ struct SelectionFixture
         preferences.setAudioEditingScheme(openDyne ? AudioEditingScheme::Scheme::NotesPrimary
                                                    : AudioEditingScheme::Scheme::CorrectedF0Primary);
         preferences.setExperimentalFeaturesEnabled(experimental);
+        bridge->syncAppliedScheme();
     }
 
     /** Track 0 active with no clip selected on any track, as in a new project: an import selects the imported clip and
@@ -583,6 +628,18 @@ void scenarioSelectionImpl()
     CONTROL_CHECK(memberOf(dry, "dryRun").asBoolean() && reportsNoTempoChange(dry)
                   && memberOf(dry, "sideEffects").find("workspaceSwitched") != nullptr);
     CONTROL_CHECK(isNear(f.processor->getBpm(), 120.27) && f.bridge->view.workspace == "arrangement");
+
+    // A selection that fails after the focus left the BPM field (SelectionBridge::breaksOffAfterFocusMove): the field
+    // committed, so the tempo 120.27 was rewritten to 120.3 before the error. "Nothing changed" would be false: the
+    // error says executed true and names the tempo (kind and reason as before).
+    f.bridge->breaksOffAfterFocusMove = true;
+    CONTROL_CHECK(f.api.failsAfterChange("ui.setSelection", selectClip(idA, true), "INTERNAL", "",
+                                         "the tempo changed from 120.27 to 120.3 bpm"));
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.3));
+    // With a tempo that the field leaves as it is, the failure still promises that nothing changed.
+    CONTROL_CHECK(f.api.fails("ui.setSelection", selectClip(idA, true), "INTERNAL", ""));
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.3));
+    f.bridge->breaksOffAfterFocusMove = false;
     CONTROL_CHECK(f.service().dispatcher()->threadProbe().otherThreadAccesses.load() == 0);
 }
 

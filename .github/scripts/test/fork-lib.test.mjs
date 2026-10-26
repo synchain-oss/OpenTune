@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { stripYamlComment, workflowCodeLines, workflowTriggerBlock, spdxProblem, needsSpdx } from '../fork-checks.mjs';
-import { classifyPath, eolStyle, findSignoffs, globToRegExp, matchesAny, parseArgs, parseNameStatusZ, parseUpstreamBackports, reportToGitHub, result, GUARDED_PATTERNS } from '../fork-lib.mjs';
+import { classifyPath, eolStyle, findSignoffs, globToRegExp, matchesAny, parseArgs, parseNameStatusZ, parseUpstreamBackports, protectedRegisterBranch, reportToGitHub, result, GUARDED_PATTERNS } from '../fork-lib.mjs';
 
 describe('globs and path classes', () => {
   test('globToRegExp', () => {
@@ -131,22 +131,52 @@ describe('reportToGitHub', () => {
   });
 });
 
+describe('protectedRegisterBranch', () => {
+  test('dev and feature/control-api, in every spelling of --base, are the protected branches', () => {
+    for (const ref of ['dev', 'origin/dev', 'refs/remotes/origin/dev', 'refs/heads/dev']) assert.equal(protectedRegisterBranch(ref), 'dev', ref);
+    for (const ref of ['feature/control-api', 'origin/feature/control-api', 'refs/remotes/origin/feature/control-api', 'refs/heads/feature/control-api']) {
+      assert.equal(protectedRegisterBranch(ref), 'feature/control-api', ref);
+    }
+  });
+
+  test('any other name is not protected, and look-alikes do not pass', () => {
+    const sha = 'a'.repeat(40);
+    for (const ref of [
+      'feature/x', 'origin/feature/x', 'refs/remotes/origin/review-base/7', 'sync/20261101', 'main',
+      'dev-x', 'xdev', 'feature/control-api-2', 'feature/control-api/x', 'origin/origin/dev', 'refs/heads/origin/dev',
+      'refs/remotes/upstream/dev', 'refs/tags/dev', 'DEV', sha, '', null, undefined,
+    ]) {
+      assert.equal(protectedRegisterBranch(ref), null, String(ref));
+    }
+  });
+});
+
 describe('parseUpstreamBackports', () => {
   const sha = (c) => c.repeat(40);
+  const file = (patch, blob) => ({ patchId: sha(patch), blob: sha(blob) });
   const entry = (files) => ({ upstreamCommit: sha('a'), files });
 
-  test('a well-formed register lists every registered file with its patch-id and commit', () => {
-    const r = parseUpstreamBackports(JSON.stringify({ backports: [entry({ 'Source/Utils/A.cpp': sha('1') }), { ...entry({ 'Source/Utils/B.h': sha('2') }), upstreamCommit: sha('b') }] }));
+  test('a well-formed register lists every registered file with its patch-id, blob and commit', () => {
+    const r = parseUpstreamBackports(JSON.stringify({ backports: [entry({ 'Source/Utils/A.cpp': file('1', '3') }), { ...entry({ 'Source/Utils/B.h': file('2', '4') }), upstreamCommit: sha('b') }] }));
     assert.equal(r.error, null);
     assert.deepEqual([...r.files], [
-      ['Source/Utils/A.cpp', { patchId: sha('1'), upstreamCommit: sha('a') }],
-      ['Source/Utils/B.h', { patchId: sha('2'), upstreamCommit: sha('b') }],
+      ['Source/Utils/A.cpp', { patchId: sha('1'), blob: sha('3'), upstreamCommit: sha('a') }],
+      ['Source/Utils/B.h', { patchId: sha('2'), blob: sha('4'), upstreamCommit: sha('b') }],
     ]);
+  });
+
+  test('notes next to the files are ignored', () => {
+    const r = parseUpstreamBackports(JSON.stringify({
+      backports: [{ ...entry({ 'a.cpp': file('1', '3') }), upstreamRepo: 'x/y', approved: '2026-10-26', summary: 's', hookFileChanges: { 'Source/PluginProcessor.cpp': 'one added line' } }],
+      comment: 'anything',
+    }));
+    assert.equal(r.error, null);
+    assert.deepEqual([...r.files.keys()], ['a.cpp']);
   });
 
   test('an empty list is valid, a BOM is tolerated', () => {
     assert.deepEqual(parseUpstreamBackports('{"backports":[]}'), { files: new Map(), error: null });
-    assert.equal(parseUpstreamBackports('\uFEFF{"backports":[]}').error, null);
+    assert.equal(parseUpstreamBackports('﻿{"backports":[]}').error, null);
   });
 
   test('anything malformed is "no registrations" with the reason, never an exception', () => {
@@ -162,12 +192,11 @@ describe('parseUpstreamBackports', () => {
       JSON.stringify({ backports: [{ upstreamCommit: 'abc', files: {} }] }),
       JSON.stringify({ backports: [{ upstreamCommit: sha('A'), files: {} }] }),
       JSON.stringify({ backports: [{ upstreamCommit: sha('a') }] }),
-      JSON.stringify({ backports: [entry({ 'a.cpp': 'xyz' })] }),
-      JSON.stringify({ backports: [entry({ 'a.cpp': 5 })] }),
-      JSON.stringify({ backports: [entry({ '/abs.cpp': sha('1') })] }),
-      JSON.stringify({ backports: [entry({ '../up.cpp': sha('1') })] }),
-      JSON.stringify({ backports: [entry({ 'back\\slash.cpp': sha('1') })] }),
-      JSON.stringify({ backports: [entry({ 'a.cpp': sha('1') }), entry({ 'a.cpp': sha('2') })] }),
+      JSON.stringify({ backports: [entry({ 'a.cpp': file('1', '3') }), { upstreamCommit: sha('a'), files: [] }] }),
+      JSON.stringify({ backports: [entry({ '/abs.cpp': file('1', '3') })] }),
+      JSON.stringify({ backports: [entry({ '../up.cpp': file('1', '3') })] }),
+      JSON.stringify({ backports: [entry({ 'back\\slash.cpp': file('1', '3') })] }),
+      JSON.stringify({ backports: [entry({ 'a.cpp': file('1', '3') }), entry({ 'a.cpp': file('2', '4') })] }),
     ];
     for (const text of bad) {
       const r = parseUpstreamBackports(text);
@@ -176,8 +205,31 @@ describe('parseUpstreamBackports', () => {
     }
   });
 
+  test('a file entry needs both patchId and blob as 40 lowercase hex digits; the old single patch-id form is rejected', () => {
+    const bad = [
+      sha('1'), // the former format: the patch-id alone
+      null,
+      [],
+      {},
+      { patchId: sha('1') },
+      { blob: sha('3') },
+      { patchId: sha('1'), blob: 'xyz' },
+      { patchId: 'xyz', blob: sha('3') },
+      { patchId: sha('1'), blob: sha('c').toUpperCase() },
+      { patchId: sha('1'), blob: 5 },
+      { patchId: sha('1'), blob: null },
+    ];
+    for (const spec of bad) {
+      const r = parseUpstreamBackports(JSON.stringify({ backports: [entry({ 'a.cpp': spec })] }));
+      assert.equal(r.files.size, 0, JSON.stringify(spec));
+      assert.match(r.error ?? '', /backports\[0\]\.files\[a\.cpp\]/, JSON.stringify(spec));
+    }
+    assert.match(parseUpstreamBackports(JSON.stringify({ backports: [entry({ 'a.cpp': { patchId: sha('1') } })] })).error, /blob 缺失/);
+    assert.match(parseUpstreamBackports(JSON.stringify({ backports: [entry({ 'a.cpp': { blob: sha('3') } })] })).error, /patchId 缺失/);
+  });
+
   test('one bad entry voids the whole register', () => {
-    const r = parseUpstreamBackports(JSON.stringify({ backports: [entry({ 'good.cpp': sha('1') }), entry({ 'bad.cpp': 'zz' })] }));
+    const r = parseUpstreamBackports(JSON.stringify({ backports: [entry({ 'good.cpp': file('1', '3') }), entry({ 'bad.cpp': { patchId: 'zz', blob: sha('3') } })] }));
     assert.equal(r.files.size, 0);
     assert.match(r.error, /backports\[1\]/);
   });

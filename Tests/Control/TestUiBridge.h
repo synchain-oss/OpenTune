@@ -61,9 +61,13 @@ public:
     juce::ThreadPool* projectWorkerPool() override { return pool; }
     void onTimeGridChanged() override { ++timeGridNotifications; }
 
+    /** The editor's applyPlacementSelectionContext(): the clip becomes the selected clip of the active track, which
+        loads it into the piano roll without switching the view (a selection shows the clip in the piano roll even
+        while the arrangement is shown). */
     bool focusPlacement(int trackId, std::uint64_t placementId) override
     {
         focused.emplace_back(trackId, placementId);
+        view.pianoRollPlacementId = placementId;
         return true;
     }
     bool revealTracks(int count) override
@@ -141,6 +145,8 @@ public:
         the view already does nothing. A bridge without the switch returns false. */
     bool setWorkspace(bool arrangement) override
     {
+        if (commitsBpmFieldOnFailedSwitch && view.workspace != (arrangement ? "arrangement" : "pianoRoll"))
+            commitBpmFieldOnViewSwitch();
         if (!switchesWorkspace)
             return false;
         if (swallowsWorkspaceSwitch)
@@ -179,8 +185,46 @@ public:
     bool switchesWorkspace = true;
     /** setWorkspace() answers true and shows another view than asked for, as an editor that did not take the switch. */
     bool swallowsWorkspaceSwitch = false;
+    /** setWorkspace() moves the keyboard focus before it fails (either failure above), as an editor whose view switch
+        breaks off after the focus left the BPM field: the field commits (commitBpmFieldOnViewSwitch()) although the
+       view stays. Only a request for the view that is not shown moves the focus. */
+    bool commitsBpmFieldOnFailedSwitch = false;
     /** The switches setWorkspace() made, in the number of calls that changed the view. */
     int workspaceSwitches = 0;
+
+    // ---- Quit ----
+
+    bool canQuit() const override { return quits; }
+    /** Records the request and does not end the process; onQuitRequest lets a test look at the instance at the moment
+        the real bridge would close the window. A bridge that cannot quit does nothing and returns false, and so does a
+        window that is asked and does not close (refusesClose; the request is counted in refusedQuitRequests). */
+    bool requestQuit() override
+    {
+        if (!quits)
+            return false;
+        if (refusesClose) {
+            ++refusedQuitRequests;
+            if (onQuitRequest)
+                onQuitRequest();
+            return false;
+        }
+        ++quitRequests;
+        if (onQuitRequest)
+            onQuitRequest();
+        return true;
+    }
+
+    /** canQuit(): false is a bridge whose window cannot be closed (no Standalone window around the editor). */
+    bool quits = true;
+    /** canQuit() is true but requestQuit() finds no window to close when it is asked (the editor's window is gone
+        between the check of app.quit and the exit step), and returns false. */
+    bool refusesClose = false;
+    /** The number of requestQuit() calls that closed the window. */
+    int quitRequests = 0;
+    /** The number of requestQuit() calls that found nothing to close (refusesClose). */
+    int refusedQuitRequests = 0;
+    /** Called inside requestQuit(), on the message thread, after the request was counted (also for a refused one). */
+    std::function<void()> onQuitRequest;
 
     /** Injected dialogs, from the bottom of the stack to the top; reportsDialogs false is a bridge without them. */
     std::vector<DialogInfo> dialogs;

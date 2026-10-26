@@ -24,6 +24,9 @@ struct ControlDispatcher::Outcome
     ControlErrorReply error;
     /** `executed` of the error: whether state may have changed. */
     bool executed = false;
+    /** The method ended the instance (ControlOpContext::endInstanceAfterReply): what handleRequest() posts to the
+        message thread once the result is written. Only with a result. */
+    std::function<void()> afterReply;
 };
 
 namespace {
@@ -86,6 +89,11 @@ std::shared_ptr<const ControlInstanceFacts> ControlDispatcher::currentFacts() co
 }
 
 void ControlDispatcher::serverStopping()
+{
+    enterStopping();
+}
+
+void ControlDispatcher::enterStopping()
 {
     // Requests that reach handleRequest() from now on answer themselves with SHUTTING_DOWN (they may have
     // passed the listener's stop check just before its flag was set). Functions already queued for the
@@ -158,6 +166,11 @@ void ControlDispatcher::handleRequest(ControlRequest request, ControlCompletion 
     switch (callResult) {
         case ControlMessageThread::CallResult::Done:
             respond(*outcome, completion);
+            // Only now, with the result written to the connection (or discarded because the peer is gone): a method
+            // that ended the instance gets its exit step, which stops the service and quits (PROTOCOL.md section 14.1).
+            if (outcome->afterReply)
+                notifyAfterReply(AfterReplyEvent::ReplyWritten);
+            runAfterReply(*outcome);
             return;
         case ControlMessageThread::CallResult::Failed:
             logFailure(method->name, "failed on the message thread");
@@ -197,6 +210,14 @@ void ControlDispatcher::execute(const ControlMethod& method, const void* parsed,
         auto result = method.run(context, parsed);
         if (result.ok()) {
             outcome.result = std::move(result).value();
+            if (auto action = context.takeEndInstanceAction()) {
+                // The method decided to end the instance (app.quit). The stopping state starts here, on the message
+                // thread and before any other request can run: a request of another session that was queued behind this
+                // one is answered with SHUTTING_DOWN and cannot change what the method has just checked. The result
+                // itself is still written (respond() does not look at the flag), and the exit step follows it.
+                enterStopping();
+                outcome.afterReply = std::move(action);
+            }
         } else {
             outcome.error = controlMapError(result.error());
             // As the operation stated it: controlOpError fails before any change, controlOpErrorAfterChange
@@ -261,6 +282,55 @@ void ControlDispatcher::respond(const Outcome& outcome, const ControlCompletion&
         completion.respondResult(*outcome.result);
     else
         completion.respondError(outcome.error.kind, outcome.error.reason, outcome.error.detail, outcome.executed);
+}
+
+void ControlDispatcher::runAfterReply(Outcome& outcome)
+{
+    if (!outcome.afterReply)
+        return;
+    // ControlMessageThread::post(): the action runs on the message thread, in the message loop, and never inside the
+    // call() that this connection thread has finished (the thread rules of Source/Control/README.md: a method run by
+    // call() must not stop the service itself). It does nothing when the service has stopped meanwhile: the
+    // application is then ending anyway.
+    auto step = [this, action = std::move(outcome.afterReply)] {
+        notifyAfterReply(AfterReplyEvent::ExitStepStarted);
+        action();
+    };
+    if (!setup_.messageThread->post(std::move(step))) {
+        // The state this leaves behind: the dispatcher is in its stopping state (enterStopping() ran when the method
+        // returned) and the client has the result with `quitting: true`, but the exit step never runs, so the service,
+        // the listener, the open connections and the discovery file stay as they are. post() fails when the liveness
+        // token is dead (the service has been stopped on the message thread, which leaves nothing to clean up) or when
+        // the message queue refuses the message, for example while the application quits: then the application's own
+        // shutdown stops the service (the first statement of the processor's destructor), and until it does every
+        // request is answered with SHUTTING_DOWN.
+        //
+        // There is no cleanup that this thread can do. ControlService::stop() runs on the message thread, which is the
+        // thread that has just refused to take work, and calling it here would make the service join this very
+        // connection thread (ControlMessageThread::call() describes the same rule). So the case is only logged, in
+        // words that say what the client was told and what is left running.
+        AppLogger::logNoThrow(
+            "control API: the exit step of a method that ends the instance could not be queued: the client was told "
+            "that the instance quits and every request now gets SHUTTING_DOWN, but the listener and the discovery file "
+            "stay until the application's own shutdown stops the control service");
+    }
+}
+
+void ControlDispatcher::setAfterReplyObserverForTesting(std::function<void(AfterReplyEvent)> observer)
+{
+    std::lock_guard<std::mutex> lock(observerMutex_);
+    afterReplyObserver_ = std::make_shared<const std::function<void(AfterReplyEvent)>>(std::move(observer));
+}
+
+void ControlDispatcher::notifyAfterReply(AfterReplyEvent event)
+{
+    std::shared_ptr<const std::function<void(AfterReplyEvent)>> observer;
+    {
+        std::lock_guard<std::mutex> lock(observerMutex_);
+        observer = afterReplyObserver_;
+    }
+    if (observer != nullptr && *observer)
+        (*observer)(event);
 }
 
 } // namespace OpenTune

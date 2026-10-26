@@ -726,5 +726,25 @@ void scenarioSelectionMatrix();
     editor does. */
 void scenarioSelectionVectors();
 
+// Scenarios of app.quit (ControlQuitTests.cpp).
+
+/** app.quit: the capability, the closed params, UNSAVED_CHANGES, every BUSY reason and every job kind with the order of
+    the checks, and that each refusal changes nothing; then the call that quits. */
+void scenarioAppQuit();
+/** app.quit without an editor, with a bridge whose window cannot be closed, and on an instance that does not report the
+    capability. */
+void scenarioAppQuitWithoutWindow();
+/** The result: the members, the project path (also non-ASCII), the warning IRREVERSIBLE, exitDeadlineMs. */
+void scenarioAppQuitResult();
+/** The result is written before the exit step: at the window's close the client has the result, the service is stopped,
+    the discovery file is gone and the listener is closed; the normal shutdown that follows is within its bound. */
+void scenarioAppQuitSequence();
+/** The stopping state begins when the call decides to quit: a second app.quit and a write queued behind it are answered
+    with SHUTTING_DOWN and do not run. */
+void scenarioAppQuitStopping();
+/** The specification's vectors of app.quit (the nine of vectors/app/quit-*), against the real dispatcher with a test
+    bridge; the vectors with endsSession also check that the instance has ended. */
+void scenarioAppQuitVectors();
+
 } // namespace ControlTest
 } // namespace OpenTune

@@ -165,9 +165,9 @@ public:
         decimal, juce::String(value, 1), and sends that value to OpenTuneAudioProcessorEditor::bpmChanged), and the
         editor sets that tempo and marks the project as changed. The editor's bridge takes the mark back when the tempo
         is what it was (settleViewSwitch), so a tempo with one decimal changes nothing and a tempo with more decimals
-        is rewritten and keeps the mark. A test that gives the processor here has the focus in the field; null, the
-        default, is a window whose focus is elsewhere, which leaves the tempo alone. A derived bridge that switches the
-        view calls this when it does. */
+        is rewritten and keeps the mark. It does this only while the field holds the focus (focusTempoField()); with
+        the focus elsewhere, the default, which is a window in the background, it leaves the tempo alone. A derived
+        bridge that switches the view calls this when it does. */
     void commitBpmFieldOnViewSwitch()
     {
         if (bpmFieldProcessor == nullptr)
@@ -178,7 +178,28 @@ public:
             markDirty();
     }
 
-    /** The processor whose tempo the BPM field of commitBpmFieldOnViewSwitch() commits; null: no focus in the field. */
+    /** Where the keyboard focus of the window is, in the terms of the given.keyboardFocus of a vector
+        (vectors/README.md, Preconditions). Only the tempo field of the transport bar is modelled: the focus that
+        leaves it at a switch of the view is what the control API reports. */
+    enum class KeyboardFocus {
+        elsewhere,
+        tempoField
+    };
+
+    /** Establishes given.keyboardFocus tempoField: the transport bar's BPM field holds the keyboard focus, as in a
+        window that has just started in the foreground, and commits the tempo of processor when the focus leaves it
+        (commitBpmFieldOnViewSwitch()). */
+    void focusTempoField(OpenTuneAudioProcessor& processor) { bpmFieldProcessor = &processor; }
+    /** The keyboard focus is somewhere else, as in a window in the background: a switch of the view leaves the tempo
+        alone and does not mark the project. This is the default of a TestUiBridge. */
+    void focusElsewhere() { bpmFieldProcessor = nullptr; }
+    KeyboardFocus keyboardFocus() const
+    {
+        return bpmFieldProcessor != nullptr ? KeyboardFocus::tempoField : KeyboardFocus::elsewhere;
+    }
+
+    /** The processor whose tempo the BPM field of commitBpmFieldOnViewSwitch() commits; null: the focus is elsewhere
+        (focusTempoField() and focusElsewhere() set it). */
     OpenTuneAudioProcessor* bpmFieldProcessor = nullptr;
 
     /** setWorkspace(): false is a bridge that cannot switch. */

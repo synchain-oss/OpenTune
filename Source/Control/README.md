@@ -1138,15 +1138,26 @@ member `bpm {before, after, unit: "bpm"}`) and the side effect `tempoRounded {fr
 (PROTOCOL.md section 15.2 rule 2). The time signature is not touched (the field commits the tempo only) and not
 reported. Whether the rewrite happens depends on where the keyboard focus is, so a call can also leave the tempo as it
 was, and then nothing about the tempo is reported; `dryRun` of `ui.setSelection` does not predict it for the same
-reason. The test bridge models it (`TestUiBridge::bpmFieldProcessor`): a switch rewrites a tempo with more than one
-decimal to one decimal and marks the project as changed.
+reason. The specification (PROTOCOL.md section 14.6, rc.7) says the same: the field rounds only while it holds the
+keyboard focus, as in a window in the foreground that has just started, and the instance reports `tempoRounded` and the
+change of the tempo only when the tempo differs before and after the switch (a result without them says only that the
+tempo did not change). The test bridge models both states (`TestUiBridge::focusTempoField()`, `focusElsewhere()` and
+`keyboardFocus()`): with the focus in the field a switch rewrites a tempo with more than one decimal to one decimal and
+marks the project as changed; with the focus elsewhere, as in a window in the background, it leaves the tempo and the
+mark alone and the result says nothing about the tempo.
 
 **Mirrors.** `workspace-track-view` and `workspace-piano-view` (the two button handlers of the transport bar) and
 `workspace-view-toggled` (the editor's handler), all in the group `ui`.
 
 **Vectors.** The request vectors `ui/set-workspace-piano-roll`, `-noop`, `-invalid` and `-busy-modal` run in `UiVectors`
-against the test bridge; the two scenarios `ui/set-workspace-arrangement` and `ui/set-workspace-piano-roll-opendyne` need
-clips, a selection and the editing scheme, so they run in `SelectionVectors` on the real processor (see "Selection").
+against the test bridge; the three scenarios `ui/set-workspace-arrangement`, `ui/set-workspace-piano-roll-opendyne` and
+`ui/set-workspace-tempo-rounded` need clips, a selection, the editing scheme or the keyboard focus, so they run in
+`SelectionVectors` on the real processor (see "Selection"). The last one has the precondition
+`given.keyboardFocus` `tempoField` (vectors/README.md, Preconditions), which `SelectionVectors` establishes with
+`TestUiBridge::focusTempoField()`; a vector without the member runs with the focus elsewhere (it assumes nothing about
+it), and a `keyboardFocus` value or any other `given` member that the runner cannot establish is reported as skipped
+with that reason (`selectionVectorSkip()`), never run in another state. A runner that does not establish the focus
+leaves `ui/set-workspace-tempo-rounded` red, which `kMustRunSelectionVectors` turns into a failure of the test.
 Since spec rc.7, `ui/set-workspace-piano-roll-opendyne` selects the clip in the openTune scheme, where a selection
 generates nothing, and then switches the scheme with `prefs.set`: a selection loads the clip into the piano roll even
 while the arrangement is shown (`ui.getState` reports it as `pianoRollContentId`), so the switch to openDyne generates
@@ -1163,8 +1174,9 @@ Tests: `ControlProcessorTests.UiWorkspace` in `Tests/Control/ControlUiTests.cpp`
 the editor, the params, busy for each reason, a bridge that cannot switch or does not, no editor, the revert recipe sent
 back, an unchanged dirty state, the empty `revisionDiff`, the capability right after `ui.onboardingClose`, and the
 rewritten tempo: 120.27 to 120.3 with the change, `tempoRounded`, its revert recipe and `dirty.after`, and a tempo with
-one decimal reporting neither). `Selection` checks the same for `openEditor`, and that a double click with the piano roll
-shown already rewrites nothing.
+one decimal reporting neither; with the focus elsewhere, in both directions, nothing rewritten, reported or marked, and
+with the focus back in the field the same switch rounds again). `Selection` checks the same for `openEditor`, and that a
+double click with the piano roll shown already rewrites nothing.
 
 ## Selection
 
@@ -1220,7 +1232,7 @@ state as it was, a clip, `openEditor`, the scale with `ui.getState`, the no-op, 
 prediction of dryRun equals the committed result (a binding adds no side effect and no warning), and dryRun leaves every field of the state as it was. The test bridge
 and the prediction follow the same rules, so this shows that the two copies agree, not that the prediction agrees with
 the real editor; drift of the real editor is caught by the drift pins ("Mirrors") and by checks in the real Standalone.
-`SelectionVectors` runs the vectors `ui/set-selection-*` and the two scenarios of `ui.setWorkspace` (see "Workspace"). The view's highlight and keyboard target, and the real piano
+`SelectionVectors` runs the vectors `ui/set-selection-*` and the three scenarios of `ui.setWorkspace` (see "Workspace"; it establishes `given.keyboardFocus`, and skips a vector with a `given` member it cannot establish). The view's highlight and keyboard target, and the real piano
 roll, run only in the Standalone application.
 
 ## Preferences and audio device

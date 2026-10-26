@@ -67,8 +67,10 @@ public:
     explicit SelectionBridge(OpenTuneAudioProcessor& processor) : processor_(processor)
     {
         view.workspace = "arrangement";
-        // The keyboard focus is in the transport bar's BPM field (TestUiBridge::commitBpmFieldOnViewSwitch()).
-        bpmFieldProcessor = &processor;
+        // The keyboard focus is in the transport bar's BPM field (TestUiBridge::commitBpmFieldOnViewSwitch()): the
+        // state of a window that has just started in the foreground. The scenarios of this file rely on it; the
+        // vector runner sets the focus from the vector's given.keyboardFocus (runSelectionVector()).
+        focusTempoField(processor);
     }
 
     bool canSelect() const override { return selects; }
@@ -629,6 +631,30 @@ void scenarioSelectionImpl()
                   && memberOf(dry, "sideEffects").find("workspaceSwitched") != nullptr);
     CONTROL_CHECK(isNear(f.processor->getBpm(), 120.27) && f.bridge->view.workspace == "arrangement");
 
+    // The tempo field does not hold the keyboard focus (a window in the background, TestUiBridge::focusElsewhere()):
+    // the double click switches the view and moves no focus out of the field, so the tempo with more decimals stays,
+    // nothing about it is reported and the project is not marked as changed (PROTOCOL.md section 14.6). With the
+    // focus back in the field the same double click rounds it.
+    f.bridge->focusElsewhere();
+    f.bridge->project.dirty = false;
+    const auto unfocused = f.api.result("ui.setSelection", selectClip(idA, true));
+    CONTROL_CHECK(memberOf(unfocused, "applied").asBoolean() && reportsNoTempoChange(unfocused)
+                  && memberOf(unfocused, "sideEffects").find("workspaceSwitched") != nullptr);
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.27) && isNear(readBpm(), 120.27));
+    CONTROL_CHECK(!memberOf(memberOf(unfocused, "dirty"), "after").asBoolean());
+    f.bridge->focusTempoField(*f.processor);
+    f.api.result("ui.setSelection", selectClip(idB));
+    f.bridge->view.workspace = "arrangement";
+    f.bridge->project.dirty = false;
+    const auto refocused = f.api.result("ui.setSelection", selectClip(idA, true));
+    if (const JsonValue* tempoChange = checkTempoRounded(refocused, 120.27, 120.3, true))
+        checkEqual(reference, *tempoChange, "the change of the tempo with the focus back in the field");
+    CONTROL_CHECK(isNear(f.processor->getBpm(), 120.3));
+    f.processor->setBpm(120.27);
+    f.api.result("ui.setSelection", selectClip(idB));
+    f.bridge->view.workspace = "arrangement";
+    f.bridge->project.dirty = false;
+
     // A selection that fails after the focus left the BPM field (SelectionBridge::breaksOffAfterFocusMove): the field
     // committed, so the tempo 120.27 was rewritten to 120.3 before the error. "Nothing changed" would be false: the
     // error says executed true and names the tempo (kind and reason as before).
@@ -707,11 +733,39 @@ const char* const kMustRunSelectionVectors[] = {
     "ui/set-selection-generates-notes",
     "ui/set-selection-not-found",
     "ui/set-selection-open-editor",
-    // The two scenarios of ui.setWorkspace that need clips, the selection and the editing scheme (its other vectors
-    // run in ControlUiTests.cpp).
+    // The scenarios of ui.setWorkspace that need clips, the selection, the editing scheme or the keyboard focus (its
+    // other vectors run in ControlUiTests.cpp).
     "ui/set-workspace-arrangement",
     "ui/set-workspace-piano-roll-opendyne",
+    "ui/set-workspace-tempo-rounded",
 };
+
+/**
+ * Why this runner does not run a vector, or empty when it establishes every member of its given. A precondition
+ * that the runner cannot establish is a skip with that reason (vectors/README.md, Preconditions), never a pass: a
+ * member that is not listed here would be ignored, and the vector would run in a state it does not describe.
+ */
+std::string selectionVectorSkip(const JsonValue& vector)
+{
+    const auto& given = memberOf(vector, "given");
+    for (std::size_t i = 0; i < given.size(); ++i) {
+        const auto& name = given.keyAt(i);
+        if (name == "keyboardFocus") {
+            // tempoField is the only value of this version of the specification.
+            if (given.at(i).text() != "tempoField")
+                return "keyboardFocus " + given.at(i).text() + " is not established by this runner";
+        } else if (name == "preferences") {
+            // Only the experimental features are written (setPreferences()).
+            for (std::size_t p = 0; p < given.at(i).size(); ++p)
+                if (given.at(i).keyAt(p) != "experimentalFeatures")
+                    return "precondition given.preferences." + given.at(i).keyAt(p)
+                           + " is not established by this runner";
+        } else if (name != "dirty" && name != "clips" && name != "editingScheme") {
+            return "precondition given." + name + " is not established by this runner";
+        }
+    }
+    return {};
+}
 
 std::string runSelectionVector(const JsonValue& vector)
 {
@@ -721,6 +775,14 @@ std::string runSelectionVector(const JsonValue& vector)
     const auto& given = memberOf(vector, "given");
     f.setPreferences(memberOf(given, "editingScheme").text() == "openDyne",
                      memberOf(memberOf(given, "preferences"), "experimentalFeatures").asBoolean());
+    // given.keyboardFocus (vectors/README.md, Preconditions): where the keyboard focus is when the vector starts.
+    // tempoField puts it in the transport bar's BPM field, which commits the tempo at a switch of the view. Without
+    // the member a vector assumes nothing about the focus, so the runner takes it away from the field (the fixture's
+    // bridge has it there for its own scenarios): a vector that depends on the focus names it. None of the other
+    // vectors of this runner rewrites a tempo, so none depends on it.
+    f.bridge->focusElsewhere();
+    if (memberOf(given, "keyboardFocus").text() == "tempoField")
+        f.bridge->focusTempoField(*f.processor);
 
     struct Created
     {
@@ -836,8 +898,17 @@ void scenarioSelectionVectors()
         if (entry.path().extension() == ".json")
             files.push_back(entry.path());
     std::sort(files.begin(), files.end());
+
+    // The skip rule on vectors of its own: a precondition that is not established is a skip, an established one is not.
+    CONTROL_CHECK(selectionVectorSkip(jsonOf(R"({"given":{"dirty":false,"keyboardFocus":"tempoField"}})")).empty());
+    CONTROL_CHECK(selectionVectorSkip(jsonOf(R"({"given":{"preferences":{"experimentalFeatures":true}}})")).empty());
+    CONTROL_CHECK(!selectionVectorSkip(jsonOf(R"({"given":{"keyboardFocus":"trackPanel"}})")).empty());
+    CONTROL_CHECK(!selectionVectorSkip(jsonOf(R"({"given":{"audio":{"running":true}}})")).empty());
+    CONTROL_CHECK(!selectionVectorSkip(jsonOf(R"({"given":{"preferences":{"tuningHz":442}}})")).empty());
+
     std::set<std::string> passedIds;
     int passed = 0;
+    int skipped = 0;
     VectorReport report("ControlProcessorTests.SelectionVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
@@ -849,6 +920,12 @@ void scenarioSelectionVectors()
         if (memberOf(memberOf(vector, "request"), "method").text() != "ui.setSelection" && !workspaceScenario)
             continue;
         const auto id = memberOf(vector, "id").text();
+        if (const auto skip = selectionVectorSkip(vector); !skip.empty()) {
+            ++skipped;
+            report.skip(id, skip);
+            note("SKIP " + id + ": " + skip);
+            continue;
+        }
         const auto started = Clock::now();
         const auto failure = runSelectionVector(vector);
         report.ran(id, failure);
@@ -862,7 +939,7 @@ void scenarioSelectionVectors()
     report.write();
     for (const char* id : kMustRunSelectionVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
-    note(std::to_string(passed) + " vectors passed");
+    note(std::to_string(passed) + " vectors passed, " + std::to_string(skipped) + " skipped");
 }
 
 } // namespace ControlTest

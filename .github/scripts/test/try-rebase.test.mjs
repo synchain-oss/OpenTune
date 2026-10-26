@@ -7,7 +7,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { hashSymbol } from '../drift-pins.mjs';
-import { formatSummary, tryRebase } from '../try-rebase.mjs';
+import { git, makeTempDir, removeDir } from '../fork-lib.mjs';
+import { cloneArgs, formatSummary, tryRebase } from '../try-rebase.mjs';
 import { SCRIPTS, TestRepo, UPSTREAM, msg } from './helpers.mjs';
 
 const FOO_OLD = 'void foo()\n{\n    int y = 0;\n}\n';
@@ -115,6 +116,40 @@ describe('tryRebase', () => {
     for (const f of ['try-rebase.mjs', 'drift-pins.mjs']) {
       const text = fs.readFileSync(path.join(SCRIPTS, f), 'utf8');
       assert.equal(/['"]push['"]/.test(text), false, `${f} mentions a push`);
+    }
+  });
+});
+
+describe('the throw-away clone', () => {
+  /** Hard-link counts of every loose object file below objectsDir. */
+  const looseObjectLinkCounts = (objectsDir) => {
+    const counts = [];
+    for (const d of fs.readdirSync(objectsDir)) {
+      if (!/^[0-9a-f]{2}$/.test(d)) continue;
+      for (const n of fs.readdirSync(path.join(objectsDir, d))) counts.push(fs.statSync(path.join(objectsDir, d, n)).nlink);
+    }
+    return counts;
+  };
+
+  test('cloneArgs is a local clone without hard links, checkout or hooks', () => {
+    const args = cloneArgs('SRC', 'DEST');
+    assert.equal(args[0], 'clone');
+    for (const flag of ['--local', '--no-hardlinks', '--no-checkout', '--template=']) assert.ok(args.includes(flag), `missing ${flag}`);
+    assert.deepEqual(args.slice(-2), ['SRC', 'DEST']);
+  });
+
+  test('the clone copies the objects: no object file is hard-linked to the source repository', () => {
+    const dest = makeTempDir('try-rebase-clone');
+    try {
+      const clone = path.join(dest, 'clone');
+      git(cloneArgs(repo.dir, clone));
+      const counts = looseObjectLinkCounts(path.join(clone, '.git', 'objects'));
+      assert.ok(counts.length > 0, 'the clone has loose objects to look at');
+      assert.deepEqual(counts.filter((n) => n !== 1), [], 'every object file of the clone has exactly one link');
+      // The source side agrees: nothing in it was linked into the clone.
+      assert.deepEqual(looseObjectLinkCounts(path.join(repo.dir, '.git', 'objects')).filter((n) => n !== 1), []);
+    } finally {
+      removeDir(dest);
     }
   });
 });

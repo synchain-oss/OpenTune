@@ -112,8 +112,10 @@ public:
 
     // ---- View changes that a write makes as the UI does ----------------------------------------
 
-    /** Shows a placement the way the editor does after its own import: it becomes the active track's
-        selected placement and the piano roll shows its content. Returns false when not supported. */
+    /** Focuses a placement the way the editor does after its own import: it becomes the active track's
+        selected placement and the piano roll loads its content. The view is not switched: the workspace that the
+        window shows stays as it was, so no switch and no tempo rounding follow (PROTOCOL.md section 21 rule 2).
+        Returns false when not supported. */
     virtual bool focusPlacement(int /*trackId*/, std::uint64_t /*placementId*/) { return false; }
 
     /** Makes the arrangement show at least count track slots, as the editor does when an import fills

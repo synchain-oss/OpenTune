@@ -298,21 +298,38 @@ void ControlDispatcher::runAfterReply(Outcome& outcome)
     };
     if (!setup_.messageThread->post(std::move(step))) {
         // The state this leaves behind: the dispatcher is in its stopping state (enterStopping() ran when the method
-        // returned) and the client has the result with `quitting: true`, but the exit step never runs, so the service,
-        // the listener, the open connections and the discovery file stay as they are. post() fails when the liveness
-        // token is dead (the service has been stopped on the message thread, which leaves nothing to clean up) or when
-        // the message queue refuses the message, for example while the application quits: then the application's own
-        // shutdown stops the service (the first statement of the processor's destructor), and until it does every
-        // request is answered with SHUTTING_DOWN.
+        // returned) and the client has the result with `quitting: true`, but the exit step never runs. post() fails
+        // for one of two reasons, which isAlive() tells apart:
+        //  - the liveness token is dead: the service has been stopped on the message thread, which leaves nothing to
+        //    clean up (the listener, the connections and the discovery file are gone or going), so the step has
+        //    nothing left to do;
+        //  - the token is alive and the message queue refused the message, for example while the application quits:
+        //    the service, the listener, the open connections and the discovery file stay as they are, until the
+        //    application's own shutdown stops the service (the first statement of the processor's destructor); until
+        //    it does, every request is answered with SHUTTING_DOWN.
+        //
+        // isAlive() is read after post() failed, and the token never comes back to life. So an alive token at that
+        // point was alive when post() failed, and the first log below ("refused by the message queue") is exact. A dead
+        // token is usually the first case, but it can also be the second one: the queue refused the step while the
+        // token was alive, and the service stopped before isAlive() was read. The log then says that the service is
+        // already stopping. That is still true when it is written (the service is stopping and there is nothing left to
+        // stop), so the line is harmless; only the reason that post() failed may have been the queue's refusal.
         //
         // There is no cleanup that this thread can do. ControlService::stop() runs on the message thread, which is the
         // thread that has just refused to take work, and calling it here would make the service join this very
         // connection thread (ControlMessageThread::call() describes the same rule). So the case is only logged, in
         // words that say what the client was told and what is left running.
-        AppLogger::logNoThrow(
-            "control API: the exit step of a method that ends the instance could not be queued: the client was told "
-            "that the instance quits and every request now gets SHUTTING_DOWN, but the listener and the discovery file "
-            "stay until the application's own shutdown stops the control service");
+        if (setup_.messageThread->isAlive())
+            AppLogger::logNoThrow(
+                "control API: the exit step of a method that ends the instance was refused by the message queue: the "
+                "client was told that the instance quits and every request now gets SHUTTING_DOWN, but the listener "
+                "and the discovery file stay until the application closes itself and its own shutdown stops the "
+                "control service");
+        else
+            AppLogger::logNoThrow(
+                "control API: the exit step of a method that ends the instance was not queued because the control "
+                "service is already stopping: the client was told that the instance quits and every request now gets "
+                "SHUTTING_DOWN, and there is nothing left to stop");
     }
 }
 

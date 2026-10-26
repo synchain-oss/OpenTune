@@ -1425,7 +1425,10 @@ does the two steps (`StandalonePluginHolder::savePluginState()` and `JUCEApplica
 repeated in `Source/Control` and there is no mirror, drift pin or hook to register: the function that would drift is the
 one called. The processor's destructor then runs the normal shutdown, with `ControlService::stop()` already done (it is
 idempotent). `canQuit()` is true when a standalone holder and that window exist. If `requestQuit()` fails after the reply
-(the window is gone) the control API stays stopped, the application keeps running and the failure is logged.
+(the window is gone) the control API stays stopped, the application keeps running and the failure is logged. If the exit
+step cannot be queued at all (`post()` fails in `runAfterReply()`), the log says why: the message queue refused it
+while the service was alive (the listener and the discovery file stay until the application closes itself and its own
+shutdown stops the service; every request gets `SHUTTING_DOWN` meanwhile), or the service was already stopping.
 
 **`exitDeadlineMs`** (`kExitDeadlineMs` in `AppQuitOps.cpp`): the longest time in which the process ends after the reply,
 10 s, which the vectors' runners may rely on (they wait 15 s; the schema allows 60 s). Measured on the Standalone with
@@ -1455,7 +1458,12 @@ the call itself with `UNSUPPORTED`.
   `ControlDispatcher::setAfterReplyObserverForTesting()` is the seam of the ordering test: it reports
   `ReplyWritten` (connection thread) and `ExitStepStarted` (message thread), because `ControlService::stop()` joins the
   connection thread and would deliver the reply even from a step that was queued too early, so the client alone cannot
-  tell the two orders apart.
+  tell the two orders apart. `AppQuitStopping` also covers an exit step that cannot be queued, for each of the two
+  reasons that `ControlMessageThread::isAlive()` tells apart after a failed `post()`: the token is dead (the observer
+  stops the marshalling; the service is already stopping, and the log says nothing is left to stop), and the message
+  queue refuses the step while the token is alive (the observer calls `juce::MessageManager::stopDispatchLoop()`, as
+  `JUCEApplicationBase::quit()` does; the log says the listener and the discovery file stay until the application closes
+  itself). The second latches for the rest of the process in JUCE 9.0.3, so it runs last.
 - `AppQuitVectors`: all nine `app/quit-*` vectors, with their `given` established; a vector that ends the instance
   (`endsSession`) is checked as `vectors/README.md` says as far as a headless process can: the connection closes
   (15 s), the port refuses, the discovery file is gone and the test bridge saw one quit request. The exit status of the

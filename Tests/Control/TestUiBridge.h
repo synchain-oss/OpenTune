@@ -208,7 +208,7 @@ public:
     bool swallowsWorkspaceSwitch = false;
     /** setWorkspace() moves the keyboard focus before it fails (either failure above), as an editor whose view switch
         breaks off after the focus left the BPM field: the field commits (commitBpmFieldOnViewSwitch()) although the
-       view stays. Only a request for the view that is not shown moves the focus. */
+        view stays. Only a request for the view that is not shown moves the focus. */
     bool commitsBpmFieldOnFailedSwitch = false;
     /** The switches setWorkspace() made, in the number of calls that changed the view. */
     int workspaceSwitches = 0;
@@ -237,8 +237,9 @@ public:
 
     /** canQuit(): false is a bridge whose window cannot be closed (no Standalone window around the editor). */
     bool quits = true;
-    /** canQuit() is true but requestQuit() finds no window to close when it is asked (the editor's window is gone
-        between the check of app.quit and the exit step), and returns false. */
+    /** canQuit() is true, requestQuit() is asked and the window does not close (it returns false). That the editor is
+        gone altogether, between the check of app.quit and the exit step, is not modelled by this switch: a test
+        unregisters the bridge from the service instead (windowNotClosed(true) in ControlQuitTests.cpp). */
     bool refusesClose = false;
     /** The number of requestQuit() calls that closed the window. */
     int quitRequests = 0;

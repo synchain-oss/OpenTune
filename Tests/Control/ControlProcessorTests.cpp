@@ -402,8 +402,9 @@ void scenarioDestroyBeforeStart()
     auto processor = std::make_unique<OpenTuneAudioProcessor>();
     CONTROL_CHECK(processor->getControlService().options().enabled);
     const auto messageThread = processor->getControlService().messageThread();
+    CONTROL_CHECK(messageThread->isAlive() && !messageThread->isStopped());
     processor.reset();
-    CONTROL_CHECK(messageThread->isStopped() && !messageThread->post([] {}));
+    CONTROL_CHECK(messageThread->isStopped() && !messageThread->isAlive() && !messageThread->post([] {}));
     pumpMessagesFor(kQuietPumpMs);
     CONTROL_CHECK(initialisations == 0);
     CONTROL_CHECK(!std::filesystem::exists(isolatedDiscoveryFile()));
@@ -441,7 +442,7 @@ void scenarioRepeatedStop()
     service.stop();
     CONTROL_CHECK(!service.start());
     const auto messageThread = service.messageThread();
-    CONTROL_CHECK(!messageThread->post([] {}));
+    CONTROL_CHECK(!messageThread->isAlive() && !messageThread->post([] {}));
     std::atomic<int> executed{0};
     auto result = ControlMessageThread::CallResult::Done;
     std::thread caller([&] { result = messageThread->call([&executed] { ++executed; }, kLongCallTimeoutMs); });

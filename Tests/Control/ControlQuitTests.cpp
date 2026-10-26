@@ -50,8 +50,14 @@ constexpr int kQuietAfterRefusalMs = 20;
     (AppQuitOps.cpp, endInstance()); the reason follows in brackets. */
 constexpr const char* kWindowNotClosedLog =
     "the client was told quitting: true, but the OpenTune window was not closed";
-/** What the dispatcher logs when the exit step cannot be queued (ControlDispatcher::runAfterReply()). */
-constexpr const char* kExitStepNotQueuedLog = "the exit step of a method that ends the instance could not be queued";
+/** What the dispatcher logs when the exit step cannot be queued because the liveness token of the message-thread
+    marshalling is dead: the control service is already stopping (ControlDispatcher::runAfterReply()). */
+constexpr const char* kExitStepServiceStoppingLog =
+    "the exit step of a method that ends the instance was not queued because the control service is already stopping";
+/** What the dispatcher logs when the exit step cannot be queued although the token is alive: the message queue refused
+    the step (ControlDispatcher::runAfterReply()). */
+constexpr const char* kExitStepRefusedLog =
+    "the exit step of a method that ends the instance was refused by the message queue";
 
 JsonValue jsonOf(const std::string& text)
 {
@@ -410,10 +416,11 @@ void windowNotClosed(bool editorGone)
 }
 
 /**
- * The exit step cannot be queued (ControlDispatcher::runAfterReply()): the observer kills the liveness token of the
- * message-thread marshalling as soon as the result is written, which makes post() return false the way a refusing
- * message queue does. The client has the result with quitting: true; the exit step never runs, so the window is not
- * asked; the dispatcher answers SHUTTING_DOWN; and the log says what the client was told and what stays up.
+ * The exit step cannot be queued because the token is dead (ControlDispatcher::runAfterReply()): the observer kills
+ * the liveness token of the message-thread marshalling as soon as the result is written, which makes post() return
+ * false and isAlive() false, as when the service has been stopped on the message thread. The client has the result
+ * with quitting: true; the exit step never runs, so the window is not asked; the dispatcher answers SHUTTING_DOWN;
+ * and the log says that the service is already stopping and nothing is left to stop: not that anything stays up.
  */
 void exitStepNotQueued()
 {
@@ -428,25 +435,88 @@ void exitStepNotQueued()
         if (event == ControlDispatcher::AfterReplyEvent::ReplyWritten)
             messageThread->stop();
     });
-    const auto logged = occurrences(logText(), kExitStepNotQueuedLog);
+    const auto logged = occurrences(logText(), kExitStepServiceStoppingLog);
+    const auto loggedRefused = occurrences(logText(), kExitStepRefusedLog);
 
     checkQuitResult(f.api.result("app.quit"), false, nullptr);
-    const bool logLine = pumpMessagesUntil([&] { return occurrences(logText(), kExitStepNotQueuedLog) == logged + 1; },
+    const bool logLine = pumpMessagesUntil(
+        [&] { return occurrences(logText(), kExitStepServiceStoppingLog) == logged + 1; }, kEndsSessionWaitMs);
+    CONTROL_CHECK(logLine);
+    if (!logLine)
+        note(std::string("the log has no line with: ") + kExitStepServiceStoppingLog);
+    pumpMessagesFor(kQuietPumpMs);
+    CONTROL_CHECK(occurrences(logText(), kExitStepServiceStoppingLog) == logged + 1);
+    // The line says what the client was told and that nothing is left to stop; it is not the line of a refusing queue.
+    CONTROL_CHECK(occurrences(logText(), kExitStepRefusedLog) == loggedRefused);
+    const auto log = logText();
+    const auto line = log.find(kExitStepServiceStoppingLog);
+    CONTROL_CHECK(line != std::string::npos && log.find("quits", line) != std::string::npos
+                  && log.find("SHUTTING_DOWN", line) != std::string::npos
+                  && log.find("nothing left to stop", line) != std::string::npos);
+
+    CONTROL_CHECK(!messageThread->isAlive() && messageThread->isStopped());
+    CONTROL_CHECK(f.bridge.quitRequests == 0 && f.bridge.refusedQuitRequests == 0);
+    CONTROL_CHECK(dispatcher->isStopping());
+    CONTROL_CHECK(f.api.fails("session.info", JsonValue::object(), "SHUTTING_DOWN", ""));
+}
+
+/**
+ * The exit step cannot be queued because the message queue refuses it while the token is alive
+ * (ControlDispatcher::runAfterReply()), as while the application quits. The observer calls
+ * juce::MessageManager::stopDispatchLoop() as soon as the result is written, which is what JUCEApplicationBase::quit()
+ * does: from then on juce::MessageManager::callAsync() returns false, so post() fails with the token still alive
+ * (isAlive() true). The client has the result with quitting: true; the exit step never runs, so the window is not
+ * asked and the service is not stopped; the dispatcher answers SHUTTING_DOWN; and the log says that the queue refused
+ * the step and that the listener and the discovery file stay until the application closes itself.
+ *
+ * Run it last in its process: in JUCE 9.0.3 stopDispatchLoop() latches for the rest of the process (every message that
+ * is posted afterwards is dropped; see ControlHeadlessSupport.h), so no later step of the scenario can use the queue.
+ * The pump of the tests dispatches what was posted before, which is all this case needs.
+ */
+void exitStepRefusedByQueue()
+{
+    QuitFixture f;
+    if (!f.open())
+        return;
+    auto& service = f.service();
+    const auto dispatcher = service.dispatcher();
+    const auto messageThread = service.messageThread();
+    const auto discoveryFile = std::filesystem::u8path(service.discoveryFilePath());
+    CONTROL_CHECK(messageThread->isAlive());
+    // stopDispatchLoop() posts the quit message and sets the flag that makes the later posts fail; it may be called
+    // from any thread, here the connection thread that writes the result.
+    dispatcher->setAfterReplyObserverForTesting([](ControlDispatcher::AfterReplyEvent event) {
+        if (event == ControlDispatcher::AfterReplyEvent::ReplyWritten)
+            juce::MessageManager::getInstance()->stopDispatchLoop();
+    });
+    const auto logged = occurrences(logText(), kExitStepRefusedLog);
+    const auto loggedStopping = occurrences(logText(), kExitStepServiceStoppingLog);
+
+    checkQuitResult(f.api.result("app.quit"), false, nullptr);
+    const bool logLine = pumpMessagesUntil([&] { return occurrences(logText(), kExitStepRefusedLog) == logged + 1; },
                                            kEndsSessionWaitMs);
     CONTROL_CHECK(logLine);
     if (!logLine)
-        note(std::string("the log has no line with: ") + kExitStepNotQueuedLog);
+        note(std::string("the log has no line with: ") + kExitStepRefusedLog);
     pumpMessagesFor(kQuietPumpMs);
-    CONTROL_CHECK(occurrences(logText(), kExitStepNotQueuedLog) == logged + 1);
-    // The line says what the client was told and what is left running.
+    CONTROL_CHECK(occurrences(logText(), kExitStepRefusedLog) == logged + 1);
+    // The queue refuses, and the token is alive: that is what makes it this case and not the one of
+    // exitStepNotQueued().
+    CONTROL_CHECK(!juce::MessageManager::callAsync([] {}));
+    CONTROL_CHECK(messageThread->isAlive() && !messageThread->isStopped() && !messageThread->post([] {}));
+    CONTROL_CHECK(occurrences(logText(), kExitStepServiceStoppingLog) == loggedStopping);
+    // The line says what the client was told and what is left running until the application closes itself.
     const auto log = logText();
-    const auto line = log.find(kExitStepNotQueuedLog);
+    const auto line = log.find(kExitStepRefusedLog);
     CONTROL_CHECK(line != std::string::npos && log.find("quits", line) != std::string::npos
                   && log.find("SHUTTING_DOWN", line) != std::string::npos
-                  && log.find("discovery file", line) != std::string::npos);
+                  && log.find("discovery file stay until the application closes itself", line) != std::string::npos);
 
+    // The exit step never ran: the window was not asked, and the service was not stopped (the dispatcher refuses new
+    // requests, but the listener and the discovery file stay).
     CONTROL_CHECK(f.bridge.quitRequests == 0 && f.bridge.refusedQuitRequests == 0);
-    CONTROL_CHECK(dispatcher->isStopping());
+    CONTROL_CHECK(dispatcher->isStopping() && service.isRunning());
+    CONTROL_CHECK(std::filesystem::exists(discoveryFile));
     CONTROL_CHECK(f.api.fails("session.info", JsonValue::object(), "SHUTTING_DOWN", ""));
 }
 
@@ -745,11 +815,11 @@ void scenarioAppQuitSequence()
     CONTROL_CHECK(!std::filesystem::exists(discoveryFile));
 }
 
-void scenarioAppQuitStopping()
-{
-    // First, the stopping state when the exit step cannot even be queued (its own instance, gone before the next one).
-    exitStepNotQueued();
+namespace {
 
+/** The stopping state with requests queued behind the quit (see the comment where the three sessions are sent). */
+void requestsQueuedBehindTheQuit()
+{
     QuitFixture f;
     if (!f.open())
         return;
@@ -831,6 +901,20 @@ void scenarioAppQuitStopping()
     CONTROL_CHECK(f.api.client().waitClosed(kCloseSeenMs, bytes));
     CONTROL_CHECK(second.client().waitClosed(kCloseSeenMs, bytes));
     CONTROL_CHECK(third.client().waitClosed(kCloseSeenMs, bytes));
+}
+
+} // namespace
+
+void scenarioAppQuitStopping()
+{
+    // First, the stopping state when the exit step cannot even be queued, for each of the two reasons: the token is
+    // dead (its own instance, gone before the next one) ...
+    exitStepNotQueued();
+    // ... then three sessions queued behind the quit ...
+    requestsQueuedBehindTheQuit();
+    // ... and last, the message queue refusing the step while the token is alive, which latches for the rest of the
+    // process (exitStepRefusedByQueue()).
+    exitStepRefusedByQueue();
 }
 
 // ---- The specification's vectors -----------------------------------------------------------------------

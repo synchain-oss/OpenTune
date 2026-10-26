@@ -170,7 +170,7 @@ Registered ctest names / 实际注册的 ctest 名（摘自 `cmake/OpenTuneContr
 | `Tests/Control/ControlExportTests.cpp` | `ControlProcessorTests.Export`, `.ExportFailures`, `.ExportVectors`, `.ExportTimeStretch`, `.ExportAfterEdit`, `.ExportCancelOverwrite`, `.ExportDestroy`, `.ExportUnicodePath`, `.ExportDryReasons` |
 | `Tests/Control/ControlEditTests.cpp` | `ControlProcessorTests.Undo`, `.SetKey`, `.AutoTune`, `.EditNotes`, `.EditMultiNoteRender`, `.SetPitchShift`, `.SnapNotes`, `.EditConflictRetry`, `.TokenAspects`, `.EditCapability`, `.EditVectors` |
 | `Tests/Control/ControlTimingTests.cpp` | `ControlProcessorTests.Timing`, `.TimeGridSeed`, `.TimingTokenAspects`, `.TimingVectors` |
-| `Tests/Control/ControlProjectTests.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectWithoutEditor`, `.ProjectVectors` |
+| `Tests/Control/ControlProjectTests.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectWithoutEditor`, `.ProjectReopenKeepsTuning`, `.ProjectVectors` |
 | `Tests/Control/ControlTracksTests.cpp` | `ControlProcessorTests.Transport`, `.Tracks`, `.TrackBarrier`, `.TrackVectors` |
 | `Tests/Control/ControlUiTests.cpp` | `ControlProcessorTests.UiState`, `.UiDismiss`, `.UiOnboardingWithheld`, `.UiWorkspace`, `.UiVectors` |
 | `Tests/Control/ControlPrefsTests.cpp` | `ControlProcessorTests.PrefsRoundTrip`, `.PrefsSchemeJob`, `.PrefsVectors`, `.AudioDevice`, `.AudioVectors` |

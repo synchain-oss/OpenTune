@@ -10,6 +10,8 @@
 #include "ControlProcessorSupport.h"
 #include "TestUiBridge.h"
 
+#include "Content/EditableContentSnapshot.h"
+#include "Content/StandaloneClipContent.h"
 #include "Content/StandaloneContentRepository.h"
 #include "Control/ControlDispatcher.h"
 #include "Control/ControlJobs.h"
@@ -17,16 +19,20 @@
 #include "Render/ContentRenderService.h"
 #include "SourceStore.h"
 #include "Utils/AppPreferences.h"
+#include "Utils/PitchCurve.h"
 #include "Utils/ProjectSession.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <filesystem>
 #include <functional>
+#include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "ControlWinAcl.h" // after the JUCE headers: needs windows.h
@@ -608,6 +614,321 @@ void scenarioProjectWithoutEditor()
     CONTROL_CHECK(preferences.getRecentProjects().empty());
     const auto again = api.result("project.clearRecent");
     CONTROL_CHECK(memberOf(again, "noOp").asBoolean());
+    const auto dispatcher = service.dispatcher();
+    CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+}
+
+// ---- Reopening a project with tuned notes ----------------------------------------------------------
+
+namespace {
+
+/** Bound of the wait for the analysis that a project open requests; the model-less runs end it at once. */
+constexpr int kReanalysisWaitMs = 35000;
+/** The synthetic analysis of the fixtures (ControlContentFixtures.h) has 100 frames per second. */
+constexpr double kFramesPerSecond = 100.0;
+/** The frames at the edge of a note that the comparison leaves out: the correction of a note reaches a few frames
+    beyond it, and the edges are where a new analysis may differ. */
+constexpr int kNoteEdgeFrames = 10;
+constexpr double kMidiTolerance = 1e-3;
+constexpr float kParameterTolerance = 1e-4f;
+
+/** What the editor's knobs set and store with every correction segment it writes (PitchCorrectionSegment::
+    ParameterSnapshot): four values, none of them the default. The API cannot set these (its corrections use the
+    generator's defaults, as the UI's knobs start with), so the scenario writes them to the saved segments. */
+PitchCorrectionSegment::ParameterSnapshot knobParameters()
+{
+    PitchCorrectionSegment::ParameterSnapshot parameters;
+    parameters.retuneSpeed = 0.35f;
+    parameters.vibratoDepth = 45.0f;
+    parameters.vibratoRate = 6.5f;
+    parameters.pitchDriftScale = 0.5f;
+    return parameters;
+}
+
+bool sameParameters(const PitchCorrectionSegment::ParameterSnapshot& a,
+                    const PitchCorrectionSegment::ParameterSnapshot& b)
+{
+    return std::abs(a.retuneSpeed - b.retuneSpeed) <= kParameterTolerance
+           && std::abs(a.vibratoDepth - b.vibratoDepth) <= kParameterTolerance
+           && std::abs(a.vibratoRate - b.vibratoRate) <= kParameterTolerance
+           && std::abs(a.pitchDriftScale - b.pitchDriftScale) <= kParameterTolerance;
+}
+
+using MidiSeries = std::vector<std::optional<double>>;
+
+MidiSeries midiSeriesOf(const JsonValue& array)
+{
+    MidiSeries series;
+    for (std::size_t i = 0; i < array.size(); ++i)
+        series.push_back(array.at(i).isNumber() ? std::optional<double>(array.at(i).asDouble()) : std::nullopt);
+    return series;
+}
+
+/** The notes and the two pitch lines of a content as the API reports them. */
+struct TuningRead
+{
+    JsonValue notes;
+    MidiSeries original;
+    MidiSeries corrected;
+};
+
+TuningRead readTuning(ApiSession& api, const std::string& contentId)
+{
+    const auto byContent = json("{\"contentId\":" + quoted(contentId) + "}");
+    TuningRead read;
+    read.notes = memberOf(api.result("content.getNotes", byContent), "notes");
+    const auto curve = api.result("content.getPitchCurve", byContent);
+    read.original = midiSeriesOf(memberOf(curve, "originalMidi"));
+    read.corrected = midiSeriesOf(memberOf(curve, "correctedMidi"));
+    return read;
+}
+
+std::vector<PitchCorrectionSegment> segmentsOf(OpenTuneAudioProcessor& processor, const ContentKey& key)
+{
+    const auto snapshot = processor.getContentSnapshot(key);
+    if (snapshot == nullptr || snapshot->pitchCurve == nullptr)
+        return {};
+    return snapshot->pitchCurve->getCorrectionSegments();
+}
+
+/** The corrected value of a frame in the segments; 0 where no segment covers it. */
+float segmentValueAt(const std::vector<PitchCorrectionSegment>& segments, int frame)
+{
+    for (const auto& segment : segments) {
+        const auto offset = frame - segment.startFrame;
+        if (offset >= 0 && frame < segment.endFrame && offset < static_cast<int>(segment.f0Data.size()))
+            return segment.f0Data[static_cast<std::size_t>(offset)];
+    }
+    return 0.0f;
+}
+
+/** The frames inside a note of the scenario's clip, without its edges. */
+std::vector<int> interiorFrames(double startSec, double endSec)
+{
+    std::vector<int> frames;
+    const int first = static_cast<int>(startSec * kFramesPerSecond) + kNoteEdgeFrames;
+    const int end = static_cast<int>(endSec * kFramesPerSecond) - kNoteEdgeFrames;
+    for (int frame = first; frame < end; ++frame)
+        frames.push_back(frame);
+    return frames;
+}
+
+/** Writes the parameters to every correction segment of the content, as the editor's knobs have them when it writes
+    the segments (through the content owner, as the processor does). */
+bool setSegmentParameters(OpenTuneAudioProcessor& processor, const ContentKey& key,
+                          const PitchCorrectionSegment::ParameterSnapshot& parameters)
+{
+    auto* owner = processor.getStandaloneContentRepository()->findClip(key);
+    const auto snapshot = processor.getContentSnapshot(key);
+    if (owner == nullptr || snapshot == nullptr || snapshot->pitchCurve == nullptr)
+        return false;
+    auto segments = snapshot->pitchCurve->getCorrectionSegments();
+    for (auto& segment : segments)
+        segment.parameterSnapshot = parameters;
+    auto curve = PitchCurve::fromSnapshot(snapshot->pitchCurve);
+    curve->replaceCorrectionSegments(segments);
+    owner->applyPitchCurve(std::move(curve));
+    return true;
+}
+
+/**
+ * Completes the analysis of a reopened content the way OpenTuneAudioProcessor::requestContentRefresh does when the
+ * extraction has finished with the preserve-corrections request that ProjectSession::commitPreparedOpen makes: a new
+ * curve with the new original F0 (here the F0 the content had when it was saved: the same audio gives the same
+ * analysis), the correction segments of the reopened content carried over to it, the curve given to the content
+ * owner and the state Ready. The processor's own completion needs the FCPE model, which the model-less runs
+ * (the build machines) do not have; with the model it runs by itself and this is not called.
+ */
+bool completeReanalysis(OpenTuneAudioProcessor& processor, const ContentKey& key, const PitchCurveSnapshot& analysis)
+{
+    auto* owner = processor.getStandaloneContentRepository()->findClip(key);
+    const auto reopened = segmentsOf(processor, key);
+    if (owner == nullptr)
+        return false;
+    auto curve = std::make_shared<PitchCurve>();
+    curve->setHopSize(analysis.getHopSize());
+    curve->setSampleRate(analysis.getSampleRate());
+    curve->setOriginalF0(analysis.getOriginalF0());
+    if (!reopened.empty())
+        curve->replaceCorrectionSegments(reopened);
+    owner->applyOriginalF0(std::move(curve));
+    return processor.setContentOriginalF0State(key, OriginalF0State::Ready);
+}
+
+/** The notes the scenario tunes, by index: the first two of sungClip(); the third stays as it was analysed. */
+constexpr int kTunedNotes = 2;
+
+/** The members of a note that the tuning sets, equal in both reads for every note, and the corrected flag of the
+    note equal to the flag expected (when expectFlags). */
+void checkNotesEqual(const JsonValue& before, const JsonValue& after, bool expectFlags)
+{
+    if (!CONTROL_CHECK(before.size() == 3 && after.size() == before.size()))
+        return;
+    for (std::size_t i = 0; i < after.size(); ++i) {
+        for (const char* member :
+             {"targetMidi", "offsetCents", "retuneSpeed", "vibratoDepth", "vibratoRateHz", "pitchDriftScale"})
+            if (!CONTROL_CHECK(
+                    std::abs(memberOf(after.at(i), member).asDouble() - memberOf(before.at(i), member).asDouble())
+                    <= kMidiTolerance))
+                note("note " + std::to_string(i) + " " + member + ": " + toJsonString(memberOf(after.at(i), member))
+                     + " after, " + toJsonString(memberOf(before.at(i), member)) + " before");
+        if (expectFlags)
+            if (!CONTROL_CHECK(memberOf(after.at(i), "corrected").asBoolean()
+                               == memberOf(before.at(i), "corrected").asBoolean()))
+                note("note " + std::to_string(i) + " corrected: " + toJsonString(memberOf(after.at(i), "corrected"))
+                     + " after, " + toJsonString(memberOf(before.at(i), "corrected")) + " before");
+    }
+}
+
+} // namespace
+
+/**
+ * A tuned project saved and opened again keeps the tuning: the correction segments with the four parameters they were
+ * written with, the notes marked as corrected, and the corrected pitch line on the voiced frames of the tuned notes.
+ *
+ * Opening restores the segments while the original F0 is not yet analysed again (the curve is empty); upstream
+ * dropped every saved frame there (commit 0afb6c8 keeps them until the analysis is done) and the project came back
+ * with the red line only. The scenario checks the project right after the open job (the segments and their
+ * parameters, which no analysis is needed for), waits for the analysis the open requested, completes it as the
+ * processor does (completeReanalysis) where the model-less run could not, and compares what the API reports with
+ * what it reported before the save.
+ */
+void scenarioProjectReopenKeepsTuning()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    EditorParts editor(*processor);
+    const auto directory = projectDirectory("reopen-tuning");
+    const auto file = (directory / "tuned.otproj").u8string();
+
+    // A clip with a finished analysis and three notes; the first two are tuned through the API.
+    const auto clip = fixtureAddClip(*processor, sungClip("reopen-tuning"));
+    CONTROL_CHECK(settleBackgroundWork(*processor));
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    const auto placed = handlesAt(api, 2.0);
+    if (!CONTROL_CHECK(placed.has_value()))
+        return;
+    const auto analysis = processor->getContentSnapshot(clip.key);
+    if (!CONTROL_CHECK(analysis != nullptr && analysis->hasUsableOriginalF0()))
+        return;
+    const auto analysedCurve = analysis->pitchCurve;
+
+    // Tune: move the first note and set the four parameters of the first two.
+    const std::string ops = R"([{"op":"setTargetPitch","select":{"indices":[0]},"targetMidi":65.5},)"
+                            R"({"op":"setParams","select":{"indices":[0,1]},"retuneSpeed":0.35,"vibratoDepth":45,)"
+                            R"("vibratoRateHz":6.5,"pitchDriftScale":0.5}])";
+    const auto edited = api.result(
+        "content.editNotes", json("{\"contentId\":" + quoted(placed->contentId) + ",\"expectedRevision\":"
+                                  + quoted(memberOf(placed->tokens, "revision").text()) + ",\"ops\":" + ops + "}"));
+    CONTROL_CHECK(memberOf(edited, "applied").asBoolean());
+    CONTROL_CHECK(settleBackgroundWork(*processor));
+    CONTROL_CHECK(setSegmentParameters(*processor, clip.key, knobParameters()));
+
+    const auto savedSegments = segmentsOf(*processor, clip.key);
+    const auto savedTuning = readTuning(api, placed->contentId);
+    // The scenario can tell a tuned line from the red one: the notes are marked, and the lines differ in them.
+    CONTROL_CHECK(!savedSegments.empty());
+    for (int index = 0; index < 3; ++index)
+        CONTROL_CHECK(memberOf(savedTuning.notes.at(static_cast<std::size_t>(index)), "corrected").asBoolean()
+                      == (index < kTunedNotes));
+    const std::pair<double, double> noteSpans[] = {{0.5, 1.5}, {2.0, 3.0}, {3.5, 4.5}};
+    std::vector<std::vector<int>> probes;
+    for (int index = 0; index < kTunedNotes; ++index) {
+        const auto frames = interiorFrames(noteSpans[index].first, noteSpans[index].second);
+        int differing = 0;
+        for (const int frame : frames) {
+            const auto position = static_cast<std::size_t>(frame);
+            if (position < savedTuning.corrected.size() && savedTuning.corrected[position]
+                && savedTuning.original[position]
+                && std::abs(*savedTuning.corrected[position] - *savedTuning.original[position]) > 0.05)
+                ++differing;
+        }
+        CONTROL_CHECK(differing > static_cast<int>(frames.size()) / 2);
+        probes.push_back(frames);
+    }
+
+    // Save, then open the same file again.
+    CONTROL_CHECK(succeeded(runAsJob(api, "project.saveAs", pathParams(file), "projectSave")));
+    const auto opened = runAsJob(api, "project.open", pathParams(file), "projectOpen");
+    if (!CONTROL_CHECK(succeeded(opened)))
+        return;
+    CONTROL_CHECK(memberOf(memberOf(memberOf(opened, "result"), "restored"), "contentCount").asDouble() == 1.0);
+    const auto keys = processor->getStandaloneContentRepository()->getAllClips();
+    if (!CONTROL_CHECK(keys.size() == 1))
+        return;
+    const auto key = keys.front();
+
+    // Right after the open: the segments are there with their parameters and their corrected frames, before any
+    // analysis has been done again.
+    const auto reopened = segmentsOf(*processor, key);
+    if (CONTROL_CHECK(!reopened.empty())) {
+        for (const auto& segment : reopened)
+            CONTROL_CHECK(sameParameters(segment.parameterSnapshot, knobParameters()));
+        for (const auto& frames : probes)
+            for (const int frame : frames)
+                if (!CONTROL_CHECK(std::abs(segmentValueAt(reopened, frame) - segmentValueAt(savedSegments, frame))
+                                   <= 1e-3f))
+                    return;
+    }
+
+    // The analysis that the open requested ends: with the processor's own result where it has the model, else
+    // failed, and then it is completed the way the processor completes it.
+    CONTROL_CHECK(pumpMessagesUntil(
+        [&processor, &key] {
+            const auto snapshot = processor->getContentSnapshot(key);
+            return snapshot == nullptr || snapshot->originalF0State != OriginalF0State::Extracting;
+        },
+        kReanalysisWaitMs));
+    const auto settled = processor->getContentSnapshot(key);
+    if (!CONTROL_CHECK(settled != nullptr))
+        return;
+    if (settled->originalF0State == OriginalF0State::Ready && settled->hasUsableOriginalF0()) {
+        note("the processor's own analysis finished the open: its completion ran with the reopened segments");
+    } else {
+        note("the analysis did not run (no F0 model): completing it with the F0 of the content before the save");
+        CONTROL_CHECK(completeReanalysis(*processor, key, *analysedCurve));
+    }
+
+    // What the API reports now equals what it reported before the save.
+    const auto now = handlesAt(api, 2.0);
+    if (!CONTROL_CHECK(now.has_value() && now->contentId != placed->contentId))
+        return;
+    const auto reopenedTuning = readTuning(api, now->contentId);
+    checkNotesEqual(savedTuning.notes, reopenedTuning.notes, true);
+    for (int index = 0; index < kTunedNotes; ++index)
+        CONTROL_CHECK(memberOf(reopenedTuning.notes.at(static_cast<std::size_t>(index)), "corrected").asBoolean());
+    const auto finalSegments = segmentsOf(*processor, key);
+    CONTROL_CHECK(!finalSegments.empty());
+    for (const auto& segment : finalSegments)
+        CONTROL_CHECK(sameParameters(segment.parameterSnapshot, knobParameters()));
+    // The corrected line is not empty on the frames in which the original line was voiced before the save, and it is
+    // what it was.
+    for (const auto& frames : probes)
+        for (const int frame : frames) {
+            const auto position = static_cast<std::size_t>(frame);
+            if (!CONTROL_CHECK(position < reopenedTuning.corrected.size() && position < savedTuning.corrected.size()))
+                return;
+            if (!savedTuning.original[position])
+                continue;
+            const bool same =
+                reopenedTuning.corrected[position] && savedTuning.corrected[position]
+                && std::abs(*reopenedTuning.corrected[position] - *savedTuning.corrected[position]) <= kMidiTolerance;
+            if (!CONTROL_CHECK(same)) {
+                note("frame " + std::to_string(frame) + ": corrected line "
+                     + (reopenedTuning.corrected[position] ? std::to_string(*reopenedTuning.corrected[position])
+                                                           : std::string("empty"))
+                     + " after the open, "
+                     + (savedTuning.corrected[position] ? std::to_string(*savedTuning.corrected[position])
+                                                        : std::string("empty"))
+                     + " before the save");
+                return;
+            }
+        }
+    CONTROL_CHECK(settleBackgroundWork(*processor));
     const auto dispatcher = service.dispatcher();
     CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
 }

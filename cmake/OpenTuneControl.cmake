@@ -405,6 +405,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ProjectRoundTrip|--control-api"
             "ProjectJobs|--control-api"
             "ProjectWithoutEditor|--control-api"
+            "ProjectReopenKeepsTuning|--control-api"
             "ProjectVectors|--control-api"
         )
         # Transport and tracks (Tests/Control/ControlTracksTests.cpp).

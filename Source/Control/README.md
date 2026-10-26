@@ -853,7 +853,10 @@ title and `refreshAllUIFromProject()`), `onRecentProjectsChanged()` and `setProj
   command (`ProjectSession::clearRecentProjects()`) does on the same preferences.
 
 Tests: `Tests/Control/ControlProjectTests.cpp` (`ProjectRoundTrip`, `ProjectJobs`, `ProjectWithoutEditor`,
-`ProjectVectors`). `ProjectVectors` runs the specification's `project/*` vectors of `project.io` and requires an
+`ProjectReopenKeepsTuning`, `ProjectVectors`). `ProjectReopenKeepsTuning` saves a project with tuned notes and
+opens it again: the correction segments and their parameters must be there right after the open (before the original
+F0 is analysed again), and the notes, their corrected flags and the corrected pitch line must be as before the save
+once the analysis is done. `ProjectVectors` runs the specification's `project/*` vectors of `project.io` and requires an
 explicit list to pass; `project/get-ok` is a read and runs in `Vectors`, and `project/save-as-no-access` is skipped
 because the runner cannot make a file whose identity is unreadable on Windows.
 
@@ -1660,7 +1663,7 @@ than one step.
 | `content.editTimeGrid` (ops `seed`, `moveHandles`) | `timing.v1` | `Ops/TimingOps.cpp` (moves in `Edit/TimeGridOps.cpp`) | `ControlProcessorTests.Timing`, `.TimeGridSeed`, `.TimingVectors` | `methods/content.editTimeGrid.schema.json` |
 | `project.save` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.save.schema.json` |
 | `project.saveAs` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.saveAs.schema.json` |
-| `project.open` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.open.schema.json` |
+| `project.open` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectReopenKeepsTuning`, `.ProjectVectors` | `methods/project.open.schema.json` |
 | `project.clearRecent` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors`, `.ProjectWithoutEditor` | `methods/project.clearRecent.schema.json` |
 | `prefs.set` | `prefs.write` | `Ops/PrefsOps.cpp` (a job of kind `prefsApply` for a change of the editing scheme, the vocoder weight or the rendering priority; `Ops/PrefsModels.cpp` for the options and the runtime calls) | `ControlProcessorTests.PrefsRoundTrip`, `.PrefsSchemeJob`, `.PrefsOptions`, `.PrefsVocoderJob`, `.PrefsVocoderOverlap`, `.PrefsVectors` | `methods/prefs.set.schema.json` |
 | `audio.get` | `audio.device` | `Ops/AudioDeviceOps.cpp` | `ControlProcessorTests.AudioDevice`, `.AudioVectors` | `methods/audio.get.schema.json` |

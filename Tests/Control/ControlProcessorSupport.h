@@ -631,6 +631,10 @@ void scenarioProjectRoundTrip();
 void scenarioProjectJobs();
 /** Without an editor: the save and open methods say so, project.clearRecent works. */
 void scenarioProjectWithoutEditor();
+/** A project with tuned notes saved and opened again keeps the tuning: the correction segments and their four
+    parameters right after the open, then, once the analysis is done again, the corrected flags of the notes and the
+    corrected pitch line on the voiced frames. */
+void scenarioProjectReopenKeepsTuning();
 /** The specification's vectors of project.save, project.saveAs, project.open and project.clearRecent, against the
     real dispatcher with a real project session and a worker pool. */
 void scenarioProjectVectors();

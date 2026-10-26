@@ -36,6 +36,13 @@ class ControlMethodTable;
  * stops the control service (connections close, the discovery file goes) and then asks the bridge to close the window
  * (ControlUiBridge::requestQuit()). The call never stops the service itself while it runs on behalf of a request: the
  * network thread that waits for it holds no lease, and the service joins that very thread when it stops.
+ *
+ * Two cases leave the client with a result that the instance cannot honour, because the result is written before they
+ * can be known: the editor is gone or its window does not close when the exit step runs, and the exit step cannot be
+ * queued (ControlDispatcher::runAfterReply()). In the first the service is stopped all the same (before the window is
+ * asked, never after) and OpenTune keeps running without its control API; the log says that the client was told
+ * `quitting: true` and the window was not closed. In the second the dispatcher answers SHUTTING_DOWN, and the listener
+ * and the discovery file stay until the application's own shutdown stops the service; the log says so.
  */
 void registerAppQuitOps(ControlMethodTable& table);
 

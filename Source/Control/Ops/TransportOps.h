@@ -46,9 +46,29 @@ bool controlBpmDiffers(double a, double b);
  * revert recipe is transport.setTempo back to fromBpm, or null where the instance does not report transport.v1
  * (PROTOCOL.md section 15.2 rule 2). The time signature is not touched by what causes this and is not reported.
  *
+ * The bpm values it reports (the change's before and after, fromBpm, toBpm and the bpm of the revert recipe) carry
+ * three decimals: controlJsonNumber() rounds to the nearest 0.001, the precision at which every result of the control
+ * API reports the tempo. That is not a limit of transport.setTempo, which takes any bpm from 1 to 999 and stores it
+ * unrounded. So the tempo that the revert recipe restores differs from the tempo it replaces by at most 0.0005 when
+ * that tempo had more than three decimals (transport.setTempo can set one, and the BPM field rewrites it as soon as it
+ * loses the focus).
+ *
  * Used by ui.setWorkspace and ui.setSelection: the window's view switch moves the keyboard focus, and the focus that
  * the transport bar's BPM field loses then commits the field, which shows the tempo with one decimal. Message thread.
  */
 void controlReportTempoRounded(ControlOpContext& context, ControlWriteEnvelope& envelope, double fromBpm, double toBpm);
+
+/**
+ * The error of a call that asked the editor to switch the view (ControlUiBridge::setWorkspace(), or select() with
+ * openEditor) and found that the editor reports a failure. The view switch moves the keyboard focus, and the BPM field
+ * that loses it rewrites a tempo with more than one decimal (see controlReportTempoRounded()), also when the switch
+ * breaks off afterwards. So the failure promises `executed` false only while the tempo is still bpmBefore, the tempo
+ * read before the editor was asked: then it is controlOpError(kind, reason, detail). A tempo that differs from
+ * bpmBefore (controlBpmDiffers()) means the call changed something: the error is then controlOpErrorAfterChange()
+ * (`executed` true, PROTOCOL.md section 17.4 rule 3) with the same kind and reason, and detail ends with how the tempo
+ * changed. detail must be printable ASCII. Message thread.
+ */
+Error controlViewSwitchError(ControlOpContext& context, double bpmBefore, std::string_view kind,
+                             std::string_view reason, std::string detail);
 
 } // namespace OpenTune

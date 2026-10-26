@@ -128,8 +128,9 @@ public:
      */
     void endInstanceAfterReply(std::function<void()> action);
 
-    /** For the dispatcher: the action given to endInstanceAfterReply(), moved out; empty when none. */
-    std::function<void()> takeEndInstanceAction() { return std::move(endInstanceAction_); }
+    /** For the dispatcher: the action given to endInstanceAfterReply(), moved out; empty when none. Leaves the context
+        without an action: the moved-from state of a std::function is not specified, so it is reset explicitly. */
+    std::function<void()> takeEndInstanceAction() { return std::exchange(endInstanceAction_, nullptr); }
 
 private:
     void requireMessageThread();

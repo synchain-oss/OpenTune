@@ -109,9 +109,17 @@ JsonValue quitWarnings(bool discarded)
 /**
  * The step that ends the instance, run on the message thread after the result was written (ControlDispatcher): stops
  * the control service, which closes the connections, the listener and the discovery file, then closes the window the
- * way its close button does. A bridge that cannot close the window any more (the editor is gone) leaves the
- * application running with the control API stopped; that is logged, because the caller was told that the application
- * quits.
+ * way its close button does.
+ *
+ * The service is always stopped first, also when the window turns out not to close: the client was told `quitting:
+ * true` and the dispatcher has answered SHUTTING_DOWN since the call returned, so a service that stayed up would only
+ * keep a listener and a discovery file that point at an instance that no longer answers. Checking the bridge before
+ * the stop would not help either: requestQuit() is what finds out whether the window closes, and it must come after
+ * the stop (the interface is down before the window closes).
+ *
+ * When the editor is gone, or its window does not close, the application keeps running with the control API stopped.
+ * The result cannot be taken back, so the step makes that state explainable instead: the log names it, and says that
+ * the client was told `quitting: true`.
  */
 void endInstance(const ControlOpEnvironment& environment)
 {
@@ -119,8 +127,16 @@ void endInstance(const ControlOpEnvironment& environment)
     // ControlService::stop(): idempotent, so the normal shutdown that follows finds it done.
     context.processor().getControlService().stop();
     auto* bridge = context.bridge();
-    if (bridge == nullptr || !bridge->requestQuit())
-        AppLogger::logNoThrow("control API: app.quit could not close the OpenTune window");
+    const char* notClosed = nullptr;
+    if (bridge == nullptr)
+        notClosed = "the editor is gone";
+    else if (!bridge->requestQuit())
+        notClosed = "the editor did not close it";
+    if (notClosed != nullptr)
+        AppLogger::logNoThrow(
+            juce::String("control API: app.quit: the client was told quitting: true, but the OpenTune "
+                         "window was not closed (")
+            + notClosed + "); the control API is stopped and OpenTune keeps running");
 }
 
 Result<JsonValue> runQuit(ControlOpContext& context, const QuitParams& params)

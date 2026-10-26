@@ -411,8 +411,6 @@ std::string controlUndoActionName(const UndoAction& action)
         return "TrimPlacementAction";
     if (dynamic_cast<const FadeChangeAction*>(&action) != nullptr)
         return "FadeChangeAction";
-    if (dynamic_cast<const ReferenceBindingAction*>(&action) != nullptr)
-        return "ReferenceBindingAction";
     return "UndoAction";
 }
 

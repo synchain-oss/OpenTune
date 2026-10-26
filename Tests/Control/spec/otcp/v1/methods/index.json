@@ -282,10 +282,10 @@
       "schema": "defined"
     },
     {
-      "method": "content.analyzeReference",
+      "method": "ui.setWorkspace",
       "layer": "L6",
-      "capability": "reference.v1",
-      "write": "no",
+      "capability": "ui.workspace",
+      "write": "conditional",
       "since": "1.0",
       "schema": "defined"
     },

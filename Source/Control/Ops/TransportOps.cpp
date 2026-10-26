@@ -443,6 +443,19 @@ void controlReportTempoRounded(ControlOpContext& context, ControlWriteEnvelope& 
     envelope.addSideEffect("tempoRounded", std::move(effect));
 }
 
+Error controlViewSwitchError(ControlOpContext& context, double bpmBefore, std::string_view kind,
+                             std::string_view reason, std::string detail)
+{
+    const double bpmNow = context.processor().getBpm();
+    if (!controlBpmDiffers(bpmBefore, bpmNow))
+        return controlOpError(kind, reason, std::move(detail));
+    // The tempo as the results report it (three decimals), so that the text agrees with the tempoRounded side effect of
+    // a call that went through.
+    detail += "; the tempo changed from " + toJsonString(controlJsonNumber(bpmBefore, 3)) + " to "
+              + toJsonString(controlJsonNumber(bpmNow, 3)) + " bpm";
+    return controlOpErrorAfterChange(kind, reason, std::move(detail));
+}
+
 void registerTransportOps(ControlMethodTable& table)
 {
     table.add(controlWriteMethod<ControlParams>("transport.control", parseControl, runControl));

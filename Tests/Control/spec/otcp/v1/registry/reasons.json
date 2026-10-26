@@ -626,6 +626,24 @@
       "scope": "ANALYSIS_FAILED",
       "since": "1.0",
       "description": "OpenTune's reference analysis of the clip failed, so no alignment data was stored and nothing was written. Not retryable."
+    },
+    {
+      "code": "option_unavailable",
+      "scope": "INVALID_ARGUMENT",
+      "since": "1.0",
+      "description": "The vocoder weight or the pitch model that prefs.set asks for is not among the values the instance offers (prefs.get lists them in processing.options); detail names the member. Nothing is changed (executed false). Not retryable: the same request fails until the installation offers the value."
+    },
+    {
+      "code": "vocoder_not_ready",
+      "scope": "MODEL_UNAVAILABLE",
+      "since": "1.0",
+      "description": "The vocoder was still busy (loading) when the wait limit of the prefsApply job passed after a change of the vocoder weight or the rendering priority; the implementation defines the limit. The job took its changes back (executed is true only where a preference that another write changed meanwhile kept that write's value, PROTOCOL.md section 12.7). Retryable: a new request waits for the vocoder again."
+    },
+    {
+      "code": "vocoder_load_failed",
+      "scope": "MODEL_UNAVAILABLE",
+      "since": "1.0",
+      "description": "The command to change the vocoder weight or the rendering priority was carried out, but the vocoder did not become ready, because it could not load the new weight or backend (for example a corrupt or incompatible weight file). The prefsApply job did not wait for its wait limit: it took its changes back at once (executed is true only where a preference that another write changed meanwhile kept that write's value, PROTOCOL.md section 12.7). Not retryable: the same request fails the same way until the weight file or the installation changes."
     }
   ]
 }

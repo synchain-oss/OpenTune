@@ -46,15 +46,19 @@ void insertVoicedSegmentPieces(std::vector<PitchCorrectionSegment>& segments,
         pieceStart = -1;
     };
 
+    // 工程恢复时原始音高还没重新分析，曲线是空的。这时不能用原始音高
+    // 把已保存的修音段全部滤掉，否则加载后只剩红线。原始音高到位后再切一次。
+    const bool originalReady = !originalF0.empty();
     for (int frame = segment.startFrame; frame < segment.endFrame; ++frame) {
         const int offset = frame - segment.startFrame;
-        const bool voiced = frame >= 0
-            && frame < static_cast<int>(originalF0.size())
-            && originalF0[static_cast<size_t>(frame)] > 0.0f
-            && offset >= 0
+        const bool savedValueVoiced = offset >= 0
             && offset < static_cast<int>(segment.f0Data.size())
             && segment.f0Data[static_cast<size_t>(offset)] > 0.0f;
-        if (voiced) {
+        const bool originalVoiced = !originalReady
+            || (frame >= 0
+                && frame < static_cast<int>(originalF0.size())
+                && originalF0[static_cast<size_t>(frame)] > 0.0f);
+        if (frame >= 0 && savedValueVoiced && originalVoiced) {
             if (pieceStart < 0)
                 pieceStart = frame;
         } else {
@@ -682,6 +686,29 @@ std::shared_ptr<const PitchCurveSnapshot> PitchCurve::applyCorrectionToRange(
     );
     std::atomic_store(&snapshot_, newSnapshot);
     return newSnapshot;
+}
+
+void PitchCurve::retainVoicedCorrectionSegments()
+{
+    auto oldSnapshot = getSnapshot();
+    const auto& originalF0 = oldSnapshot->getOriginalF0();
+    if (originalF0.empty() || !oldSnapshot->hasCorrectionLayer())
+        return;
+
+    std::vector<PitchCorrectionSegment> voicedSegments;
+    for (const auto& segment : oldSnapshot->getCorrectionSegments())
+        insertVoicedSegmentPieces(voicedSegments, segment, originalF0);
+
+    const uint64_t newGen = incrementGeneration();
+    auto newSnapshot = std::make_shared<const PitchCurveSnapshot>(
+        oldSnapshot->getOriginalF0(),
+        oldSnapshot->getOriginalEnergy(),
+        std::move(voicedSegments),
+        oldSnapshot->getHopSize(),
+        oldSnapshot->getSampleRate(),
+        newGen,
+        oldSnapshot->getErasedRanges());
+    std::atomic_store(&snapshot_, newSnapshot);
 }
 
 std::shared_ptr<const PitchCurveSnapshot> PitchCurve::setManualCorrectionRange(

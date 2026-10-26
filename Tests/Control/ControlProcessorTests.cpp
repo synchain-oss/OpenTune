@@ -573,6 +573,7 @@ const Scenario kScenarios[] = {
     {"ProjectRoundTrip", scenarioProjectRoundTrip, false},
     {"ProjectJobs", scenarioProjectJobs, false},
     {"ProjectWithoutEditor", scenarioProjectWithoutEditor, false},
+    {"ProjectReopenKeepsTuning", scenarioProjectReopenKeepsTuning, false},
     {"ProjectVectors", scenarioProjectVectors, false},
     {"Transport", scenarioTransport, false},
     {"Tracks", scenarioTracks, false},

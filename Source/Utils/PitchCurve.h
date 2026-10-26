@@ -357,6 +357,9 @@ public:
         std::atomic_store(&snapshot_, newSnapshot);
     }
 
+    // 用当前原始音高把修音段切回有声帧。原始音高尚未就绪时不做任何事。
+    void retainVoicedCorrectionSegments();
+
     void replaceCorrectionSegments(const std::vector<PitchCorrectionSegment>& segments) {
         auto oldSnapshot = getSnapshot();
         auto normalized = segments;

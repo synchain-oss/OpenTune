@@ -505,9 +505,17 @@ Result<void> ProjectSession::commitPreparedOpen(PreparedOpen&& preparedOpen)
         auto pitchCurve = std::make_shared<PitchCurve>();
         for (const auto& seg : contentEntry.correctionSegments) {
             if (!seg.f0Data.empty()) {
+                // 此时原始音高尚未重新提取。修音段先按保存的 f0 保留，
+                // 提取完成后再按新的有声帧切开。
+                PitchCorrectionSegment::ParameterSnapshot parameters;
+                parameters.retuneSpeed = seg.retuneSpeed;
+                parameters.pitchDriftScale = seg.pitchDriftScale;
+                parameters.vibratoDepth = seg.vibratoDepth;
+                parameters.vibratoRate = seg.vibratoRate;
                 pitchCurve->setManualCorrectionRange(
                     seg.startFrame, seg.endFrame, seg.f0Data,
-                    static_cast<PitchCorrectionSegment::Source>(seg.source));
+                    static_cast<PitchCorrectionSegment::Source>(seg.source),
+                    parameters);
             }
         }
         clip->applyPitchCurve(pitchCurve);

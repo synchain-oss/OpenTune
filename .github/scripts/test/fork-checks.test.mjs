@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { after, before, describe, test } from 'node:test';
 import { parseLayerFromBody, runChecks, workflowTriggerBlock, actionRefProblem } from '../fork-checks.mjs';
-import { makeTempDir, removeDir } from '../fork-lib.mjs';
+import { filePatchId, makeTempDir, overallStatus, removeDir } from '../fork-lib.mjs';
 import {
   FORK, GITHUB, PINNED_WORKFLOW, SCRIPTS, STRANGER, TestRepo, UPSTREAM, WEB,
   aiGeneratedLine, aiTrailer, byId, fakeClangFormat, msg, realTool,
@@ -245,6 +245,203 @@ describe('scope', () => {
     await expectStatus('scope', repo.change({ 'README.md': '# Upstream\nedit\n' }), 'FAIL');
     await expectStatus('scope', repo.change({ 'Source/Utils/Foo.cpp': 'void foo() {}\n' }), 'FAIL');
     await expectStatus('scope', repo.change({ 'newdir/file.txt': 'x\n' }), 'FAIL');
+  });
+});
+
+describe('approved upstream cherry-picks (.github/upstream-backports.json)', () => {
+  const FOO = 'Source/Utils/Foo.cpp';
+  const BAR = 'Source/Utils/Bar.cpp';
+  const REGISTER = '.github/upstream-backports.json';
+  const UPSTREAM_COMMIT = 'abcdef0123456789abcdef0123456789abcdef01';
+  const picked = 'void foo()\n{\n    int y = 1;\n}\n';
+  // Same git patch-id --stable as `picked` (it ignores whitespace), but other bytes.
+  const pickedReindented = 'void foo()\n{\n  int y = 1;\n}\n';
+  const pickedTrailingBlanks = 'void foo()\n{\n    int y = 1;  \n}\n';
+
+  const register = (files, upstreamCommit = UPSTREAM_COMMIT) => JSON.stringify({ backports: [{ upstreamCommit, files }] }, null, 2) + '\n';
+  const blobOf = (content) => repo.git(['hash-object', '--stdin'], { input: content }).trim();
+
+  /** The register entry for FOO as it is cherry-picked to `content` on top of the upstream snapshot. */
+  function entryOf(content) {
+    return { patchId: filePatchId(repo.dir, FOO, { base: repo.upstream, head: repo.change({ [FOO]: content }) }), blob: blobOf(content) };
+  }
+
+  let targetCounter = 0;
+  /** A target branch (remote-tracking ref) whose tip carries `text` as the register; null = no register file. */
+  function target(text) {
+    const ref = `origin/target-${++targetCounter}`;
+    const sha = repo.change(text === null ? {} : { [REGISTER]: text });
+    repo.ref(`refs/remotes/${ref}`, sha);
+    return { ref, sha };
+  }
+
+  /** `files` on top of the target branch tip, as a PR head would be. */
+  const prHead = (t, files) => repo.change(files, { parent: t.sha });
+
+  test('registered, patch-id and blob both equal: scope and layer pass, the register comes from the target branch', async () => {
+    const t = target(register({ [FOO]: entryOf(picked) }));
+    const head = prHead(t, { [FOO]: picked });
+    const scope = await expectStatus('scope', head, 'PASS', { base: t.ref });
+    assert.match(scope.detail, /已批准的上游挑入 abcdef0（1 个文件），补丁与文件内容均与登记一致；登记表取自目标分支 origin\/target-\d+/);
+    const layer = await expectStatus('layer', head, 'PASS', { layer: 'L2', base: t.ref });
+    assert.match(layer.detail, /已批准的上游挑入 abcdef0/);
+  });
+
+  test('a change of whitespace next to the cherry-pick keeps the patch-id but not the blob: fails', async () => {
+    const entry = entryOf(picked);
+    for (const changed of [pickedReindented, pickedTrailingBlanks]) {
+      // The premise of this test: the patch-id alone cannot tell these apart.
+      assert.equal(entryOf(changed).patchId, entry.patchId);
+      assert.notEqual(entryOf(changed).blob, entry.blob);
+      const t = target(register({ [FOO]: entry }));
+      const head = prHead(t, { [FOO]: changed });
+      const scope = await expectStatus('scope', head, 'FAIL', { base: t.ref });
+      assert.match(scope.problems.join('\n'), /Source\/Utils\/Foo\.cpp（已登记（abcdef0），补丁一致，但文件内容与登记的 blob 不是逐字节一致（登记 \w{7}，实际 \w{7}）/);
+      const layer = await expectStatus('layer', head, 'FAIL', { layer: 'L2', base: t.ref });
+      assert.match(layer.problems.join('\n'), /白名单之外的上游路径：Source\/Utils\/Foo\.cpp.*不是逐字节一致/);
+    }
+  });
+
+  test('a registered file changed by one more line fails: patch-id and blob both differ', async () => {
+    const t = target(register({ [FOO]: entryOf(picked) }));
+    const head = prHead(t, { [FOO]: `${picked}// one more line\n` });
+    const scope = await expectStatus('scope', head, 'FAIL', { base: t.ref });
+    assert.match(scope.problems.join('\n'), /Source\/Utils\/Foo\.cpp（已登记（abcdef0），但改动与登记的补丁不一致.*在挑入之外又改了这个文件；且文件内容与登记的 blob 不是逐字节一致（登记 \w{7}，实际 \w{7}）/);
+    const layer = await expectStatus('layer', head, 'FAIL', { layer: 'L2', base: t.ref });
+    assert.match(layer.problems.join('\n'), /白名单之外的上游路径：Source\/Utils\/Foo\.cpp.*不一致/);
+  });
+
+  test('a later extra commit on top of the cherry-pick fails too', async () => {
+    const t = target(register({ [FOO]: entryOf(picked) }));
+    const first = prHead(t, { [FOO]: picked });
+    const second = repo.change({ [FOO]: `${picked}// later\n` }, { parent: first });
+    await expectStatus('scope', first, 'PASS', { base: t.ref });
+    await expectStatus('scope', second, 'FAIL', { base: t.ref });
+    await expectStatus('layer', second, 'FAIL', { layer: 'L2', base: t.ref });
+  });
+
+  test('an upstream file that is not in the register fails, the registered one next to it does not', async () => {
+    const t = target(register({ [FOO]: entryOf(picked) }));
+    const head = prHead(t, { [FOO]: picked, 'README.md': '# Upstream\nedit\n' });
+    const scope = await expectStatus('scope', head, 'FAIL', { base: t.ref });
+    assert.match(scope.problems.join('\n'), /README\.md（未登记为已批准的上游挑入：目标分支 origin\/target-\d+（\w{7}）上的登记表里没有它）/);
+    assert.doesNotMatch(scope.problems.join('\n'), /Foo\.cpp/);
+    await expectStatus('layer', head, 'FAIL', { layer: 'L2', base: t.ref });
+  });
+
+  test('in a PR the head cannot approve itself: an entry the head adds to the register does not count', async () => {
+    const mine = register({ [FOO]: entryOf(picked) });
+
+    // The target branch has no register file at all.
+    const none = target(null);
+    const head = prHead(none, { [FOO]: picked, [REGISTER]: mine });
+    const scope = await expectStatus('scope', head, 'FAIL', { base: none.ref });
+    assert.match(scope.problems.join('\n'), /未登记为已批准的上游挑入：目标分支 origin\/target-\d+（\w{7}）上没有登记文件/);
+    const layer = await expectStatus('layer', head, 'FAIL', { layer: 'L2', base: none.ref });
+    assert.match(layer.problems.join('\n'), /白名单之外的上游路径：Source\/Utils\/Foo\.cpp.*没有登记文件/);
+    assert.match(layer.problems.join('\n'), /WARN：改动了上游挑入登记表/);
+
+    // The target branch has a register, but not for this file.
+    const other = target(register({ [BAR]: { patchId: '1'.repeat(40), blob: '2'.repeat(40) } }));
+    const head2 = prHead(other, { [FOO]: picked, [REGISTER]: mine });
+    const scope2 = await expectStatus('scope', head2, 'FAIL', { base: other.ref });
+    assert.match(scope2.problems.join('\n'), /Foo\.cpp（未登记为已批准的上游挑入：目标分支 origin\/target-\d+（\w{7}）上的登记表里没有它）/);
+    await expectStatus('layer', head2, 'FAIL', { layer: 'L2', base: other.ref });
+  });
+
+  test('in a PR an edit of the upstream file plus a matching edit of the register in the same change still fails', async () => {
+    const t = target(register({ [FOO]: entryOf(picked) }));
+    const other = 'void foo()\n{\n    int y = 2;\n}\n';
+    const head = prHead(t, { [FOO]: other, [REGISTER]: register({ [FOO]: entryOf(other) }) });
+    await expectStatus('scope', head, 'FAIL', { base: t.ref });
+    await expectStatus('layer', head, 'FAIL', { layer: 'L2', base: t.ref });
+  });
+
+  test('without a base (a push to dev or the main line) the register is read from the head', async () => {
+    const head = repo.change({ [FOO]: picked, [REGISTER]: register({ [FOO]: entryOf(picked) }) });
+    const scope = await expectStatus('scope', head, 'PASS', { base: undefined, defaultBase: false });
+    assert.match(scope.detail, /已批准的上游挑入 abcdef0（1 个文件）/);
+    assert.doesNotMatch(scope.detail, /登记表取自/);
+    // The same head still has to match the register byte for byte, and without a register it fails.
+    const changed = repo.change({ [FOO]: pickedReindented, [REGISTER]: register({ [FOO]: entryOf(picked) }) });
+    await expectStatus('scope', changed, 'FAIL', { base: undefined, defaultBase: false });
+    const unregistered = await expectStatus('scope', repo.change({ [FOO]: picked }), 'FAIL', { base: undefined, defaultBase: false });
+    assert.match(unregistered.problems.join('\n'), /未登记为已批准的上游挑入：没有登记文件/);
+  });
+
+  test('a target branch that cannot be resolved means no register: the file fails', async () => {
+    const head = repo.change({ [FOO]: picked, [REGISTER]: register({ [FOO]: entryOf(picked) }) });
+    const scope = await expectStatus('scope', head, 'FAIL', { base: 'origin/no-such-branch' });
+    assert.match(scope.problems.join('\n'), /无法解析目标分支 origin\/no-such-branch/);
+  });
+
+  test('a damaged register on the target branch counts as no register and says why, without crashing the check', async () => {
+    const patchId = '1'.repeat(40);
+    const blob = '2'.repeat(40);
+    const damaged = [
+      '{ not json',
+      '{"backports":[{"upstreamCommit":"abc","files":{}}]}',
+      '[]',
+      // the old format: a bare patch-id string instead of { patchId, blob }
+      JSON.stringify({ backports: [{ upstreamCommit: UPSTREAM_COMMIT, files: { [FOO]: patchId } }] }),
+      // fields missing
+      JSON.stringify({ backports: [{ upstreamCommit: UPSTREAM_COMMIT, files: { [FOO]: { patchId } } }] }),
+      JSON.stringify({ backports: [{ upstreamCommit: UPSTREAM_COMMIT, files: { [FOO]: { blob } } }] }),
+      JSON.stringify({ backports: [{ upstreamCommit: UPSTREAM_COMMIT, files: { [FOO]: {} } }] }),
+    ];
+    for (const text of damaged) {
+      const t = target(text);
+      const head = prHead(t, { [FOO]: picked });
+      const scope = await expectStatus('scope', head, 'FAIL', { base: t.ref });
+      assert.match(scope.problems.join('\n'), /登记文件有误（.+），按没有登记处理/, text);
+      await expectStatus('layer', head, 'FAIL', { layer: 'L2', base: t.ref });
+    }
+  });
+
+  test('a registration does not make an L0 change allowed to touch the file', async () => {
+    const t = target(register({ [FOO]: entryOf(picked) }));
+    await expectStatus('layer', prHead(t, { [FOO]: picked }), 'FAIL', { layer: 'L0', base: t.ref });
+  });
+
+  test('a register entry for a file the branch does not change has no effect', async () => {
+    const t = target(register({ [FOO]: entryOf(picked) }));
+    const scope = await expectStatus('scope', prHead(t, { 'Tests/ControlFork/a.txt': 'x\n' }), 'PASS', { base: t.ref });
+    assert.doesNotMatch(scope.detail, /已批准/);
+  });
+
+  describe('a PR range that changes the register', () => {
+    const WARNING = /改动了上游挑入登记表：新增或修改登记需要维护者书面批准，review 按【红旗】处理/;
+
+    test('gets a WARN on the layer result, which does not block', async () => {
+      const t = target(register({ [FOO]: entryOf(picked) }));
+      const head = prHead(t, { [REGISTER]: register({ [FOO]: entryOf(picked), [BAR]: { patchId: '1'.repeat(40), blob: '2'.repeat(40) } }) });
+      const layer = await expectStatus('layer', head, 'WARN', { layer: 'L0', base: t.ref });
+      assert.match(layer.detail, WARNING);
+      const out = await runChecks({ cwd: repo.dir, head, base: t.ref, headBranch: BRANCH, layer: 'L0', only: ['layer'] });
+      assert.equal(overallStatus(out.results), 'PASS');
+    });
+
+    test('also when the register is deleted, and also on a multi-layer PR whose layer check is skipped', async () => {
+      const t = target(register({ [FOO]: entryOf(picked) }));
+      const head = prHead(t, { [REGISTER]: null });
+      await expectStatus('layer', head, 'WARN', { layer: 'L0', base: t.ref });
+      const skipped = await expectStatus('layer', prHead(t, { [REGISTER]: register({}) }), 'WARN', { layer: undefined, headBranch: 'spec-sync/v1.0.0', base: t.ref });
+      assert.match(skipped.detail, /不属于单一层/);
+      assert.match(skipped.detail, WARNING);
+    });
+
+    test('a failing layer check stays a FAIL and carries the warning as one more line', async () => {
+      const t = target(null);
+      const head = prHead(t, { [REGISTER]: register({}), 'README.md': '# Upstream\nedit\n' });
+      const layer = await expectStatus('layer', head, 'FAIL', { layer: 'L0', base: t.ref });
+      assert.match(layer.problems.join('\n'), WARNING);
+    });
+
+    test('is not reported when the register is only inherited from the target branch', async () => {
+      const t = target(register({ [FOO]: entryOf(picked) }));
+      const layer = await expectStatus('layer', prHead(t, { 'Tests/ControlFork/a.txt': 'x\n' }), 'PASS', { layer: 'L0', base: t.ref });
+      assert.doesNotMatch(layer.detail, /登记表/);
+    });
   });
 });
 

@@ -5,7 +5,7 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 import { stripYamlComment, workflowCodeLines, workflowTriggerBlock, spdxProblem, needsSpdx } from '../fork-checks.mjs';
-import { classifyPath, eolStyle, findSignoffs, globToRegExp, matchesAny, parseArgs, parseNameStatusZ, parseUpstreamBackports, reportToGitHub, result, GUARDED_PATTERNS } from '../fork-lib.mjs';
+import { classifyPath, eolStyle, findSignoffs, globToRegExp, matchesAny, parseArgs, parseNameStatusZ, parseUpstreamBackports, protectedRegisterBranch, reportToGitHub, result, GUARDED_PATTERNS } from '../fork-lib.mjs';
 
 describe('globs and path classes', () => {
   test('globToRegExp', () => {
@@ -128,6 +128,26 @@ describe('reportToGitHub', () => {
   test('a WARN without problems still gets its annotation, and the text is escaped', () => {
     const lines = capture([result('w', 'W', 'WARN', '100% done\nsecond line')]);
     assert.deepEqual(lines, ['::warning title=w::100%25 done%0Asecond line\n']);
+  });
+});
+
+describe('protectedRegisterBranch', () => {
+  test('dev and feature/control-api, in every spelling of --base, are the protected branches', () => {
+    for (const ref of ['dev', 'origin/dev', 'refs/remotes/origin/dev', 'refs/heads/dev']) assert.equal(protectedRegisterBranch(ref), 'dev', ref);
+    for (const ref of ['feature/control-api', 'origin/feature/control-api', 'refs/remotes/origin/feature/control-api', 'refs/heads/feature/control-api']) {
+      assert.equal(protectedRegisterBranch(ref), 'feature/control-api', ref);
+    }
+  });
+
+  test('any other name is not protected, and look-alikes do not pass', () => {
+    const sha = 'a'.repeat(40);
+    for (const ref of [
+      'feature/x', 'origin/feature/x', 'refs/remotes/origin/review-base/7', 'sync/20261101', 'main',
+      'dev-x', 'xdev', 'feature/control-api-2', 'feature/control-api/x', 'origin/origin/dev', 'refs/heads/origin/dev',
+      'refs/remotes/upstream/dev', 'refs/tags/dev', 'DEV', sha, '', null, undefined,
+    ]) {
+      assert.equal(protectedRegisterBranch(ref), null, String(ref));
+    }
   });
 });
 

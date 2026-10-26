@@ -337,6 +337,27 @@ export const UPSTREAM_BACKPORTS_PATH = '.github/upstream-backports.json';
 const HEX40 = /^[0-9a-f]{40}$/;
 
 /**
+ * The only target branches whose register is trusted in a pull request: the protected integration branch and the
+ * main line. Anyone who can create or push another branch (feature/x, review-base/<n>, ...) could put a register of
+ * their own on it and aim a PR there, so a register on any other target branch is never read.
+ */
+export const BACKPORT_REGISTER_BRANCHES = ['dev', 'feature/control-api'];
+
+/**
+ * The branch name of a ref as given to --base: `origin/<name>`, `refs/remotes/origin/<name>`, `refs/heads/<name>` or
+ * a bare `<name>`. One prefix is removed, once.
+ */
+export function branchNameOfRef(ref) {
+  return String(ref ?? '').replace(/^(?:refs\/remotes\/origin\/|refs\/heads\/|origin\/)/, '');
+}
+
+/** The protected branch (see BACKPORT_REGISTER_BRANCHES) that `ref` names, or null when it is any other ref. */
+export function protectedRegisterBranch(ref) {
+  const name = branchNameOfRef(ref);
+  return BACKPORT_REGISTER_BRANCHES.includes(name) ? name : null;
+}
+
+/**
  * Parse the register. Never throws: a malformed register means "no registrations", with the reason in `error`.
  * Shape:
  *   { "backports": [ { "upstreamCommit": <40 hex>,
@@ -395,10 +416,12 @@ export function loadUpstreamBackports(cwd, rev, origin = '') {
 
 /**
  * `git patch-id --stable` of one file's diff: `base`..`head`, or the index against `base` when `head` is null.
- * The diff options are fixed so that a user's diff.* settings cannot change the hunks; null when the file has no diff.
+ * The diff options are fixed so that a user's diff.* settings cannot change the hunks (algorithm, context,
+ * diff.interHunkContext and diff.indentHeuristic included: --inter-hunk-context=0 and --indent-heuristic are git's
+ * own defaults, so the registered patch-ids do not change); null when the file has no diff.
  */
 export function filePatchId(cwd, file, { base, head }) {
-  const args = ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--unified=3', '--diff-algorithm=myers', '--src-prefix=a/', '--dst-prefix=b/'];
+  const args = ['diff', '--no-color', '--no-ext-diff', '--no-textconv', '--no-renames', '--unified=3', '--inter-hunk-context=0', '--indent-heuristic', '--diff-algorithm=myers', '--src-prefix=a/', '--dst-prefix=b/'];
   if (head) args.push(base, head);
   else args.push('--cached', base);
   args.push('--', file);
@@ -430,7 +453,9 @@ export function judgeBackports(cwd, register, paths, range) {
   for (const file of paths) {
     const entry = register.files.get(file);
     if (!entry) {
-      const why = register.error ? `${at}的登记文件有误（${register.error}），按没有登记处理` : register.present ? `${at}的登记表里没有它` : `${at}没有登记文件`;
+      const why = register.unusable
+        ? `${register.unusable}，按没有登记处理`
+        : register.error ? `${at}的登记文件有误（${register.error}），按没有登记处理` : register.present ? `${at}的登记表里没有它` : `${at}没有登记文件`;
       verdicts.set(file, { ok: false, reason: 'unregistered', detail: `未登记为已批准的上游挑入：${why}` });
       continue;
     }

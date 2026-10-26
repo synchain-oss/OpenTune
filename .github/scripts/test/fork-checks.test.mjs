@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { after, before, describe, test } from 'node:test';
+import { after, afterEach, before, describe, test } from 'node:test';
 import { parseLayerFromBody, runChecks, workflowTriggerBlock, actionRefProblem } from '../fork-checks.mjs';
 import { filePatchId, makeTempDir, overallStatus, removeDir } from '../fork-lib.mjs';
 import {
@@ -266,13 +266,31 @@ describe('approved upstream cherry-picks (.github/upstream-backports.json)', () 
     return { patchId: filePatchId(repo.dir, FOO, { base: repo.upstream, head: repo.change({ [FOO]: content }) }), blob: blobOf(content) };
   }
 
-  let targetCounter = 0;
-  /** A target branch (remote-tracking ref) whose tip carries `text` as the register; null = no register file. */
-  function target(text) {
-    const ref = `origin/target-${++targetCounter}`;
+  // Refs the tests move or delete; afterEach puts them back, because the other tests share this repository.
+  const touched = new Map();
+  function remember(fullRef) {
+    if (touched.has(fullRef)) return;
+    const r = repo.git(['rev-parse', '--verify', '--quiet', fullRef], { allowFail: true });
+    touched.set(fullRef, r.status === 0 ? String(r.stdout).trim() : null);
+  }
+  afterEach(() => {
+    for (const [fullRef, sha] of touched) {
+      if (sha) repo.git(['update-ref', fullRef, sha]);
+      else repo.git(['update-ref', '-d', fullRef]);
+    }
+    touched.clear();
+  });
+
+  /**
+   * A target branch whose tip carries `text` as the register (null = no register file). By default it is the
+   * remote-tracking ref of feature/control-api, one of the two branches whose register is trusted in a PR (the
+   * other is dev); pass another full ref name to try other branches. `ref` is what --base gets.
+   */
+  function target(text, fullRef = 'refs/remotes/origin/feature/control-api') {
+    remember(fullRef);
     const sha = repo.change(text === null ? {} : { [REGISTER]: text });
-    repo.ref(`refs/remotes/${ref}`, sha);
-    return { ref, sha };
+    repo.ref(fullRef, sha);
+    return { ref: fullRef.replace(/^refs\/remotes\//, ''), sha };
   }
 
   /** `files` on top of the target branch tip, as a PR head would be. */
@@ -282,7 +300,7 @@ describe('approved upstream cherry-picks (.github/upstream-backports.json)', () 
     const t = target(register({ [FOO]: entryOf(picked) }));
     const head = prHead(t, { [FOO]: picked });
     const scope = await expectStatus('scope', head, 'PASS', { base: t.ref });
-    assert.match(scope.detail, /已批准的上游挑入 abcdef0（1 个文件），补丁与文件内容均与登记一致；登记表取自目标分支 origin\/target-\d+/);
+    assert.match(scope.detail, /已批准的上游挑入 abcdef0（1 个文件），补丁与文件内容均与登记一致；登记表取自目标分支 origin\/feature\/control-api/);
     const layer = await expectStatus('layer', head, 'PASS', { layer: 'L2', base: t.ref });
     assert.match(layer.detail, /已批准的上游挑入 abcdef0/);
   });
@@ -299,6 +317,25 @@ describe('approved upstream cherry-picks (.github/upstream-backports.json)', () 
       assert.match(scope.problems.join('\n'), /Source\/Utils\/Foo\.cpp（已登记（abcdef0），补丁一致，但文件内容与登记的 blob 不是逐字节一致（登记 \w{7}，实际 \w{7}）/);
       const layer = await expectStatus('layer', head, 'FAIL', { layer: 'L2', base: t.ref });
       assert.match(layer.problems.join('\n'), /白名单之外的上游路径：Source\/Utils\/Foo\.cpp.*不是逐字节一致/);
+    }
+  });
+
+  test('the patch-id does not depend on diff.interHunkContext or diff.indentHeuristic of the machine', () => {
+    const BIG = 'Source/Utils/Big.cpp';
+    const lines = (a, b) => Array.from({ length: 40 }, (_, i) => (i === 4 ? a : i === 24 ? b : `line ${i};`)).join('\n') + '\n';
+    const before = repo.commit({ parent: repo.forkBase, files: { [BIG]: lines('four', 'twentyfour') } });
+    const after = repo.commit({ parent: before, files: { [BIG]: lines('four!', 'twentyfour!') } });
+    const idPlain = filePatchId(repo.dir, BIG, { base: before, head: after });
+    const hunks = () => (repo.git(['diff', before, after, '--', BIG]).match(/^@@ /gm) ?? []).length;
+    assert.equal(hunks(), 2);
+    try {
+      repo.git(['config', 'diff.interHunkContext', '30']);
+      repo.git(['config', 'diff.indentHeuristic', 'false']);
+      assert.equal(hunks(), 1, 'premise: the configuration merges the two hunks');
+      assert.equal(filePatchId(repo.dir, BIG, { base: before, head: after }), idPlain);
+    } finally {
+      repo.git(['config', '--unset', 'diff.interHunkContext']);
+      repo.git(['config', '--unset', 'diff.indentHeuristic']);
     }
   });
 
@@ -324,7 +361,7 @@ describe('approved upstream cherry-picks (.github/upstream-backports.json)', () 
     const t = target(register({ [FOO]: entryOf(picked) }));
     const head = prHead(t, { [FOO]: picked, 'README.md': '# Upstream\nedit\n' });
     const scope = await expectStatus('scope', head, 'FAIL', { base: t.ref });
-    assert.match(scope.problems.join('\n'), /README\.md（未登记为已批准的上游挑入：目标分支 origin\/target-\d+（\w{7}）上的登记表里没有它）/);
+    assert.match(scope.problems.join('\n'), /README\.md（未登记为已批准的上游挑入：目标分支 origin\/feature\/control-api（\w{7}）上的登记表里没有它）/);
     assert.doesNotMatch(scope.problems.join('\n'), /Foo\.cpp/);
     await expectStatus('layer', head, 'FAIL', { layer: 'L2', base: t.ref });
   });
@@ -336,7 +373,7 @@ describe('approved upstream cherry-picks (.github/upstream-backports.json)', () 
     const none = target(null);
     const head = prHead(none, { [FOO]: picked, [REGISTER]: mine });
     const scope = await expectStatus('scope', head, 'FAIL', { base: none.ref });
-    assert.match(scope.problems.join('\n'), /未登记为已批准的上游挑入：目标分支 origin\/target-\d+（\w{7}）上没有登记文件/);
+    assert.match(scope.problems.join('\n'), /未登记为已批准的上游挑入：目标分支 origin\/feature\/control-api（\w{7}）上没有登记文件/);
     const layer = await expectStatus('layer', head, 'FAIL', { layer: 'L2', base: none.ref });
     assert.match(layer.problems.join('\n'), /白名单之外的上游路径：Source\/Utils\/Foo\.cpp.*没有登记文件/);
     assert.match(layer.problems.join('\n'), /WARN：改动了上游挑入登记表/);
@@ -345,7 +382,7 @@ describe('approved upstream cherry-picks (.github/upstream-backports.json)', () 
     const other = target(register({ [BAR]: { patchId: '1'.repeat(40), blob: '2'.repeat(40) } }));
     const head2 = prHead(other, { [FOO]: picked, [REGISTER]: mine });
     const scope2 = await expectStatus('scope', head2, 'FAIL', { base: other.ref });
-    assert.match(scope2.problems.join('\n'), /Foo\.cpp（未登记为已批准的上游挑入：目标分支 origin\/target-\d+（\w{7}）上的登记表里没有它）/);
+    assert.match(scope2.problems.join('\n'), /Foo\.cpp（未登记为已批准的上游挑入：目标分支 origin\/feature\/control-api（\w{7}）上的登记表里没有它）/);
     await expectStatus('layer', head2, 'FAIL', { layer: 'L2', base: other.ref });
   });
 
@@ -369,10 +406,62 @@ describe('approved upstream cherry-picks (.github/upstream-backports.json)', () 
     assert.match(unregistered.problems.join('\n'), /未登记为已批准的上游挑入：没有登记文件/);
   });
 
-  test('a target branch that cannot be resolved means no register: the file fails', async () => {
+  test('a protected target branch that cannot be resolved means no register: the file fails', async () => {
+    remember('refs/remotes/origin/dev');
+    repo.git(['update-ref', '-d', 'refs/remotes/origin/dev']);
     const head = repo.change({ [FOO]: picked, [REGISTER]: register({ [FOO]: entryOf(picked) }) });
-    const scope = await expectStatus('scope', head, 'FAIL', { base: 'origin/no-such-branch' });
-    assert.match(scope.problems.join('\n'), /无法解析目标分支 origin\/no-such-branch/);
+    const scope = await expectStatus('scope', head, 'FAIL', { base: 'origin/dev' });
+    assert.match(scope.problems.join('\n'), /无法解析目标分支 origin\/dev/);
+  });
+
+  describe('only dev and feature/control-api are trusted as target branches', () => {
+    const approving = () => register({ [FOO]: entryOf(picked) });
+    const UNTRUSTED = /未登记为已批准的上游挑入：目标分支 `(.+)` 不是受保护的 dev 或 feature\/control-api，按没有登记处理/;
+
+    test('a register on any other target branch is not read, however well it matches', async () => {
+      for (const branch of ['feature/x', 'feature/control-api-2', 'review-base/7', 'sync/20261101', 'dev-x']) {
+        const t = target(approving(), `refs/remotes/origin/${branch}`);
+        const head = prHead(t, { [FOO]: picked });
+        const scope = await expectStatus('scope', head, 'FAIL', { base: t.ref });
+        assert.match(scope.problems.join('\n'), UNTRUSTED, branch);
+        assert.equal(UNTRUSTED.exec(scope.problems.join('\n'))[1], branch);
+        const layer = await expectStatus('layer', head, 'FAIL', { layer: 'L2', base: t.ref });
+        assert.match(layer.problems.join('\n'), /白名单之外的上游路径：Source\/Utils\/Foo\.cpp.*不是受保护的 dev 或 feature\/control-api/, branch);
+      }
+    });
+
+    test('the same register on feature/control-api or dev is read', async () => {
+      for (const fullRef of ['refs/remotes/origin/feature/control-api', 'refs/remotes/origin/dev']) {
+        const t = target(approving(), fullRef);
+        const head = prHead(t, { [FOO]: picked });
+        await expectStatus('scope', head, 'PASS', { base: t.ref });
+        await expectStatus('layer', head, 'PASS', { layer: 'L2', base: t.ref });
+      }
+    });
+
+    test('every spelling of the protected branch is accepted: origin/<name>, refs/remotes/origin/<name>, refs/heads/<name>', async () => {
+      const t = target(approving());
+      remember('refs/heads/feature/control-api');
+      repo.ref('refs/heads/feature/control-api', t.sha);
+      const head = prHead(t, { [FOO]: picked });
+      for (const base of ['origin/feature/control-api', 'refs/remotes/origin/feature/control-api', 'refs/heads/feature/control-api']) {
+        const scope = await expectStatus('scope', head, 'PASS', { base });
+        assert.match(scope.detail, /已批准的上游挑入 abcdef0/, base);
+        await expectStatus('layer', head, 'PASS', { layer: 'L2', base });
+      }
+    });
+
+    test('look-alike names and a bare commit are not protected branches', async () => {
+      const t = target(approving(), 'refs/remotes/upstream/dev');
+      const head = prHead(t, { [FOO]: picked });
+      for (const base of ['upstream/dev', 'refs/remotes/upstream/dev', t.sha]) {
+        const scope = await expectStatus('scope', head, 'FAIL', { base });
+        assert.match(scope.problems.join('\n'), /不是受保护的 dev 或 feature\/control-api/, base);
+      }
+      // origin/origin/dev: one prefix is removed once, what is left is origin/dev
+      const nested = target(approving(), 'refs/remotes/origin/origin/dev');
+      await expectStatus('scope', prHead(nested, { [FOO]: picked }), 'FAIL', { base: nested.ref });
+    });
   });
 
   test('a damaged register on the target branch counts as no register and says why, without crashing the check', async () => {

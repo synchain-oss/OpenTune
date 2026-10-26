@@ -59,6 +59,7 @@ import {
   SPEC_COPY_PATTERNS,
   SPEC_PATTERNS,
   UPSTREAM_BACKPORTS_PATH,
+  branchNameOfRef,
   classifyPath,
   currentBranch,
   describeApprovedBackports,
@@ -76,6 +77,7 @@ import {
   matchesAny,
   overallStatus,
   parseArgs,
+  protectedRegisterBranch,
   readBlobs,
   removeDir,
   reportToGitHub,
@@ -389,18 +391,44 @@ export async function runChecks(opts = {}) {
   };
 
   // The register of approved upstream cherry-picks (.github/upstream-backports.json) decides which upstream files
-  // outside the hook table scope and layer let through. In a pull request (a base was given, or the local default
-  // base exists) it is read from the tip of the target branch, never from the PR head: otherwise a PR could edit an
-  // upstream file and add the register entry that approves the edit in the same change. Without a base (a push to
-  // dev or the main line, or a local run without one) it is read from the head (the staged state with --index);
-  // those commits were already reviewed in a PR. The upstream snapshot (delta.base) is not the target branch and
-  // has no register. If the target branch cannot be resolved there is no register, and every such file fails.
+  // outside the hook table scope and layer let through.
+  //
+  // In a pull request (a base was given, or the local default base exists) it is read from the tip of the target
+  // branch, never from the PR head: otherwise a PR could edit an upstream file and add the register entry that
+  // approves the edit in the same change. Only a protected target branch is trusted (dev and feature/control-api,
+  // BACKPORT_REGISTER_BRANCHES): the register is as trustworthy as the people who can write to that branch, so a PR
+  // aimed at any other branch (feature/x, review-base/<n>, ...) gets no register at all. The upstream snapshot
+  // (delta.base) is not the target branch and has no register. If the target branch cannot be resolved there is no
+  // register either, and every such file fails.
+  //
+  // Order of integration that follows from this: the gate scripts of a PR are the ones on its target branch, and so
+  // is the register. The main line therefore only passes scope when it merges into dev if dev already has the new
+  // scripts and the register. Before the wave PR (feature/control-api into dev) a separate L0 PR, changing only
+  // .github/** and CLAUDE.md, has to bring the scripts and the register into dev. Without it the wave PR fails scope
+  // on the cherry-picked files; that is the "a PR cannot approve itself" rule working as intended, not a bug.
+  //
+  // Without a base (a push event, which only runs for dev and feature/**, or a local run without one) it is read
+  // from the head (the staged state with --index). That is safe because those branches only change through a merged
+  // PR, which was already checked against the register of its target branch (dev is protected), or through a push of
+  // the main line, which needs the manager's approval. A direct push that edits the register and an upstream file
+  // together is not possible without that approval.
   let registerMemo;
   const backportRegister = () => {
     if (registerMemo) return registerMemo;
     const b = prBase();
     if (!b) {
       registerMemo = loadUpstreamBackports(top, opts.index ? null : delta.head);
+      return registerMemo;
+    }
+    if (!protectedRegisterBranch(b.baseRef)) {
+      const name = branchNameOfRef(b.baseRef);
+      registerMemo = {
+        files: new Map(),
+        error: null,
+        present: false,
+        origin: `目标分支 ${b.baseRef}`,
+        unusable: `目标分支 \`${name}\` 不是受保护的 dev 或 feature/control-api`,
+      };
       return registerMemo;
     }
     const sha = tryResolveCommit(top, b.baseRef);

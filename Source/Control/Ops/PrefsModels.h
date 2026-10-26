@@ -58,14 +58,14 @@ struct ControlPrefsBackend
 };
 
 /**
- * processing.options of prefs.get (methods/prefs.get.schema.json): {vocoderWeight, f0Model, renderingPriority,
- * referenceAlignMode}, each an array of strings.
+ * processing.options of prefs.get (methods/prefs.get.schema.json): {vocoderWeight, f0Model, renderingPriority}, each an
+ * array of strings.
  *
  * - vocoderWeight: the file names that the preferences window lists, in its order (ModelFactory::
  *   getAvailableVocoderWeights() of the models directory); empty without a model.
  * - f0Model: the names of the pitch models that are available (ModelFactory::getAvailableF0Models()); empty without
  *   a model.
- * - renderingPriority and referenceAlignMode: every value.
+ * - renderingPriority: every value.
  *
  * A name that is not valid UTF-8 or longer than kControlOptionTextCodePoints can never be sent back, so it is left
  * out; an array has at most kControlOptionCount members. Reads the disk; message thread.

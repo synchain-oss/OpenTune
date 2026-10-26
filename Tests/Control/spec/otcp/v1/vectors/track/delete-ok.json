@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "track/delete-ok",
   "type": "request",
-  "description": "Deleting track 1 removes its clip and, since no other clip shows it, the clip's content (both listed in removed, PROTOCOL.md section 14.4 rule 6), moves track 2 with its clip down to position 1 (trackIdMap) and removes the reference binding that the moved clip had to the deleted clip (danglingReferences). The deletion cannot be undone: undo reason no_upstream_undo, revert null, warning IRREVERSIBLE. No undo entry became possibly stale, because the histories are empty.",
+  "description": "Deleting track 1 removes its clip and, since no other clip shows it, the clip's content (both listed in removed, PROTOCOL.md section 14.4 rule 6), and moves track 2 with its clip down to position 1 (trackIdMap). The deletion cannot be undone: undo reason no_upstream_undo, revert null, warning IRREVERSIBLE. No undo entry became possibly stale, because the histories are empty.",
   "capability": "tracks.v1",
   "since": "1.0",
   "method": "track.delete",
@@ -30,8 +30,7 @@
         "trackId": 2,
         "startTimelineSec": 2,
         "durationSec": 6,
-        "analysis": "ready",
-        "referenceClip": "b"
+        "analysis": "ready"
       }
     ]
   },
@@ -58,12 +57,7 @@
           "ref": { "placementId": { "$ref": "c.placementId" } },
           "label": { "$any": true },
           "fields": {
-            "trackId": { "before": 2, "after": 1, "unit": null },
-            "referencePlacementId": {
-              "before": { "$ref": "b.placementId" },
-              "after": null,
-              "unit": null
-            }
+            "trackId": { "before": 2, "after": 1, "unit": null }
           }
         }
       ],
@@ -117,12 +111,6 @@
       "trackIdMap": [
         { "before": 1, "after": null },
         { "before": 2, "after": 1 }
-      ],
-      "danglingReferences": [
-        {
-          "placementId": { "$ref": "c.placementId" },
-          "referencePlacementId": { "$ref": "b.placementId" }
-        }
       ],
       "possiblyStaleEntries": { "undo": 0, "redo": 0 }
     }

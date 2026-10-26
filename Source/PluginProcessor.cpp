@@ -4469,12 +4469,6 @@ OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(ContentKey key)
         ProcessRenderRuntime::CompletionCallbackLease callbackLease(*gate);
         if (!callbackLease)
             return;
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-        // OpenTune Control API hook: remember that a synchronous reference analysis finished, so that no other one
-        // runs in this session (see isReferenceAnalysisWorkerStalled()), see Source/Control/README.md#hooks
-        if (jobKey.producer != ReferenceFeatureProducer::Game)
-            processor->referenceAnalysisWorkerStalled_ = true;
-#endif
         processor->analysisFinished(jobKey.contentKey, result);
     };
 

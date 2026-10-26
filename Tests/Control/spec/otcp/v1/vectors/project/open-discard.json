@@ -148,8 +148,7 @@
               },
               "skipped": {
                 "media": [],
-                "placementCount": 0,
-                "referenceBindingCount": 0
+                "placementCount": 0
               },
               "historyCleared": { "undoCount": 0, "redoCount": 0 },
               "omittedCount": { "created": 0, "removed": 0 }

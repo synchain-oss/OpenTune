@@ -228,7 +228,7 @@ void scenarioStartAndHello()
         // session.v1 and the capabilities of the methods the dispatcher implements.
         CONTROL_CHECK(
             toJsonString(memberOf(*hello, "capabilities"))
-            == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","ui.bridge","ui.onboardingClose","edit.v1","history.v1","timing.v1","transport.v1","arrangement.v1","reference.v1","tracks.v1","project.io","prefs.write","audio.device"])");
+            == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","ui.bridge","ui.onboardingClose","ui.workspace","edit.v1","history.v1","timing.v1","transport.v1","arrangement.v1","tracks.v1","project.io","prefs.write","audio.device"])");
     }
     // The runtime was initialised before the listener started: the logger writes under the data dir.
     checkLogInsideDataDirectory();
@@ -581,6 +581,7 @@ const Scenario kScenarios[] = {
     {"UiState", scenarioUiState, false},
     {"UiDismiss", scenarioUiDismiss, false},
     {"UiOnboardingWithheld", scenarioUiOnboardingWithheld, false},
+    {"UiWorkspace", scenarioUiWorkspace, false},
     {"UiVectors", scenarioUiVectors, false},
     {"PrefsRoundTrip", scenarioPrefsRoundTrip, false},
     {"PrefsSchemeJob", scenarioPrefsSchemeJob, false},
@@ -590,9 +591,6 @@ const Scenario kScenarios[] = {
     {"PrefsVectors", scenarioPrefsVectors, false},
     {"AudioDevice", scenarioAudioDevice, false},
     {"AudioVectors", scenarioAudioVectors, false},
-    {"Reference", scenarioReference, false},
-    {"ReferenceAnalysisLimit", scenarioReferenceAnalysisLimit, false},
-    {"ReferenceVectors", scenarioReferenceVectors, false},
     {"Arrangement", scenarioArrangement, false},
     {"ArrangementUndo", scenarioArrangementUndo, false},
     {"ArrangementCopy", scenarioArrangementCopy, false},

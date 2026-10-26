@@ -64,7 +64,6 @@
           "gainLinear": { "$approx": 1 },
           "fadeInSec": { "$approx": 0 },
           "fadeOutSec": { "$approx": 0 },
-          "referencePlacementId": null,
           "sourcePath": { "$ref": "clip.sourcePath" },
           "geometryHash": { "$ref": "clip.geometryHash" }
         }

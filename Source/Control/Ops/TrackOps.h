@@ -31,8 +31,7 @@ namespace OpenTune {
  *   later shown track down, then the panel and the arrangement show one track fewer. Hidden slots keep their
  *   position, their clips and their mix. It cannot be undone (no_upstream_undo, IRREVERSIBLE) and needs confirm; the
  *   only shown track and hidden tracks cannot be deleted.
- *   A clip of another track whose reference binding named a removed clip loses the binding (the UI leaves it
- *   dangling) and is listed in danglingReferences. The deletion is a barrier in the undo and redo histories
+ *   The deletion is a barrier in the undo and redo histories
  *   (ControlHistory::onTrackDeleted(), PROTOCOL.md section 15.3 rule 6): an entry that addresses the deleted track or
  *   a shown track after it is possibly stale, while an entry that addresses only hidden tracks stays valid, since
  *   those keep their position. The barrier also follows the clips of the shown tracks it moves down, so a later

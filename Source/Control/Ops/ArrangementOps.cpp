@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "ArrangementOps.h"
 
+#include "ClipIds.h"
 #include "EditSupport.h"
 #include "OpsSupport.h"
 #include "TrackSupport.h"
@@ -682,11 +683,17 @@ Result<JsonValue> runSplit(ControlOpContext& context, const EditParams& params, 
     }
 
     // The split key of the arrangement view: splitPlacementAtSeconds() at the clip's position on its track, then
-    // SplitPlacementAction on the undo history.
+    // SplitPlacementAction on the undo history. The call makes two clips; after a project was opened OpenTune's clip
+    // id counter can stand on the ids of the opened clips, so the counter is moved to where the next two ids are free
+    // first (ClipIds.h): the call would refuse the split without a word, and when only one of its two ids is in use,
+    // it would leave the other new clip behind as a content that no clip shows.
+    controlSkipUsedClipIds(context, "arrangement.edit split", 2);
     const int index = processor.findPlacementIndexById(clip.trackId, clip.placement.placementId);
     const auto outcome = processor.splitPlacementAtSeconds(clip.trackId, index, at);
     if (!outcome)
         return controlOpError("UNSUPPORTED", "upstream_absent", "OpenTune did not split the clip at this position");
+    controlRecordCommittedClipId(context, outcome->leadingContentKey);
+    controlRecordCommittedClipId(context, outcome->trailingContentKey);
     std::vector<ControlOriginAction::Inner> inner;
     inner.push_back(
         innerOf(std::make_unique<SplitPlacementAction>(processor, *outcome), "SplitPlacementAction", {clip.trackId}));
@@ -734,13 +741,16 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
     }
 
     // The merge key of the arrangement view: mergePlacements() with the leading clip's position on its track, then
-    // MergePlacementAction on the undo history.
+    // MergePlacementAction on the undo history. The call makes one clip, so the clip id counter is moved to where the
+    // next id is free first, as for a split (ClipIds.h).
+    controlSkipUsedClipIds(context, "arrangement.edit merge", 1);
     const int index = arrangement->findPlacementIndexById(leading.trackId, leading.placement.placementId);
     const auto outcome = processor.mergePlacements(leading.trackId, leading.placement.placementId,
                                                    trailing.placement.placementId, index);
     if (!outcome)
         return controlOpError("INVALID_ARGUMENT", "merge_not_possible",
                               "OpenTune did not merge the clips: their keys or their pitch analyses do not join");
+    controlRecordCommittedClipId(context, outcome->mergedContentKey);
     std::vector<ControlOriginAction::Inner> inner;
     inner.push_back(innerOf(std::make_unique<MergePlacementAction>(processor, *outcome), "MergePlacementAction",
                             {leading.trackId}));
@@ -1238,6 +1248,9 @@ Result<JsonValue> runCopy(ControlOpContext& context, const CopyParams& params)
 
     // The contents first, so that a failure leaves the arrangement as it was: paste copies the part of the content the
     // clip shows (copyContentRange()), duplicate the whole content (cloneContent()), as the arrangement view's keys do.
+    // Each of the two makes a clip per source; the clip id counter is moved to where that many ids are free first, so
+    // that none of the calls meets an id in use (ClipIds.h).
+    controlSkipUsedClipIds(context, params.full ? "arrangement.copy full" : "arrangement.copy window", sources.size());
     std::vector<ContentKey> contents;
     for (const auto& source : sources) {
         const auto& p = source.placement;
@@ -1248,6 +1261,7 @@ Result<JsonValue> runCopy(ControlOpContext& context, const CopyParams& params)
                 repository->retireClip(made);
             return controlOpError("INTERNAL", "", "OpenTune could not copy the content of a clip");
         }
+        controlRecordCommittedClipId(context, key);
         contents.push_back(key);
     }
     std::vector<std::uint64_t> made;

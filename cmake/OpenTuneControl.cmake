@@ -156,6 +156,10 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # accepts, and the vocoder state and processor calls that the prefs.set job waits on and makes.
         Source/Control/Ops/PrefsModels.cpp
         Source/Control/Ops/PrefsModels.h
+        # Clip ids: how the methods that make clips (import, split, merge, copy, track duplicate) get past the ids that
+        # a project that was opened leaves in use ahead of OpenTune's clip id counter.
+        Source/Control/Ops/ClipIds.cpp
+        Source/Control/Ops/ClipIds.h
     )
 
     target_sources(OpenTuneStandalone PRIVATE ${OPENTUNE_CONTROL_SOURCES})
@@ -462,6 +466,12 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "AppQuitStopping|--control-api"
             "AppQuitVectors|--control-api"
         )
+        # Clip ids after a project was opened (Tests/Control/ControlArrangementTests.cpp).
+        list(APPEND _opentune_control_scenarios
+            "ClipIdSkip|--control-api"
+            "ClipIdsAfterOpen|--control-api"
+            "ClipIdsWithoutOpen|--control-api"
+        )
         set(_opentune_control_tests)
         foreach(_opentune_control_scenario IN LISTS _opentune_control_scenarios)
             string(REPLACE "|" ";" _opentune_control_scenario "${_opentune_control_scenario}")
@@ -514,6 +524,8 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         set_tests_properties(ControlProcessorTests.AppQuit PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.AppQuitResult PROPERTIES TIMEOUT 300)
         set_tests_properties(ControlProcessorTests.AppQuitVectors PROPERTIES TIMEOUT 300)
+        # Two processors and seven times saving and opening a project.
+        set_tests_properties(ControlProcessorTests.ClipIdsAfterOpen PROPERTIES TIMEOUT 300)
         # Each scenario process gets its own test's TIMEOUT, from which its watchdog takes its bound (a margin before;
         # ScenarioWatchdog in Tests/Control/ControlProcessorTests.cpp). Keep this after every TIMEOUT of the scenarios.
         foreach(_opentune_control_test IN LISTS _opentune_control_tests)

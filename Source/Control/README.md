@@ -58,6 +58,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `Edit/PitchShiftLedger.*` | The steps of OpenTune's pitch shifts that the `revision` token leaves out (see "Note edits and the pitch shift"). |
 | `mirror-map.json`, `MIRRORS.md` | The upstream functions that the API mirrors, with a hash of each (machine-readable source of truth and the table generated from it); checked by `Tests/Control/ControlMirrorDriftTests.cpp` (see "Mirrors"). |
 | `ControlFileIdentity.*` | File identity (volume and file id, `st_dev` and `st_ino`), "same file" by identity, and the final rename that never replaces (PROTOCOL.md sections 20.3 and 20.4); standard library and operating system only. |
+| `Ops/ClipIds.*` | Clip id collisions after a project was opened: the floor of ids that OpenTune's counter is known to have passed, `controlSkipUsedClipIds()` (moves the counter past every id in use before a method makes clips) and `controlRecordCommittedClipId()`; shared by the import, `arrangement.edit` split and merge, `arrangement.copy` and `track.duplicate`. See "Import". |
 | `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme, the processing object of `session.info` and `prefs.get`). |
 | `Ops/PrefsModels.*` | `processing.options` of `prefs.get` (the vocoder weights and pitch models on offer) and the calls of `prefs.set` into the render runtime (vocoder weight, inference backend, pitch model, and the vocoder state a job waits on), behind `ControlPrefsBackend`, a test seam. See "Preferences and audio device". |
 | `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
@@ -166,7 +167,7 @@ option, so a build with the option OFF compiles exactly the upstream code.
 | `Source/Content/StandaloneContentRepository.h` (end of the class) | Member `contentEpoch_` and public `getContentEpoch()` | The content epoch of the handles (PROTOCOL.md section 9). | Handles cannot tell the contents of a project opened later from earlier ones. |
 | `Source/PluginProcessor.h` (the control block at the end of the class, after `getControlService()`; 5 lines: one marker comment, `getContentF0FailureReason()`, `recordF0FailureReason()`, members `contentF0FailureReasons_` and `contentF0FailureEpoch_`) | The last F0 failure reason per content | The reason the pitch analysis of a content failed, for `content.getDetails`. The reasons belong to one content epoch: the first record after a project was opened forgets the old ones, and the getter reports nothing for an older epoch, because clip ids restart at 1. | `content.getDetails` cannot tell why an analysis failed (it reports `f0_failed`). |
 | `Source/PluginProcessor.cpp` (43 lines: one `#if` block of 25 lines with the two definitions, just before `resolveReferenceFeatureProducer()`; six calls in `requestContentRefresh`, each 3 lines with its own `#if`/`#endif`) | `recordF0FailureReason(key, reason)` where the analysis starts (clear: the Standalone clip case of the state switch), fails (the extractor's failure: `f0_empty` for its unvoiced result, else `f0_failed`; the commit of the curve; the dispatcher-failure callback; a rejected submit: `f0_failed`) and succeeds (clear, before the state becomes Ready) | Remembers the last failure reason per content on the message thread (all six places are message-thread callbacks or the caller itself). | As above. |
-| `Source/Content/StandaloneContentRepository.cpp` (`clear()`) | `contentEpoch_` is incremented | `clear()` discards every content when a project is opened (`ProjectSession::commitPreparedOpen`) and clip ids restart at 1, so handles from before become `NOT_FOUND(stale_handle)` instead of naming new contents. | Old handles would silently name the contents of the newly opened project. |
+| `Source/Content/StandaloneContentRepository.cpp` (`clear()`) | `contentEpoch_` is incremented | `clear()` discards every content when a project is opened (`ProjectSession::commitPreparedOpen`) and clip ids restart at 1, so handles from before become `NOT_FOUND(stale_handle)` instead of naming new contents. (The restart collides with the ids of the clips the opened project loads; see "Import", known OpenTune behaviours.) | Old handles would silently name the contents of the newly opened project. |
 | `Source/Standalone/PluginEditor.h` (end of the class) | `friend class ControlEditorBridge;` and member `controlEditorBridge_` | The bridge reads the editor's state and calls its functions while the editor keeps its members private. | The control API cannot reach the editor: results report `no_editor`, busy checks cannot see the UI. |
 | `Source/Standalone/PluginEditor.cpp` (includes) | `#include "ControlEditorBridge.h"` | Complete type for the constructor and destructor. | Does not compile with the option ON. |
 | `Source/Standalone/PluginEditor.cpp` (end of the constructor) | Create the bridge, which registers itself with `ControlService::setUiBridge()` | The API reaches the editor only once it is complete. | No bridge is registered. |
@@ -613,13 +614,29 @@ committed no clip is a no-op (reason `no_op`).
 Known OpenTune behaviours, reported as they are:
 
 - After a project was opened, OpenTune gives a new clip an id that a clip of the project may already use, and the commit
-  fails; each failed attempt uses up that id, so the import fails once per id in use. The job repeats the commit, at
-  most once per clip whose id OpenTune can still hand out, and logs it; the result carries the warning
+  fails; each failed attempt uses up that id, so the import fails once per id in use. (The other methods that make
+  a clip are covered by the next item.) The job repeats the commit, at most once per clip whose id OpenTune can still
+  hand out, and logs it; the result carries the warning
   `IMPORT_COMMIT_REPEATED` (subject: the placement, `data.repeatCount`: the number of repeated commits). The UI's import
   fails in this situation. The commit consumes the prepared audio, so an attempt that may be repeated commits a copy;
   the job copies only when a project was opened (the content epoch is not 0) and a clip has an id above the highest one
   the instance's imports received since, and it never repeats a failure that the clip id cannot have caused. Otherwise
   it commits once without a copy, as the UI.
+- The same id collision hits every other method that makes a clip: `arrangement.edit` ops `split` (two clips) and
+  `merge`, `arrangement.copy` (modes `window` and `full`) and `track.duplicate` in clone mode (`share: false`). They do
+  not repeat after a failure, because a failed split leaves a clip behind: it makes two clips, and when the second
+  collides, OpenTune's own clean-up (`releaseClip()`) does nothing for a clip that was never retired, so the first
+  stays in the repository, in the render service and in the contents that `project.get` lists. Instead each of them
+  calls `controlSkipUsedClipIds()` (`Ops/ClipIds.cpp`) once, right before it calls OpenTune, and only when the call
+  will really make clips (not on `dryRun`, not when a check before the call refuses). The function does nothing at
+  content epoch 0 and when no clip has an id above the highest one the instance's imports and these methods
+  received since the project was opened. Otherwise it asks the repository for empty clips, retires and releases each
+  one at once, until the counter is above the highest id of any clip (retired clips included, since the collision check
+  looks at all of them). Such a probe never enters the render service, is never referenced by a placement, and never
+  enters the undo history. Skipping logs one line (the method and the number of ids skipped); the result has no extra
+  warning, because the clips the caller gets are the ones it asked for. After the call each new clip is recorded
+  (`controlRecordCommittedClipId()`), which the import's check for a collision uses too. Both functions and the
+  floor they keep are shared with `Ops/ImportOps.cpp`.
 - `commitPreparedImportAsPlacement()` selects every clip it commits and makes its track the active
   track, as the editor's import does. The job puts back the selection it found after each commit, so
   that `focus` alone decides the selection: with `focus: false` the selection does not change, and
@@ -918,8 +935,9 @@ without one); `track.set` works on the arrangement alone.
   also marks the project as changed; the schema follows the button.
 - `track.duplicate` follows `trackDuplicateRequested`: mix state and a copy of every clip go to the first hidden slot.
   Mode `share` is what the UI does (the copies show the same contents, `SHARED_CONTENT`); mode `clone` first gives every
-  clip a content of its own with `OpenTuneAudioProcessor::cloneContent()`. A clip that waits to be reclaimed
-  (`isRetired`) is not copied, where the UI would copy it as well.
+  clip a content of its own with `OpenTuneAudioProcessor::cloneContent()`, after `controlSkipUsedClipIds()` has moved the
+  clip id counter past the ids of an opened project's clips (see "Import", known OpenTune behaviours). A clip that waits
+  to be reclaimed (`isRetired`) is not copied, where the UI would copy it as well.
 - `track.delete` follows `trackDeleteRequested`: `StandaloneArrangement::removeTrackAndShift()`, then the panel shows
   the mix of the arrangement and one track fewer. It needs `confirm`, the revision of the arrangement, and a shown
   track that is not the only one. `trackIdMap` lists the deleted track and the shown tracks after it (hidden slots
@@ -976,6 +994,10 @@ the trailing clip of a merge, the slot of `toTrackId`), then busy, then `expecte
   way. `delete` needs `confirm` (`confirm_required`) and removes the clips with `deletePlacement()`, in one undo entry.
 - `dryRun` predicts the changes and warnings without changing anything; a split or merge prediction names the clips it
   replaces, since the new clips get their placementIds when they are made.
+- `split` and `merge` (not their `dryRun`, and not when a check refuses them) and the copy below skip past the clip ids
+  that the clips of an opened project already have, before they call OpenTune (`controlSkipUsedClipIds()`, see "Import",
+  known OpenTune behaviours). Without it a split right after `project.open` fails with `UNSUPPORTED(upstream_absent)`
+  and leaves a clip behind.
 
 **arrangement.copy.** Mode `window` is the view's paste (`copyContentRange()`: a new content of the part the clip
 shows, a clip that shows all of it), mode `full` is its duplicate (`cloneContent()`: a copy of the whole content, the
@@ -997,7 +1019,7 @@ Mirrors: `arrangement-trim-left`, `arrangement-trim-fades`, `arrangement-fade-li
 and `arrangement-merge`.
 
 Tests: `Tests/Control/ControlArrangementTests.cpp` (`Arrangement`, `ArrangementUndo`, `ArrangementCopy`,
-`ArrangementVectors`).
+`ArrangementVectors`, `ClipIdSkip`, `ClipIdsAfterOpen`, `ClipIdsWithoutOpen`).
 
 ## Dialogs and onboarding
 
@@ -1728,7 +1750,13 @@ removed contents, the refused undo). `ArrangementUndo` undoes and redoes a trim 
 shortened the fades, undoes a call of several ops, and checks the refused undo of a split and its revert
 recipe. `ArrangementCopy` runs both modes (gain and fades copied, the revert recipe sent with consent, a hidden
 track, several sources), the tokens and the checks. `ArrangementVectors` runs every `arrangement/*` vector and
-`track/delete-arrangement-changed`; all of them must pass.
+`track/delete-arrangement-changed`; all of them must pass. `ClipIdSkip` tests `controlSkipUsedClipIds()` on the
+repository itself (nothing at epoch 0, ids with holes, a retired clip that is not reclaimed, the floor, a second call
+that moves nothing). `ClipIdsAfterOpen` runs split, merge, `arrangement.copy` (both modes) and `track.duplicate` (clone)
+as the first call after a project was opened and again after another open: each succeeds at once, the live clips grow
+only by the clips the call makes, `project.get` lists no clip that no placement shows, a dry run and a refused call
+move no counter, and a project whose clips have the ids 1 and 3 gets its split. `ClipIdsWithoutOpen` runs the same
+calls at content epoch 0: the new clips get the next ids in order and nothing is skipped.
 
 `Tests/Control/ControlUiTests.cpp` holds the scenarios of `ui.getState` and `ui.dismiss`, against the dialogs and the
 onboarding overlay of `TestUiBridge`. `UiState` checks the capabilities (`ui.onboardingClose` right after `ui.bridge`,
@@ -1807,9 +1835,9 @@ than one step.
 | `transport.control` | `transport.v1` | `Ops/TransportOps.cpp` | `ControlProcessorTests.Transport`, `.TrackVectors` | `methods/transport.control.schema.json` |
 | `transport.setTempo` | `transport.v1` | `Ops/TransportOps.cpp` | `ControlProcessorTests.Transport`, `.TrackVectors` | `methods/transport.setTempo.schema.json` |
 | `transport.setLoop` | `transport.v1` | `Ops/TransportOps.cpp` | `ControlProcessorTests.Transport`, `.TrackVectors` | `methods/transport.setLoop.schema.json` |
-| `arrangement.edit` (ops `move`, `trim`, `setGain`, `setFade`, `split`, `merge`, `delete`) | `arrangement.v1` | `Ops/ArrangementOps.cpp` | `ControlProcessorTests.Arrangement`, `.ArrangementUndo`, `.ArrangementVectors` | `methods/arrangement.edit.schema.json` |
-| `arrangement.copy` (modes `window`, `full`) | `arrangement.v1` | `Ops/ArrangementOps.cpp` | `ControlProcessorTests.ArrangementCopy`, `.ArrangementVectors` | `methods/arrangement.copy.schema.json` |
+| `arrangement.edit` (ops `move`, `trim`, `setGain`, `setFade`, `split`, `merge`, `delete`) | `arrangement.v1` | `Ops/ArrangementOps.cpp` | `ControlProcessorTests.Arrangement`, `.ArrangementUndo`, `.ClipIdsAfterOpen`, `.ClipIdsWithoutOpen`, `.ArrangementVectors` | `methods/arrangement.edit.schema.json` |
+| `arrangement.copy` (modes `window`, `full`) | `arrangement.v1` | `Ops/ArrangementOps.cpp` | `ControlProcessorTests.ArrangementCopy`, `.ClipIdsAfterOpen`, `.ClipIdsWithoutOpen`, `.ArrangementVectors` | `methods/arrangement.copy.schema.json` |
 | `track.set` | `tracks.v1` | `Ops/TrackOps.cpp` | `ControlProcessorTests.Tracks`, `.TrackVectors` | `methods/track.set.schema.json` |
 | `track.add` | `tracks.v1` | `Ops/TrackOps.cpp` | `ControlProcessorTests.Tracks`, `.TrackVectors` | `methods/track.add.schema.json` |
-| `track.duplicate` | `tracks.v1` | `Ops/TrackOps.cpp` | `ControlProcessorTests.Tracks`, `.TrackVectors` | `methods/track.duplicate.schema.json` |
+| `track.duplicate` | `tracks.v1` | `Ops/TrackOps.cpp` | `ControlProcessorTests.Tracks`, `.ClipIdsAfterOpen`, `.ClipIdsWithoutOpen`, `.TrackVectors` | `methods/track.duplicate.schema.json` |
 | `track.delete` | `tracks.v1` | `Ops/TrackOps.cpp` (barrier in `Edit/ControlOriginAction.cpp`) | `ControlProcessorTests.Tracks`, `.TrackBarrier`, `.TrackVectors` | `methods/track.delete.schema.json` |

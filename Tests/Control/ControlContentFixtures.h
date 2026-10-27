@@ -81,6 +81,10 @@ std::optional<Scale> fixtureScaleOf(const std::string& name);
 /** Saves the project and opens it again with the editor's two-phase flows; opening clears the content
     repository (a new content epoch) and OpenTune's undo history. */
 bool fixtureSaveAndReopen(OpenTuneAudioProcessor& processor);
+/** fixtureSaveAndReopen(), then gives every clip of the opened project a synthetic pitch analysis again (opening
+    restarts the analysis of every clip, which cannot succeed without the models). The clips keep the ids they were
+    saved with, while the repository's counter for new ids is back at 1. Message thread. */
+bool fixtureReopenWithAnalysis(OpenTuneAudioProcessor& processor);
 
 } // namespace ControlTest
 } // namespace OpenTune

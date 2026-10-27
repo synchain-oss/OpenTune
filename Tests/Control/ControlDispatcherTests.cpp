@@ -10,6 +10,7 @@
 #include "ControlProcessorSupport.h"
 #include "TestUiBridge.h"
 
+#include "Content/EditableContentSnapshot.h"
 #include "Content/StandaloneClipContent.h"
 #include "Content/StandaloneContentRepository.h"
 #include "Control/ControlDispatcher.h"
@@ -1477,6 +1478,39 @@ std::optional<Scale> fixtureScaleOf(const std::string& name)
 bool fixtureSaveAndReopen(OpenTuneAudioProcessor& processor)
 {
     return saveAndReopen(processor);
+}
+
+bool fixtureReopenWithAnalysis(OpenTuneAudioProcessor& processor)
+{
+    if (!saveAndReopen(processor))
+        return false;
+    auto* repository = processor.getStandaloneContentRepository();
+    // Opening requests the pitch analysis of every clip (ProjectSession::commitPreparedOpen). Without the models it
+    // fails on a worker thread and the failure is committed from a later message; wait for it, or it would replace
+    // the analysis given below.
+    const bool ended = pumpMessagesUntil(
+        [&processor, repository] {
+            for (const auto& key : repository->getAllClips()) {
+                const auto snapshot = processor.getContentSnapshot(key);
+                if (snapshot != nullptr && snapshot->originalF0State == OriginalF0State::Extracting)
+                    return false;
+            }
+            return true;
+        },
+        kSettleTimeoutMs);
+    if (!CONTROL_CHECK(ended))
+        return false;
+    for (const auto& key : repository->getAllClips()) {
+        const auto snapshot = processor.getContentSnapshot(key);
+        auto* owner = repository->findClip(key);
+        if (snapshot == nullptr || snapshot->audioBuffer == nullptr || owner == nullptr)
+            continue;
+        ClipSpec spec;
+        spec.durationSec = snapshot->audioBuffer->getNumSamples() / kAudioSampleRate;
+        owner->applyOriginalF0(analysisOf(spec));
+        CONTROL_CHECK(processor.setContentOriginalF0State(key, OriginalF0State::Ready));
+    }
+    return CONTROL_CHECK(settleBackgroundWork(processor));
 }
 
 // ---- Scenarios -------------------------------------------------------------------------------------

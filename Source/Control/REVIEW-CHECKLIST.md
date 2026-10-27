@@ -174,7 +174,7 @@ Registered ctest names / 实际注册的 ctest 名（摘自 `cmake/OpenTuneContr
 | `Tests/Control/ControlTracksTests.cpp` | `ControlProcessorTests.Transport`, `.Tracks`, `.TrackBarrier`, `.TrackVectors` |
 | `Tests/Control/ControlUiTests.cpp` | `ControlProcessorTests.UiState`, `.UiDismiss`, `.UiOnboardingWithheld`, `.UiWorkspace`, `.UiVectors` |
 | `Tests/Control/ControlPrefsTests.cpp` | `ControlProcessorTests.PrefsRoundTrip`, `.PrefsSchemeJob`, `.PrefsVectors`, `.AudioDevice`, `.AudioVectors` |
-| `Tests/Control/ControlArrangementTests.cpp` | `ControlProcessorTests.Arrangement`, `.ArrangementUndo`, `.ArrangementCopy`, `.ArrangementVectors` |
+| `Tests/Control/ControlArrangementTests.cpp` | `ControlProcessorTests.Arrangement`, `.ArrangementUndo`, `.ArrangementCopy`, `.ArrangementVectors`, `.ClipIdSkip`, `.ClipIdsAfterOpen`, `.ClipIdsWithoutOpen` |
 | `Tests/Control/ControlSelectionTests.cpp` | `ControlProcessorTests.Selection`, `.SelectionMatrix`, `.SelectionVectors` |
 | `Tests/Control/ControlQuitTests.cpp` | `ControlProcessorTests.AppQuit`, `.AppQuitWithoutWindow`, `.AppQuitResult`, `.AppQuitSequence`, `.AppQuitStopping`, `.AppQuitVectors` |
 

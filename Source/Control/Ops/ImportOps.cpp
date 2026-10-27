@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "ImportOps.h"
 
+#include "ClipIds.h"
 #include "OpsSupport.h"
 #include "WriteEnvelope.h"
 
@@ -54,56 +55,6 @@ std::uint64_t& commitCopies()
 {
     static std::uint64_t copies = 0;
     return copies;
-}
-
-/** The highest clip id that an import commit of the instance received, with the content epoch it was
-    received in. Message thread only. */
-struct ClipIdFloor
-{
-    std::string instanceId;
-    std::uint64_t epoch = 0;
-    std::uint64_t clipId = 0;
-};
-
-ClipIdFloor& clipIdFloor()
-{
-    static ClipIdFloor floor;
-    return floor;
-}
-
-/**
- * How many attempts to commit a new clip can fail because OpenTune hands out a clip id that a clip
- * already has. StandaloneContentRepository::createClip() takes new ids from a counter; clear(), which
- * opening a project calls, restarts the counter at 1 while the opened project's clips keep their ids, so
- * each id in use that the counter reaches makes one commit fail. Without a clear() (content epoch 0) every
- * id came from the counter, which is past them all; ids up to the highest one that a commit of this
- * instance received since the last clear() are behind the counter as well. Message thread.
- */
-std::size_t possibleClipIdCollisions(ControlOpContext& context)
-{
-    const auto* repository = context.processor().getStandaloneContentRepository();
-    if (repository == nullptr || repository->getContentEpoch() == 0)
-        return 0;
-    const auto& floor = clipIdFloor();
-    const std::uint64_t behind =
-        floor.instanceId == context.facts().instanceId && floor.epoch == repository->getContentEpoch() ? floor.clipId
-                                                                                                       : 0;
-    const auto clips = repository->getAllClips();
-    return static_cast<std::size_t>(
-        std::count_if(clips.begin(), clips.end(), [behind](const ContentKey& key) { return key.objectId > behind; }));
-}
-
-/** Records the clip id that a commit received (see possibleClipIdCollisions()). Message thread. */
-void recordCommittedClipId(ControlOpContext& context, const ContentKey& key)
-{
-    const auto* repository = context.processor().getStandaloneContentRepository();
-    if (repository == nullptr)
-        return;
-    auto& floor = clipIdFloor();
-    const auto epoch = repository->getContentEpoch();
-    if (floor.instanceId != context.facts().instanceId || floor.epoch != epoch)
-        floor = ClipIdFloor{context.facts().instanceId, epoch, 0};
-    floor.clipId = std::max(floor.clipId, key.objectId);
 }
 
 /**
@@ -586,7 +537,7 @@ private:
         // a copy. Attempts are repeated only while the clip id can be the cause of the failure: for a file
         // that prepareImport() accepted, at a placement that ImportPlacement::isValid() accepts, the commit
         // has no other reason to fail, and any other failure would repeat on every attempt.
-        const std::size_t attempts = (placement.isValid() ? possibleClipIdCollisions(context) : 0) + 1;
+        const std::size_t attempts = (placement.isValid() ? controlPossibleClipIdCollisions(context) : 0) + 1;
         OpenTuneAudioProcessor::CommittedPlacement committed;
         std::size_t attempt = 0;
         auto* arrangement = processor.getStandaloneArrangement();
@@ -611,7 +562,7 @@ private:
             item.error = ControlJobError{"INTERNAL", "", "OpenTune did not accept the clip", false};
             return;
         }
-        recordCommittedClipId(context, committed.contentKey);
+        controlRecordCommittedClipId(context, committed.contentKey);
         if (attempt > 1)
             AppLogger::logNoThrow("control API: import.start: the commit of a clip was repeated "
                                   + juce::String(static_cast<int>(attempt - 1))

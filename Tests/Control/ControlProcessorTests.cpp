@@ -606,6 +606,9 @@ const Scenario kScenarios[] = {
     {"AppQuitSequence", scenarioAppQuitSequence, false},
     {"AppQuitStopping", scenarioAppQuitStopping, false},
     {"AppQuitVectors", scenarioAppQuitVectors, false},
+    {"ClipIdSkip", scenarioClipIdSkip, false},
+    {"ClipIdsAfterOpen", scenarioClipIdsAfterOpen, false},
+    {"ClipIdsWithoutOpen", scenarioClipIdsWithoutOpen, false},
 };
 
 /** How much earlier than the ctest TIMEOUT of its test the watchdog of a scenario ends it. */

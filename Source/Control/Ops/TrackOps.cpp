@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "TrackOps.h"
 
+#include "ClipIds.h"
 #include "EditSupport.h"
 #include "OpsSupport.h"
 #include "TrackSupport.h"
@@ -479,7 +480,10 @@ Result<JsonValue> runDuplicate(ControlOpContext& context, const DuplicateParams&
 
     // Mode clone: every copied clip gets a content of its own first (OpenTuneAudioProcessor::cloneContent()), so
     // that a failure leaves the arrangement as it was; the contents made so far are retired again, as the
-    // arrangement's clip duplicate does when its insert fails.
+    // arrangement's clip duplicate does when its insert fails. Every clone makes a clip, so the clip id counter is
+    // moved to where that many ids are free first, once for all of them (ClipIds.h); mode share makes none.
+    if (!params.share && !sources.empty())
+        controlSkipUsedClipIds(context, "track.duplicate", sources.size());
     std::vector<ContentKey> contents;
     for (const auto& source : sources) {
         if (params.share) {
@@ -492,6 +496,7 @@ Result<JsonValue> runDuplicate(ControlOpContext& context, const DuplicateParams&
                 repository->retireClip(made);
             return controlOpError("INTERNAL", "", "OpenTune could not copy the content of a clip");
         }
+        controlRecordCommittedClipId(context, clone);
         contents.push_back(clone);
     }
 

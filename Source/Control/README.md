@@ -58,7 +58,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `Edit/PitchShiftLedger.*` | The steps of OpenTune's pitch shifts that the `revision` token leaves out (see "Note edits and the pitch shift"). |
 | `mirror-map.json`, `MIRRORS.md` | The upstream functions that the API mirrors, with a hash of each (machine-readable source of truth and the table generated from it); checked by `Tests/Control/ControlMirrorDriftTests.cpp` (see "Mirrors"). |
 | `ControlFileIdentity.*` | File identity (volume and file id, `st_dev` and `st_ino`), "same file" by identity, and the final rename that never replaces (PROTOCOL.md sections 20.3 and 20.4); standard library and operating system only. |
-| `Ops/ClipIds.*` | Clip id collisions after a project was opened: the floor of ids that OpenTune's counter is known to have passed, `controlSkipUsedClipIds()` (moves the counter past every id in use before a method makes clips) and `controlRecordCommittedClipId()`; shared by the import, `arrangement.edit` split and merge, `arrangement.copy` and `track.duplicate`. See "Import". |
+| `Ops/ClipIds.*` | Clip id collisions after a project was opened: the floor of ids that OpenTune's counter is known to have passed, `controlSkipUsedClipIds()` (moves the counter to where the next ids are free, before a method makes that many clips) and `controlRecordCommittedClipId()`; shared by the import, `arrangement.edit` split and merge, `arrangement.copy` and `track.duplicate`. See "Import". |
 | `Ops/OpsJson.*` | Wire forms that several reads share (key, pitch shift, language tag, editing scheme, the processing object of `session.info` and `prefs.get`). |
 | `Ops/PrefsModels.*` | `processing.options` of `prefs.get` (the vocoder weights and pitch models on offer) and the calls of `prefs.set` into the render runtime (vocoder weight, inference backend, pitch model, and the vocoder state a job waits on), behind `ControlPrefsBackend`, a test seam. See "Preferences and audio device". |
 | `ControlLogTail.*` | The tail of the log file and the redaction of its lines for `app.getLog`; standard library only. |
@@ -627,16 +627,24 @@ Known OpenTune behaviours, reported as they are:
   not repeat after a failure, because a failed split leaves a clip behind: it makes two clips, and when the second
   collides, OpenTune's own clean-up (`releaseClip()`) does nothing for a clip that was never retired, so the first
   stays in the repository, in the render service and in the contents that `project.get` lists. Instead each of them
-  calls `controlSkipUsedClipIds()` (`Ops/ClipIds.cpp`) once, right before it calls OpenTune, and only when the call
-  will really make clips (not on `dryRun`, not when a check before the call refuses). The function does nothing at
-  content epoch 0 and when no clip has an id above the highest one the instance's imports and these methods
-  received since the project was opened. Otherwise it asks the repository for empty clips, retires and releases each
-  one at once, until the counter is above the highest id of any clip (retired clips included, since the collision check
-  looks at all of them). Such a probe never enters the render service, is never referenced by a placement, and never
-  enters the undo history. Skipping logs one line (the method and the number of ids skipped); the result has no extra
-  warning, because the clips the caller gets are the ones it asked for. After the call each new clip is recorded
-  (`controlRecordCommittedClipId()`), which the import's check for a collision uses too. Both functions and the
-  floor they keep are shared with `Ops/ImportOps.cpp`.
+  calls `controlSkipUsedClipIds()` (`Ops/ClipIds.cpp`) once, right before it calls OpenTune, with the number of
+  clips the call is about to make (2 for a split, 1 for a merge, one per source for a copy or a duplicate), and only
+  when the call will really make clips (not on `dryRun`, not when a check before the call refuses). The function does
+  nothing at content epoch 0 and when no clip has an id above the highest one the instance's imports and these methods
+  have recorded since the project was opened. Otherwise it asks the repository for empty clips, retires and releases
+  each one at once, until one has a free id and the next ids after it, as many as clips will be made, are free too
+  (retired clips that are not reclaimed count as in use, since the collision check looks at all of them). Such a probe
+  never enters the render service, is never referenced by a placement, and never enters the undo history. The search
+  does not depend on how high the ids lie: a project file stores an id as a signed 64-bit integer that OpenTune reads
+  back without a range check, so a clip can have the id 2^40 or the largest 64-bit value (a stored -1), and moving the
+  counter past such an id would not end. The number of probes is bounded by the number of clips in use (each id in use
+  blocks at most one probe more than the clips to make), not by their ids; if the bound is reached anyway (only a
+  counter close to the largest value can do it), a line is logged and the call goes on as it would without the skip. A
+  clip with such a huge id keeps counting as a possible collision, so each later call costs one more probe. Stepping
+  over ids logs one line (the method, the probes made, how many met an id in use, the clips to make); the result has
+  no extra warning, because the clips the caller gets are the ones it asked for. After the call each new clip is
+  recorded (`controlRecordCommittedClipId()`), which the import's check for a collision uses too. Both functions and
+  the floor they keep are shared with `Ops/ImportOps.cpp`.
 - `commitPreparedImportAsPlacement()` selects every clip it commits and makes its track the active
   track, as the editor's import does. The job puts back the selection it found after each commit, so
   that `focus` alone decides the selection: with `focus: false` the selection does not change, and
@@ -936,7 +944,7 @@ without one); `track.set` works on the arrangement alone.
 - `track.duplicate` follows `trackDuplicateRequested`: mix state and a copy of every clip go to the first hidden slot.
   Mode `share` is what the UI does (the copies show the same contents, `SHARED_CONTENT`); mode `clone` first gives every
   clip a content of its own with `OpenTuneAudioProcessor::cloneContent()`, after `controlSkipUsedClipIds()` has moved the
-  clip id counter past the ids of an opened project's clips (see "Import", known OpenTune behaviours). A clip that waits
+  clip id counter to where one free id per copied clip follows (see "Import", known OpenTune behaviours). A clip that waits
   to be reclaimed (`isRetired`) is not copied, where the UI would copy it as well.
 - `track.delete` follows `trackDeleteRequested`: `StandaloneArrangement::removeTrackAndShift()`, then the panel shows
   the mix of the arrangement and one track fewer. It needs `confirm`, the revision of the arrangement, and a shown
@@ -994,10 +1002,11 @@ the trailing clip of a merge, the slot of `toTrackId`), then busy, then `expecte
   way. `delete` needs `confirm` (`confirm_required`) and removes the clips with `deletePlacement()`, in one undo entry.
 - `dryRun` predicts the changes and warnings without changing anything; a split or merge prediction names the clips it
   replaces, since the new clips get their placementIds when they are made.
-- `split` and `merge` (not their `dryRun`, and not when a check refuses them) and the copy below skip past the clip ids
-  that the clips of an opened project already have, before they call OpenTune (`controlSkipUsedClipIds()`, see "Import",
-  known OpenTune behaviours). Without it a split right after `project.open` fails with `UNSUPPORTED(upstream_absent)`
-  and leaves a clip behind.
+- `split` (two clips) and `merge` (one clip), not their `dryRun`, and not when a check refuses them, and the copy
+  below move OpenTune's clip id counter to where that many ids are free before they call OpenTune, because the clips
+  of an opened project keep ids that the counter reaches again (`controlSkipUsedClipIds()`, see "Import", known OpenTune
+  behaviours). Without it a split right after `project.open` fails with `UNSUPPORTED(upstream_absent)` and leaves a
+  clip behind.
 
 **arrangement.copy.** Mode `window` is the view's paste (`copyContentRange()`: a new content of the part the clip
 shows, a clip that shows all of it), mode `full` is its duplicate (`cloneContent()`: a copy of the whole content, the
@@ -1751,12 +1760,16 @@ shortened the fades, undoes a call of several ops, and checks the refused undo o
 recipe. `ArrangementCopy` runs both modes (gain and fades copied, the revert recipe sent with consent, a hidden
 track, several sources), the tokens and the checks. `ArrangementVectors` runs every `arrangement/*` vector and
 `track/delete-arrangement-changed`; all of them must pass. `ClipIdSkip` tests `controlSkipUsedClipIds()` on the
-repository itself (nothing at epoch 0, ids with holes, a retired clip that is not reclaimed, the floor, a second call
-that moves nothing). `ClipIdsAfterOpen` runs split, merge, `arrangement.copy` (both modes) and `track.duplicate` (clone)
-as the first call after a project was opened and again after another open: each succeeds at once, the live clips grow
-only by the clips the call makes, `project.get` lists no clip that no placement shows, a dry run and a refused call
-move no counter, and a project whose clips have the ids 1 and 3 gets its split. `ClipIdsWithoutOpen` runs the same
-calls at content epoch 0: the new clips get the next ids in order and nothing is skipped.
+repository itself (nothing at epoch 0 or for 0 clips, ids with holes, runs of free ids for one, two and three clips, a
+retired clip that is not reclaimed, the floor, a second call that moves nothing, and the ids 2^40 and the largest
+64-bit value, which must end at once). `ClipIdsAfterOpen` runs split, merge, `arrangement.copy` (both modes) and
+`track.duplicate` (clone) as the first call after a project was opened and again after another open: each succeeds at
+once with the ids that follow from the counter at 1, the live clips grow only by the clips the call makes,
+`project.get` lists no clip that no placement shows, and a dry run and a refused call move no counter (the real call
+after them gets the ids that a counter at 1 gives). It also runs a project whose clips have the ids 1 and 3, and a
+project in which one clip was given the id 2^40 or the largest 64-bit value (saved as -1) before it was opened: the
+first split and the merge after it end at once, with no clip left without a placement. `ClipIdsWithoutOpen` runs the
+same calls at content epoch 0: the new clips get the next ids in order and nothing is skipped.
 
 `Tests/Control/ControlUiTests.cpp` holds the scenarios of `ui.getState` and `ui.dismiss`, against the dialogs and the
 onboarding overlay of `TestUiBridge`. `UiState` checks the capabilities (`ui.onboardingClose` right after `ui.bridge`,

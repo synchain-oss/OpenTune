@@ -21,6 +21,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
+#include <limits>
 #include <map>
 #include <memory>
 #include <set>
@@ -231,7 +232,11 @@ std::string entities(const JsonValue& result, const char* member)
 
 std::string refAt(const JsonValue& result, const char* member, std::size_t index, const char* refMember)
 {
-    return memberOf(memberOf(memberOf(result, member).at(index), "ref"), refMember).text();
+    const auto& list = memberOf(result, member);
+    // A call that failed has no list: answer with empty text, so the checks that follow fail instead of the process.
+    if (index >= list.size())
+        return {};
+    return memberOf(memberOf(list.at(index), "ref"), refMember).text();
 }
 
 // ---- Scenario: the ops of arrangement.edit ----------------------------------------------------------------
@@ -778,7 +783,10 @@ std::size_t unshownContents(Fixture& f)
 }
 
 /** Takes the next id from the counter, as a new clip would, and says whether it lies above the id of every clip, that
-    is, whether the counter has passed them all. A free id is taken by an empty clip that is deleted again at once. */
+    is, whether the counter has passed them all. A free id is taken by an empty clip that is deleted again at once.
+    The call itself uses up an id, so it only belongs where nothing follows that could depend on the counter: a
+    scenario that checks what the counter did to a later call reads the ids of the clips that call made (and the log
+    line, written when ids were stepped over) instead. */
 bool counterPastEveryClipId(OpenTuneAudioProcessor& processor)
 {
     auto* repository = processor.getStandaloneContentRepository();
@@ -809,6 +817,12 @@ std::string mergeOp(const std::string& leading, const std::string& trailing)
            + ",\"trailingPlacementId\":" + quoted(trailing) + "}";
 }
 
+std::string splitOp(const std::string& placementHandle, double atTimelineSec)
+{
+    return "{\"op\":\"split\",\"placementId\":" + quoted(placementHandle)
+           + ",\"atTimelineSec\":" + std::to_string(atTimelineSec) + "}";
+}
+
 std::string copyParams(Fixture& f, const std::string& sources, const char* mode, int track, double start)
 {
     return "{\"sources\":[" + sources + "],\"mode\":" + quoted(mode) + ",\"toTrackId\":" + std::to_string(track)
@@ -831,12 +845,19 @@ bool addThreeClips(Fixture& f, Clip& a, Clip& b, Clip& c)
     return CONTROL_CHECK(settleBackgroundWork(*f.processor));
 }
 
-/** Saves the project and opens it again: the clips keep their ids and the counter for new ids is back at 1. */
-bool reopen(Fixture& f)
+/** Saves the project and opens it again: the clips keep their ids and the counter for new ids is back at 1. With
+    renumberFrom not 0 the clip with that id comes back with the id renumberTo. */
+bool reopen(Fixture& f, std::uint64_t renumberFrom = 0, std::uint64_t renumberTo = 0)
 {
     const auto epoch = f.processor->getStandaloneContentRepository()->getContentEpoch();
-    return CONTROL_CHECK(fixtureReopenWithAnalysis(*f.processor))
+    return CONTROL_CHECK(fixtureReopenWithAnalysis(*f.processor, renumberFrom, renumberTo))
            && CONTROL_CHECK(f.processor->getStandaloneContentRepository()->getContentEpoch() == epoch + 1);
+}
+
+/** The id of the content that a placement shows (the placement is given by its handle). */
+std::uint64_t contentIdOfPlacement(Fixture& f, const std::string& placementHandle)
+{
+    return f.locate(idOfHandle(placementHandle)).placement.contentKey.objectId;
 }
 
 /** project.get lists as many contents as there are live clips (none without a clip) and as many placements. */
@@ -865,12 +886,15 @@ void scenarioClipIdsAfterOpenImpl()
         return;
     CONTROL_CHECK(clipIds(processor) == (std::set<std::uint64_t>{1, 2, 3}));
     const auto skipsBefore = skipsLogged();
-    // A refused call and a prediction leave the counter where it was.
+    // A refused call and a prediction leave the counter where it was. The counter cannot be read without using up an
+    // id (a probe of this scenario would move it), so this is read from what the skip leaves behind: it writes a log
+    // line whenever it steps over ids, so a skip by the refused call or the prediction would show as a line here; and
+    // the real split below finds the counter still at 1 (it steps over 1 to 3 with one line and probes 4, so the split
+    // gets 5 and 6), where a counter that had been moved before would give it higher ids.
     CONTROL_CHECK(f.editFails(f.op("split", c, "\"atTimelineSec\":0.05"), "INVALID_ARGUMENT", "split_out_of_range"));
     auto result = f.edit(f.op("split", c, "\"atTimelineSec\":3"), ",\"dryRun\":true");
     CONTROL_CHECK(memberOf(result, "dryRun").asBoolean() && entities(result, "created").empty());
-    CONTROL_CHECK(!counterPastEveryClipId(processor) && clipIds(processor) == (std::set<std::uint64_t>{1, 2, 3})
-                  && skipsLogged() == skipsBefore);
+    CONTROL_CHECK(clipIds(processor) == (std::set<std::uint64_t>{1, 2, 3}) && skipsLogged() == skipsBefore);
     result = f.edit(f.op("split", c, "\"atTimelineSec\":3"));
     const bool splitMade = CONTROL_CHECK(entities(result, "created") == "placement,placement"
                                          && entities(result, "removed") == "placement");
@@ -880,19 +904,28 @@ void scenarioClipIdsAfterOpenImpl()
         return;
     const auto left = refAt(result, "created", 0, "placementId");
     const auto right = refAt(result, "created", 1, "placementId");
-    // The ids the split took are recorded: the next one finds nothing in its way and moves nothing.
-    result = f.edit(f.op("split", a, "\"atTimelineSec\":3"));
-    CONTROL_CHECK(entities(result, "created") == "placement,placement");
-    CONTROL_CHECK(skipsLogged() == skipsBefore + 1 && counterPastEveryClipId(processor));
+    CONTROL_CHECK(contentIdOfPlacement(f, left) == 5 && contentIdOfPlacement(f, right) == 6);
+    // The ids the split took are recorded: splitting the right part again finds nothing in its way, takes no id for a
+    // probe (its clips get the next two ids, 7 and 8) and writes no line. This keeps the low ids 1 and 2 in use, so
+    // that the calls below, each on a project that was just opened, meet a real collision.
+    result = f.edit(splitOp(right, 4.5));
+    if (!CONTROL_CHECK(entities(result, "created") == "placement,placement"))
+        return;
+    CONTROL_CHECK(skipsLogged() == skipsBefore + 1);
+    const auto rightLeft = refAt(result, "created", 0, "placementId");
+    const auto rightRight = refAt(result, "created", 1, "placementId");
+    CONTROL_CHECK(contentIdOfPlacement(f, rightLeft) == 7 && contentIdOfPlacement(f, rightRight) == 8);
     checkListed(f, 5, 5);
 
-    // ---- arrangement.edit merge: the two parts of c.
+    // ---- arrangement.edit merge: the two parts of the right part again.
     if (!reopen(f))
         return;
-    const auto merge = mergeOp(f.handle(idOfHandle(left)), f.handle(idOfHandle(right)));
+    CONTROL_CHECK(clipIds(processor) == (std::set<std::uint64_t>{1, 2, 5, 7, 8}));
+    const auto merge = mergeOp(f.handle(idOfHandle(rightLeft)), f.handle(idOfHandle(rightRight)));
+    // A prediction leaves the counter where it was: no line, and the merge below still gets the id that follows from
+    // a counter at 1.
     result = f.edit(merge, ",\"dryRun\":true");
-    CONTROL_CHECK(memberOf(result, "dryRun").asBoolean() && !counterPastEveryClipId(processor));
-    CONTROL_CHECK(skipsLogged() == skipsBefore + 1);
+    CONTROL_CHECK(memberOf(result, "dryRun").asBoolean() && skipsLogged() == skipsBefore + 1);
     result = f.edit(merge);
     const bool mergeMade = CONTROL_CHECK(entities(result, "created") == "placement"
                                          && entities(result, "removed") == "placement,placement");
@@ -900,6 +933,9 @@ void scenarioClipIdsAfterOpenImpl()
     checkListed(f, 4, 4);
     if (!mergeMade)
         return;
+    // The merge makes one clip, so it needs a probe with a free id and a free id behind it. The counter stands at 1: 1
+    // and 2 are in use, 3 is free with 4 behind it. The probe takes 3 and the merged clip gets 4.
+    CONTROL_CHECK(contentIdOfPlacement(f, refAt(result, "created", 0, "placementId")) == 4);
     const auto mergedId = idOfHandle(refAt(result, "created", 0, "placementId"));
 
     // ---- arrangement.copy: both modes, each on a project that was just opened; several sources get one skip.
@@ -907,6 +943,8 @@ void scenarioClipIdsAfterOpenImpl()
         return;
     result = f.api.result("arrangement.copy", json(copyParams(f, copySource(f.pid(b)), "full", 1, 20.0)));
     CONTROL_CHECK(entities(result, "created") == "placement,content" && skipsLogged() == skipsBefore + 3);
+    // The opened clips are 1, 2, 4 and 5; 3 is free but 4 stands behind it, so the probe is 6 and the copy gets 7.
+    CONTROL_CHECK(idOfHandle(refAt(result, "created", 1, "contentId")) == 7);
     checkListed(f, 5, 5);
     if (!reopen(f))
         return;
@@ -915,20 +953,27 @@ void scenarioClipIdsAfterOpenImpl()
         json(copyParams(f, copySource(f.pid(b)) + "," + copySource(f.handle(mergedId)), "window", 1, 30.0)));
     CONTROL_CHECK(entities(result, "created") == "placement,placement,content,content");
     CONTROL_CHECK(skipsLogged() == skipsBefore + 4);
+    // Two sources need two free ids in a row: the opened clips are 1, 2, 4, 5 and 7, so the first such run is 9, 10.
+    CONTROL_CHECK(idOfHandle(refAt(result, "created", 2, "contentId")) == 9
+                  && idOfHandle(refAt(result, "created", 3, "contentId")) == 10);
     checkListed(f, 7, 7);
     // Nothing is in the way any more.
     result = f.api.result("arrangement.copy", json(copyParams(f, copySource(f.pid(b)), "full", 1, 40.0)));
     CONTROL_CHECK(entities(result, "created") == "placement,content" && skipsLogged() == skipsBefore + 4);
+    CONTROL_CHECK(idOfHandle(refAt(result, "created", 1, "contentId")) == 11);
     checkListed(f, 8, 8);
 
-    // ---- track.duplicate, mode clone: the three clips of track 0 are copied, with one skip for all.
+    // ---- track.duplicate, mode clone: the two clips of track 0 are copied, with one skip for both.
     if (!reopen(f))
         return;
     const auto duplicated = f.api.result("track.duplicate", json(R"({"trackId":0,"mode":"clone"})"));
     CONTROL_CHECK(near(memberOf(duplicated, "newTrackId"), 2.0));
-    CONTROL_CHECK(entities(duplicated, "created") == "placement,placement,placement,content,content,content");
+    CONTROL_CHECK(entities(duplicated, "created") == "placement,placement,content,content");
     CONTROL_CHECK(skipsLogged() == skipsBefore + 5);
-    checkListed(f, 11, 11);
+    // Two clones need two free ids in a row: the opened clips are 1, 2, 4, 5, 7, 9, 10 and 11, so they get 13 and 14.
+    CONTROL_CHECK(idOfHandle(refAt(duplicated, "created", 2, "contentId")) == 13
+                  && idOfHandle(refAt(duplicated, "created", 3, "contentId")) == 14);
+    checkListed(f, 10, 10);
 }
 
 /** Ids with a hole: 1 and 3 are in use, 2 is free. The split takes two ids; without the skip, the first one meets the
@@ -952,16 +997,63 @@ void scenarioClipIdsHoleImpl()
     CONTROL_CHECK(clipIds(processor) == (std::set<std::uint64_t>{1, 3}));
 
     const auto skipsBefore = skipsLogged();
-    const auto logBefore = occurrences(logText(), "moved past 3 id(s)");
+    const auto logBefore = occurrences(logText(), "moved past 4 id(s) (2 of them used by clips)");
     const auto result = f.edit(f.op("split", a, "\"atTimelineSec\":3"));
     CONTROL_CHECK(entities(result, "created") == "placement,placement");
-    CONTROL_CHECK(skipsLogged() == skipsBefore + 1 && occurrences(logText(), "moved past 3 id(s)") == logBefore + 1);
-    // The counter was moved past 1, 2 and 3 by empty clips that are gone again: the split got 5 and 6, nothing is
-    // left of the clips taken with 2 and 4, and the project has no content without a clip.
+    CONTROL_CHECK(skipsLogged() == skipsBefore + 1
+                  && occurrences(logText(), "moved past 4 id(s) (2 of them used by clips)") == logBefore + 1);
+    // The split needs two free ids in a row. The counter stood at 1: 1 and 3 are in use, 2 is free but 3 stands behind
+    // it, and 4 is free with 5 behind it. So it was moved past 1 to 4 (the probes with the free ids 2 and 4 are gone
+    // again) and the split got 5 and 6: nothing is left of the clips taken with 2 and 4, and the project has no
+    // content without a clip.
     CONTROL_CHECK(liveClipIds(processor) == (std::set<std::uint64_t>{3, 5, 6}));
     for (const auto id : clipIds(processor))
         CONTROL_CHECK(id == 1 || id == 3 || id == 5 || id == 6);
     checkListed(f, 3, 3);
+}
+
+/** A project file stores a clip id as a signed 64-bit integer that OpenTune reads back without a range check, so an
+    opened clip can have any id: the largest value (a stored -1), or 2^40. The first split after opening must still end
+    at once, with the clips of the split at the first free ids and no content without a clip. */
+void scenarioClipIdsHugeImpl()
+{
+    constexpr std::uint64_t kLargest = std::numeric_limits<std::uint64_t>::max();
+    constexpr std::uint64_t kHuge = std::uint64_t{1} << 40;
+    for (const std::uint64_t huge : {kLargest, kHuge}) {
+        Fixture f;
+        if (!CONTROL_CHECK(f.open()))
+            return;
+        Clip a;
+        Clip b;
+        Clip c;
+        if (!addThreeClips(f, a, b, c))
+            return;
+        auto& processor = *f.processor;
+        if (!reopen(f, 3, huge))
+            return;
+        CONTROL_CHECK(clipIds(processor) == (std::set<std::uint64_t>{1, 2, huge}));
+
+        const auto started = juce::Time::getMillisecondCounter();
+        const auto result = f.edit(f.op("split", a, "\"atTimelineSec\":3"));
+        // The counter stood at 1; 1 and 2 are in use and 3 is free with 4 and 5 behind it: the split gets 4 and 5.
+        // The opened clip with the huge id does not matter to it.
+        if (!CONTROL_CHECK(entities(result, "created") == "placement,placement"))
+            return;
+        CONTROL_CHECK(juce::Time::getMillisecondCounter() - started < 20000);
+        CONTROL_CHECK(contentIdOfPlacement(f, refAt(result, "created", 0, "placementId")) == 4
+                      && contentIdOfPlacement(f, refAt(result, "created", 1, "placementId")) == 5);
+        CONTROL_CHECK(liveClipIds(processor) == (std::set<std::uint64_t>{2, 4, 5, huge}));
+        checkListed(f, 4, 4);
+        // The clip with the huge id keeps counting as a possible collision, so a merge probes once more and still ends
+        // at once; its clip gets the next id.
+        const auto merge =
+            mergeOp(refAt(result, "created", 0, "placementId"), refAt(result, "created", 1, "placementId"));
+        const auto merged = f.edit(merge);
+        if (!CONTROL_CHECK(entities(merged, "created") == "placement"))
+            return;
+        CONTROL_CHECK(contentIdOfPlacement(f, refAt(merged, "created", 0, "placementId")) == 7);
+        checkListed(f, 3, 3);
+    }
 }
 
 /** No project was opened: the counter is past every id, so nothing is skipped and the ids are consecutive. */
@@ -977,20 +1069,17 @@ void scenarioClipIdsWithoutOpenImpl()
         return;
     auto& processor = *f.processor;
     CONTROL_CHECK(processor.getStandaloneContentRepository()->getContentEpoch() == 0);
-    const auto contentIdOfPlacement = [&f](const std::string& placement) {
-        return f.locate(idOfHandle(placement)).placement.contentKey.objectId;
-    };
 
     auto result = f.edit(f.op("split", c, "\"atTimelineSec\":3"));
     if (!CONTROL_CHECK(entities(result, "created") == "placement,placement"))
         return;
     const auto left = refAt(result, "created", 0, "placementId");
     const auto right = refAt(result, "created", 1, "placementId");
-    CONTROL_CHECK(contentIdOfPlacement(left) == 4 && contentIdOfPlacement(right) == 5);
+    CONTROL_CHECK(contentIdOfPlacement(f, left) == 4 && contentIdOfPlacement(f, right) == 5);
     result = f.edit(mergeOp(left, right));
     if (!CONTROL_CHECK(entities(result, "created") == "placement"))
         return;
-    CONTROL_CHECK(contentIdOfPlacement(refAt(result, "created", 0, "placementId")) == 6);
+    CONTROL_CHECK(contentIdOfPlacement(f, refAt(result, "created", 0, "placementId")) == 6);
     result = f.api.result("arrangement.copy", json(copyParams(f, copySource(f.pid(a)), "full", 1, 20.0)));
     if (!CONTROL_CHECK(entities(result, "created") == "placement,content"))
         return;
@@ -1026,7 +1115,7 @@ void scenarioClipIdSkipImpl()
 
     // No content epoch: the counter is past every id, nothing is skipped, and no id is taken.
     CONTROL_CHECK(repository->getContentEpoch() == 0 && controlPossibleClipIdCollisions(context) == 0);
-    CONTROL_CHECK(controlSkipUsedClipIds(context, "test") == 0);
+    CONTROL_CHECK(controlSkipUsedClipIds(context, "test", 1) == 0);
     auto first = repository->createClip();
     CONTROL_CHECK(first.objectId == 1);
     repository->retireClip(first);
@@ -1041,17 +1130,22 @@ void scenarioClipIdSkipImpl()
     CONTROL_CHECK(retired.isValid() && repository->retireClip(retired) && repository->isRetired(retired));
     CONTROL_CHECK(controlPossibleClipIdCollisions(context) == 3);
 
-    const auto skippedFirst = controlSkipUsedClipIds(context, "test");
-    // The ids 1, 2, 3 (free) and 4 were passed, and the probe that got 5 reached the highest id.
-    CONTROL_CHECK(skippedFirst == 4);
+    // No clip to make: nothing is done and the counter stays where it was (the call below starts at 1).
+    CONTROL_CHECK(controlSkipUsedClipIds(context, "test", 0) == 0);
+    // One clip to make. The probes: 1 and 2 are in use, 3 is free but 4 stands behind it, 4 is in use, and 5 is free
+    // with 6 behind it free. That is 5 probes, 3 of them met an id in use.
+    const auto skippedFirst = controlSkipUsedClipIds(context, "test", 1);
+    CONTROL_CHECK(skippedFirst == 5);
     CONTROL_CHECK(clipIds(*processor) == (std::set<std::uint64_t>{1, 2, 4}));
     CONTROL_CHECK(repository->getRetiredClips().size() == 1 && controlPossibleClipIdCollisions(context) == 0);
-    CONTROL_CHECK(logText().find("test: OpenTune's clip id counter was moved past 4 id(s)") != std::string::npos);
+    CONTROL_CHECK(logText().find("test: OpenTune's clip id counter was moved past 5 id(s) (3 of them used by clips) "
+                                 "so that the 1 new clip id(s) are free")
+                  != std::string::npos);
     // The next clip gets 6: the probe took 5 and was deleted. Nothing is skipped or taken when no id is in the way.
     const auto next = repository->createClip();
     CONTROL_CHECK(next.objectId == 6);
     controlRecordCommittedClipId(context, next);
-    CONTROL_CHECK(controlSkipUsedClipIds(context, "test") == 0);
+    CONTROL_CHECK(controlSkipUsedClipIds(context, "test", 1) == 0);
     const auto after = repository->createClip();
     CONTROL_CHECK(after.objectId == 7);
     repository->retireClip(next);
@@ -1059,12 +1153,49 @@ void scenarioClipIdSkipImpl()
     repository->retireClip(after);
     repository->releaseClip(after);
 
-    // A clip with a higher id appears (the editor made it, or a project was merged in): skipped the same way, and the
-    // free ids below it are passed by empty clips that are deleted.
+    // A clip with a higher id appears (the editor made it, or a project was merged in): the counter stands at 8, whose
+    // run is blocked by 9; 9 is in use; 10 is free with 11 behind it.
     CONTROL_CHECK(repository->createClip(9).isValid());
     CONTROL_CHECK(controlPossibleClipIdCollisions(context) == 1);
-    CONTROL_CHECK(controlSkipUsedClipIds(context, "test") == 2);
+    CONTROL_CHECK(controlSkipUsedClipIds(context, "test", 1) == 3);
     CONTROL_CHECK(clipIds(*processor) == (std::set<std::uint64_t>{1, 2, 4, 9}));
+
+    // Ids with a hole, for a split (two clips): 1 and 3 are in use. 1 is in use, 2 is free but 3 stands behind it, 3
+    // is in use, 4 is free with 5 and 6 behind it. Another content epoch forgets what was recorded, and the counter
+    // is back at 1.
+    repository->clear();
+    CONTROL_CHECK(repository->createClip(1).isValid() && repository->createClip(3).isValid());
+    CONTROL_CHECK(controlPossibleClipIdCollisions(context) == 2);
+    CONTROL_CHECK(controlSkipUsedClipIds(context, "test", 2) == 4);
+    CONTROL_CHECK(clipIds(*processor) == (std::set<std::uint64_t>{1, 3}));
+    const auto firstOfTwo = repository->createClip();
+    const auto secondOfTwo = repository->createClip();
+    CONTROL_CHECK(firstOfTwo.objectId == 5 && secondOfTwo.objectId == 6);
+    for (const auto& key : {firstOfTwo, secondOfTwo}) {
+        repository->retireClip(key);
+        repository->releaseClip(key);
+    }
+
+    // A project file stores an id as a signed 64-bit integer that is read back without a range check, so a clip can
+    // have any id: 2^40, or the largest value (a stored -1). The search must not depend on how high the ids lie (it
+    // used to count up to the highest id), and must not run over the end of the numbers.
+    repository->clear();
+    constexpr std::uint64_t kHuge = std::uint64_t{1} << 40;
+    constexpr std::uint64_t kLargest = std::numeric_limits<std::uint64_t>::max();
+    CONTROL_CHECK(repository->createClip(1).isValid() && repository->createClip(kHuge).isValid()
+                  && repository->createClip(kLargest).isValid());
+    CONTROL_CHECK(controlPossibleClipIdCollisions(context) == 3);
+    const auto started = juce::Time::getMillisecondCounter();
+    // 1 is in use and 2 is free with 3 to 5 behind it: two probes.
+    CONTROL_CHECK(controlSkipUsedClipIds(context, "test", 3) == 2);
+    CONTROL_CHECK(controlSkipUsedClipIds(context, "test", 1) == 1);
+    CONTROL_CHECK(juce::Time::getMillisecondCounter() - started < 5000);
+    CONTROL_CHECK(clipIds(*processor) == (std::set<std::uint64_t>{1, kHuge, kLargest}));
+    // The two big clips stay above what was recorded, so every later call probes once more: one clip, no more.
+    CONTROL_CHECK(controlPossibleClipIdCollisions(context) == 2);
+    // The probe of the second call took 3 and was deleted again, so the next clip gets 4.
+    CONTROL_CHECK(repository->createClip().objectId == 4);
+
     // Another content epoch forgets what was recorded.
     repository->clear();
     CONTROL_CHECK(repository->createClip(2).isValid());
@@ -1292,6 +1423,7 @@ void scenarioClipIdsAfterOpen()
 {
     scenarioClipIdsAfterOpenImpl();
     scenarioClipIdsHoleImpl();
+    scenarioClipIdsHugeImpl();
 }
 
 void scenarioClipIdsWithoutOpen()

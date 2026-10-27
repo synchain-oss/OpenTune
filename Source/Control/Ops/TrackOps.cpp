@@ -481,9 +481,9 @@ Result<JsonValue> runDuplicate(ControlOpContext& context, const DuplicateParams&
     // Mode clone: every copied clip gets a content of its own first (OpenTuneAudioProcessor::cloneContent()), so
     // that a failure leaves the arrangement as it was; the contents made so far are retired again, as the
     // arrangement's clip duplicate does when its insert fails. Every clone makes a clip, so the clip id counter is
-    // moved past the ids of an opened project's clips first, once for all of them (ClipIds.h); mode share makes none.
+    // moved to where that many ids are free first, once for all of them (ClipIds.h); mode share makes none.
     if (!params.share && !sources.empty())
-        controlSkipUsedClipIds(context, "track.duplicate");
+        controlSkipUsedClipIds(context, "track.duplicate", sources.size());
     std::vector<ContentKey> contents;
     for (const auto& source : sources) {
         if (params.share) {

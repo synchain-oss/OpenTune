@@ -684,10 +684,10 @@ Result<JsonValue> runSplit(ControlOpContext& context, const EditParams& params, 
 
     // The split key of the arrangement view: splitPlacementAtSeconds() at the clip's position on its track, then
     // SplitPlacementAction on the undo history. The call makes two clips; after a project was opened OpenTune's clip
-    // id counter can stand on the ids of the opened clips, so the counter is moved past them first (ClipIds.h): the
-    // call would refuse the split without a word, and when only one of its two ids is in use, it would leave the
-    // other new clip behind as a content that no clip shows.
-    controlSkipUsedClipIds(context, "arrangement.edit split");
+    // id counter can stand on the ids of the opened clips, so the counter is moved to where the next two ids are free
+    // first (ClipIds.h): the call would refuse the split without a word, and when only one of its two ids is in use,
+    // it would leave the other new clip behind as a content that no clip shows.
+    controlSkipUsedClipIds(context, "arrangement.edit split", 2);
     const int index = processor.findPlacementIndexById(clip.trackId, clip.placement.placementId);
     const auto outcome = processor.splitPlacementAtSeconds(clip.trackId, index, at);
     if (!outcome)
@@ -741,9 +741,9 @@ Result<JsonValue> runMerge(ControlOpContext& context, const EditParams& params, 
     }
 
     // The merge key of the arrangement view: mergePlacements() with the leading clip's position on its track, then
-    // MergePlacementAction on the undo history. The call makes one clip, so the clip id counter is moved past the ids
-    // of the opened project's clips first, as for a split (ClipIds.h).
-    controlSkipUsedClipIds(context, "arrangement.edit merge");
+    // MergePlacementAction on the undo history. The call makes one clip, so the clip id counter is moved to where the
+    // next id is free first, as for a split (ClipIds.h).
+    controlSkipUsedClipIds(context, "arrangement.edit merge", 1);
     const int index = arrangement->findPlacementIndexById(leading.trackId, leading.placement.placementId);
     const auto outcome = processor.mergePlacements(leading.trackId, leading.placement.placementId,
                                                    trailing.placement.placementId, index);
@@ -1248,9 +1248,9 @@ Result<JsonValue> runCopy(ControlOpContext& context, const CopyParams& params)
 
     // The contents first, so that a failure leaves the arrangement as it was: paste copies the part of the content the
     // clip shows (copyContentRange()), duplicate the whole content (cloneContent()), as the arrangement view's keys do.
-    // Each of the two makes a clip; the clip id counter is moved past the ids of an opened project's clips first, so
+    // Each of the two makes a clip per source; the clip id counter is moved to where that many ids are free first, so
     // that none of the calls meets an id in use (ClipIds.h).
-    controlSkipUsedClipIds(context, params.full ? "arrangement.copy full" : "arrangement.copy window");
+    controlSkipUsedClipIds(context, params.full ? "arrangement.copy full" : "arrangement.copy window", sources.size());
     std::vector<ContentKey> contents;
     for (const auto& source : sources) {
         const auto& p = source.placement;

@@ -785,11 +785,11 @@ void scenarioAppQuitVectors();
 
 /** controlSkipUsedClipIds() and its companions on a repository with holes in its ids and a retired clip that was not
     reclaimed: what is skipped, that no probe clip is left, that nothing is taken when no id is in the way, and the
-    record that makes the next call skip nothing. */
+    record that makes the next call skip nothing, runs of free ids for several clips, and huge ids. */
 void scenarioClipIdSkip();
 /** Splitting, merging, copying (both modes) and duplicating a track (mode clone) right after a project was opened
     succeed at once and leave no content without a clip; refused calls and predictions leave the counter alone; ids
-    with a hole. */
+    with a hole, and clips with huge ids (2^40, the largest 64-bit value) that must not make the first call wait. */
 void scenarioClipIdsAfterOpen();
 /** Without a project opened before, the same methods skip nothing and take no ids: the new clips get consecutive ids.
  */

@@ -253,7 +253,7 @@ ClipSpec unanalysedSpec(const char* name, int trackId, double start, Analysis an
 
 /** Saves the project and opens it again with the editor's two-phase flows (ProjectSession::prepareSave,
     executeSaveToFile, prepareOpen, commitPreparedOpen): opening clears the content repository. */
-bool saveAndReopen(OpenTuneAudioProcessor& processor)
+bool saveAndReopen(OpenTuneAudioProcessor& processor, std::uint64_t renumberFrom = 0, std::uint64_t renumberTo = 0)
 {
     ProjectSession session(processor, processor.getAppPreferences());
     const auto directory = isolatedDataDirectory() / "project";
@@ -266,7 +266,20 @@ bool saveAndReopen(OpenTuneAudioProcessor& processor)
     auto prepared = session.prepareOpen(file);
     if (!CONTROL_CHECK(prepared.ok()))
         return false;
-    return CONTROL_CHECK(session.commitPreparedOpen(std::move(prepared).value()).ok());
+    if (renumberFrom == 0)
+        return CONTROL_CHECK(session.commitPreparedOpen(std::move(prepared).value()).ok());
+    // A project file stores a clip id as a signed 64-bit integer and OpenTune converts it back without a range check,
+    // so a project can hold any id, the largest value (a stored -1) included. Give one clip of the opened project such
+    // an id before it is committed, the way a file with that id would have.
+    auto open = std::move(prepared).value();
+    for (auto& content : open.snapshot.contents)
+        if (content.contentKey.objectId == renumberFrom)
+            content.contentKey.objectId = renumberTo;
+    for (auto& track : open.snapshot.tracks)
+        for (auto& placement : track.placements)
+            if (placement.contentKey.objectId == renumberFrom)
+                placement.contentKey.objectId = renumberTo;
+    return CONTROL_CHECK(session.commitPreparedOpen(std::move(open)).ok());
 }
 
 // ---- Results ---------------------------------------------------------------------------------------
@@ -1480,9 +1493,9 @@ bool fixtureSaveAndReopen(OpenTuneAudioProcessor& processor)
     return saveAndReopen(processor);
 }
 
-bool fixtureReopenWithAnalysis(OpenTuneAudioProcessor& processor)
+bool fixtureReopenWithAnalysis(OpenTuneAudioProcessor& processor, std::uint64_t renumberFrom, std::uint64_t renumberTo)
 {
-    if (!saveAndReopen(processor))
+    if (!saveAndReopen(processor, renumberFrom, renumberTo))
         return false;
     auto* repository = processor.getStandaloneContentRepository();
     // Opening requests the pitch analysis of every clip (ProjectSession::commitPreparedOpen). Without the models it

@@ -661,7 +661,7 @@
       }
     },
     "jobKind": {
-      "description": "import, export, projectOpen, projectSave, timeGridSeed or prefsApply.",
+      "description": "import, export, projectOpen, projectSave, projectCopy, timeGridSeed or prefsApply.",
       "$ref": "#/$defs/camelName"
     },
     "jobState": {

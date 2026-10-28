@@ -90,6 +90,11 @@
       "code": "app.quit",
       "since": "1.0",
       "description": "app.quit, which quits OpenTune as the close button of its window does and needs the OpenTune editor window."
+    },
+    {
+      "code": "project.copy",
+      "since": "1.0",
+      "description": "project.saveCopy, which writes a copy of the project to a new project file and leaves the project file, the unsaved-changes flag and the recent-projects list as they were. It needs the OpenTune editor window. An instance of release candidate 7 or earlier does not report it, and a client then has no way to write a copy that does not become the project file."
     }
   ]
 }

@@ -26,7 +26,13 @@ struct ControlViewSwitchBaseline
         in the view that the switch hides (a hidden view gives the focus to the editor, which hands it to the default
         component, the field, and the focus that the new view then grabs leaves the field). False for anything else: a
         field that commits when it loses the focus (the focus moves out of it at the grab of the new view, and its
-        commit is a real change), and no focus at all. */
+        commit is a real change), and no focus at all.
+        The view case rests on an observation of the real window, not on a guarantee: the focus that leaves a hidden
+        view always passes the BPM field, so a field inside that view that commits on focus loss comes with a commit of
+        the BPM field (the mark is set twice and stays). Today the only such field in the Standalone UI is the BPM
+        field itself (the parameter panel's number boxes edit modally, and a write meanwhile answers BUSY(modal_open)).
+        A field added inside a view that commits on focus loss and hands the focus elsewhere than to the editor would
+        set the mark once, and this rule would take it back: narrow the view case for such a field. */
     bool focusLeadsToBpmCommit = false;
 };
 

@@ -548,7 +548,7 @@ never applies in this build.
 `controlCheckBusy(context)` refuses a write with `BUSY` while the user is in the middle of something
 (section 13.2), in this order: a mouse or pen gesture (`pointer_down`), a modal dialog (`modal_open`;
 not for `ui.dismiss`), an import of the UI (`import_in_progress`), an export (`export_in_progress`), a
-project save or open (`project_operation`). The bridge reports these from the editor's own flags. An
+project save, copy or open (`project_operation`). The bridge reports these from the editor's own flags. An
 export is also busy while the processor's export lock is held (`isExportLockHeld()`: an export of the
 editor or of `export.start`), with or without an editor; without an editor nothing else is busy. Reads,
 `session.*` and `job.*` never call it. A job that commits in several steps (`import.start`) checks again
@@ -855,7 +855,8 @@ a binding that is made later.
 ## Project files
 
 `project.save`, `project.saveAs`, `project.open` and `project.clearRecent` (`Ops/ProjectOps.cpp`, capability
-`project.io`, reported only because all four are registered). The project session and its worker pool belong to the
+`project.io`, reported only because all four are registered) and `project.saveCopy` (same file, capability
+`project.copy`, since specification 1.0.0-rc.8). The project session and its worker pool belong to the
 editor (`ProjectSession` stays inside it, as the processor takes over no project state), so the methods reach them
 through `ControlUiBridge::projectSession()` and `projectWorkerPool()`; without an editor the save and open methods
 answer `UNSUPPORTED(no_editor_window)`, and `project.clearRecent`, which is a preference, still works.
@@ -865,7 +866,8 @@ their end, so the jobs do not call them. They run the same steps on `ProjectSess
 editor's UI steps to the bridge: `onProjectSaved()` (recent-projects menu and title), `onProjectReloaded()` (menu,
 title and `refreshAllUIFromProject()`), `onRecentProjectsChanged()` and `setProjectOperationRunning()`, the editor's
 `projectOperationBusy_` flag. The two editor functions are registered as mirrors (`project-save-flow`,
-`project-open-flow`).
+`project-open-flow`); `project.saveCopy` is a second port of `saveProject` and is listed in the same entry
+(`CopyJob::step`, `startCopy`).
 
 - **Save (`projectSave`, not cancellable).** The request takes the snapshot on the message thread
   (`ProjectSession::prepareSave()`), a worker of the editor's pool writes the project and copies the media
@@ -878,6 +880,26 @@ title and `refreshAllUIFromProject()`), `onRecentProjectsChanged()` and `setProj
   generation), the file is pushed to the recent projects, and the editor updates its menu and title. The result is
   never a no-op (`ControlWriteEnvelope::markEffective()`), carries `IRREVERSIBLE` (the file's earlier content cannot be
   brought back), `OVERWROTE_OTHER_PROJECT` for another project file that was replaced, and `NOT_SAVED_IN_PROJECT`.
+- **Copy (`projectCopy`, not cancellable).** `project.saveCopy` writes the project to a new file and changes nothing of
+  the project. It is the first half of the save: the snapshot on the message thread (`prepareSave()`), the write and the
+  media copy on a worker (`executeSaveToFile()`) into a temporary file in the target directory, and the final rename of
+  section 20.4, which never replaces. It does not call `setCurrentProjectFile()`, `clearDirty()` or
+  `pushRecentProject()` and tells the editor nothing (no `onProjectSaved()`), so the project keeps its file, its
+  unsaved-changes flag, the recent projects, the undo history and the window title; the editor's project-operation flag
+  is held for the run, as for a save. The path is checked as for `project.saveAs` (absolute, `.otproj`, the directory
+  must exist: the call does not make it), but nothing is ever replaced: a file or directory at the target, the
+  project's own file included (also when it was deleted from disk meanwhile; identity by section 20.3, decided again
+  right before the rename), ends the call with `ALREADY_EXISTS(target_exists)`, and a file that appears while the job
+  waits ends the job with the same error and is not touched. A write that fails, the media copy included, ends the job
+  with `IO_ERROR(write_failed)` and deletes the temporary file; the target does not appear (media copied to the
+  `Project_Media` directory before the failure stay: OpenTune copies a media file only when the one there is missing or
+  older). The call returns the write envelope that hands the work to the job, as `export.start` does; the job result is
+  no write envelope, because the project did not change: `{path, sizeBytes, projectPath, projectDirty, warnings}`,
+  where `projectPath` is the project's file (null with `nullReasons.projectPath` `no_project_path` for a project that was
+  never saved) and `projectDirty` its flag, both as the job did not touch them, and `warnings` holds
+  `NOT_SAVED_IN_PROJECT`. There is no `IRREVERSIBLE`: no file was replaced. The bridge offers nothing new for it: the
+  method needs the editor's `projectSession()` and `projectWorkerPool()` as the save does, so a bridge without them
+  answers `UNSUPPORTED(capability_missing)` and an instance without an editor `UNSUPPORTED(no_editor_window)`.
 - **Open (`projectOpen`, cancellable until the file is prepared).** A worker reads the project and its media
   (`ProjectSession::prepareOpen()`); the job then commits it in one message-thread step
   (`ProjectSession::commitPreparedOpen()`), which clears the content repository (a new content epoch: the handles of the
@@ -894,11 +916,17 @@ title and `refreshAllUIFromProject()`), `onRecentProjectsChanged()` and `setProj
   command (`ProjectSession::clearRecentProjects()`) does on the same preferences.
 
 Tests: `Tests/Control/ControlProjectTests.cpp` (`ProjectRoundTrip`, `ProjectJobs`, `ProjectWithoutEditor`,
-`ProjectReopenKeepsTuning`, `ProjectVectors`). `ProjectReopenKeepsTuning` saves a project with tuned notes and
+`ProjectSaveCopy`, `ProjectSaveCopyChecks`, `ProjectSaveCopyCapability`, `ProjectReopenKeepsTuning`, `ProjectVectors`).
+`ProjectSaveCopy` writes copies of a project that was never saved and of one with a file and unsaved changes, and checks
+that the file, the flag and its generation, the recent projects, the undo history, what the editor was told, `project.get`
+and the bytes of the main file are as before, that the copy holds the project as it is in memory and opens as a
+project of its own; `ProjectSaveCopyChecks` the params, the path, every kind of target that exists, busy, a running
+copy, a target that appears meanwhile and a failing write; `ProjectSaveCopyCapability` the capability. `ProjectReopenKeepsTuning` saves a project with tuned notes and
 opens it again: the correction segments and their parameters must be there right after the open (before the original
 F0 is analysed again), and the notes, their corrected flags and the corrected pitch line must be as before the save
-once the analysis is done. `ProjectVectors` runs the specification's `project/*` vectors of `project.io` and requires an
-explicit list to pass; `project/get-ok` is a read and runs in `Vectors`, and `project/save-as-no-access` is skipped
+once the analysis is done. `ProjectVectors` runs the specification's `project/*` vectors of `project.io` and
+`project.copy` and requires an explicit list to pass (the `project/save-copy-*` vectors from the moment the locked copy
+of the specification has `project.saveCopy`); `project/get-ok` is a read and runs in `Vectors`, and `project/save-as-no-access` is skipped
 because the runner cannot make a file whose identity is unreadable on Windows.
 
 ## Transport and tracks
@@ -1437,8 +1465,8 @@ had unsaved changes and `discardUnsaved: true` was given; `warnings` then holds 
 3. `BUSY`: the five reasons of every write (`controlCheckBusy()`: pointer down, modal dialog, import, export, project
    operation, an export lock held by the UI included), then any job of the control API that has not finished
    (`ControlJobs::activeKinds()`), because the process would end under it. The reason of a job is the one PROTOCOL.md
-   section 13.2 names for its kind (`import_in_progress`, `export_in_progress`, `project_operation` for `projectOpen`
-   and `projectSave`) and `job_in_progress` for any other kind (`prefsApply`, `timeGridSeed`). With several jobs the
+   section 13.2 names for its kind (`import_in_progress`, `export_in_progress`, `project_operation` for `projectOpen`,
+   `projectSave` and `projectCopy`) and `job_in_progress` for any other kind (`prefsApply`, `timeGridSeed`). With several jobs the
    reasons of section 13.2 come first in the order of that section and `job_in_progress` last, whichever job started
    first.
 4. `UNSAVED_CHANGES(project_dirty)`: the project has unsaved changes and `discardUnsaved` is not true. The flag is
@@ -1791,7 +1819,7 @@ leaves the `app.quit` vectors to `AppQuitVectors`, with the reason in its skip l
 
 The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities it reports come from the
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
-`jobs.v1`, `import.v1`, `export.v1`, `ui.bridge` with `ui.onboardingClose`, `ui.workspace`, `edit.v1`, `history.v1`, `timing.v1`, `transport.v1`, `arrangement.v1`, `tracks.v1`, `project.io`, `prefs.write`, `audio.device` and `app.quit`). The listener answers a method of an unreported capability itself with
+`jobs.v1`, `import.v1`, `export.v1`, `ui.bridge` with `ui.onboardingClose`, `ui.workspace`, `edit.v1`, `history.v1`, `timing.v1`, `transport.v1`, `arrangement.v1`, `tracks.v1`, `project.io`, `project.copy`, `prefs.write`, `audio.device` and `app.quit`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
 that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
@@ -1841,6 +1869,7 @@ than one step.
 | `project.saveAs` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.saveAs.schema.json` |
 | `project.open` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectReopenKeepsTuning`, `.ProjectVectors` | `methods/project.open.schema.json` |
 | `project.clearRecent` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors`, `.ProjectWithoutEditor` | `methods/project.clearRecent.schema.json` |
+| `project.saveCopy` | `project.copy` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectSaveCopy`, `.ProjectSaveCopyChecks`, `.ProjectSaveCopyCapability`, `.ProjectWithoutEditor`, `.ProjectVectors` | `methods/project.saveCopy.schema.json` |
 | `prefs.set` | `prefs.write` | `Ops/PrefsOps.cpp` (a job of kind `prefsApply` for a change of the editing scheme, the vocoder weight or the rendering priority; `Ops/PrefsModels.cpp` for the options and the runtime calls) | `ControlProcessorTests.PrefsRoundTrip`, `.PrefsSchemeJob`, `.PrefsOptions`, `.PrefsVocoderJob`, `.PrefsVocoderOverlap`, `.PrefsVectors` | `methods/prefs.set.schema.json` |
 | `audio.get` | `audio.device` | `Ops/AudioDeviceOps.cpp` | `ControlProcessorTests.AudioDevice`, `.AudioVectors` | `methods/audio.get.schema.json` |
 | `audio.set` | `audio.device` | `Ops/AudioDeviceOps.cpp` | `ControlProcessorTests.AudioDevice`, `.AudioVectors` | `methods/audio.set.schema.json` |

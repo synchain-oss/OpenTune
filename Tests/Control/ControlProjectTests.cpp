@@ -15,6 +15,7 @@
 #include "Content/StandaloneContentRepository.h"
 #include "Control/ControlDispatcher.h"
 #include "Control/ControlJobs.h"
+#include "Control/Ops/OpsRegistry.h"
 #include "PluginProcessor.h"
 #include "Render/ContentRenderService.h"
 #include "SourceStore.h"
@@ -91,6 +92,20 @@ public:
 
 private:
     ControlService& service_;
+};
+
+/** Leaves the capabilities out of the dispatchers created during its life (the seam of OpsRegistry.h). */
+class ScopedWithheldCapabilities
+{
+public:
+    explicit ScopedWithheldCapabilities(std::vector<std::string> withheld)
+    {
+        controlSetWithheldCapabilitiesForTesting(std::move(withheld));
+    }
+    ~ScopedWithheldCapabilities() { controlSetWithheldCapabilitiesForTesting({}); }
+
+    ScopedWithheldCapabilities(const ScopedWithheldCapabilities&) = delete;
+    ScopedWithheldCapabilities& operator=(const ScopedWithheldCapabilities&) = delete;
 };
 
 /**
@@ -603,6 +618,9 @@ void scenarioProjectWithoutEditor()
     const auto directory = projectDirectory("without-editor");
     CONTROL_CHECK(api.fails("project.saveAs", pathParams((directory / "a.otproj").u8string()), "UNSUPPORTED",
                             "no_editor_window"));
+    CONTROL_CHECK(api.fails("project.saveCopy", pathParams((directory / "a.otproj").u8string()), "UNSUPPORTED",
+                            "no_editor_window"));
+    CONTROL_CHECK(!juceFileOf((directory / "a.otproj").u8string()).exists());
     CONTROL_CHECK(
         api.fails("project.open", pathParams((directory / "a.otproj").u8string()), "UNSUPPORTED", "no_editor_window"));
     // The recent projects are a preference: they can be cleared.
@@ -616,6 +634,417 @@ void scenarioProjectWithoutEditor()
     CONTROL_CHECK(memberOf(again, "noOp").asBoolean());
     const auto dispatcher = service.dispatcher();
     CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+}
+
+// ---- project.saveCopy ------------------------------------------------------------------------------
+
+namespace {
+
+/** The bytes of a file; empty when there is none. */
+std::string bytesOf(const std::string& path)
+{
+    return readFile(std::filesystem::u8path(path));
+}
+
+/** The names in a directory, sorted. */
+std::vector<std::string> namesIn(const std::filesystem::path& directory)
+{
+    std::vector<std::string> names;
+    for (const auto& entry : std::filesystem::directory_iterator(directory))
+        names.push_back(entry.path().filename().u8string());
+    std::sort(names.begin(), names.end());
+    return names;
+}
+
+/** True when a directory holds a temporary file of a project write (their names start with a dot). */
+bool holdsTemporaryFile(const std::filesystem::path& directory)
+{
+    const auto names = namesIn(directory);
+    return std::any_of(names.begin(), names.end(), [](const std::string& name) { return name[0] == '.'; });
+}
+
+/** What a project copy must leave as it was, as one string: the project's file and unsaved-changes flag (with the
+    generation of the changes) as the session has them, the recent projects, the undo history, what the editor was told
+    (saves, opens, changes of the recent list, marks), and the project as project.get reports it. */
+std::string projectFacts(OpenTuneAudioProcessor& processor, EditorParts& editor, ApiSession& api)
+{
+    std::string facts = "file=";
+    facts += editor.session.hasProjectPath() ? editor.session.getCurrentProjectFile().getFullPathName().toStdString()
+                                             : std::string("-");
+    facts += "|dirty=" + std::to_string(editor.session.isDirty() ? 1 : 0);
+    facts += "|generation=" + std::to_string(editor.session.getDirtyGeneration());
+    facts += "|recent=";
+    for (const auto& recent : processor.getAppPreferences().getRecentProjects())
+        facts += recent.toStdString() + ";";
+    facts += "|undo=" + std::to_string(processor.getUndoManager().size()) + "/"
+             + std::to_string(processor.getUndoManager().cursor());
+    facts += "|editor=" + std::to_string(editor.bridge.projectSaves) + "/"
+             + std::to_string(editor.bridge.projectReloads) + "/" + std::to_string(editor.bridge.recentProjectChanges)
+             + "/" + std::to_string(editor.bridge.dirtyMarks);
+    facts += "|api=" + toJsonString(memberOf(api.result("project.get"), "project"));
+    return facts;
+}
+
+/** The warning NOT_SAVED_IN_PROJECT of a copy: the only warning, without a subject, with the three names of state that
+   a project file does not hold. */
+void checkCopyWarnings(const JsonValue& result)
+{
+    const auto& warnings = memberOf(result, "warnings");
+    if (!CONTROL_CHECK(warnings.size() == 1))
+        return;
+    const auto& warning = warnings.at(0);
+    CONTROL_CHECK(memberOf(warning, "code").text() == "NOT_SAVED_IN_PROJECT" && memberOf(warning, "subject").isNull());
+    CONTROL_CHECK(toJsonString(memberOf(memberOf(warning, "data"), "items"))
+                  == R"(["visibleTrackCount","undoHistory","preferences"])");
+}
+
+} // namespace
+
+/**
+ * A copy of the project is a file and nothing else: the project keeps its file, its unsaved-changes flag, the recent
+ * projects and its undo history, the editor is told nothing, and the main file is the same bytes. The copy holds the
+ * project as it is in memory (not the main file), opens as a project of its own, and the main file opens as it was.
+ */
+void scenarioProjectSaveCopy()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    EditorParts editor(*processor);
+    processor->getAppPreferences().clearRecentProjects();
+    const auto directory = projectDirectory("save-copy");
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    const auto clip = fixtureAddClip(*processor, sungClip("save-copy"));
+    editor.session.markDirty();
+    const auto placed = handlesAt(api, 2.0);
+    if (!CONTROL_CHECK(placed.has_value()))
+        return;
+    CONTROL_CHECK(targetsOf(api, placed->contentId).size() == 3);
+
+    // A project that was never saved: the copy is written, the project still has no file, and the result says why its
+    // projectPath is null.
+    {
+        const auto target = (directory / "never.otproj").u8string();
+        const auto before = projectFacts(*processor, editor, api);
+        const auto job = runAsJob(api, "project.saveCopy", pathParams(target), "projectCopy");
+        CONTROL_CHECK(succeeded(job));
+        const auto& result = memberOf(job, "result");
+        CONTROL_CHECK(memberOf(result, "path").text() == target);
+        CONTROL_CHECK(bytesOf(target).size() > 0
+                      && memberOf(result, "sizeBytes").asDouble() == static_cast<double>(bytesOf(target).size()));
+        CONTROL_CHECK(memberOf(result, "projectPath").isNull());
+        CONTROL_CHECK(memberOf(memberOf(result, "nullReasons"), "projectPath").text() == "no_project_path");
+        CONTROL_CHECK(memberOf(result, "projectDirty").isBoolean() && memberOf(result, "projectDirty").asBoolean());
+        checkCopyWarnings(result);
+        CONTROL_CHECK(!editor.session.hasProjectPath() && editor.session.isDirty());
+        CONTROL_CHECK(projectFacts(*processor, editor, api) == before);
+        CONTROL_CHECK(api.fails("project.save", JsonValue::object(), "INVALID_ARGUMENT", "no_project_path"));
+    }
+
+    // The project is saved to its file, then changed: one note instead of the three the file holds, so that the copy
+    // can be told from the file.
+    const auto main = (directory / "song.otproj").u8string();
+    CONTROL_CHECK(succeeded(runAsJob(api, "project.saveAs", pathParams(main), "projectSave")));
+    {
+        std::vector<Note> notes;
+        Note note;
+        note.startTime = 0.2;
+        note.endTime = 0.8;
+        note.pitch = 440.0f;
+        note.originalPitch = 440.0f;
+        note.isVoiced = true;
+        notes.push_back(note);
+        CONTROL_CHECK(processor->replaceContentNotesForFullMutation(clip.key, std::move(notes)));
+        editor.session.markDirty();
+    }
+    const auto mainBytes = bytesOf(main);
+    CONTROL_CHECK(!mainBytes.empty());
+    const auto mainModified = juceFileOf(main).getLastModificationTime();
+    const auto copyDirectory = directory / "song.autosave";
+    CONTROL_CHECK(std::filesystem::create_directories(copyDirectory));
+    const auto copy1 = (copyDirectory / "song-autosave-0001.otproj").u8string();
+    const auto copy2 = (copyDirectory / "song-autosave-0002.otproj").u8string();
+
+    {
+        const auto before = projectFacts(*processor, editor, api);
+        CONTROL_CHECK(before.find("|dirty=1|") != std::string::npos
+                      && before.find("file=" + main + "|") != std::string::npos);
+        const auto flagChanges = editor.bridge.operationFlagChanges.size();
+        const auto started = api.result("project.saveCopy", pathParams(copy1));
+        // The call hands the work to a job and changes nothing itself.
+        CONTROL_CHECK(!memberOf(started, "applied").asBoolean()
+                      && memberOf(memberOf(started, "job"), "kind").text() == "projectCopy");
+        const auto job = waitJob(api, jobIdOf(started));
+        CONTROL_CHECK(succeeded(job));
+        const auto& result = memberOf(job, "result");
+        CONTROL_CHECK(memberOf(result, "path").text() == copy1);
+        CONTROL_CHECK(bytesOf(copy1).size() > 0
+                      && memberOf(result, "sizeBytes").asDouble() == static_cast<double>(bytesOf(copy1).size()));
+        // The project's file and flag as they are: the file is the main file, the project still has unsaved changes.
+        CONTROL_CHECK(memberOf(result, "projectPath").text() == main);
+        CONTROL_CHECK(memberOf(result, "projectDirty").isBoolean() && memberOf(result, "projectDirty").asBoolean());
+        CONTROL_CHECK(result.find("nullReasons") == nullptr);
+        checkCopyWarnings(result);
+        // No write envelope: nothing of the project changed, so there is no undo descriptor, no change list, no
+        // IRREVERSIBLE (the copy replaced no file).
+        for (const char* member : {"applied", "noOp", "changes", "undo", "tokens", "dirty"})
+            CONTROL_CHECK(result.find(member) == nullptr);
+        CONTROL_CHECK(!hasWarning(result, "IRREVERSIBLE"));
+
+        // The main file is the same bytes (and was not written), and the project is what it was in every respect.
+        CONTROL_CHECK(bytesOf(main) == mainBytes && juceFileOf(main).getLastModificationTime() == mainModified);
+        CONTROL_CHECK(projectFacts(*processor, editor, api) == before);
+        CONTROL_CHECK(editor.session.getCurrentProjectFile().getFullPathName().toStdString() == main);
+        // The editor's flag of a running project operation was set for the job and cleared at its end.
+        CONTROL_CHECK(editor.bridge.operationFlagChanges.size() == flagChanges + 2
+                      && editor.bridge.operationFlagChanges[flagChanges]
+                      && !editor.bridge.operationFlagChanges[flagChanges + 1]);
+        CONTROL_CHECK(!editor.bridge.busy.operationRunning);
+        // The copy and its media are in the copy's directory; no temporary file is left anywhere.
+        CONTROL_CHECK((namesIn(copyDirectory)
+                       == std::vector<std::string>{ProjectSession::kMediaDirectoryName, "song-autosave-0001.otproj"}));
+        CONTROL_CHECK(!holdsTemporaryFile(copyDirectory) && !holdsTemporaryFile(directory));
+    }
+
+    // A second copy next to the first: the first is never rewritten, and the main file is still the same bytes.
+    {
+        const auto copy1Bytes = bytesOf(copy1);
+        const auto job = runAsJob(api, "project.saveCopy", pathParams(copy2), "projectCopy");
+        CONTROL_CHECK(succeeded(job));
+        CONTROL_CHECK(bytesOf(copy1) == copy1Bytes && !bytesOf(copy2).empty());
+        CONTROL_CHECK(bytesOf(main) == mainBytes);
+    }
+
+    // The copy opens as a project: one clip, one content, the one note the project had when it was written. The open
+    // is a different method and does what it always does: the opened file becomes the project's file.
+    {
+        const auto job = runAsJob(api, "project.open", pathParams(copy1, "discardUnsaved"), "projectOpen");
+        CONTROL_CHECK(succeeded(job));
+        const auto& restored = memberOf(memberOf(job, "result"), "restored");
+        CONTROL_CHECK(memberOf(restored, "placementCount").asDouble() == 1.0
+                      && memberOf(restored, "contentCount").asDouble() == 1.0);
+        CONTROL_CHECK(memberOf(memberOf(job, "result"), "skipped").find("media") != nullptr
+                      && memberOf(memberOf(memberOf(job, "result"), "skipped"), "media").size() == 0);
+        const auto opened = handlesAt(api, 2.0);
+        if (CONTROL_CHECK(opened.has_value()))
+            CONTROL_CHECK(targetsOf(api, opened->contentId).size() == 1);
+        CONTROL_CHECK(editor.session.getCurrentProjectFile().getFullPathName().toStdString() == copy1);
+    }
+    // The main file opens as it was written: the three notes of the save.
+    {
+        const auto job = runAsJob(api, "project.open", pathParams(main), "projectOpen");
+        CONTROL_CHECK(succeeded(job));
+        const auto opened = handlesAt(api, 2.0);
+        if (CONTROL_CHECK(opened.has_value()))
+            CONTROL_CHECK(targetsOf(api, opened->contentId).size() == 3);
+        CONTROL_CHECK(bytesOf(main) == mainBytes);
+    }
+    const auto dispatcher = service.dispatcher();
+    CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+}
+
+/** The checks before the job and the failures of the job: nothing is written, nothing of the project changes, the
+    main file is never touched. */
+void scenarioProjectSaveCopyChecks()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    EditorParts editor(*processor);
+    processor->getAppPreferences().clearRecentProjects();
+    const auto directory = projectDirectory("save-copy-checks");
+    const auto main = (directory / "main.otproj").u8string();
+    const auto existing = (directory / "existing.otproj").u8string();
+    CONTROL_CHECK(juceFileOf(existing).replaceWithText("an existing file"));
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    fixtureAddClip(*processor, sungClip("save-copy-checks"));
+    editor.session.markDirty();
+    CONTROL_CHECK(succeeded(runAsJob(api, "project.saveAs", pathParams(main), "projectSave")));
+    editor.session.markDirty();
+    const auto mainBytes = bytesOf(main);
+    const auto before = projectFacts(*processor, editor, api);
+    const auto jobsBefore = service.jobs()->retainedCount();
+    const auto flagChanges = editor.bridge.operationFlagChanges.size();
+
+    // The params: the path, and no other member.
+    CONTROL_CHECK(api.fails("project.saveCopy", JsonValue::object(), "INVALID_ARGUMENT", "invalid_params"));
+    CONTROL_CHECK(api.fails("project.saveCopy", json(R"({"path":"x.otproj","confirm":true})"), "INVALID_ARGUMENT",
+                            "invalid_params"));
+    CONTROL_CHECK(api.fails("project.saveCopy", json(R"({"path":7})"), "INVALID_ARGUMENT", "invalid_params"));
+    CONTROL_CHECK(api.fails("project.saveCopy", json(R"({"path":""})"), "INVALID_ARGUMENT", "invalid_params"));
+    // The path: absolute, ending in .otproj.
+    CONTROL_CHECK(
+        api.fails("project.saveCopy", pathParams("relative.otproj"), "INVALID_ARGUMENT", "path_not_absolute"));
+    CONTROL_CHECK(api.fails("project.saveCopy", pathParams((directory / "x.wav").u8string()), "INVALID_ARGUMENT",
+                            "path_bad_extension"));
+    CONTROL_CHECK(api.fails("project.saveCopy", pathParams((directory / "x.otproj.bak").u8string()), "INVALID_ARGUMENT",
+                            "path_bad_extension"));
+    // A copy never replaces: a file, the project's own file, a directory. The bytes stay.
+    CONTROL_CHECK(api.fails("project.saveCopy", pathParams(existing), "ALREADY_EXISTS", "target_exists"));
+    CONTROL_CHECK(textOf(existing) == "an existing file");
+    CONTROL_CHECK(api.fails("project.saveCopy", pathParams(main), "ALREADY_EXISTS", "target_exists"));
+    CONTROL_CHECK(bytesOf(main) == mainBytes);
+#if JUCE_WINDOWS
+    // The same file under another spelling of its name (the file system ignores case).
+    CONTROL_CHECK(api.fails("project.saveCopy", pathParams((directory / "MAIN.OTPROJ").u8string()), "ALREADY_EXISTS",
+                            "target_exists"));
+    CONTROL_CHECK(bytesOf(main) == mainBytes);
+#endif
+    const auto folder = directory / "folder.otproj";
+    CONTROL_CHECK(std::filesystem::create_directories(folder));
+    CONTROL_CHECK(api.fails("project.saveCopy", pathParams(folder.u8string()), "ALREADY_EXISTS", "target_exists"));
+    CONTROL_CHECK(std::filesystem::is_directory(folder) && namesIn(folder).empty());
+    // The directory of the target is not made.
+    CONTROL_CHECK(api.fails("project.saveCopy", pathParams((directory / "missing-dir" / "x.otproj").u8string()),
+                            "IO_ERROR", "write_failed"));
+    CONTROL_CHECK(!std::filesystem::exists(directory / "missing-dir"));
+    // BUSY, in the order of every write: nothing is started and nothing is written.
+    {
+        struct Condition
+        {
+            bool ControlUiBridge::BusyState::*flag;
+            const char* reason;
+        };
+        const Condition conditions[] = {
+            {&ControlUiBridge::BusyState::pointerDown, "pointer_down"},
+            {&ControlUiBridge::BusyState::modalOpen, "modal_open"},
+            {&ControlUiBridge::BusyState::exportRunning, "export_in_progress"},
+            {&ControlUiBridge::BusyState::importRunning, "import_in_progress"},
+            {&ControlUiBridge::BusyState::operationRunning, "project_operation"},
+        };
+        const auto target = (directory / "busy.otproj").u8string();
+        for (const auto& condition : conditions) {
+            editor.bridge.busy.*(condition.flag) = true;
+            CONTROL_CHECK(api.fails("project.saveCopy", pathParams(target), "BUSY", condition.reason));
+            editor.bridge.busy = {};
+        }
+        CONTROL_CHECK(!juceFileOf(target).exists());
+    }
+    CONTROL_CHECK(service.jobs()->retainedCount() == jobsBefore);
+    CONTROL_CHECK(editor.bridge.operationFlagChanges.size() == flagChanges);
+    CONTROL_CHECK(projectFacts(*processor, editor, api) == before);
+    CONTROL_CHECK(bytesOf(main) == mainBytes && !holdsTemporaryFile(directory));
+
+    // A running copy holds the project-operation flag: the other project writes and a second copy wait, the job cannot
+    // be cancelled, and it finishes as usual.
+    {
+        const auto target = (directory / "held.otproj").u8string();
+        WorkerHold hold(editor.pool);
+        const auto started = api.result("project.saveCopy", pathParams(target));
+        const auto jobId = jobIdOf(started);
+        CONTROL_CHECK(!jobId.empty() && memberOf(memberOf(started, "job"), "kind").text() == "projectCopy");
+        CONTROL_CHECK(editor.bridge.busy.operationRunning);
+        CONTROL_CHECK(api.fails("project.save", JsonValue::object(), "BUSY", "project_operation"));
+        CONTROL_CHECK(api.fails("project.saveCopy", pathParams((directory / "second.otproj").u8string()), "BUSY",
+                                "project_operation"));
+        CONTROL_CHECK(api.fails("project.clearRecent", JsonValue::object(), "BUSY", "project_operation"));
+        auto cancel = JsonValue::object();
+        cancel.appendMember("jobId", JsonValue::string(jobId));
+        CONTROL_CHECK(api.fails("job.cancel", cancel, "UNSUPPORTED", "job_not_cancellable"));
+        hold.release();
+        const auto job = waitJob(api, jobId);
+        CONTROL_CHECK(succeeded(job));
+        CONTROL_CHECK(bytesOf(target).size() > 0 && !editor.bridge.busy.operationRunning);
+        CONTROL_CHECK(!juceFileOf((directory / "second.otproj").u8string()).exists());
+        CONTROL_CHECK(bytesOf(main) == mainBytes);
+    }
+
+    // A file that appears at the target while the job waits for its worker is not replaced: the job fails with
+    // ALREADY_EXISTS, the file is as it was, and the temporary file is gone.
+    {
+        const auto appeared = (directory / "appeared.otproj").u8string();
+        WorkerHold hold(editor.pool);
+        const auto started = api.result("project.saveCopy", pathParams(appeared));
+        const auto jobId = jobIdOf(started);
+        CONTROL_CHECK(!jobId.empty());
+        CONTROL_CHECK(juceFileOf(appeared).replaceWithText("someone else's file"));
+        hold.release();
+        const auto job = waitJob(api, jobId);
+        CONTROL_CHECK(failedWith(job, "ALREADY_EXISTS", "target_exists"));
+        CONTROL_CHECK(textOf(appeared) == "someone else's file");
+        CONTROL_CHECK(!holdsTemporaryFile(directory) && !editor.bridge.busy.operationRunning);
+        CONTROL_CHECK(bytesOf(main) == mainBytes);
+    }
+
+    // A job whose media is gone fails with write_failed (the media copy is part of the write): the target does not
+    // appear, no temporary file is left, the project is as it was and the flag is released.
+    {
+        const auto target = (directory / "no-media.otproj").u8string();
+        ClipSpec spec = sungClip("save-copy-media");
+        spec.startTimelineSec = 20.0;
+        const auto gone = fixtureAddClip(*processor, spec);
+        CONTROL_CHECK(juceFileOf(gone.sourcePath).deleteFile());
+        const auto dirtyBefore = editor.session.isDirty();
+        const auto job = runAsJob(api, "project.saveCopy", pathParams(target), "projectCopy");
+        CONTROL_CHECK(failedWith(job, "IO_ERROR", "write_failed"));
+        CONTROL_CHECK(!juceFileOf(target).exists() && !holdsTemporaryFile(directory));
+        CONTROL_CHECK(editor.session.isDirty() == dirtyBefore && !editor.bridge.busy.operationRunning);
+        CONTROL_CHECK(editor.session.getCurrentProjectFile().getFullPathName().toStdString() == main);
+        CONTROL_CHECK(bytesOf(main) == mainBytes);
+    }
+
+    // The project's file deleted from disk is still the project's file: a path that names it is no target of a copy,
+    // and the file is not created again.
+    {
+        CONTROL_CHECK(juceFileOf(main).deleteFile());
+        CONTROL_CHECK(api.fails("project.saveCopy", pathParams(main), "ALREADY_EXISTS", "target_exists"));
+        CONTROL_CHECK(!juceFileOf(main).exists());
+    }
+    const auto dispatcher = service.dispatcher();
+    CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+}
+
+/** The capability project.copy: reported with the method, withheld by an instance that does not know it, and the
+    method needs the editor's project session. */
+void scenarioProjectSaveCopyCapability()
+{
+    const auto directory = projectDirectory("save-copy-capability");
+    const auto target = (directory / "copy.otproj").u8string();
+    {
+        auto processor = startedProcessor();
+        auto& service = processor->getControlService();
+        if (!service.isRunning())
+            return;
+        const auto capabilities = service.dispatcher()->capabilities();
+        const auto io = std::find(capabilities.begin(), capabilities.end(), "project.io");
+        CONTROL_CHECK(io != capabilities.end() && io + 1 != capabilities.end() && *(io + 1) == "project.copy");
+        CONTROL_CHECK(service.dispatcher()->implements("project.saveCopy"));
+
+        // A bridge without a project session cannot write a copy, and says so: the editor exists, the capability
+        // does not apply to it.
+        TestUiBridge bridge;
+        ScopedBridge registered(service, bridge);
+        ApiSession api;
+        if (!api.open(service))
+            return;
+        CONTROL_CHECK(api.fails("project.saveCopy", pathParams(target), "UNSUPPORTED", "capability_missing"));
+        CONTROL_CHECK(!juceFileOf(target).exists());
+    }
+    // An instance that does not report project.copy (release candidate 7 and before): the listener answers, and the
+    // methods of project.io are not affected.
+    {
+        ScopedWithheldCapabilities withheld({"project.copy"});
+        auto processor = startedProcessor();
+        auto& service = processor->getControlService();
+        if (!service.isRunning())
+            return;
+        EditorParts editor(*processor);
+        const auto capabilities = service.dispatcher()->capabilities();
+        CONTROL_CHECK(std::find(capabilities.begin(), capabilities.end(), "project.copy") == capabilities.end());
+        CONTROL_CHECK(std::find(capabilities.begin(), capabilities.end(), "project.io") != capabilities.end());
+        ApiSession api;
+        if (!api.open(service))
+            return;
+        CONTROL_CHECK(api.fails("project.saveCopy", pathParams(target), "UNSUPPORTED", "capability_missing"));
+        CONTROL_CHECK(!juceFileOf(target).exists() && editor.bridge.operationFlagChanges.empty());
+        CONTROL_CHECK(api.fails("project.save", JsonValue::object(), "INVALID_ARGUMENT", "no_project_path"));
+    }
 }
 
 // ---- Reopening a project with tuned notes ----------------------------------------------------------
@@ -954,15 +1383,33 @@ void scenarioProjectReopenKeepsTuning()
 
 namespace {
 
-const std::set<std::string> kProjectVectorMethods = {"project.save",        "project.saveAs", "project.open",
-                                                     "project.clearRecent", "job.get",        "job.cancel"};
-const std::set<std::string> kProjectVectorCapabilities = {"session.v1", "read.v1", "jobs.v1", "project.io"};
+const std::set<std::string> kProjectVectorMethods = {"project.save",     "project.saveAs",      "project.open",
+                                                     "project.saveCopy", "project.clearRecent", "job.get",
+                                                     "job.cancel",       "project.get",         "prefs.get"};
+const std::set<std::string> kProjectVectorCapabilities = {"session.v1", "read.v1", "jobs.v1", "project.io",
+                                                          "project.copy"};
+
+/** The capabilities that given.withoutCapabilities of a vector names, for a runner that withholds them. */
+std::vector<std::string> withoutCapabilitiesOf(const JsonValue& vector)
+{
+    std::vector<std::string> names;
+    const auto& without = memberOf(memberOf(vector, "given"), "withoutCapabilities");
+    for (std::size_t i = 0; i < without.size(); ++i)
+        names.push_back(without.at(i).text());
+    return names;
+}
 
 std::string projectVectorSkipReason(const JsonValue& vector)
 {
     if (kProjectVectorCapabilities.count(memberOf(vector, "capability").text()) == 0)
         return "needs capability " + memberOf(vector, "capability").text() + ", which a later part implements";
-    if (memberOf(vector, "capability").text() != "project.io")
+    // The vectors of project.io and project.copy are this runner's; so is a vector of an instance that does not
+    // report one of them (capability session.v1, given.withoutCapabilities), such as one of release candidate 7.
+    const auto capability = memberOf(vector, "capability").text();
+    const auto withheld = withoutCapabilitiesOf(vector);
+    const bool withholdsOwn = std::any_of(withheld.begin(), withheld.end(),
+                                          [](const std::string& name) { return name.rfind("project.", 0) == 0; });
+    if (capability != "project.io" && capability != "project.copy" && !(capability == "session.v1" && withholdsOwn))
         return "runs in the runner of its own capability";
     const auto& extra = memberOf(vector, "extraCapabilities");
     for (std::size_t i = 0; i < extra.size(); ++i)
@@ -987,7 +1434,8 @@ std::string projectVectorSkipReason(const JsonValue& vector)
     const auto& given = memberOf(vector, "given");
     for (std::size_t i = 0; i < given.size(); ++i) {
         const auto& name = given.keyAt(i);
-        if (name == "dirty" || name == "projectFile" || name == "preferences" || name == "jobs" || name == "clips")
+        if (name == "dirty" || name == "projectFile" || name == "preferences" || name == "jobs" || name == "clips"
+            || name == "withoutCapabilities" || name == "dialogs")
             continue;
         if (name == "files") {
             for (std::size_t f = 0; f < given.at(i).size(); ++f) {
@@ -1041,6 +1489,8 @@ bool establishJobs(ControlJobs& jobs, const JsonValue& given, VectorMatcher& mat
     and a worker pool. Empty on success. */
 std::string runProjectVector(const JsonValue& vector, const std::string& slug)
 {
+    // The capabilities the vector's instance does not report are left out before the dispatcher is made.
+    ScopedWithheldCapabilities withheldCapabilities(withoutCapabilitiesOf(vector));
     auto processor = startedProcessor();
     auto& service = processor->getControlService();
     if (!service.isRunning())
@@ -1108,6 +1558,14 @@ std::string runProjectVector(const JsonValue& vector, const std::string& slug)
     }
     if (memberOf(given, "dirty").isBoolean() && memberOf(given, "dirty").asBoolean())
         editor.session.markDirty();
+    // given.dialogs: a dialog that is open makes the editor report a modal state, which refuses every write.
+    const auto& dialogs = memberOf(given, "dialogs");
+    for (std::size_t i = 0; i < dialogs.size(); ++i) {
+        ControlUiBridge::DialogInfo dialog;
+        dialog.kind = memberOf(dialogs.at(i), "kind").text();
+        editor.bridge.dialogs.push_back(dialog);
+        editor.bridge.busy.modalOpen = true;
+    }
     if (!establishJobs(*service.jobs(), memberOf(given, "jobs"), matcher))
         return "given.jobs could not be established";
 
@@ -1189,6 +1647,16 @@ const char* const kMustRunProjectVectors[] = {
     "project/save-ok",
 };
 
+/** The vectors of project.saveCopy (specification 1.0.0-rc.8 on). The locked copy of the specification has them once it
+    has the method: from then on they must run and pass; before that it has none of them, and they are not required. */
+const char* const kMustRunSaveCopyVectors[] = {
+    "project/save-copy-bad-extension",      "project/save-copy-busy-modal",
+    "project/save-copy-capability-missing", "project/save-copy-exists",
+    "project/save-copy-exists-current",     "project/save-copy-job",
+    "project/save-copy-job-failures",       "project/save-copy-never-saved",
+    "project/save-copy-no-access",          "project/save-copy-ok",
+};
+
 } // namespace
 
 void scenarioProjectVectors()
@@ -1230,6 +1698,14 @@ void scenarioProjectVectors()
     report.write();
     for (const char* id : kMustRunProjectVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
+    if (std::filesystem::exists(std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR) / "methods"
+                                / "project.saveCopy.schema.json")) {
+        for (const char* id : kMustRunSaveCopyVectors)
+            CONTROL_CHECK(passedIds.count(id) == 1);
+    } else {
+        note("the locked specification has no project.saveCopy yet (it comes with 1.0.0-rc.8): its vectors are not "
+             "required");
+    }
     note(std::to_string(passed) + " vectors passed, " + std::to_string(skipped) + " skipped");
 }
 

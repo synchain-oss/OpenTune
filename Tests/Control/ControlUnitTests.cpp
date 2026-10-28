@@ -1655,7 +1655,7 @@ void testViewSwitchSettle()
     // that the switch hides, say), and that commit is a real change that the BPM field's commit must not take back.
     CONTROL_CHECK(!takenBack(true, 9, 120.0, 4, 4));
     CONTROL_CHECK(!takenBack(true, 12, 120.0, 4, 4));
-    // The mark was marked and the generation did not move, or moved back: not what one commit does.
+    // The project was marked and the generation did not move, or moved back: not what one commit does.
     CONTROL_CHECK(!takenBack(true, 7, 120.0, 4, 4));
     CONTROL_CHECK(!takenBack(true, 6, 120.0, 4, 4));
     // The project was changed before the switch: the mark is not the commit's.
@@ -1673,8 +1673,14 @@ void testViewSwitchSettle()
     baseline.dirty = true;
     CONTROL_CHECK(!takenBack(true, 8, 120.0, 4, 4));
 
-    // The baseline of an editor that has not been read takes nothing back.
-    CONTROL_CHECK(!controlViewSwitchMarkIsBpmCommit(ControlViewSwitchBaseline{}, true, 1, 0.0, 0, 0));
+    // The first mark of a session (generation 0 to 1) is a commit like any other: with the focus where the commit
+    // follows it, it is taken back.
+    ControlViewSwitchBaseline first;
+    first.focusLeadsToBpmCommit = true;
+    first.bpm = 120.0;
+    first.timeSignatureNumerator = 4;
+    first.timeSignatureDenominator = 4;
+    CONTROL_CHECK(controlViewSwitchMarkIsBpmCommit(first, true, 1, 120.0, 4, 4));
 }
 
 } // namespace

@@ -625,9 +625,10 @@ void scenarioAppQuit()
     // for any other kind. While it runs the call is refused (also before the question about unsaved changes); once it
     // has finished, the unsaved changes are what is refused.
     const std::pair<const char*, const char*> kinds[] = {
-        {"import", "import_in_progress"},     {"export", "export_in_progress"},  {"projectOpen", "project_operation"},
-        {"projectSave", "project_operation"}, {"prefsApply", "job_in_progress"}, {"timeGridSeed", "job_in_progress"},
-        {"someFutureKind", "job_in_progress"}};
+        {"import", "import_in_progress"},     {"export", "export_in_progress"},
+        {"projectOpen", "project_operation"}, {"projectSave", "project_operation"},
+        {"projectCopy", "project_operation"}, {"prefsApply", "job_in_progress"},
+        {"timeGridSeed", "job_in_progress"},  {"someFutureKind", "job_in_progress"}};
     for (const auto& [kind, reason] : kinds) {
         const auto job = startHeldJob(f, kind);
         if (!CONTROL_CHECK(job != nullptr))

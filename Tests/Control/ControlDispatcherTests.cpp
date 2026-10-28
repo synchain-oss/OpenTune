@@ -376,7 +376,7 @@ void checkSessionInfo(ApiSession& api)
     // Only the capabilities this build implements completely are reported.
     CONTROL_CHECK(
         toJsonString(memberOf(info, "capabilities"))
-        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","ui.bridge","ui.onboardingClose","ui.workspace","edit.v1","history.v1","timing.v1","transport.v1","arrangement.v1","tracks.v1","project.io","prefs.write","audio.device","app.quit"])");
+        == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","ui.bridge","ui.onboardingClose","ui.workspace","edit.v1","history.v1","timing.v1","transport.v1","arrangement.v1","tracks.v1","project.io","project.copy","prefs.write","audio.device","app.quit"])");
 
     // Without an editor the audio device is unknown; never omitted.
     const auto& device = memberOf(info, "audioDevice");
@@ -1864,8 +1864,8 @@ void scenarioCompleteness()
     const auto reported = dispatcher->capabilities();
     for (const char* capability :
          {"session.v1", "read.v1", "jobs.v1", "import.v1", "export.v1", "ui.bridge", "ui.workspace", "edit.v1",
-          "history.v1", "timing.v1", "transport.v1", "arrangement.v1", "tracks.v1", "project.io", "prefs.write",
-          "audio.device", "app.quit"})
+          "history.v1", "timing.v1", "transport.v1", "arrangement.v1", "tracks.v1", "project.io", "project.copy",
+          "prefs.write", "audio.device", "app.quit"})
         CONTROL_CHECK(std::find(reported.begin(), reported.end(), capability) != reported.end());
 
     // The listener answers session.hello itself, so the dispatcher's method table has no entry for it.

@@ -39,6 +39,7 @@ constexpr std::string_view kProjectExtension = ".otproj";
 /** The state that a project file does not hold (warning NOT_SAVED_IN_PROJECT, data.items). */
 constexpr const char* kNotSavedItems[] = {"visibleTrackCount", "undoHistory", "preferences"};
 constexpr const char* kJobKindSave = "projectSave";
+constexpr const char* kJobKindCopy = "projectCopy";
 constexpr const char* kJobKindOpen = "projectOpen";
 
 juce::File fileOf(const std::string& utf8Path)
@@ -110,6 +111,16 @@ bool parseSaveAs(const JsonValue& params, PathParams& out, std::string& why)
     return false;
 }
 
+/** methods/project.saveCopy.schema.json $defs.params, on the connection thread: the path, and no other member. */
+bool parseSaveCopy(const JsonValue& params, PathParams& out, std::string& why)
+{
+    ControlParamReader reader(params);
+    if (reader.onlyMembers({"path"}) && readProjectPath(reader, out.path))
+        return true;
+    why = reader.why();
+    return false;
+}
+
 /** methods/project.open.schema.json $defs.params, on the connection thread. */
 bool parseOpen(const JsonValue& params, PathParams& out, std::string& why)
 {
@@ -131,8 +142,9 @@ struct ProjectParts
     juce::ThreadPool* pool = nullptr;
 };
 
-/** The editor's parts, or the error of a build without an editor (the project session belongs to the editor). */
-Result<ProjectParts> projectParts(ControlOpContext& context)
+/** The editor's parts, or the error of a build without an editor (the project session belongs to the editor).
+    capability names the capability of the calling method, for the error's detail. */
+Result<ProjectParts> projectParts(ControlOpContext& context, const char* capability = "project.io")
 {
     ProjectParts parts;
     parts.bridge = context.bridge();
@@ -143,10 +155,11 @@ Result<ProjectParts> projectParts(ControlOpContext& context)
     // PROTOCOL.md section 7 rule 6: without an editor window the method fails with no_editor_window.
     if (parts.bridge == nullptr)
         return controlOpError("UNSUPPORTED", "no_editor_window",
-                              "project.io acts through the editor window, and no editor exists");
+                              std::string(capability) + " acts through the editor window, and no editor exists");
     if (parts.session == nullptr || parts.pool == nullptr)
         return controlOpError("UNSUPPORTED", "capability_missing",
-                              "project.io needs the editor's project session, and the editor offers none");
+                              std::string(capability)
+                                  + " needs the editor's project session, and the editor offers none");
     return parts;
 }
 
@@ -466,6 +479,222 @@ Result<JsonValue> runSaveAs(ControlOpContext& context, const PathParams& params)
     spec.confirm = params.consent;
     spec.target = target;
     return startSave(context, parts.value(), spec);
+}
+
+// ---- project.saveCopy: the job -------------------------------------------------------------------
+
+/**
+ * The job of project.saveCopy. It runs the first half of OpenTuneAudioProcessorEditor::saveProject and stops where the
+ * editor takes the written file as the project's own: the snapshot was taken on the message thread when the request
+ * came (ProjectSession::prepareSave), a worker of the editor's pool wrote the project and copied its media
+ * (ProjectSession::executeSaveToFile) into a temporary file in the target directory, and the job moves that file into
+ * place with the final rename of PROTOCOL.md section 20.4, which never replaces. It does not call
+ * setCurrentProjectFile, clearDirty or pushRecentProject, and it does not ask the editor to update its menu or title:
+ * the project keeps its file, its unsaved-changes flag, its recent projects and its undo history, and the result
+ * reports the file and the flag so that a client can see it. The worker's state is that of SaveJob (SaveShared).
+ */
+class CopyJob
+{
+public:
+    CopyJob(ControlOpEnvironment environment, juce::File target, std::shared_ptr<SaveShared> shared)
+        : environment_(std::move(environment))
+        , target_(std::move(target))
+        , shared_(std::move(shared))
+    {}
+
+    ~CopyJob()
+    {
+        if (finished_)
+            return;
+        // The registry stopped before the job ended: the worker deletes what it wrote, and the editor's flag of a
+        // running project operation is released.
+        shared_->abandoned = true;
+        if (shared_->done.load())
+            shared_->temporary.deleteFile();
+        endOperation();
+    }
+
+    void step(ControlJobStep& step)
+    {
+        if (!shared_->done.load())
+            return;
+        ControlOpContext context(environment_);
+        auto* bridge = context.bridge();
+        auto* session = bridge != nullptr ? bridge->projectSession() : nullptr;
+        if (session == nullptr) {
+            fail(step, jobError("INTERNAL", "", "the editor's project session is gone"));
+            return;
+        }
+        if (!shared_->written) {
+            AppLogger::logNoThrow("control API: project copy: OpenTune could not write the project file");
+            fail(step, jobError("IO_ERROR", "write_failed",
+                                "OpenTune could not copy the project's media or write the project file"));
+            return;
+        }
+        const auto target = utf8PathOf(target_);
+
+        // The copy never replaces a file. Whether the target names the project's own file is decided again right
+        // before the rename (PROTOCOL.md section 20.3 rule 5): a project file that was deleted meanwhile would
+        // otherwise be created again by the rename, which is a save and not a copy.
+        if (session->hasProjectPath()) {
+            const auto same = controlSameFile(target, utf8PathOf(session->getCurrentProjectFile()));
+            if (!same) {
+                fail(step,
+                     jobError("IO_ERROR", "read_failed", "the identity of the project file cannot be determined"));
+                return;
+            }
+            if (*same) {
+                fail(step, jobError("ALREADY_EXISTS", "target_exists", "the target is the project's own file"));
+                return;
+            }
+        }
+        const auto from = utf8PathOf(shared_->temporary);
+        switch (controlRenameFile(from, target, false)) {
+            case ControlRenameResult::DoneSourceRemains:
+                // The target holds the data; only the temporary name is left over. Remove it again now.
+                if (!shared_->temporary.deleteFile() && shared_->temporary.exists())
+                    AppLogger::logNoThrow("control API: project copy: the temporary file could not be removed");
+                [[fallthrough]];
+            case ControlRenameResult::Done:
+                break;
+            case ControlRenameResult::TargetExists:
+                fail(step,
+                     jobError("ALREADY_EXISTS", "target_exists", "a file appeared at the target and was not replaced"));
+                return;
+            case ControlRenameResult::Failed:
+                AppLogger::logNoThrow("control API: project copy: the project file could not be moved to the target");
+                fail(step, jobError("IO_ERROR", "write_failed", "the project file could not be moved to the target"));
+                return;
+        }
+
+        // The result is no write envelope: the project did not change. It names the project's file and the flag as
+        // they are now, which this job did not touch.
+        auto result = JsonValue::object();
+        result.appendMember("path", controlJsonText(target, kMaxPathCodePoints));
+        result.appendMember("sizeBytes", JsonValue::integer(std::max<juce::int64>(0, target_.getSize())));
+        const bool hasProjectPath = session->hasProjectPath();
+        result.appendMember("projectPath",
+                            hasProjectPath
+                                ? controlJsonText(utf8PathOf(session->getCurrentProjectFile()), kMaxPathCodePoints)
+                                : JsonValue());
+        result.appendMember("projectDirty", JsonValue::boolean(session->isDirty()));
+        auto items = JsonValue::array();
+        for (const char* item : kNotSavedItems)
+            items.append(JsonValue::string(item));
+        auto data = JsonValue::object();
+        data.appendMember("items", std::move(items));
+        auto warning = JsonValue::object();
+        warning.appendMember("code", JsonValue::string("NOT_SAVED_IN_PROJECT"));
+        warning.appendMember("subject", JsonValue());
+        warning.appendMember("data", std::move(data));
+        auto warnings = JsonValue::array();
+        warnings.append(std::move(warning));
+        result.appendMember("warnings", std::move(warnings));
+        if (!hasProjectPath) {
+            auto nullReasons = JsonValue::object();
+            nullReasons.appendMember("projectPath", JsonValue::string("no_project_path"));
+            result.appendMember("nullReasons", std::move(nullReasons));
+        }
+        finished_ = true;
+        endOperation();
+        step.succeed(std::move(result));
+    }
+
+private:
+    void fail(ControlJobStep& step, const ControlJobError& error)
+    {
+        shared_->temporary.deleteFile();
+        finished_ = true;
+        endOperation();
+        step.fail(error);
+    }
+
+    void endOperation()
+    {
+        if (operationEnded_)
+            return;
+        operationEnded_ = true;
+        if (auto* bridge = environment_.bridge ? environment_.bridge() : nullptr)
+            bridge->setProjectOperationRunning(false);
+    }
+
+    ControlOpEnvironment environment_;
+    juce::File target_;
+    std::shared_ptr<SaveShared> shared_;
+    bool finished_ = false;
+    bool operationEnded_ = false;
+};
+
+/** Starts the copy job of a request that passed its checks: the snapshot now, the write on the editor's worker. */
+Result<JsonValue> startCopy(ControlOpContext& context, const ProjectParts& parts, const juce::File& target)
+{
+    auto* jobs = context.jobs();
+    if (jobs == nullptr)
+        return controlOpError("INTERNAL", "", "the jobs registry is not available");
+    // ProjectSession::prepareSave(): captures the snapshot of the target on the message thread, as the editor's
+    // saveProject does before it hands the write to its worker. The dirty generation of the snapshot, which the
+    // editor keeps to clear the flag after its save, is not needed: a copy never clears the flag.
+    auto task = std::make_shared<ProjectSession::SaveTask>(parts.session->prepareSave(target));
+    auto shared = std::make_shared<SaveShared>();
+    // A name of its own in the target directory, so that the final rename never moves data between volumes; the media
+    // directory stays next to the target (prepareSave derived it from the target).
+    shared->temporary = target.getParentDirectory().getNonexistentChildFile(
+        "." + target.getFileNameWithoutExtension() + ".copy", ".tmp", false);
+    task->targetFile = shared->temporary;
+
+    auto job = std::make_shared<CopyJob>(context.environment(), target, shared);
+    const auto started = jobs->start(kJobKindCopy, false, [job](ControlJobStep& step) { job->step(step); });
+    if (started.jobId.empty())
+        return startRefusal(started.refusal);
+    parts.bridge->setProjectOperationRunning(true);
+    // ProjectSession::executeSaveToFile(): the editor's own file I/O (media copy and project write), a static function
+    // that touches no state of the session.
+    parts.pool->addJob([shared, task] {
+        shared->written = ProjectSession::executeSaveToFile(*task).ok();
+        shared->done = true;
+        if (shared->abandoned.load())
+            shared->temporary.deleteFile();
+    });
+    ControlWriteEnvelope envelope(context);
+    return envelope.handedToJob(context, jobs->jobRef(started.jobId));
+}
+
+// ---- project.saveCopy ----------------------------------------------------------------------------
+
+Result<JsonValue> runSaveCopy(ControlOpContext& context, const PathParams& params)
+{
+    const auto parts = projectParts(context, "project.copy");
+    if (!parts.ok())
+        return parts.error();
+    if (auto busy = controlCheckBusy(context))
+        return *busy;
+    // Section 20.1: the raw text, before any file-system access.
+    const auto reason = controlCheckAbsolutePath(params.path, controlNativePathStyle());
+    if (!reason.empty())
+        return controlOpError("INVALID_ARGUMENT", reason, "the path is not an absolute path in the accepted form");
+    if (!hasProjectExtension(params.path))
+        return controlOpError("INVALID_ARGUMENT", "path_bad_extension", "a project file ends in .otproj");
+
+    // The copy never replaces anything: a file or directory at the target, the project's own file included, ends the
+    // call, and the job's rename (which never replaces) and its second identity check decide again.
+    ControlFileId id;
+    const auto status = controlFileIdentity(params.path, id);
+    if (status != ControlFileIdStatus::Found && status != ControlFileIdStatus::Missing)
+        return controlOpError("IO_ERROR", "read_failed", "the identity of the target cannot be determined");
+    if (status == ControlFileIdStatus::Found)
+        return controlOpError("ALREADY_EXISTS", "target_exists", "a file exists at the target");
+    if (parts.value().session->hasProjectPath()) {
+        // The project's file may be missing on disk (deleted since); a path that names it is still not a copy.
+        const auto same = controlSameFile(params.path, utf8PathOf(parts.value().session->getCurrentProjectFile()));
+        if (!same)
+            return controlOpError("IO_ERROR", "read_failed", "the identity of the project file cannot be determined");
+        if (*same)
+            return controlOpError("ALREADY_EXISTS", "target_exists", "the target is the project's own file");
+    }
+    const auto target = fileOf(params.path);
+    if (!target.getParentDirectory().isDirectory())
+        return controlOpError("IO_ERROR", "write_failed", "the directory of the target does not exist");
+    return startCopy(context, parts.value(), target);
 }
 
 // ---- project.open: the job -----------------------------------------------------------------------
@@ -867,6 +1096,7 @@ void registerProjectOps(ControlMethodTable& table)
     table.add(controlWriteMethod<PathParams>("project.saveAs", parseSaveAs, runSaveAs));
     table.add(controlWriteMethod<PathParams>("project.open", parseOpen, runOpen));
     table.add(controlWriteMethod<ControlNoParams>("project.clearRecent", controlParseNoParams, runClearRecent));
+    table.add(controlWriteMethod<PathParams>("project.saveCopy", parseSaveCopy, runSaveCopy));
 }
 
 } // namespace OpenTune

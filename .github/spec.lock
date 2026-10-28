@@ -1,11 +1,11 @@
 {
   "source": "synchain-oss/opentune-mcp-server",
-  "ref": "spec-v1.0.0-rc.7",
-  "commit": "3a1d00a35bbc11ac539dfa7d7c215cde7599bf49",
+  "ref": "feature/v1",
+  "commit": "871b93d85d17f286df7a589a640ff1f35c0f01be",
   "path": "spec/otcp/v1",
   "copy": "Tests/Control/spec/otcp/v1",
-  "gitTree": "0f33b6a09fbbfbc3aa22c01a997df4bcaf724d7a",
-  "sha256": "248655df20f5650a2c3de7e59a6098b689d47cafb0afe393e5e16d84239f1acc",
-  "files": 331,
+  "gitTree": "38990a145da72d91c8235fdc3848536913448ada",
+  "sha256": "e08778579bcfb6d5fc95ebd067ff14aa6333658d6c0175f382bc10308455d698",
+  "files": 342,
   "sha256Method": "sha256 of the sha256sum listing (\"<hex>  <relative path>\" lines, paths sorted bytewise) of every file under the copy"
 }

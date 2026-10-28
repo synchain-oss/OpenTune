@@ -662,6 +662,16 @@ void scenarioProjectRoundTrip();
 void scenarioProjectJobs();
 /** Without an editor: the save and open methods say so, project.clearRecent works. */
 void scenarioProjectWithoutEditor();
+/** project.saveCopy: the copy is a file and nothing else (the project keeps its file, its unsaved-changes flag, the
+    recent projects and the undo history, the editor is told nothing, the main file is the same bytes), holds the
+   project as it is in memory and opens as a project of its own. */
+void scenarioProjectSaveCopy();
+/** project.saveCopy: the checks (params, path, an existing target of any kind including the project's own file,
+    busy), a running copy, a target that appears meanwhile, a write that fails: nothing is replaced or left behind. */
+void scenarioProjectSaveCopyChecks();
+/** The capability project.copy: reported with the method, withheld by an instance that lacks it, and a bridge without
+    a project session. */
+void scenarioProjectSaveCopyCapability();
 /** A project with tuned notes saved and opened again keeps the tuning: the correction segments and their four
     parameters right after the open, then, once the analysis is done again, the corrected flags of the notes and the
     corrected pitch line on the voiced frames. */

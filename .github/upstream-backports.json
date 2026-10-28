@@ -1,0 +1,18 @@
+{
+  "backports": [
+    {
+      "upstreamCommit": "0afb6c88d4e6c6529eb42f9b1774d2dcfe55350e",
+      "upstreamRepo": "YuFeng926/OpenTune",
+      "approved": "2026-10-26",
+      "summary": "keep the corrected pitch line when reopening a project",
+      "files": {
+        "Source/Utils/PitchCurve.cpp": { "patchId": "84d58f3e48815f3f40d735fd33a956dc8dd1f6c8", "blob": "ef17040eef6784778c43851bfd184932f0d5e8b3" },
+        "Source/Utils/PitchCurve.h": { "patchId": "e1e181c8ba12112877d2507696fdb6d65ba362c8", "blob": "95f2921aa49b91795cc73ff0476620ed75937653" },
+        "Source/Utils/ProjectSession.cpp": { "patchId": "c107ed6b3059c0b44375860244c73c2af5f5594c", "blob": "2f88f60aedd2f2b7650893b88a9be81dab6ea301" }
+      },
+      "hookFileChanges": {
+        "Source/PluginProcessor.cpp": "In requestContentRefresh, after replaceCorrectionSegments(segments): the added line pitchCurve->retainVoicedCorrectionSegments(); It belongs to this cherry-pick. The file is in the hook table, so the gate does not check it here; the final rebase drops the line together with the cherry-pick."
+      }
+    }
+  ]
+}

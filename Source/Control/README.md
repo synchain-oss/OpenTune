@@ -904,11 +904,11 @@ title and `refreshAllUIFromProject()`), `onRecentProjectsChanged()` and `setProj
   here):
   - The media go into the `Project_Media` directory beside the target, copied from the file each source was loaded from
     (the imported audio, or the project's own media after an open) as `<sourceId><extension>` when the file there is
-    missing or older. Every project in a directory shares that
-    `Project_Media`, and source ids start at 1 in every project, so a copy (like `project.save` and `project.saveAs`)
-    into a directory that holds another OpenTune project can replace that project's media with this project's audio,
-    and nothing reports it. A copy into the project's own directory updates the main project's older media of the same
-    name. Clients write copies into a directory of their own (the MCP server uses `<name>.autosave` beside the project).
+    missing or older. Every project in a directory shares that `Project_Media`, and source ids start at 1 in every
+    project, so a copy (like `project.save` and `project.saveAs`) into a directory that holds another OpenTune project
+    can replace that project's media with this project's audio, and nothing reports it. A copy into the project's own
+    directory updates the main project's older media of the same name. Clients write copies into a directory of their
+    own (for example one named `<name>.autosave` beside the project).
     Opening a project looks for `<project directory>/<relativeMediaPath>` first and falls back to the path the source
     was loaded from when the project was saved, and source ids are kept when a project is opened again.
   - `prepareSave()` takes the snapshot with `ProjectSession::captureSnapshot()`, which fixes the session's `projectId`
@@ -1227,8 +1227,9 @@ the commit of another field adds a second one, also when that field is a child o
 second mark rests on the focus chain observed on the real window (a hidden view always passes the focus through the
 BPM field), not on a guarantee: a field added inside a view that commits on losing the focus and hands the focus
 elsewhere than to the editor would set the mark once, and the rule would take that real change back. Such a field needs
-the view case narrowed (only the view itself, or children known not to commit). For anything else the mark stays; a mark that stays costs at most a project that is reported as changed without a change in
-it, and a mark taken back by mistake would lose a change without a word. The numeric boxes of the panels (the
+the view case narrowed (only the view itself, or children known not to commit).
+For anything else the mark stays; a mark that stays costs at most a project that is reported as changed without a
+change in it, and a mark taken back by mistake would lose a change without a word. The numeric boxes of the panels (the
 `juce::Slider` text boxes) are modal while they are edited, so the write is refused with `BUSY(modal_open)` before the
 bridge is reached (observed on the real window with a value typed and not entered); the two conditions guard whatever
 else commits on losing the focus. The rule is `controlViewSwitchMarkIsBpmCommit()` in

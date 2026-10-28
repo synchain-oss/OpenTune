@@ -1673,6 +1673,9 @@ void testViewSwitchSettle()
     baseline.dirty = true;
     CONTROL_CHECK(!takenBack(true, 8, 120.0, 4, 4));
 
+    // The baseline of an editor that has not been read takes nothing back.
+    CONTROL_CHECK(!controlViewSwitchMarkIsBpmCommit(ControlViewSwitchBaseline{}, true, 1, 0.0, 0, 0));
+
     // The first mark of a session (generation 0 to 1) is a commit like any other: with the focus where the commit
     // follows it, it is taken back.
     ControlViewSwitchBaseline first;

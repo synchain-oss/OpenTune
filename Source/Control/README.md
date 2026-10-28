@@ -52,7 +52,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `Edit/ControlOriginAction.*` | The undo entry of a change made through the API (upstream undo actions wrapped with an `undoId`), and `ControlHistory`: undoIds, the API's entries, the undoIds of UI entries, changes without an undo entry. |
 | `Edit/ContentEditTransaction.*` | Undo entries built from snapshots around a commit of the content commands, as the piano roll builds them (see "ContentEditTransaction"). |
 | `Edit/NoteCorrection.*` | The correction segments the piano roll rebuilds after an edit of notes, and SNAP (AUTO in the openDyne scheme), computed as the piano roll computes them and committed into a ContentEditTransaction (see "Note edits and the pitch shift"). |
-| `Ops/WorkspaceOps.*`, `../Standalone/ControlEditorBridgeWorkspace.cpp` | `ui.setWorkspace`: the two view buttons of the transport bar through the bridge, view state only apart from the tempo that the focus change can rewrite (see "Workspace"). |
+| `Ops/WorkspaceOps.*`, `../Standalone/ControlEditorBridgeWorkspace.cpp`, `../Standalone/ControlEditorBridgeViewSwitch.h` | `ui.setWorkspace`: the two view buttons of the transport bar through the bridge, view state only apart from the tempo that the focus change can rewrite (see "Workspace"). The header is the rule that takes the changed mark of a view switch back, a function of plain values that the unit tests run. |
 | `Ops/SelectionOps.*`, `../Standalone/ControlEditorBridgeSelection.cpp` | `ui.setSelection`: the effects of a click on a clip predicted, then the click and double click through the arrangement view's hook, and the effects observed (see "Selection"). |
 | `Ops/AppQuitOps.*`, `../Standalone/ControlEditorBridge.cpp` (`canQuit()`, `requestQuit()`) | `app.quit`: the checks, the result, and the end of the instance after the reply is written (the dispatcher's after-reply step); the editor's side calls the window's own close button handler (see "Quit"). |
 | `Edit/PitchShiftLedger.*` | The steps of OpenTune's pitch shifts that the `revision` token leaves out (see "Note edits and the pitch shift"). |
@@ -1165,6 +1165,36 @@ change keeps the mark. The double click that `ui.setSelection` with `openEditor`
 piano roll shown already nothing moves the focus and nothing is settled. The UI's own click on a view button is not
 touched.
 
+Only the commit of the BPM field is taken back. The focus that the switch moves can also leave another field that
+commits when it loses the focus: that commit is a real change that leaves the tempo and the time signature as they were,
+so the checks above alone would take its mark back, and a later `project.open` or `app.quit` would not report
+`UNSAVED_CHANGES` for it. Two more conditions keep it. (1) The keyboard focus before the switch has to be where the
+commit of the BPM field follows it (`viewSwitchBaseline()`, `juce::Component::getCurrentlyFocusedComponent()`): in the
+field, or in the view that the switch hides or one of its children. On the real window the view holds the focus after
+every switch of the API (observed: the focused component before the second and every later switch is the
+`ArrangementViewComponent` or the `PianoRollComponent`; before the first switch of a new window it is the top-level
+window, and no commit follows), and the field gets the focus in between: the hidden view gives the focus to the editor,
+which hands it to its default component, the BPM field, and the focus that the new view then grabs leaves the field. So the
+field itself is not the usual place of the focus before the switch, and a test for `focused == the BPM field` alone leaves
+every ordinary switch of the API marked as changed (the same sequence, run on the real window, ended with `dirty` true and
+`app.quit` refused with `UNSAVED_CHANGES`). The field is found as the `BpmValueField` among the children of the
+transport bar, since the bridge is no friend of the transport bar. (2) The mark has to be set exactly once during the
+switch (`ProjectSession::getDirtyGeneration()` counts every `markDirty()`): one commit of the field sets it once, and
+the commit of another field adds a second one, also when that field is a child of the view that the switch hides. For
+anything else the mark stays; a mark that stays costs at most a project that is reported as changed without a change in
+it, and a mark taken back by mistake would lose a change without a word. The numeric boxes of the panels (the
+`juce::Slider` text boxes) are modal while they are edited, so the write is refused with `BUSY(modal_open)` before the
+bridge is reached (observed on the real window with a value typed and not entered); the two conditions guard whatever
+else commits on losing the focus. The rule is `controlViewSwitchMarkIsBpmCommit()` in
+`ControlEditorBridgeViewSwitch.h`, a function of plain values, tested in `ControlUnitTests` ("view switch settle").
+
+`ProjectSession::clearDirty()` does not take the dirty generation back, which a project save that is on its way compares
+(`saveProject()` in the editor, the save job of `project.save`: the mark is cleared only if the generation is still the
+one the snapshot was taken at). The take-back never meets such a save: both operations answer `BUSY(project_operation)`
+while a project operation runs (`controlCheckBusy()` before the editor is asked; the editor's own save sets
+`projectOperationBusy_` from its start to the end of its worker's callback, the API's save job from its start to its
+end), and everything runs on the message thread, where no save can finish between the commit and the take-back.
+
 **The tempo (the exception to "view state only").** The commit sets the tempo the field shows, so a project tempo with
 more than one decimal (120.27, which `transport.setTempo` or a project file can set) is rewritten to 120.3 when the focus
 was in the field, and that is a real change: the mark stays and `dirty.after` is true. It is upstream behaviour and is
@@ -1579,7 +1609,7 @@ mirror" in `MIRRORS.md`) and name the upstream function in a comment of the mirr
 ## Tests
 
 `Tests/Control/ControlUnitTests.cpp` tests the channel, the handles, the tokens and the cursors with the
-standard library only.
+standard library only, and the rule that takes the changed mark of a view switch back (a function of plain values).
 `Tests/Control/ControlProcessorTests.cpp` runs the real Standalone processor without a window or an audio
 device: one process per scenario, each with its own `OPENTUNE_DATA_DIR`, the lifecycle scenarios under
 the upstream `Tests/LifecycleWatchdog.h`. Its target copies the SharedCode's compile definitions and

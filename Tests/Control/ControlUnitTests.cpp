@@ -4,7 +4,8 @@
 // fixed responses, discovery and ready files, the listener with its rules before and after
 // authentication, the content handles, revision tokens and cursors, and the redacting log tail. The session vectors of
 // the specification copy (Tests/Control/spec/otcp/v1/vectors/ session) are read and run against a real server with a
-// stand-in request handler.
+// stand-in request handler. The rule by which the editor's bridge takes the changed mark of a view switch back is a
+// plain function of values, and is tested here as well.
 //
 // Every file goes to a fresh directory under OPENTUNE_DATA_DIR (set per test by the gates) or under
 // the build directory, never to the user's real data directories.
@@ -14,6 +15,7 @@
 #include "Control/ContentHandles.h"
 #include "Control/ControlLogTail.h"
 #include "Control/ControlPathPolicy.h"
+#include "Standalone/ControlEditorBridgeViewSwitch.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -1620,6 +1622,60 @@ void testSessionVectors()
     note(std::to_string(passed) + " session vectors passed, " + std::to_string(skipped) + " skipped");
 }
 
+/** The rule of the editor's bridge that takes the changed mark of a view switch back (ControlEditorBridgeViewSwitch.h):
+    only for the commit of the transport bar's BPM field. The rule reads plain values, so it runs here without a window;
+    ControlEditorBridge reads the values from the editor and calls it. */
+void testViewSwitchSettle()
+{
+    // A clean project, tempo 120 in 4/4, and the dirty generation 7 before the switch.
+    ControlViewSwitchBaseline baseline;
+    baseline.dirty = false;
+    baseline.dirtyGeneration = 7;
+    baseline.bpm = 120.0;
+    baseline.timeSignatureNumerator = 4;
+    baseline.timeSignatureDenominator = 4;
+    const auto takenBack = [&baseline](bool dirtyNow, std::uint64_t generationNow, double bpmNow, int numeratorNow,
+                                       int denominatorNow) {
+        return controlViewSwitchMarkIsBpmCommit(baseline, dirtyNow, generationNow, bpmNow, numeratorNow, denominatorNow);
+    };
+
+    // The focus was in the BPM field or in the view that the switch hides: the commit of the field marked a clean
+    // project once, with the tempo and the time signature as they were, and the mark is taken back.
+    baseline.focusLeadsToBpmCommit = true;
+    CONTROL_CHECK(takenBack(true, 8, 120.0, 4, 4));
+    // Nothing marked the project: nothing to take back.
+    CONTROL_CHECK(!takenBack(false, 7, 120.0, 4, 4));
+    // The tempo or the time signature changed: a real change (a tempo with more decimals that the field rewrote, a value
+    // typed into the field), the mark stays.
+    CONTROL_CHECK(!takenBack(true, 8, 120.3, 4, 4));
+    CONTROL_CHECK(!takenBack(true, 8, 120.0, 3, 4));
+    CONTROL_CHECK(!takenBack(true, 8, 120.0, 4, 8));
+    // The mark was set twice: a second field committed with the BPM field (the focus was in a field inside the view that
+    // the switch hides, say), and that commit is a real change that the BPM field's commit must not take back.
+    CONTROL_CHECK(!takenBack(true, 9, 120.0, 4, 4));
+    CONTROL_CHECK(!takenBack(true, 12, 120.0, 4, 4));
+    // The mark was marked and the generation did not move, or moved back: not what one commit does.
+    CONTROL_CHECK(!takenBack(true, 7, 120.0, 4, 4));
+    CONTROL_CHECK(!takenBack(true, 6, 120.0, 4, 4));
+    // The project was changed before the switch: the mark is not the commit's.
+    baseline.dirty = true;
+    CONTROL_CHECK(!takenBack(true, 8, 120.0, 4, 4));
+
+    // The focus was anywhere else (a field that commits when it loses the focus, whose commit leaves the tempo and the
+    // time signature alone; no focus at all): the mark stays, with every other value as above.
+    baseline.dirty = false;
+    baseline.focusLeadsToBpmCommit = false;
+    CONTROL_CHECK(!takenBack(true, 8, 120.0, 4, 4));
+    CONTROL_CHECK(!takenBack(true, 8, 120.3, 4, 4));
+    CONTROL_CHECK(!takenBack(false, 7, 120.0, 4, 4));
+    CONTROL_CHECK(!takenBack(true, 9, 120.0, 4, 4));
+    baseline.dirty = true;
+    CONTROL_CHECK(!takenBack(true, 8, 120.0, 4, 4));
+
+    // The baseline of an editor that has not been read takes nothing back.
+    CONTROL_CHECK(!controlViewSwitchMarkIsBpmCommit(ControlViewSwitchBaseline{}, true, 1, 0.0, 0, 0));
+}
+
 } // namespace
 
 // Optional argument: run only the tests whose name contains it.
@@ -1652,6 +1708,7 @@ int main(int argc, char** argv)
         {"handles", testHandles},
         {"log tail", testLogTail},
         {"session vectors", testSessionVectors},
+        {"view switch settle", testViewSwitchSettle},
     };
     if (!ControlSocket::acquireNetworking()) {
         std::cerr << "cannot initialise networking" << std::endl;

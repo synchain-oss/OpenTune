@@ -57,6 +57,7 @@ constexpr MethodCapability kMethods[] = {
     {"project.saveAs", "project.io"},
     {"project.open", "project.io"},
     {"project.clearRecent", "project.io"},
+    {"project.saveCopy", "project.copy"},
     {"prefs.set", "prefs.write"},
     {"audio.get", "audio.device"},
     {"audio.set", "audio.device"},

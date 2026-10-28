@@ -38,14 +38,15 @@ constexpr std::size_t kMaxPathCodePoints = 4096;
 constexpr int kExitDeadlineMs = 10000;
 
 /** What the job kinds of this instance mean for BUSY (PROTOCOL.md section 13.2): import, export, projectOpen and
-    projectSave have a reason of their own, every other kind (prefsApply, timeGridSeed, ...) is job_in_progress. */
+    projectSave have a reason of their own, and so has projectCopy (project.saveCopy runs under the same
+   project-operation flag as a save), every other kind (prefsApply, timeGridSeed, ...) is job_in_progress. */
 const char* busyReasonOfJobKind(std::string_view kind)
 {
     if (kind == "import")
         return "import_in_progress";
     if (kind == "export")
         return "export_in_progress";
-    if (kind == "projectOpen" || kind == "projectSave")
+    if (kind == "projectOpen" || kind == "projectSave" || kind == "projectCopy")
         return "project_operation";
     return "job_in_progress";
 }

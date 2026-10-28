@@ -603,16 +603,19 @@
           "file": "Source/Control/Ops/ProjectOps.cpp",
           "symbols": [
             "SaveJob::step",
-            "startSave"
+            "startSave",
+            "CopyJob::step",
+            "startCopy"
           ]
         }
       ],
       "tests": [
         "ControlProcessorTests.ProjectRoundTrip",
-        "ControlProcessorTests.ProjectVectors"
+        "ControlProcessorTests.ProjectVectors",
+        "ControlProcessorTests.ProjectSaveCopy"
       ],
-      "note": "What the editor does around a save: the snapshot on the message thread, the write on the project worker, then the new project file, the flag cleared unless the project changed meanwhile, the recent project and the menu and title. The API writes through a temporary file and a final rename, and reports failures instead of showing a dialog.",
-      "noteZh": "编辑器保存时的步骤：消息线程取快照、工程 worker 写盘，之后设置新的工程文件、在工程期间没有再改动时清除脏标记、推入最近工程并更新菜单与标题。接口经临时文件和最终改名写入，失败时报告错误而不弹对话框。"
+      "note": "What the editor does around a save: the snapshot on the message thread, the write on the project worker, then the new project file, the flag cleared unless the project changed meanwhile, the recent project and the menu and title. The API writes through a temporary file and a final rename, and reports failures instead of showing a dialog. project.saveCopy (CopyJob) repeats the first half, the snapshot and the worker write, and stops where the editor takes the file as the project's own: it calls neither setCurrentProjectFile, clearDirty nor pushRecentProject and updates neither menu nor title, so a change in these steps has to be weighed for both ports.",
+      "noteZh": "编辑器保存时的步骤：消息线程取快照、工程 worker 写盘，之后设置新的工程文件、在工程期间没有再改动时清除脏标记、推入最近工程并更新菜单与标题。接口经临时文件和最终改名写入，失败时报告错误而不弹对话框。project.saveCopy（CopyJob）照抄前半段：取快照、worker 写盘，在编辑器把文件当作工程自己的文件之前停下：不调用 setCurrentProjectFile、clearDirty 和 pushRecentProject，也不更新菜单与标题，所以这些步骤有改动时两个移植都要权衡。"
     },
     {
       "id": "project-open-flow",

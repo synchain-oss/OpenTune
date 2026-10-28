@@ -294,13 +294,13 @@
       "code": "project_operation",
       "scope": "BUSY",
       "since": "1.0",
-      "description": "A project save or open is running."
+      "description": "A project save, copy or open is running."
     },
     {
       "code": "job_in_progress",
       "scope": "BUSY",
       "since": "1.0",
-      "description": "A job that no other busy reason names has not finished: a prefsApply or timeGridSeed job. Sent by app.quit only, which does not quit while any job is unfinished; the jobs of kind import, export, projectOpen and projectSave give import_in_progress, export_in_progress and project_operation."
+      "description": "A job that no other busy reason names has not finished: a prefsApply or timeGridSeed job. Sent by app.quit only, which does not quit while any job is unfinished; the jobs of kind import, export, projectOpen, projectSave and projectCopy give import_in_progress, export_in_progress and project_operation."
     },
     {
       "code": "session_limit",

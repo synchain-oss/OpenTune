@@ -132,7 +132,7 @@
     {
       "code": "NOT_SAVED_IN_PROJECT",
       "since": "1.0",
-      "description": "The project was saved, but some session state is not part of the project file. data.items lists it (for example the visible track count, the undo history and preferences)."
+      "description": "The project was saved, or a copy of it was written, but some session state is not part of the project file. data.items lists it (for example the visible track count, the undo history and preferences)."
     },
     {
       "code": "SCHEME_GENERATED_NOTES",

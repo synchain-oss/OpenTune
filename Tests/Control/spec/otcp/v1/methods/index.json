@@ -306,6 +306,14 @@
       "schema": "defined"
     },
     {
+      "method": "project.saveCopy",
+      "layer": "L8",
+      "capability": "project.copy",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
       "method": "project.open",
       "layer": "L8",
       "capability": "project.io",

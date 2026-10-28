@@ -415,6 +415,9 @@ if(OPENTUNE_ENABLE_CONTROL_API)
             "ProjectRoundTrip|--control-api"
             "ProjectJobs|--control-api"
             "ProjectWithoutEditor|--control-api"
+            "ProjectSaveCopy|--control-api"
+            "ProjectSaveCopyChecks|--control-api"
+            "ProjectSaveCopyCapability|--control-api"
             "ProjectReopenKeepsTuning|--control-api"
             "ProjectVectors|--control-api"
         )

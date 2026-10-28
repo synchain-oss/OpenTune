@@ -18,7 +18,7 @@ class ControlMethodTable;
  * 2. UNSUPPORTED(no_editor_window) without an editor and UNSUPPORTED(capability_missing) with a bridge that cannot
  *    close the window (ControlUiBridge::canQuit()): only the editor's window can end the Standalone application;
  * 3. BUSY, the five reasons of every write (controlCheckBusy()) and then any job that is not finished: its kind says
- *    the reason (import: import_in_progress, export: export_in_progress, projectOpen and projectSave:
+ *    the reason (import: import_in_progress, export: export_in_progress, projectOpen, projectSave and projectCopy:
  *    project_operation, any other kind: job_in_progress); with several jobs the reasons of section 13.2 come first, in
  *    the order of that section, and job_in_progress last. BUSY comes before UNSAVED_CHANGES: the user's open dialog
  *    or running operation must not be answered with a question about what to discard;

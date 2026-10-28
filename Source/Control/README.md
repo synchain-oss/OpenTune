@@ -887,7 +887,7 @@ title and `refreshAllUIFromProject()`), `onRecentProjectsChanged()` and `setProj
   `pushRecentProject()` and tells the editor nothing (no `onProjectSaved()`), so the project keeps its file, its
   unsaved-changes flag, the recent projects, the undo history and the window title; the editor's project-operation flag
   is held for the run, as for a save. The path is checked as for `project.saveAs` (absolute, `.otproj`, the directory
-  must exist: the call does not make it), but nothing is ever replaced: a file or directory at the target, the
+  must exist: the call does not make it), but no project file is ever replaced: a file or directory at the target, the
   project's own file included (also when it was deleted from disk meanwhile; identity by section 20.3, decided again
   right before the rename), ends the call with `ALREADY_EXISTS(target_exists)`, and a file that appears while the job
   waits ends the job with the same error and is not touched. A write that fails, the media copy included, ends the job
@@ -897,9 +897,24 @@ title and `refreshAllUIFromProject()`), `onRecentProjectsChanged()` and `setProj
   no write envelope, because the project did not change: `{path, sizeBytes, projectPath, projectDirty, warnings}`,
   where `projectPath` is the project's file (null with `nullReasons.projectPath` `no_project_path` for a project that was
   never saved) and `projectDirty` its flag, both as the job did not touch them, and `warnings` holds
-  `NOT_SAVED_IN_PROJECT`. There is no `IRREVERSIBLE`: no file was replaced. The bridge offers nothing new for it: the
-  method needs the editor's `projectSession()` and `projectWorkerPool()` as the save does, so a bridge without them
-  answers `UNSUPPORTED(capability_missing)` and an instance without an editor `UNSUPPORTED(no_editor_window)`.
+  `NOT_SAVED_IN_PROJECT`. There is no `IRREVERSIBLE`: the project did not change and no project file was replaced. The
+  bridge offers nothing new for it: the method needs the editor's `projectSession()` and `projectWorkerPool()` as the
+  save does, so a bridge without them answers `UNSUPPORTED(capability_missing)` and an instance without an editor
+  `UNSUPPORTED(no_editor_window)`. Two things the copy shares with OpenTune's own save (upstream behaviour, not changed
+  here):
+  - The media go into the `Project_Media` directory beside the target, copied from the file each source was loaded from
+    (the imported audio, or the project's own media after an open) as `<sourceId><extension>` when the file there is
+    missing or older. Every project in a directory shares that `Project_Media`, and source ids start at 1 in every
+    project, so a copy (like `project.save` and `project.saveAs`) into a directory that holds another OpenTune project
+    can replace that project's media with this project's audio, and nothing reports it. A copy into the project's own
+    directory updates the main project's older media of the same name. Clients write copies into a directory of their
+    own (for example one named `<name>.autosave` beside the project).
+    Opening a project looks for `<project directory>/<relativeMediaPath>` first and falls back to the path the source
+    was loaded from when the project was saved, and source ids are kept when a project is opened again.
+  - `prepareSave()` takes the snapshot with `ProjectSession::captureSnapshot()`, which fixes the session's `projectId`
+    and `createdAt` the first time it runs. For a project that was never saved, the first copy therefore fixes both, as
+    a first save would: a later save of the project has the creation time of that copy and the same `projectId` as the
+    copies. Upstream only writes the two fields to the file and never compares them, so nothing depends on it.
 - **Open (`projectOpen`, cancellable until the file is prepared).** A worker reads the project and its media
   (`ProjectSession::prepareOpen()`); the job then commits it in one message-thread step
   (`ProjectSession::commitPreparedOpen()`), which clears the content repository (a new content epoch: the handles of the
@@ -926,8 +941,8 @@ opens it again: the correction segments and their parameters must be there right
 F0 is analysed again), and the notes, their corrected flags and the corrected pitch line must be as before the save
 once the analysis is done. `ProjectVectors` runs the specification's `project/*` vectors of `project.io` and
 `project.copy` and requires an explicit list to pass (the `project/save-copy-*` vectors from the moment the locked copy
-of the specification has `project.saveCopy`); `project/get-ok` is a read and runs in `Vectors`, and `project/save-as-no-access` is skipped
-because the runner cannot make a file whose identity is unreadable on Windows.
+of the specification has `project.saveCopy`); `project/get-ok` is a read and runs in `Vectors`. The `noAccess` file of the
+`*-no-access` vectors is made by `NoAccessFile`, which restores the rights when the run ends.
 
 ## Transport and tracks
 
@@ -1208,9 +1223,13 @@ every ordinary switch of the API marked as changed (the same sequence, run on th
 `app.quit` refused with `UNSAVED_CHANGES`). The field is found as the `BpmValueField` among the children of the
 transport bar, since the bridge is no friend of the transport bar. (2) The mark has to be set exactly once during the
 switch (`ProjectSession::getDirtyGeneration()` counts every `markDirty()`): one commit of the field sets it once, and
-the commit of another field adds a second one, also when that field is a child of the view that the switch hides. For
-anything else the mark stays; a mark that stays costs at most a project that is reported as changed without a change in
-it, and a mark taken back by mistake would lose a change without a word. The numeric boxes of the panels (the
+the commit of another field adds a second one, also when that field is a child of the view that the switch hides. That
+second mark rests on the focus chain observed on the real window (a hidden view always passes the focus through the
+BPM field), not on a guarantee: a field added inside a view that commits on losing the focus and hands the focus
+elsewhere than to the editor would set the mark once, and the rule would take that real change back. Such a field needs
+the view case narrowed (only the view itself, or children known not to commit).
+For anything else the mark stays; a mark that stays costs at most a project that is reported as changed without a
+change in it, and a mark taken back by mistake would lose a change without a word. The numeric boxes of the panels (the
 `juce::Slider` text boxes) are modal while they are edited, so the write is refused with `BUSY(modal_open)` before the
 bridge is reached (observed on the real window with a value typed and not entered); the two conditions guard whatever
 else commits on losing the focus. The rule is `controlViewSwitchMarkIsBpmCommit()` in

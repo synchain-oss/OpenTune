@@ -1385,7 +1385,7 @@ namespace {
 
 const std::set<std::string> kProjectVectorMethods = {"project.save",     "project.saveAs",      "project.open",
                                                      "project.saveCopy", "project.clearRecent", "job.get",
-                                                     "job.cancel"};
+                                                     "job.cancel",       "project.get",         "prefs.get"};
 const std::set<std::string> kProjectVectorCapabilities = {"session.v1", "read.v1", "jobs.v1", "project.io",
                                                           "project.copy"};
 
@@ -1435,7 +1435,7 @@ std::string projectVectorSkipReason(const JsonValue& vector)
     for (std::size_t i = 0; i < given.size(); ++i) {
         const auto& name = given.keyAt(i);
         if (name == "dirty" || name == "projectFile" || name == "preferences" || name == "jobs" || name == "clips"
-            || name == "withoutCapabilities")
+            || name == "withoutCapabilities" || name == "dialogs")
             continue;
         if (name == "files") {
             for (std::size_t f = 0; f < given.at(i).size(); ++f) {
@@ -1558,6 +1558,14 @@ std::string runProjectVector(const JsonValue& vector, const std::string& slug)
     }
     if (memberOf(given, "dirty").isBoolean() && memberOf(given, "dirty").asBoolean())
         editor.session.markDirty();
+    // given.dialogs: a dialog that is open makes the editor report a modal state, which refuses every write.
+    const auto& dialogs = memberOf(given, "dialogs");
+    for (std::size_t i = 0; i < dialogs.size(); ++i) {
+        ControlUiBridge::DialogInfo dialog;
+        dialog.kind = memberOf(dialogs.at(i), "kind").text();
+        editor.bridge.dialogs.push_back(dialog);
+        editor.bridge.busy.modalOpen = true;
+    }
     if (!establishJobs(*service.jobs(), memberOf(given, "jobs"), matcher))
         return "given.jobs could not be established";
 
@@ -1642,11 +1650,11 @@ const char* const kMustRunProjectVectors[] = {
 /** The vectors of project.saveCopy (specification 1.0.0-rc.8 on). The locked copy of the specification has them once it
     has the method: from then on they must run and pass; before that it has none of them, and they are not required. */
 const char* const kMustRunSaveCopyVectors[] = {
-    "project/save-copy-bad-extension",
-    "project/save-copy-capability-missing",
-    "project/save-copy-exists",
-    "project/save-copy-job",
-    "project/save-copy-ok",
+    "project/save-copy-bad-extension",      "project/save-copy-busy-modal",
+    "project/save-copy-capability-missing", "project/save-copy-exists",
+    "project/save-copy-exists-current",     "project/save-copy-job",
+    "project/save-copy-job-failures",       "project/save-copy-never-saved",
+    "project/save-copy-no-access",          "project/save-copy-ok",
 };
 
 } // namespace

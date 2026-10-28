@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Control/ControlUiBridge.h"
+#include "ControlEditorBridgeViewSwitch.h"
 
 namespace OpenTune {
 
@@ -84,17 +85,11 @@ public:
     bool prepareAudioDeviceSwitch(juce::AudioDeviceManager& manager, const std::string& reason) override;
 
 private:
-    /** What a view switch must leave as it was: the project's changed mark and the tempo and time signature of the
-        transport bar (ControlEditorBridgeWorkspace.cpp). */
-    struct ViewSwitchBaseline
-    {
-        bool dirty = false;
-        double bpm = 0.0;
-        int timeSignatureNumerator = 0;
-        int timeSignatureDenominator = 0;
-    };
+    /** What a view switch must leave as it was: the project's changed mark and how often it was set, the tempo and time
+        signature of the transport bar, and where the keyboard focus was (ControlEditorBridgeViewSwitch.h). */
+    using ViewSwitchBaseline = ControlViewSwitchBaseline;
 
-    /** Reads the baseline before a view switch. Message thread. */
+    /** Reads the baseline before a view switch, from the view that is shown now. Message thread. */
     ViewSwitchBaseline viewSwitchBaseline() const;
 
     /** After a view switch: takes back the project's changed mark when only the commit of the transport bar's BPM

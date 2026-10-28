@@ -106,10 +106,10 @@ void registerControlMethods(ControlMethodTable& table)
     registerTransportOps(table);      // transport.control, transport.setTempo, transport.setLoop
     registerArrangementOps(table);    // arrangement.edit, arrangement.copy
     registerTrackOps(table);          // track.set, track.add, track.duplicate, track.delete
-    registerProjectOps(table);        // project.save, project.saveAs, project.open, project.clearRecent
-    registerPrefsOps(table);          // prefs.set
-    registerAudioDeviceOps(table);    // audio.get, audio.set
-    registerAppQuitOps(table);        // app.quit
+    registerProjectOps(table);     // project.save, project.saveAs, project.open, project.clearRecent, project.saveCopy
+    registerPrefsOps(table);       // prefs.set
+    registerAudioDeviceOps(table); // audio.get, audio.set
+    registerAppQuitOps(table);     // app.quit
 }
 
 ControlOpContext::ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiBridge* bridge,

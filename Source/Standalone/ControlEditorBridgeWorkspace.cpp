@@ -49,8 +49,9 @@ ControlEditorBridge::ViewSwitchBaseline ControlEditorBridge::viewSwitchBaseline(
         const juce::Component* outgoingView = editor_.isWorkspaceView_
                                                   ? static_cast<const juce::Component*>(&editor_.arrangementView_)
                                                   : static_cast<const juce::Component*>(&editor_.pianoRoll_);
-        baseline.focusLeadsToBpmCommit = focused == outgoingView || outgoingView->isParentOf(focused)
-                                         || (bpmField != nullptr && (focused == bpmField || bpmField->isParentOf(focused)));
+        baseline.focusLeadsToBpmCommit =
+            focused == outgoingView || outgoingView->isParentOf(focused)
+            || (bpmField != nullptr && (focused == bpmField || bpmField->isParentOf(focused)));
     }
     return baseline;
 }
@@ -70,8 +71,8 @@ void ControlEditorBridge::settleViewSwitch(const ViewSwitchBaseline& baseline)
     // when it loses the focus, and that commit is a real change that leaves the tempo and the time signature as they
     // were, so the conditions above alone would take its mark back and a later project.open or app.quit would not see
     // the change. Two more conditions keep it: the focus before the switch has to be where the commit of the BPM field
-    // follows it (viewSwitchBaseline()), and the mark has to be set exactly once during the switch, as one commit of the
-    // field sets it (the dirty generation counts every markDirty()); the commit of another field adds a second one.
+    // follows it (viewSwitchBaseline()), and the mark has to be set exactly once during the switch, as one commit of
+    // the field sets it (the dirty generation counts every markDirty()); the commit of another field adds a second one.
     // For anything else the mark stays. A mark that stays costs at most a project that is reported as changed without a
     // change in it; a mark taken back by mistake would lose a change without a word. (The numeric boxes of the panels,
     // the juce::Slider text boxes, are modal while they are edited, and the control API refuses the call with

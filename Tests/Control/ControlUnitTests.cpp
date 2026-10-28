@@ -1636,7 +1636,8 @@ void testViewSwitchSettle()
     baseline.timeSignatureDenominator = 4;
     const auto takenBack = [&baseline](bool dirtyNow, std::uint64_t generationNow, double bpmNow, int numeratorNow,
                                        int denominatorNow) {
-        return controlViewSwitchMarkIsBpmCommit(baseline, dirtyNow, generationNow, bpmNow, numeratorNow, denominatorNow);
+        return controlViewSwitchMarkIsBpmCommit(baseline, dirtyNow, generationNow, bpmNow, numeratorNow,
+                                                denominatorNow);
     };
 
     // The focus was in the BPM field or in the view that the switch hides: the commit of the field marked a clean
@@ -1645,13 +1646,13 @@ void testViewSwitchSettle()
     CONTROL_CHECK(takenBack(true, 8, 120.0, 4, 4));
     // Nothing marked the project: nothing to take back.
     CONTROL_CHECK(!takenBack(false, 7, 120.0, 4, 4));
-    // The tempo or the time signature changed: a real change (a tempo with more decimals that the field rewrote, a value
-    // typed into the field), the mark stays.
+    // The tempo or the time signature changed: a real change (a tempo with more decimals that the field rewrote, a
+    // value typed into the field), the mark stays.
     CONTROL_CHECK(!takenBack(true, 8, 120.3, 4, 4));
     CONTROL_CHECK(!takenBack(true, 8, 120.0, 3, 4));
     CONTROL_CHECK(!takenBack(true, 8, 120.0, 4, 8));
-    // The mark was set twice: a second field committed with the BPM field (the focus was in a field inside the view that
-    // the switch hides, say), and that commit is a real change that the BPM field's commit must not take back.
+    // The mark was set twice: a second field committed with the BPM field (the focus was in a field inside the view
+    // that the switch hides, say), and that commit is a real change that the BPM field's commit must not take back.
     CONTROL_CHECK(!takenBack(true, 9, 120.0, 4, 4));
     CONTROL_CHECK(!takenBack(true, 12, 120.0, 4, 4));
     // The mark was marked and the generation did not move, or moved back: not what one commit does.

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The rule that decides whether the changed mark that is set after a view switch is taken back (see
-// ControlEditorBridgeWorkspace.cpp). It reads plain values and no component, so that a test can run it without a window.
+// ControlEditorBridgeWorkspace.cpp). It reads plain values and no component, so that a test can run it without a
+// window.
 #pragma once
 
 #include <cstdint>

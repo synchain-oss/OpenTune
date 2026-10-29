@@ -9,6 +9,7 @@
 #include "ControlHeadlessSupport.h"
 
 #include "Content/StandaloneContentRepository.h"
+#include "Control/ControlJobs.h"
 #include "Control/ControlService.h"
 #include "Inference/RenderCache.h"
 #include "PluginProcessor.h"
@@ -19,6 +20,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdint>
 #include <filesystem>
 #include <map>
@@ -60,6 +62,58 @@ inline const JsonValue& memberOf(const JsonValue& object, const char* name)
     static const JsonValue none;
     const JsonValue* value = object.find(name);
     return value != nullptr ? *value : none;
+}
+
+/** The change of the singleton tempo in the changes of a write result, or null when the result lists none. */
+inline const JsonValue* findTempoChange(const JsonValue& result)
+{
+    const auto& changes = memberOf(result, "changes");
+    for (std::size_t i = 0; i < changes.size(); ++i)
+        if (memberOf(changes.at(i), "entity").text() == "tempo")
+            return &changes.at(i);
+    return nullptr;
+}
+
+/** True when a write result reports no rewritten tempo: no change of the tempo and no tempoRounded side effect. */
+inline bool reportsNoTempoChange(const JsonValue& result)
+{
+    return findTempoChange(result) == nullptr && memberOf(result, "sideEffects").find("tempoRounded") == nullptr;
+}
+
+/**
+ * Checks what a view switch (ui.setWorkspace, ui.setSelection with openEditor) reports when the transport bar's BPM
+ * field rewrote the project tempo from fromBpm to toBpm: the change of the singleton tempo with the member bpm
+ * {before, after, unit bpm} and no other member (the time signature is not reported), and the side effect tempoRounded
+ * {fromBpm, toBpm, revert}, whose revert is transport.setTempo back to fromBpm, or null (revertReported false: the
+ * instance does not report transport.v1). Returns the change of the tempo, or null when the result lists none.
+ */
+inline const JsonValue* checkTempoRounded(const JsonValue& result, double fromBpm, double toBpm, bool revertReported)
+{
+    const auto same = [](const JsonValue& value, double expected) {
+        return value.isNumber() && std::abs(value.asDouble() - expected) < 1e-9;
+    };
+    const JsonValue* change = findTempoChange(result);
+    if (!CONTROL_CHECK(change != nullptr))
+        return nullptr;
+    const auto& fields = memberOf(*change, "fields");
+    const auto& bpm = memberOf(fields, "bpm");
+    CONTROL_CHECK(memberOf(memberOf(*change, "ref"), "singleton").text() == "tempo"
+                  && memberOf(*change, "label").text() == "Tempo" && fields.size() == 1);
+    CONTROL_CHECK(same(memberOf(bpm, "before"), fromBpm) && same(memberOf(bpm, "after"), toBpm)
+                  && memberOf(bpm, "unit").text() == "bpm");
+    const auto& effects = memberOf(result, "sideEffects");
+    const auto& rounded = memberOf(effects, "tempoRounded");
+    CONTROL_CHECK(effects.find("tempoRounded") != nullptr && same(memberOf(rounded, "fromBpm"), fromBpm)
+                  && same(memberOf(rounded, "toBpm"), toBpm));
+    const auto& revert = memberOf(rounded, "revert");
+    if (revertReported)
+        CONTROL_CHECK(memberOf(revert, "method").text() == "transport.setTempo"
+                      && memberOf(revert, "params").size() == 1
+                      && same(memberOf(memberOf(revert, "params"), "bpm"), fromBpm)
+                      && !memberOf(revert, "requiresConsent").asBoolean());
+    else
+        CONTROL_CHECK(revert.isNull() && rounded.find("revert") != nullptr);
+    return change;
 }
 
 /** The discovery file at path, parsed; checks its size limit (PROTOCOL.md section 5.3). */
@@ -162,9 +216,22 @@ inline void holdRenderRuntimeForProcess()
     (void)held;
 }
 
-/** Constructs a processor with the API enabled and pumps messages until it listens. */
+/**
+ * Constructs a processor with the API enabled and pumps messages until it listens.
+ *
+ * Fails the scenario when juce::MessageManager::stopDispatchLoop() was called earlier in this process: the flag it sets
+ * is never reset (see ControlHeadlessSupport.h), so the message queue would refuse everything this processor posts. The
+ * case that stops the loop (ControlQuitTests.cpp, exitStepRefusedByQueue()) must run last in its process.
+ */
 inline std::unique_ptr<OpenTuneAudioProcessor> startedProcessor()
 {
+    if (auto* messages = juce::MessageManager::getInstanceWithoutCreating()) {
+        const bool loopStopped = messages->hasStopMessageBeenSent();
+        CONTROL_CHECK(!loopStopped);
+        if (loopStopped)
+            note("an earlier case of this process stopped the message loop (juce::MessageManager::stopDispatchLoop()), "
+                 "which the queue never recovers from; exitStepRefusedByQueue() must run last in its process");
+    }
     holdRenderRuntimeForProcess();
     auto processor = std::make_unique<OpenTuneAudioProcessor>();
     auto& service = processor->getControlService();
@@ -190,6 +257,37 @@ bool runWhilePumping(Exchange&& exchange, int timeoutMs = kClientExchangeMs)
     const bool finished = pumpMessagesUntil([&done] { return done.load(); }, timeoutMs);
     client.join();
     return finished;
+}
+
+/**
+ * Establishes given.jobs of a vector whose jobs are all failed ({bind, kind, state "failed", cancellable false,
+ * error {kind, reason}}, vectors/README.md): each is started as a job of its kind that fails at once with its
+ * error (executed false), and its id is bound to the name `bind`. Pumps messages until every job has failed.
+ * Returns false when a job cannot be started or does not fail within kReadTimeoutMs.
+ */
+inline bool establishFailedJobs(ControlJobs& jobs, const JsonValue& given, VectorMatcher& matcher)
+{
+    for (std::size_t i = 0; i < given.size(); ++i) {
+        const auto& spec = given.at(i);
+        const auto& error = memberOf(spec, "error");
+        const ControlJobError failure{memberOf(error, "kind").text(), memberOf(error, "reason").text(),
+                                      "a failed job of the fixture", false};
+        const auto started =
+            jobs.start(memberOf(spec, "kind").text(), true, [failure](ControlJobStep& step) { step.fail(failure); });
+        if (started.jobId.empty())
+            return false;
+        matcher.bindings[memberOf(spec, "bind").text()] = JsonValue::string(started.jobId);
+        const std::string jobId = started.jobId;
+        if (!pumpMessagesUntil(
+                [&jobs, jobId] {
+                    JsonValue job;
+                    return jobs.get(jobId, job) == ControlJobs::Lookup::Found
+                           && memberOf(job, "state").text() == "failed";
+                },
+                kReadTimeoutMs))
+            return false;
+    }
+    return true;
 }
 
 /**
@@ -344,6 +442,24 @@ public:
         return ok;
     }
 
+    /** True when the response is an error of this kind and reason (reason "" for none) with executed true, as an error
+        after a change is, and a detail that contains detailPart. */
+    bool failsAfterChange(const std::string& method, JsonValue params, const std::string& kind,
+                          const std::string& reason, const std::string& detailPart)
+    {
+        const auto response = request(method, std::move(params));
+        const JsonValue* data = errorData(response);
+        const bool ok =
+            data != nullptr && memberOf(*data, "kind").text() == kind
+            && (reason.empty() ? data->find("reason") == nullptr : memberOf(*data, "reason").text() == reason)
+            && memberOf(*data, "executed").isBoolean() && memberOf(*data, "executed").asBoolean()
+            && memberOf(*data, "detail").text().find(detailPart) != std::string::npos;
+        if (!ok)
+            note(method + ": expected " + kind + "(" + reason + ") with executed true and \"" + detailPart
+                 + "\" in the detail, got " + toJsonString(response));
+        return ok;
+    }
+
     const JsonValue& discovery() const noexcept { return discovery_; }
     TestClient& client() noexcept { return client_; }
 
@@ -435,6 +551,9 @@ void scenarioImport();
 void scenarioImportAfterOpen();
 /** A three-file import cancelled after its first commit reports the committed clip. */
 void scenarioImportCancel();
+/** The revert recipes of an import delete the imported clips and bring the project back (arrangement.v1); without
+    that capability revert is null and the result is IRREVERSIBLE. */
+void scenarioImportRevert();
 /** The specification's vectors of job.get, job.cancel and import.start, against the real dispatcher. */
 void scenarioJobVectors();
 /** Every write method (import, export, key, AUTO in both modes, note edits, pitch shift, undo, redo, time-grid
@@ -543,9 +662,148 @@ void scenarioProjectRoundTrip();
 void scenarioProjectJobs();
 /** Without an editor: the save and open methods say so, project.clearRecent works. */
 void scenarioProjectWithoutEditor();
+/** project.saveCopy: the copy is a file and nothing else (the project keeps its file, its unsaved-changes flag, the
+    recent projects and the undo history, the editor is told nothing, the main file is the same bytes), holds the
+   project as it is in memory and opens as a project of its own. */
+void scenarioProjectSaveCopy();
+/** project.saveCopy: the checks (params, path, an existing target of any kind including the project's own file,
+    busy), a running copy, a target that appears meanwhile, a write that fails: nothing is replaced or left behind. */
+void scenarioProjectSaveCopyChecks();
+/** The capability project.copy: reported with the method, withheld by an instance that lacks it, and a bridge without
+    a project session. */
+void scenarioProjectSaveCopyCapability();
+/** A project with tuned notes saved and opened again keeps the tuning: the correction segments and their four
+    parameters right after the open, then, once the analysis is done again, the corrected flags of the notes and the
+    corrected pitch line on the voiced frames. */
+void scenarioProjectReopenKeepsTuning();
 /** The specification's vectors of project.save, project.saveAs, project.open and project.clearRecent, against the
     real dispatcher with a real project session and a worker pool. */
 void scenarioProjectVectors();
+
+// Scenarios of the transport and the tracks (ControlTracksTests.cpp).
+
+/** transport.control, transport.setTempo and transport.setLoop: every action, the position that play from start
+    returns to, no-ops, the warnings of a missing audio device and of the loop flag, the revert recipe of the tempo,
+    the checks, busy and the editor's notifications. */
+void scenarioTransport();
+/** track.set, track.add, track.duplicate and track.delete: values, clamping, solo and audibility, the revert recipe,
+    the limits, the clip copies of both modes, the removal of a content with its last clip, the checks and the answer
+    without an editor. */
+void scenarioTracks();
+/** The barrier of a track deletion in the undo history: entries recorded through the API that address a moved track,
+    entries of the UI, force, the warnings, and an entry whose content left the project. */
+void scenarioTrackBarrier();
+/** The specification's vectors of the transport and the tracks, and those of the undo history that need the barrier,
+    against the real dispatcher with a test bridge and a fake audio device. */
+void scenarioTrackVectors();
+
+// Scenarios of the dialogs and the onboarding (ControlUiTests.cpp).
+
+/** ui.getState: the capability with ui.onboardingClose, the busy flags, the dialogs from the bottom without file
+    choosers, titles, the onboarding, the scale, without an editor. */
+void scenarioUiState();
+/** ui.dismiss: params, busy, closing from the top, dialog_commits_on_close, a committed colour without tracks.v1, file
+    choosers, a dialog that does not close or opens another, and target onboarding (prevent, close, choice dialog). */
+void scenarioUiDismiss();
+/** target onboarding on an instance without ui.onboardingClose: prevents, does not close. */
+void scenarioUiOnboardingWithheld();
+/** ui.setWorkspace: the capability, the params, both switches with the write envelope (one change, the side effect,
+    view state, an empty revisionDiff, dirty as it was), the revert recipe sent back, the no-op, busy, a bridge that
+    cannot switch or did not, without an editor, and an instance that withholds the capability. */
+void scenarioUiWorkspace();
+/** The specification's vectors of ui/ (those of ui.setSelection and the scenarios of ui.setWorkspace run in
+    scenarioSelectionVectors). */
+void scenarioUiVectors();
+
+// Scenarios of preferences and the audio device (ControlPrefsTests.cpp).
+
+/** prefs.set for each setting: changes, warnings, the revert recipe sent back unchanged, no-ops, several changes in one
+    call, the closed params and BUSY. */
+void scenarioPrefsRoundTrip();
+/** A change of the editing scheme as a job: the call changes nothing, the job waits for the editor, the notes the
+   editor generates, the revert recipe, the wait that ends without the editor and puts every preference back, and a job
+   that the stopping control API destroys. */
+void scenarioPrefsSchemeJob();
+/** processing.options of prefs.get, and the vocoder weight, the rendering priority and the pitch model of prefs.set:
+    values that are not on offer, no-ops, changes with their warnings and side effects, the processor that refuses a
+    pitch model, the revert recipes, all members in one call. The render runtime is replaced by a test double
+    (ControlPrefsBackend). */
+void scenarioPrefsOptions();
+/** The wait of the prefsApply job for the vocoder after a new weight or rendering priority: no wait when the vocoder
+   was not ready before the change, the wait until it is ready again, the time-out that takes the preferences back. */
+void scenarioPrefsVocoderJob();
+/** The vocoder wait together with the other waits of the job: the editing scheme, another write, a modal dialog and the
+    stopping control API. */
+void scenarioPrefsVocoderOverlap();
+/** The specification's vectors of prefs.set, against the real dispatcher. */
+void scenarioPrefsVectors();
+/** audio.get and audio.set on a fake device manager: what is on offer, values that are not, every step of a change, the
+    rollback when the device does not open (also when the previous setup does not), no device, ASIO transitions. */
+void scenarioAudioDevice();
+/** The specification's vectors of audio.get and audio.set, against the real dispatcher. */
+void scenarioAudioVectors();
+
+// Scenarios of the arrangement (ControlArrangementTests.cpp).
+
+/** arrangement.edit: every op with its result, its checks and their order, clamping, FADES_RECLAMPED, overlaps, a
+    hidden track shown, several ops in one call and one undo entry, dryRun, the closed params, busy and a stale
+    arrangement revision. */
+void scenarioArrangement();
+/** The undo entries of arrangement.edit: a trim's undo restores the fades it shortened, undo and redo of the in-place
+    ops, the entries of split, merge and delete that edit.undo refuses, and their revert recipes. */
+void scenarioArrangementUndo();
+/** arrangement.copy: both modes, several sources, the warnings, a hidden track, the revert recipe sent back, the token
+    conflicts and a change elsewhere that keeps a token valid. */
+void scenarioArrangementCopy();
+/** The specification's vectors of arrangement.edit and arrangement.copy (and the track deletion that needs a move),
+    against the real dispatcher. */
+void scenarioArrangementVectors();
+
+// Scenarios of the selection (ControlSelectionTests.cpp).
+
+/** ui.setSelection: the capability and its methods, the params, NOT_FOUND, UNSUPPORTED without an editor, BUSY, a clip,
+    a track, openEditor, the scale, the no-op, the revert recipe sent back, dryRun changing nothing. */
+void scenarioSelection();
+/** Both editing schemes, a clip with and without notes: the prediction of dryRun equals the committed result, and
+   dryRun leaves every field of the state as it was. */
+void scenarioSelectionMatrix();
+/** The specification's vectors of ui.setSelection, against the real dispatcher with a test bridge that selects as the
+    editor does. */
+void scenarioSelectionVectors();
+
+// Scenarios of app.quit (ControlQuitTests.cpp).
+
+/** app.quit: the capability, the closed params, UNSAVED_CHANGES, every BUSY reason and every job kind with the order of
+    the checks, and that each refusal changes nothing; then the call that quits. */
+void scenarioAppQuit();
+/** app.quit without an editor, with a bridge whose window cannot be closed, and on an instance that does not report the
+    capability. */
+void scenarioAppQuitWithoutWindow();
+/** The result: the members, the project path (also non-ASCII), the warning IRREVERSIBLE, exitDeadlineMs. */
+void scenarioAppQuitResult();
+/** The result is written before the exit step: at the window's close the client has the result, the service is stopped,
+    the discovery file is gone and the listener is closed; the normal shutdown that follows is within its bound. */
+void scenarioAppQuitSequence();
+/** The stopping state begins when the call decides to quit: a second app.quit and a write queued behind it are answered
+    with SHUTTING_DOWN and do not run. */
+void scenarioAppQuitStopping();
+/** The specification's vectors of app.quit (the nine of vectors/app/quit-*), against the real dispatcher with a test
+    bridge; the vectors with endsSession also check that the instance has ended. */
+void scenarioAppQuitVectors();
+
+// Scenarios of the clip ids after a project was opened (ControlArrangementTests.cpp).
+
+/** controlSkipUsedClipIds() and its companions on a repository with holes in its ids and a retired clip that was not
+    reclaimed: what is skipped, that no probe clip is left, that nothing is taken when no id is in the way, and the
+    record that makes the next call skip nothing, runs of free ids for several clips, and huge ids. */
+void scenarioClipIdSkip();
+/** Splitting, merging, copying (both modes) and duplicating a track (mode clone) right after a project was opened
+    succeed at once and leave no content without a clip; refused calls and predictions leave the counter alone; ids
+    with a hole, and clips with huge ids (2^40, the largest 64-bit value) that must not make the first call wait. */
+void scenarioClipIdsAfterOpen();
+/** Without a project opened before, the same methods skip nothing and take no ids: the new clips get consecutive ids.
+ */
+void scenarioClipIdsWithoutOpen();
 
 } // namespace ControlTest
 } // namespace OpenTune

@@ -1,0 +1,13 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# group: tracks
+# pinned-at: upstream/20261008-addb4f4
+# ported-to: Source/Control/Ops/TrackOps.cpp
+# ported-to: Source/Control/Ops/ArrangementOps.cpp
+#
+# Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
+Source/Standalone/UI/TrackPanelComponent.cpp	TrackPanelComponent::showMoreTracks	L827-L834	fn-v1	57d1c3ebe110ec17bb6e25a2f083baffb752bd467299f7ff122ea71e5da86924
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::trackDuplicateRequested	L3298-L3331	fn-v1	ab88da61de0c340ee2dbec3a29f3024ab23da62a09c5fb9231473564484e065c
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::trackDeleteRequested	L3333-L3362	fn-v1	26a5e4725c859bdd4d1a41a5322c0b1d405b30423f62265a9e714242107a10ac
+Source/Standalone/UI/TrackPanelComponent.h	setRange(0.0, 4.0, 0.001)	L314-L314	stmt-v1	22470180421ad465f92af82b88aa58c03b7dfdef4dbf99d37f8a1c4f9ba23034

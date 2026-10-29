@@ -21,8 +21,7 @@ namespace OpenTune {
  *   every note without ranges, else per range the notes that overlap it; one undo entry for the call, built as
  *   for regenerate. notesOnly runs OpenTuneAudioProcessor::generateNotesOnlyByContentKey()
  *   (ContentEditCommands::generateNotesOnly()), which replaces every note without an undo entry, as OpenTune
- *   does when it generates notes for a clip. Mode reference needs reference.v1, which this build does not
- *   report: UNSUPPORTED(capability_missing).
+ *   does when it generates notes for a clip.
  *
  * Both check, in order: the handle, the busy state, the readiness gate (PROTOCOL.md section 11), the expected
  * tokens. Changes without an undo entry (setKey, notesOnly) are never taken back by an undo step: entries

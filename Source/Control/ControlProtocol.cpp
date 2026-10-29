@@ -52,14 +52,16 @@ constexpr MethodCapability kMethods[] = {
     {"track.duplicate", "tracks.v1"},
     {"track.delete", "tracks.v1"},
     {"ui.setSelection", "ui.bridge"},
-    {"content.analyzeReference", "reference.v1"},
+    {"ui.setWorkspace", "ui.workspace"},
     {"project.save", "project.io"},
     {"project.saveAs", "project.io"},
     {"project.open", "project.io"},
     {"project.clearRecent", "project.io"},
+    {"project.saveCopy", "project.copy"},
     {"prefs.set", "prefs.write"},
     {"audio.get", "audio.device"},
     {"audio.set", "audio.device"},
+    {"app.quit", "app.quit"},
 };
 
 constexpr double kMaxIntegerId = 9007199254740991.0; // 2^53 - 1
@@ -339,6 +341,10 @@ bool controlErrorRetryable(std::string_view kind, std::string_view reason)
         && (reason == "f0_failed" || reason == "f0_empty" || reason == "grid_not_seeded"
             || reason == "export_dry_stretched"))
         return false;
+    // The vocoder was still being loaded when the wait ran out; asking again can succeed. Not so for
+    // vocoder_load_failed (the load ended and failed: the same weight fails again), which keeps the default, false.
+    if (kind == "MODEL_UNAVAILABLE" && reason == "vocoder_not_ready")
+        return true;
     return controlErrorRetryableByDefault(kind);
 }
 

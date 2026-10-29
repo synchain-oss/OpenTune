@@ -58,15 +58,14 @@ bool parseStepParams(const JsonValue& params, StepParams& out, std::string& why)
     return true;
 }
 
-/** common.schema.json#/$defs/historyEntry. No track deletion barrier exists yet, so nothing is possibly
-    stale. */
+/** common.schema.json#/$defs/historyEntry. possiblyStale is the barrier of a track deletion (section 15.3 rule 6). */
 JsonValue entryJson(const ControlHistory::Entry& entry)
 {
     auto json = JsonValue::object();
     json.appendMember("undoId", entry.undoId ? JsonValue::string(*entry.undoId) : JsonValue());
     json.appendMember("description", controlJsonText(entry.description.toStdString(), 200));
     json.appendMember("origin", JsonValue::string(entry.control ? "control" : "ui"));
-    json.appendMember("possiblyStale", JsonValue::boolean(false));
+    json.appendMember("possiblyStale", JsonValue::boolean(entry.possiblyStale));
     json.appendMember("unsafe", JsonValue::boolean(entry.unsafe));
     return json;
 }
@@ -142,6 +141,15 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
         return controlOpError("UNSUPPORTED", "undo_unsafe_build",
                               std::string("the top entry is a clip split, merge or delete, which OpenTune cannot ")
                                   + what + " correctly");
+    // Rule 6: an entry the API recorded before a track deletion that moved a track it addresses is applied only with
+    // force. An entry of the UI (which has an undoId here only because a call with force applied it before) is
+    // applied with a warning instead, since the server cannot tell whether it addresses a moved track.
+    const bool stale = entry.possiblyStale && !params.force;
+    if (stale && entry.control)
+        return controlOpError("UNDO_CONFLICT", "stale_entry",
+                              std::string("the top entry of the ") + what
+                                  + " history addresses a track that a track deletion moved or removed; apply it "
+                                    "with force only if the end user asked for it");
 
     ControlWriteEnvelope envelope(context);
     const auto before = controlCaptureEditState(context);
@@ -155,6 +163,9 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
     const std::string undoId =
         entry.undoId ? *entry.undoId
                      : history.value()->assignUndoId(manager, *top, index, epoch, context.instanceShort());
+    // Rule 6: the end user asked for this step after seeing possiblyStale, which confirms the entry.
+    if (params.force)
+        history.value()->confirmStale(manager, *top, index, epoch, context.instanceShort());
     // As after the UI's own undo: the project is marked as changed (also when the step changed nothing), and
     // the editor redraws and refreshes its derived state (the editor's afterUndoRedo()).
     controlMarkDirty(context);
@@ -167,6 +178,8 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
     const auto* origin = dynamic_cast<const ControlOriginAction*>(top);
     const bool emptyDiff = isEmptyDiff(before.versions, after.versions);
     jassert(origin == nullptr || origin->lastStepTookEffect() || emptyDiff);
+    if (stale)
+        envelope.addWarning("UNDO_ENTRY_POSSIBLY_STALE");
     if (emptyDiff || (origin != nullptr && !origin->lastStepTookEffect()))
         envelope.addWarning("UNDO_NO_EFFECT");
     auto revertParams = JsonValue::object();

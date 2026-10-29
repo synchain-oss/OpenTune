@@ -3,6 +3,7 @@
 
 #include "OpsJson.h"
 #include "OpsSupport.h"
+#include "PrefsModels.h"
 
 #include "Control/ControlLogTail.h"
 #include "PluginProcessor.h"
@@ -38,8 +39,13 @@ Result<JsonValue> runPrefsGet(ControlOpContext& context, const ControlNoParams&)
         recent.append(std::move(entry));
     }
 
+    // processing.options is reported by prefs.get only (session.info shares controlProcessingJson() without it): what
+    // the preferences window offers for the vocoder weight, the pitch model and the rendering priority.
+    auto processing = controlProcessingJson(shared, nullptr);
+    processing.appendMember("options", controlPrefsOptionsJson());
+
     auto result = JsonValue::object();
-    result.appendMember("processing", controlProcessingJson(shared, nullptr));
+    result.appendMember("processing", std::move(processing));
     result.appendMember("onboardingShown", JsonValue::boolean(shared.onboardingShown));
     result.appendMember("language", JsonValue::string(controlLanguageTag(shared.language)));
     result.appendMember("recentProjects", std::move(recent));

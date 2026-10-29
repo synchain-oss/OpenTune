@@ -1,0 +1,15 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# group: selection
+# pinned-at: upstream/20261008-addb4f4
+# ported-to: Source/Standalone/UI/ArrangementViewComponent.cpp
+# ported-to: Source/Standalone/ControlEditorBridgeSelection.cpp
+# ported-to: Source/Control/Ops/SelectionOps.cpp
+#
+# Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
+Source/Standalone/UI/ArrangementViewComponent.cpp	ArrangementViewComponent::mouseDown	L2116-L2318	fn-v1	6be27ec917759871b5d36e72ffe645dad10b38c59369244c22b50bdc9605fbb7
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::applyPlacementSelectionContext	L1939-L1979	fn-v1	984647e426604e7052cc472ce2cbb5571efc08e7f1e17879344f69732cff4680
+Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::setEditedContentAndProjection	L3221-L3256	fn-v1	5f98d0d64ccbb32d9a187b41aab028b0fca72adbdb5ba78d2b57054c309ee299
+Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::ensureOpenDyneNotesIfNeeded	L3882-L3900	fn-v1	abcaee920c4b1fec8bb4928f07fb5223f148de15856d7aaf6e5bce8a094412f0
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::placementDoubleClicked	L3418-L3427	fn-v1	f2a155a6ad6b179a18d781c63ac5570d6bba691683ac5c7d5b11411f628b785c

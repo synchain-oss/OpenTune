@@ -111,7 +111,8 @@
     {
       "code": "REFERENCE_ANALYSIS_QUEUED",
       "since": "1.0",
-      "description": "Reference alignment analysis was queued as a side effect."
+      "retiredIn": "1.0.0-rc.7",
+      "description": "Retired in 1.0.0-rc.7 with the reference alignment, and no longer sent. Reference alignment analysis was queued as a side effect."
     },
     {
       "code": "DIALOG_CLOSE_COMMITTED",
@@ -131,7 +132,7 @@
     {
       "code": "NOT_SAVED_IN_PROJECT",
       "since": "1.0",
-      "description": "The project was saved, but some session state is not part of the project file. data.items lists it (for example the visible track count, the undo history and preferences)."
+      "description": "The project was saved, or a copy of it was written, but some session state is not part of the project file. data.items lists it (for example the visible track count, the undo history and preferences)."
     },
     {
       "code": "SCHEME_GENERATED_NOTES",

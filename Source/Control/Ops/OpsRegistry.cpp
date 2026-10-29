@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 #include "OpsRegistry.h"
 
+#include "AppQuitOps.h"
 #include "AppReadOps.h"
+#include "ArrangementOps.h"
+#include "AudioDeviceOps.h"
 #include "ContentDetailsOps.h"
 #include "ContentEditOps.h"
 #include "ContentReadOps.h"
@@ -9,17 +12,24 @@
 #include "ExportOps.h"
 #include "ImportOps.h"
 #include "JobOps.h"
+#include "PrefsOps.h"
 #include "ProjectOps.h"
 #include "ProjectReadOps.h"
+#include "SelectionOps.h"
 #include "SessionOps.h"
 #include "TimingOps.h"
+#include "TrackOps.h"
+#include "TransportOps.h"
+#include "UiOps.h"
 #include "UndoOps.h"
+#include "WorkspaceOps.h"
 
 #include "Control/ContentHandles.h"
 
 #include <juce_events/juce_events.h>
 
 #include <algorithm>
+#include <mutex>
 
 namespace OpenTune {
 
@@ -34,6 +44,32 @@ std::atomic<bool>& reportIncompleteCapabilities()
     static std::atomic<bool> report{false};
     return report;
 }
+
+/** The capabilities controlSetWithheldCapabilitiesForTesting() leaves out, under their mutex. */
+struct WithheldCapabilities
+{
+    std::mutex mutex;
+    std::vector<std::string> names;
+};
+
+WithheldCapabilities& withheldCapabilities()
+{
+    static WithheldCapabilities withheld;
+    return withheld;
+}
+
+/** A capability without methods of its own, which an instance reports together with the capability it extends
+    (PROTOCOL.md section 22): ui.onboardingClose says that ui.dismiss can close an onboarding overlay that is already
+    showing, which UiOps does wherever it can reach the editor. */
+struct FeatureCapability
+{
+    const char* capability;
+    const char* extends;
+};
+
+constexpr FeatureCapability kFeatureCapabilities[] = {
+    {"ui.onboardingClose", "ui.bridge"},
+};
 
 Error makeOpError(std::string_view prefix, std::string_view kind, std::string_view reason, std::string detail)
 {
@@ -60,17 +96,20 @@ void registerControlMethods(ControlMethodTable& table)
     registerJobOps(table);            // job.get, job.cancel
     registerImportOps(table);         // import.start
     registerExportOps(table);         // export.start
-    // registerUiOps(table);           ui.getState, ui.dismiss, ui.setSelection
-    registerContentTuneOps(table); // content.setKey, content.autoTune
-    registerContentEditOps(table); // content.editNotes, content.setPitchShift
-    registerUndoOps(table);        // edit.getHistory, edit.undo, edit.redo
-    registerTimingOps(table);      // content.shiftTiming, content.editTimeGrid
-    // registerTransportOps(table);    transport.control, transport.setTempo, transport.setLoop
-    // registerArrangementOps(table);  arrangement.edit, arrangement.copy, content.analyzeReference
-    // registerTrackOps(table);        track.set, track.add, track.duplicate, track.delete
-    registerProjectOps(table); // project.save, project.saveAs, project.open, project.clearRecent
-    // registerPrefsOps(table);        prefs.set
-    // registerAudioDeviceOps(table);  audio.get, audio.set
+    registerUiOps(table);             // ui.getState, ui.dismiss
+    registerSelectionOps(table);      // ui.setSelection
+    registerWorkspaceOps(table);      // ui.setWorkspace
+    registerContentTuneOps(table);    // content.setKey, content.autoTune
+    registerContentEditOps(table);    // content.editNotes, content.setPitchShift
+    registerUndoOps(table);           // edit.getHistory, edit.undo, edit.redo
+    registerTimingOps(table);         // content.shiftTiming, content.editTimeGrid
+    registerTransportOps(table);      // transport.control, transport.setTempo, transport.setLoop
+    registerArrangementOps(table);    // arrangement.edit, arrangement.copy
+    registerTrackOps(table);          // track.set, track.add, track.duplicate, track.delete
+    registerProjectOps(table);     // project.save, project.saveAs, project.open, project.clearRecent, project.saveCopy
+    registerPrefsOps(table);       // prefs.set
+    registerAudioDeviceOps(table); // audio.get, audio.set
+    registerAppQuitOps(table);     // app.quit
 }
 
 ControlOpContext::ControlOpContext(OpenTuneAudioProcessor& processor, ControlUiBridge* bridge,
@@ -120,6 +159,12 @@ ControlOpEnvironment ControlOpContext::environment()
     environment.jobs = jobs_;
     environment.history = history_;
     return environment;
+}
+
+void ControlOpContext::endInstanceAfterReply(std::function<void()> action)
+{
+    requireMessageThread();
+    endInstanceAction_ = std::move(action);
 }
 
 void ControlOpContext::requireMessageThread()
@@ -231,13 +276,22 @@ std::vector<std::string> ControlMethodTable::capabilities() const
             && (reportIncomplete || !controlCapabilityIsIncomplete(capability)))
             out.emplace_back(capability);
     }
+    for (const auto& feature : kFeatureCapabilities) {
+        const auto extended = std::find(out.begin(), out.end(), feature.extends);
+        if (extended != out.end())
+            out.insert(extended + 1, feature.capability);
+    }
+    auto& withheld = withheldCapabilities();
+    const std::lock_guard<std::mutex> lock(withheld.mutex);
+    for (const auto& name : withheld.names)
+        out.erase(std::remove(out.begin(), out.end(), name), out.end());
     return out;
 }
 
 bool controlCapabilityIsIncomplete(std::string_view capability)
 {
-    // No capability of this build is incomplete: edit.v1 is reported since content.editNotes and
-    // content.setPitchShift are registered.
+    // Every capability of which this build registers a method has all its methods registered (ui.bridge since
+    // ui.setSelection). A part that registers only some methods of a capability names it here.
     juce::ignoreUnused(capability);
     return false;
 }
@@ -245,6 +299,13 @@ bool controlCapabilityIsIncomplete(std::string_view capability)
 void controlSetReportIncompleteCapabilitiesForTesting(bool report)
 {
     reportIncompleteCapabilities() = report;
+}
+
+void controlSetWithheldCapabilitiesForTesting(std::vector<std::string> capabilities)
+{
+    auto& withheld = withheldCapabilities();
+    const std::lock_guard<std::mutex> lock(withheld.mutex);
+    withheld.names = std::move(capabilities);
 }
 
 } // namespace OpenTune

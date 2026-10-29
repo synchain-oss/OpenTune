@@ -26,7 +26,10 @@
 //   summary         --timings <json> [--contract <vitest json>] [--smoke <json>] [--scenarios-dir <dir>] [--log <report json>]
 //                   [--mcp-ref <ref>] [--out <md>]            PASS / FAIL / SKIP / FLAKY-SKIP table; exit 1 on any FAIL.
 //                   --scenarios-dir: one row per report there whose schema starts with opentune-mcp-e2e- (smoke excluded);
-//                   a SKIP or FLAKY-SKIP in any scenario fails the run; manualChecks[] are listed under the table
+//                   a SKIP or FLAKY-SKIP in any scenario fails the run, except a SKIP that the ENVIRONMENT_SKIPS register
+//                   below excuses (scenario, step and reason all match): it is counted as "environment SKIP", listed under
+//                   the table with its register note, and does not fail. FLAKY-SKIP and the smoke scenario get no exception.
+//                   manualChecks[] are listed under the table
 //
 // Exit codes: 0 = ok, 1 = a check failed, 2 = usage error.
 import crypto from 'node:crypto';
@@ -39,6 +42,43 @@ export const FLAKY_SKIP_MARKER = 'FLAKY-SKIP';
 
 /** Schema prefix of the scenario reports the MCP repository's e2e runner writes. */
 export const SCENARIO_SCHEMA_PREFIX = 'opentune-mcp-e2e-';
+
+/**
+ * Register of scenario steps whose SKIP is caused by the runner's environment, not by the build under test.
+ * Only a SKIP step that matches an entry on all three keys is counted as an "environment SKIP" instead of a
+ * failure: `scenario` is the scenario name of the report (its `scenario` field, or the file name without .json),
+ * `step` is the exact step name, and `reason` is the fixed beginning of the step's `note`. If the runner
+ * reports a different reason for the same step, the SKIP is not excused. FLAKY-SKIP is never excused.
+ * `why` is the explanation of the entry (Chinese, shown in the job summary). It must say why the runner,
+ * and not OpenTune, is the cause. Add an entry only for such a reason, one step at a time.
+ * The smoke scenario and the contract vectors do not use this register.
+ */
+export const ENVIRONMENT_SKIPS = Object.freeze([
+  Object.freeze({
+    scenario: 'effects',
+    step: 'vocoder weight: +30 cents, 2 weights',
+    reason: 'only one vocoder weight is installed, so there is nothing to switch to',
+    why: 'runner 上的官方安装只带一个声码器权重，没有第二个权重可以切换；这是 runner 的安装内容，不是 OpenTune 的行为',
+  }),
+  Object.freeze({
+    scenario: 'wave-b-tour',
+    step: 'audio.get and audio.set',
+    reason: 'no audio device runs in the instance, so no audio setting can be changed',
+    why: 'runner 是没有音频设备的虚拟机，实例里没有音频设备在运行，所以无法修改音频设置；这是 runner 的硬件条件，不是 OpenTune 的行为',
+  }),
+]);
+
+/**
+ * The register entry that excuses one scenario step, or null: the step has to be a SKIP (not FLAKY-SKIP, not
+ * any other result) and its scenario name, step name and the beginning of its note all have to match.
+ * @param {string|null} scenario scenario name; null (the smoke scenario) never matches
+ * @param {{name?: string, result?: string, note?: string}} step
+ */
+export function findEnvironmentSkip(scenario, step) {
+  if (!scenario || String(step?.result ?? '').toUpperCase() !== 'SKIP') return null;
+  const note = String(step.note ?? '');
+  return ENVIRONMENT_SKIPS.find((e) => e.scenario === scenario && e.step === step.name && note.startsWith(e.reason)) ?? null;
+}
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8').replace(/^﻿/, ''));
@@ -235,6 +275,31 @@ export function countSmoke(report) {
   return c;
 }
 
+/**
+ * Tally a scenario report like countSmoke, then move the SKIP steps that the ENVIRONMENT_SKIPS register excuses out of
+ * `skip` into `envSkip` (listed in `envSkips`). `unexcused` names the other skipped steps (SKIP or any result that is
+ * not PASS / FAIL / FLAKY-SKIP): they stay in `skip` and the caller fails the run. The number of remaining SKIPs is the
+ * larger of the top-level count minus the excused steps and the number of unexcused steps, so a report whose
+ * `counts` disagree with its `steps` cannot hide a skipped step.
+ * @param {object} report scenario report
+ * @param {string|null} scenario scenario name; null (the smoke scenario) excuses nothing
+ */
+export function countScenario(report, scenario) {
+  const c = countSmoke(report);
+  c.envSkips = [];
+  c.unexcused = [];
+  for (const s of report.steps ?? []) {
+    const st = String(s.result ?? '').toUpperCase();
+    if (st === 'PASS' || st === 'FAIL' || st === 'FLAKY-SKIP') continue;
+    const entry = findEnvironmentSkip(scenario, s);
+    if (entry) c.envSkips.push({ scenario, step: String(s.name ?? ''), note: String(s.note ?? ''), why: entry.why });
+    else c.unexcused.push(String(s.name ?? ''));
+  }
+  c.envSkip = c.envSkips.length;
+  c.skip = Math.max(c.skip - c.envSkip, c.unexcused.length);
+  return c;
+}
+
 const cell = (s) => String(s).replace(/\|/g, '\\|').replace(/\r?\n/g, ' ');
 
 /**
@@ -246,38 +311,49 @@ export function renderSummary({ timings = [], contract = null, smoke = null, sce
   const lines = ['### e2e-windows', ''];
   let failed = false;
   const rows = [];
+  const envRows = [];
   const add = (name, c) => {
     if (c === null) {
-      rows.push(`| ${name} | - | - | - | - | 没有结果文件（该步骤未运行或没有产出） |`);
+      rows.push(`| ${name} | - | - | - | - | - | 没有结果文件（该步骤未运行或没有产出） |`);
       failed = true;
       return;
     }
-    if (c.pass + c.fail + c.skip + c.flakySkip === 0) {
+    const envSkip = c.envSkip ?? 0;
+    if (c.pass + c.fail + c.skip + c.flakySkip + envSkip === 0) {
       c.fail = 1;
       c.failed = ['没有任何测试或步骤'];
     }
     if (c.fail > 0) failed = true;
-    rows.push(`| ${name} | ${c.pass} | ${c.fail} | ${c.skip} | ${c.flakySkip} | ${c.failed.length ? cell(c.failed.slice(0, 5).join('；')) : ''} |`);
+    rows.push(`| ${name} | ${c.pass} | ${c.fail} | ${c.skip} | ${c.flakySkip} | ${envSkip} | ${c.failed.length ? cell(c.failed.slice(0, 5).join('；')) : ''} |`);
+    for (const e of c.envSkips ?? []) envRows.push(`| ${cell(e.scenario)} | ${cell(e.step)} | ${cell(e.note)} | ${cell(e.why)} |`);
   };
   add('契约向量', contract ? countVitest(contract) : null);
-  // Unlike contract vectors (vectors with a `given` do not apply to the exe), a skipped scenario step is a step that did not run.
-  const strict = (report, label) => {
-    const c = countSmoke(report);
+  // Unlike contract vectors (vectors with a `given` do not apply to the exe), a skipped scenario step is a step that did not run,
+  // unless the ENVIRONMENT_SKIPS register excuses it (scenario != null). The smoke scenario passes null: nothing is excused there.
+  const strict = (report, label, scenario) => {
+    const c = countScenario(report, scenario);
     if (c.skip + c.flakySkip > 0) {
       if (c.fail === 0) c.fail = 1;
-      c.failed.unshift(`${label}有未运行的步骤`);
+      c.failed.unshift(`${label}有未运行的步骤${c.unexcused.length ? `（未登记为环境原因，或原因与登记不符）：${c.unexcused.join('、')}` : ''}`);
     }
     return c;
   };
-  add('冒烟场景', smoke ? strict(smoke, '冒烟') : null);
+  add('冒烟场景', smoke ? strict(smoke, '冒烟', null) : null);
   const manual = [];
   for (const sc of scenarios) {
     const name = String(sc.scenario ?? sc.name ?? sc.file ?? '场景');
-    add(`场景 ${name}`, strict(sc.report ?? sc, '场景'));
+    add(`场景 ${name}`, strict(sc.report ?? sc, '场景', name));
     for (const m of (sc.report ?? sc).manualChecks ?? []) manual.push(`- ${name}：${typeof m === 'string' ? m : cell(JSON.stringify(m))}`);
   }
-  lines.push('契约向量的 SKIP 不计为失败：带 given 的向量在 exe 上不适用。冒烟与其他场景（边界、多实例、真实启动等）的 SKIP / FLAKY-SKIP 计为失败。', '');
-  lines.push(`MCP 仓库 ref：\`${mcpRef || '(未记录)'}\``, '', '| 项目 | PASS | FAIL | SKIP | FLAKY-SKIP | 失败项（至多 5 个） |', '|---|---|---|---|---|---|', ...rows, '');
+  lines.push(
+    '契约向量的 SKIP 不计为失败：带 given 的向量在 exe 上不适用。冒烟与其他场景（边界、多实例、真实启动等）的 SKIP / FLAKY-SKIP 计为失败。',
+    '唯一的例外是登记表（脚本里的 `ENVIRONMENT_SKIPS`）：场景步骤是 SKIP，且场景名、步骤名与原因都与登记项一致时，计入「环境原因 SKIP」，不算失败，并在表下逐条列出；同一步骤换了原因、未登记的步骤、冒烟场景与所有 FLAKY-SKIP 仍然失败。',
+    '',
+  );
+  lines.push(`MCP 仓库 ref：\`${mcpRef || '(未记录)'}\``, '', '| 项目 | PASS | FAIL | SKIP | FLAKY-SKIP | 环境原因 SKIP | 失败项（至多 5 个） |', '|---|---|---|---|---|---|---|', ...rows, '');
+  if (envRows.length) {
+    lines.push('#### 环境原因 SKIP（已登记，不计为失败）', '', '| 场景 | 步骤 | 原因（报告原文） | 登记说明 |', '|---|---|---|---|', ...envRows, '');
+  }
   if (log) {
     if (!log.ok) failed = true;
     lines.push(`后端：**${log.backend}**；F0 模型路径：\`${log.f0ModelPath ?? '(无)'}\`；modelsDir 指向官方安装：${log.ok ? 'PASS' : 'FAIL'}`);

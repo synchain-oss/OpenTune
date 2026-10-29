@@ -37,6 +37,11 @@
     },
     "response": { "$ref": "#/$defs/value" },
     "connectionAfter": { "enum": ["open", "closed"] },
+    "endsSession": {
+      "description": "true when the vector ends the instance under test: once its last step is done, the instance quits by itself (vectors/README.md, \"Vectors that end the instance\"). Default false.",
+      "type": "boolean",
+      "default": false
+    },
     "steps": {
       "type": "array",
       "minItems": 1,
@@ -57,6 +62,16 @@
         { "not": { "required": ["response"] } },
         { "not": { "required": ["connectionAfter"] } }
       ]
+    }
+  ],
+  "allOf": [
+    {
+      "description": "A request vector that ends the instance has the connection closed after its response (vectors/README.md, \"Vectors that end the instance\").",
+      "if": {
+        "required": ["endsSession"],
+        "properties": { "endsSession": { "const": true } }
+      },
+      "then": { "properties": { "connectionAfter": { "const": "closed" } } }
     }
   ],
   "unevaluatedProperties": false,
@@ -123,7 +138,6 @@
             }
           }
         },
-        "referenceClip": { "$ref": "#/$defs/bindName" },
         "fadeInSec": { "$ref": "common.schema.json#/$defs/secNonNegative" },
         "fadeOutSec": { "$ref": "common.schema.json#/$defs/secNonNegative" }
       }
@@ -294,6 +308,10 @@
           "description": "notShown, shown or showing (vectors/README.md, Preconditions).",
           "enum": ["notShown", "shown", "showing"]
         },
+        "keyboardFocus": {
+          "description": "Where the keyboard focus of the OpenTune window is: tempoField, the tempo field of the transport bar, as in a window that has just started in the foreground (vectors/README.md, Preconditions).",
+          "enum": ["tempoField"]
+        },
         "preferences": {
           "type": "object",
           "minProperties": 1,
@@ -302,6 +320,27 @@
             "tuningHz": { "type": "number", "minimum": 400, "maximum": 500 },
             "hybridMode": { "type": "boolean" },
             "experimentalFeatures": { "type": "boolean" },
+            "vocoderWeight": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "renderingPriority": { "enum": ["gpuFirst", "cpuFirst"] },
+            "f0Model": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "options": {
+              "description": "The weight files and the pitch models the installation offers (prefs.get, processing.options); vocoderWeight and f0Model name one of them.",
+              "type": "object",
+              "minProperties": 1,
+              "additionalProperties": false,
+              "properties": {
+                "vocoderWeight": {
+                  "type": "array",
+                  "maxItems": 64,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+                },
+                "f0Model": {
+                  "type": "array",
+                  "maxItems": 64,
+                  "items": { "type": "string", "minLength": 1, "maxLength": 64 }
+                }
+              }
+            },
             "recentProjects": {
               "description": "Binds of given files, the most recent first.",
               "type": "array",
@@ -319,7 +358,11 @@
           "additionalProperties": false,
           "properties": {
             "running": { "type": "boolean" },
-            "failsToOpen": { "type": "boolean" }
+            "failsToOpen": { "type": "boolean" },
+            "alternatives": {
+              "description": "With running true: the machine also offers another device type and another output device of the current type (vectors/README.md, Preconditions).",
+              "type": "boolean"
+            }
           }
         }
       }

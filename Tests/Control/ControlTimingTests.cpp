@@ -175,7 +175,8 @@ bool isErrorOf(const JsonValue& response, const std::string& kind, const std::st
 }
 
 /** A timing analysis of the content given the way the processor stores a finished one: status, the producer this
-    instance uses, the content's audio revision as fingerprint, and onsets at the given source seconds. */
+    instance uses (standard AUTO: the processor of a test has no editor to hand it another mode), the content's audio
+    revision as fingerprint, and onsets at the given source seconds. */
 bool setTimingFeatures(OpenTuneAudioProcessor& processor, const ContentKey& key, ReferenceFeatureStatus status,
                        const std::vector<double>& onsetsSec)
 {
@@ -184,7 +185,7 @@ bool setTimingFeatures(OpenTuneAudioProcessor& processor, const ContentKey& key,
         return false;
     ReferenceFeatureSet features;
     features.status = status;
-    features.producer = processor.getReferenceFeatureProducer();
+    features.producer = ReferenceFeatureProducer::StandardAuto;
     features.inputFingerprint = static_cast<std::int64_t>(snapshot->audioRevision);
     features.analysisRevision = snapshot->referenceFeatures.analysisRevision + 1;
     features.sourceDurationSeconds = snapshot->timeGrid != nullptr ? snapshot->timeGrid->totalDurationSeconds() : 0.0;
@@ -331,6 +332,29 @@ std::vector<GridCase> gridCases()
     cases.push_back({"shift one handle past its right neighbour", true, middle, 1.5, {}, {1.0, 2.97, 3.0}, {{1, 3.5}}});
     cases.push_back({"shift one handle past its left neighbour", true, middle, -1.5, {}, {1.0, 1.03, 3.0}, {{1, 0.5}}});
     cases.push_back({"shift a section of two handles", true, firstTwo, 0.5, {}, {1.5, 2.5, 3.0}, {}});
+    // The range is a closed interval (start <= position <= end, as the time tool selects the handles): a handle exactly
+    // at the start and a handle exactly at the end both move. A half-open range would leave one of them where it was.
+    cases.push_back({"shift a section whose range starts on a handle",
+                     true,
+                     R"({"startOutputSec":1.0,"endOutputSec":2.5})",
+                     0.5,
+                     {},
+                     {1.5, 2.5, 3.0},
+                     {}});
+    cases.push_back({"shift a section whose range ends on a handle",
+                     true,
+                     R"({"startOutputSec":0.5,"endOutputSec":2.0})",
+                     0.5,
+                     {},
+                     {1.5, 2.5, 3.0},
+                     {}});
+    cases.push_back({"shift a section whose range starts and ends on handles",
+                     true,
+                     R"({"startOutputSec":1.0,"endOutputSec":2.0})",
+                     0.5,
+                     {},
+                     {1.5, 2.5, 3.0},
+                     {}});
     cases.push_back({"shift a section until its leading handle meets the neighbour",
                      true,
                      firstTwo,
@@ -964,32 +988,6 @@ std::string timingVectorSkipReason(const JsonValue& vector)
     return {};
 }
 
-/** Establishes given.jobs (failed jobs of the kinds they name, with their errors); binds their ids. */
-bool establishFailedJobs(ControlJobs& jobs, const JsonValue& given, VectorMatcher& matcher)
-{
-    for (std::size_t i = 0; i < given.size(); ++i) {
-        const auto& spec = given.at(i);
-        const auto& error = memberOf(spec, "error");
-        const ControlJobError failure{memberOf(error, "kind").text(), memberOf(error, "reason").text(),
-                                      "a failed job of the fixture", false};
-        const auto started =
-            jobs.start(memberOf(spec, "kind").text(), true, [failure](ControlJobStep& step) { step.fail(failure); });
-        if (started.jobId.empty())
-            return false;
-        matcher.bindings[memberOf(spec, "bind").text()] = JsonValue::string(started.jobId);
-        const std::string jobId = started.jobId;
-        if (!pumpMessagesUntil(
-                [&jobs, jobId] {
-                    JsonValue job;
-                    return jobs.get(jobId, job) == ControlJobs::Lookup::Found
-                           && memberOf(job, "state").text() == "failed";
-                },
-                kReadTimeoutMs))
-            return false;
-    }
-    return true;
-}
-
 std::string runTimingVector(const JsonValue& vector)
 {
     TimingFixture f;
@@ -1167,6 +1165,7 @@ void scenarioTimingVectors()
     std::sort(files.begin(), files.end());
     std::set<std::string> passedIds;
     int skipped = 0;
+    VectorReport report("ControlProcessorTests.TimingVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -1174,16 +1173,19 @@ void scenarioTimingVectors()
         const auto id = memberOf(parsed.value, "id").text();
         if (const auto reason = timingVectorSkipReason(parsed.value); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
         const auto started = Clock::now();
         const auto failure = runTimingVector(parsed.value);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty()))
             passedIds.insert(id);
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     for (const char* id : kMustRunTimingVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
     note(std::to_string(passedIds.size()) + " vectors passed, " + std::to_string(skipped) + " skipped");

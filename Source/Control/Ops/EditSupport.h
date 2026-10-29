@@ -86,6 +86,14 @@ std::size_t controlListNoteChanges(ControlWriteEnvelope& envelope, const std::st
                                    const std::vector<Note>& before, const std::vector<Note>& after,
                                    const std::string& revision, std::size_t maxListed);
 
+/**
+ * The members of a clip that differ between two captures of it (PROTOCOL.md section 14.3), named as project.get
+ * names them: trackId, startTimelineSec, endTimelineSec, durationSec, clipInContentSec, gainDb, gainLinear, fadeInSec,
+ * fadeOutSec. Each member is {before, after, unit}; an empty object when nothing differs. Shared by the effect of an
+ * undo step and by arrangement.edit, so that both report a clip change alike. Pure.
+ */
+JsonValue controlPlacementChangeFields(const ControlPlacementRef& was, const ControlPlacementRef& now);
+
 /** The notes of a content as a write committed them, and the content's revision then. */
 struct ControlCommittedNotes
 {
@@ -139,7 +147,7 @@ ControlEditState controlCaptureEditState(ControlOpContext& context);
  * whatever undo entry caused it, also one the server cannot inspect: per content an entry of entity content
  * with the fields revision and gridRevision that changed, of entity key with root, scale and origin, of
  * entity pitchShift with semitones and cents; per placement an entry of entity placement with its changed
- * geometry, gain, fades and reference; per track an entry of entity track; contents and placements that
+ * geometry, gain and fades; per track an entry of entity track; contents and placements that
  * appeared or disappeared in created and removed; the tokens of every changed content and placement; and
  * reRenderQueued.
  */

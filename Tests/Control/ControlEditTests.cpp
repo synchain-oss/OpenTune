@@ -930,19 +930,21 @@ void scenarioAutoTuneImpl()
             CONTROL_CHECK(toJsonString(memberOf(explicitKey, "keyUsed")) == R"({"root":0,"scale":"major"})");
         }
     }
-    // Mode reference needs reference.v1, which this build does not report.
+    // Mode reference is retired: it is no mode of content.autoTune, and placementId, which only it took, is no member.
     CONTROL_CHECK(
         f.api.fails("content.autoTune",
                     jsonOf("{\"contentId\":" + jsonQuoted(f.contentId) + ",\"mode\":\"reference\",\"expectedRevision\":"
                            + jsonQuoted(f.revision()) + ",\"placementId\":" + jsonQuoted(f.placementId) + "}"),
-                    "UNSUPPORTED", "capability_missing"));
+                    "INVALID_ARGUMENT", "invalid_params"));
     const std::string base = "{\"contentId\":" + jsonQuoted(f.contentId) + ",\"expectedRevision\":\"r1\",";
     for (const std::string params :
          {base + R"("mode":"regenerate"})", base + R"("mode":"notesOnly","key":{"root":0,"scale":"major"}})",
           base + R"("mode":"regenerate","key":"clipKey"})", base + R"("mode":"other"})",
           base + R"("mode":"regenerate","key":{"root":0,"scale":"major"},"ranges":[]})",
           base + R"("mode":"regenerate","key":{"root":0,"scale":"major"},"params":{"retuneSpeed":2}})",
-          base + R"("mode":"reference","placementId":)" + jsonQuoted(f.placementId) + R"(,"dryRun":true})"})
+          base + R"("mode":"reference"})",
+          base + R"("mode":"regenerate","key":{"root":0,"scale":"major"},"placementId":)" + jsonQuoted(f.placementId)
+              + "}"})
         CONTROL_CHECK(f.api.fails("content.autoTune", jsonOf(params), "INVALID_ARGUMENT", "invalid_params"));
 }
 
@@ -2360,8 +2362,8 @@ const char* const kMustRunEditVectors[] = {
     "content/auto-tune-not-found",
     "content/auto-tune-not-ready",
     "content/auto-tune-notes-only",
-    "content/auto-tune-reference-capability-missing",
     "content/auto-tune-regenerate",
+    "content/auto-tune-regenerate-note-split",
     "content/auto-tune-snap-notes",
     "content/edit-notes-busy-export",
     "content/edit-notes-content-changed",
@@ -2369,10 +2371,14 @@ const char* const kMustRunEditVectors[] = {
     "content/edit-notes-not-ready",
     "content/edit-notes-note-refs",
     "content/edit-notes-set-params",
+    "content/edit-notes-set-params-drift",
+    "content/edit-notes-set-params-vibrato-rate",
     "content/edit-notes-set-target-pitch",
     "content/edit-notes-shift-cents",
     "content/edit-notes-snap-to-scale",
     "content/edit-notes-unknown-note",
+    "content/get-notes-cursor-stale",
+    "content/get-pitch-curve-cursor-stale",
     "content/set-key-key-changed",
     "content/set-key-no-op",
     "content/set-key-not-found",
@@ -2397,9 +2403,10 @@ const char* const kMustRunEditVectors[] = {
     "edit/undo-unsafe-build",
 };
 
-const std::set<std::string> kEditVectorMethods = {
-    "edit.getHistory",   "edit.undo",          "edit.redo",        "content.setKey",        "content.autoTune",
-    "content.editNotes", "content.getDetails", "content.getNotes", "content.setPitchShift", "project.get"};
+const std::set<std::string> kEditVectorMethods = {"edit.getHistory",       "edit.undo",        "edit.redo",
+                                                  "content.setKey",        "content.autoTune", "content.editNotes",
+                                                  "content.getDetails",    "content.getNotes", "content.getPitchCurve",
+                                                  "content.setPitchShift", "project.get"};
 const std::set<std::string> kEditVectorCapabilities = {"session.v1", "read.v1", "history.v1", "edit.v1"};
 
 std::vector<const JsonValue*> sentRequests(const JsonValue& vector)
@@ -2434,12 +2441,6 @@ std::string editVectorSkipReason(const JsonValue& vector)
         const auto method = memberOf(*request, "method").text();
         if (kEditVectorMethods.count(method) == 0)
             return "uses " + method + ", which a later part implements";
-        // Mode reference runs only where the instance lacks reference.v1 (its refusal).
-        const auto mode = memberOf(memberOf(*request, "params"), "mode").text();
-        const auto& without = memberOf(memberOf(vector, "given"), "withoutCapabilities");
-        const bool withoutReference = without.size() == 1 && without.at(0).text() == "reference.v1";
-        if (method == "content.autoTune" && mode == "reference" && !withoutReference)
-            return "uses content.autoTune mode reference, which a later part implements";
     }
     const auto& given = memberOf(vector, "given");
     for (std::size_t i = 0; i < given.size(); ++i) {
@@ -2469,7 +2470,7 @@ std::string editVectorSkipReason(const JsonValue& vector)
                 const auto action = memberOf(entry, "action").text();
                 if (memberOf(entry, "trackDeletedAfter").asBoolean()
                     || memberOf(entry, "laterTrackDeletedAfter").asBoolean())
-                    return "track deletion barriers arrive with the track methods";
+                    return "a track deletion's barrier is established by ControlProcessorTests.TrackVectors";
                 if (action != "noteEdit" && action != "pitchShift" && action != "clipSplit")
                     return "history action " + action + " is not established by this runner";
                 if (action == "clipSplit" && memberOf(entry, "origin").text() != "ui")
@@ -2598,16 +2599,6 @@ std::string runEditVector(const JsonValue& vector)
         specs.emplace_back(spec.name, spec);
     }
     CONTROL_CHECK(settleBackgroundWork(*f.processor));
-    // Reference bindings: StandaloneArrangement::setPlacementReferencePlacement(), as the editor's menu sets one.
-    for (std::size_t i = 0; i < givenClips.size(); ++i)
-        if (const JsonValue* reference = givenClips.at(i).find("referenceClip")) {
-            const auto target = clips.find(memberOf(givenClips.at(i), "bind").text());
-            const auto source = clips.find(reference->text());
-            if (target == clips.end() || source == clips.end()
-                || !f.processor->getStandaloneArrangement()->setPlacementReferencePlacement(
-                    specs[i].second.trackId, target->second.placementId, source->second.placementId))
-                return "the reference binding of " + specs[i].first + " could not be set";
-        }
     // given.history: the undo entries oldest first; the redo entries pushed from the top down and undone.
     const auto& history = memberOf(given, "history");
     const auto& undoEntries = memberOf(history, "undo");
@@ -2850,13 +2841,16 @@ void scenarioEditVectors()
         const auto name = entry.path().filename().u8string();
         if (entry.path().extension() != ".json")
             continue;
-        for (const char* prefix : {"set-key-", "auto-tune-", "edit-notes-", "set-pitch-shift-"})
+        // The cursor-stale vectors read a page, edit the notes and read the next page with the old cursor.
+        for (const char* prefix : {"set-key-", "auto-tune-", "edit-notes-", "set-pitch-shift-",
+                                   "get-notes-cursor-stale", "get-pitch-curve-cursor-stale"})
             if (name.rfind(prefix, 0) == 0)
                 files.push_back(entry.path());
     }
     std::sort(files.begin(), files.end());
     std::set<std::string> passedIds;
     int skipped = 0;
+    VectorReport report("ControlProcessorTests.EditVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -2864,18 +2858,21 @@ void scenarioEditVectors()
         const auto id = memberOf(parsed.value, "id").text();
         if (const auto reason = editVectorSkipReason(parsed.value); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
         const auto started = Clock::now();
         const auto failure = runEditVector(parsed.value);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty()))
             passedIds.insert(id);
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     for (const char* id : kMustRunEditVectors)
-        CONTROL_CHECK(passedIds.count(id) == 1);
+        CONTROL_CHECK(mustRunHolds(passedIds, id));
     note(std::to_string(passedIds.size()) + " vectors passed, " + std::to_string(skipped) + " skipped");
 }
 

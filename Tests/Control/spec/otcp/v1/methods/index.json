@@ -282,10 +282,10 @@
       "schema": "defined"
     },
     {
-      "method": "content.analyzeReference",
+      "method": "ui.setWorkspace",
       "layer": "L6",
-      "capability": "reference.v1",
-      "write": "no",
+      "capability": "ui.workspace",
+      "write": "conditional",
       "since": "1.0",
       "schema": "defined"
     },
@@ -301,6 +301,14 @@
       "method": "project.saveAs",
       "layer": "L8",
       "capability": "project.io",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "project.saveCopy",
+      "layer": "L8",
+      "capability": "project.copy",
       "write": "yes",
       "since": "1.0",
       "schema": "defined"
@@ -341,6 +349,14 @@
       "method": "audio.set",
       "layer": "L8",
       "capability": "audio.device",
+      "write": "yes",
+      "since": "1.0",
+      "schema": "defined"
+    },
+    {
+      "method": "app.quit",
+      "layer": "L8",
+      "capability": "app.quit",
       "write": "yes",
       "since": "1.0",
       "schema": "defined"

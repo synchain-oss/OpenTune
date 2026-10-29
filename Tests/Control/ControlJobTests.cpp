@@ -278,6 +278,59 @@ std::vector<std::string> warningCodes(const JsonValue& result)
     return codes;
 }
 
+/**
+ * The revert recipe that an import result gives for the clips: one arrangement.edit op delete of exactly these
+ * placements, expecting the arrangement revision of the result's tokens, with requiresConsent and no consent member
+ * (PROTOCOL.md section 15.2 rules 3 and 4), as the string a result must carry.
+ */
+std::string deleteRecipe(const JsonValue& result, const std::vector<std::string>& placementIds)
+{
+    auto ids = JsonValue::array();
+    for (const auto& id : placementIds)
+        ids.append(JsonValue::string(id));
+    auto op = JsonValue::object();
+    op.appendMember("op", JsonValue::string("delete"));
+    op.appendMember("placementIds", std::move(ids));
+    auto ops = JsonValue::array();
+    ops.append(std::move(op));
+    auto params = JsonValue::object();
+    params.appendMember("expectedArrangementRevision", memberOf(memberOf(result, "tokens"), "arrangementRevision"));
+    params.appendMember("ops", std::move(ops));
+    auto recipe = JsonValue::object();
+    recipe.appendMember("method", JsonValue::string("arrangement.edit"));
+    recipe.appendMember("params", std::move(params));
+    recipe.appendMember("requiresConsent", JsonValue::boolean(true));
+    return toJsonString(recipe);
+}
+
+/** The undo descriptor of an import result that carries the delete recipe of the clips. */
+std::string importUndo(const JsonValue& result, const std::vector<std::string>& placementIds)
+{
+    return R"({"undoable":false,"reason":"ui_parity","revert":)" + deleteRecipe(result, placementIds) + "}";
+}
+
+/** The placementId of the item of an import result. */
+std::string placementOf(const JsonValue& result, std::size_t item)
+{
+    return memberOf(memberOf(result, "items").at(item), "placementId").text();
+}
+
+/**
+ * Sends a revert recipe the way a client does after the end user agreed: unchanged, plus the consent member of its
+ * method (arrangement.edit takes confirm with op delete). The recipe must say that it needs consent and must not carry
+ * the member itself.
+ */
+JsonValue sendDeleteRecipeWithConsent(ApiSession& api, const JsonValue& recipe)
+{
+    CONTROL_CHECK(memberOf(recipe, "method").text() == "arrangement.edit"
+                  && memberOf(recipe, "requiresConsent").isBoolean()
+                  && memberOf(recipe, "requiresConsent").asBoolean());
+    CONTROL_CHECK(memberOf(memberOf(recipe, "params"), "confirm").isNull());
+    auto params = memberOf(recipe, "params");
+    params.appendMember("confirm", JsonValue::boolean(true));
+    return api.result("arrangement.edit", std::move(params));
+}
+
 bool near(const JsonValue& value, double expected, double tolerance = kSecTolerance)
 {
     return value.isNumber() && std::abs(value.asDouble() - expected) <= tolerance;
@@ -462,7 +515,7 @@ void scenarioJobs()
     // next step.
     auto analysing = std::make_shared<FixtureJob>();
     analysing->holdCancellation = true;
-    const auto analysingId = jobs->start("referenceAnalysis", true, fixtureWork(analysing)).jobId;
+    const auto analysingId = jobs->start("timeGridSeed", true, fixtureWork(analysing)).jobId;
     CONTROL_CHECK(pumpMessagesUntil([&analysing] { return analysing->steps.load() > 0; }, kReadTimeoutMs));
     {
         const auto first = api.result("job.cancel", json(R"({"jobId":)" + quoted(analysingId) + "}"));
@@ -852,6 +905,12 @@ void scenarioImport()
 
     // 1. openTune scheme: one file onto track 0 at 1 s; it is focused, no notes are generated.
     preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::CorrectedF0Primary);
+    // The arrangement is shown, the keyboard focus is in the tempo field and the tempo has two decimals, which a switch
+    // of the view would round: the focus of an import loads the clip into the piano roll without switching the view
+    // (PROTOCOL.md section 21 rule 2), so the tempo stays and the result reports nothing about it (section 14.6).
+    bridge.view.workspace = "arrangement";
+    bridge.focusTempoField(*processor);
+    processor->setBpm(120.27);
     {
         const auto job = importAndWait(api, R"({"items":[{"path":)" + quoted(take1)
                                                 + R"(}],"layout":"single","trackId":0,"startTimelineSec":1})");
@@ -867,9 +926,10 @@ void scenarioImport()
         CONTROL_CHECK(memberOf(item, "f0State").text() == "ready" && !memberOf(item, "notesGenerated").asBoolean()
                       && memberOf(item, "notesGeneratedBy").isNull() && memberOf(item, "error").isNull());
         CONTROL_CHECK(toJsonString(memberOf(result, "counts")) == R"({"requested":1,"imported":1,"failed":0})");
-        CONTROL_CHECK(toJsonString(memberOf(result, "undo"))
-                      == R"({"undoable":false,"reason":"ui_parity","revert":null})");
-        CONTROL_CHECK(warningCodes(result) == std::vector<std::string>{"IRREVERSIBLE"});
+        // No undo entry (ui_parity); the revert recipe deletes the clip, with the consent of the end user, so the
+        // result is not IRREVERSIBLE.
+        CONTROL_CHECK(toJsonString(memberOf(result, "undo")) == importUndo(result, {placementOf(result, 0)}));
+        CONTROL_CHECK(warningCodes(result).empty());
         CONTROL_CHECK(memberOf(result, "created").size() == 2);
         const auto& diff = memberOf(result, "revisionDiff");
         CONTROL_CHECK(memberOf(diff, "arrangement").isObject() && memberOf(diff, "contents").size() == 1);
@@ -883,11 +943,21 @@ void scenarioImport()
                       == memberOf(item, "placementId").text());
         CONTROL_CHECK(memberOf(result, "sideEffects").size() == 0);
         CONTROL_CHECK(bridge.focused.size() == 1 && bridge.focused.back().first == 0 && bridge.structureChanges == 1);
+        // The default focus selects the imported clip, as the UI's import does.
+        auto& arrangement = *processor->getStandaloneArrangement();
+        CONTROL_CHECK(arrangement.getActiveTrackId() == 0 && arrangement.getSelectedPlacementId(0) != 0);
+        CONTROL_CHECK(memberOf(memberOf(result, "ui"), "activeTrackId").asDouble() == 0);
+        // The clip is loaded into the piano roll and the view stays: no switch, no tempo rounded.
+        CONTROL_CHECK(bridge.view.pianoRollPlacementId == arrangement.getSelectedPlacementId(0)
+                      && bridge.view.workspace == "arrangement" && bridge.workspaceSwitches == 0);
+        CONTROL_CHECK(reportsNoTempoChange(result) && std::abs(processor->getBpm() - 120.27) < 1e-9);
         // project.get shows the clip with its source file.
         const auto project = api.result("project.get");
         const auto& placements = memberOf(project, "placements");
         CONTROL_CHECK(placements.size() == 1 && memberOf(placements.at(0), "sourcePath").text() == take1);
     }
+    bridge.focusElsewhere();
+    processor->setBpm(120.0);
 
     // 2. openDyne scheme, sequential onto the first track without clips (track 1, hidden: revealed); the
     //    focus makes OpenTune generate the notes of the last clip.
@@ -909,12 +979,16 @@ void scenarioImport()
         CONTROL_CHECK(!memberOf(first, "notesGenerated").asBoolean() && memberOf(second, "notesGenerated").asBoolean()
                       && memberOf(second, "notesGeneratedBy").text() == "focus");
         CONTROL_CHECK(
-            (warningCodes(result)
-             == std::vector<std::string>{"TRACK_AUTO_REVEALED", "SELECTION_GENERATED_NOTES", "IRREVERSIBLE"}));
+            (warningCodes(result) == std::vector<std::string>{"TRACK_AUTO_REVEALED", "SELECTION_GENERATED_NOTES"}));
+        CONTROL_CHECK(toJsonString(memberOf(result, "undo"))
+                      == importUndo(result, {placementOf(result, 0), placementOf(result, 1)}));
         const auto& sideEffects = memberOf(result, "sideEffects");
         CONTROL_CHECK(toJsonString(memberOf(memberOf(sideEffects, "notesGenerated"), "contentIds"))
                       == "[" + quoted(memberOf(second, "contentId").text()) + "]");
-        CONTROL_CHECK(memberOf(memberOf(sideEffects, "notesGenerated"), "revert").isNull());
+        // The notes belong to the focused clip alone: the recipe of the side effect deletes that clip, and not the
+        // first one.
+        CONTROL_CHECK(toJsonString(memberOf(memberOf(sideEffects, "notesGenerated"), "revert"))
+                      == deleteRecipe(result, {placementOf(result, 1)}));
         CONTROL_CHECK(toJsonString(memberOf(memberOf(sideEffects, "tracksRevealed"), "trackIds")) == "[1]");
         CONTROL_CHECK(bridge.visibleTracks == 2 && bridge.revealCalls == 1);
         CONTROL_CHECK(bridge.focused.size() == 2 && bridge.focused.back().first == 1);
@@ -927,6 +1001,10 @@ void scenarioImport()
     // 3. Notes on request in separate tracks without focus; a file that cannot be decoded fails alone.
     {
         const auto focusedBefore = bridge.focused.size();
+        auto& arrangement = *processor->getStandaloneArrangement();
+        const int activeBefore = arrangement.getActiveTrackId();
+        const auto selectedBefore = arrangement.getSelectedPlacementId(activeBefore);
+        CONTROL_CHECK(activeBefore == 1 && selectedBefore != 0); // selected by the focus of the import above
         const auto job =
             importAndWait(api, R"({"items":[{"path":)" + quoted(take3) + R"(},{"path":)" + quoted(garbled)
                                    + R"(}],"layout":"separateTracks","trackId":3,"generateNotes":true,"focus":false})");
@@ -941,13 +1019,39 @@ void scenarioImport()
         CONTROL_CHECK(errorKindOf(memberOf(second, "error")).text() == "UNSUPPORTED"
                       && errorReasonOf(memberOf(second, "error")).text() == "unsupported_format");
         CONTROL_CHECK(toJsonString(memberOf(result, "counts")) == R"({"requested":2,"imported":1,"failed":1})");
-        CONTROL_CHECK((warningCodes(result)
-                       == std::vector<std::string>{"TRACK_AUTO_REVEALED", "TRACK_AUTO_REVEALED", "IRREVERSIBLE"}));
+        CONTROL_CHECK((warningCodes(result) == std::vector<std::string>{"TRACK_AUTO_REVEALED", "TRACK_AUTO_REVEALED"}));
+        // Only the clip that was committed is listed; the file that failed has none.
+        CONTROL_CHECK(toJsonString(memberOf(result, "undo")) == importUndo(result, {placementOf(result, 0)}));
         CONTROL_CHECK(memberOf(memberOf(result, "sideEffects"), "notesGenerated").isNull());
         CONTROL_CHECK(bridge.focused.size() == focusedBefore);
-        // OpenTune's commit selects the clip and makes its track active even without focus; the snapshot
-        // shows it (the active track was 1 after the previous import).
-        CONTROL_CHECK(memberOf(memberOf(result, "ui"), "activeTrackId").asDouble() == 3);
+        // focus false leaves the selection as it was. OpenTune's commit selects the clip it commits; the job puts the
+        // selection back, so the editor's heartbeat cannot load the clip and the openDyne scheme generates no notes
+        // for it (methods/import.start.schema.json, PROTOCOL.md section 21 rule 2).
+        CONTROL_CHECK(arrangement.getActiveTrackId() == activeBefore
+                      && arrangement.getSelectedPlacementId(activeBefore) == selectedBefore);
+        CONTROL_CHECK(memberOf(memberOf(result, "ui"), "activeTrackId").asDouble() == activeBefore);
+        CONTROL_CHECK(memberOf(api.result("project.get"), "activeTrackId").asDouble() == activeBefore);
+    }
+
+    // 3b. focus false on the active track, which already has a selected clip: the commit selects the new clip on that
+    //     track, and the job puts the selection back.
+    {
+        const auto focusedBefore = bridge.focused.size();
+        auto& arrangement = *processor->getStandaloneArrangement();
+        const int activeBefore = arrangement.getActiveTrackId();
+        const auto selectedBefore = arrangement.getSelectedPlacementId(activeBefore);
+        CONTROL_CHECK(activeBefore == 1 && selectedBefore != 0);
+        const auto job = importAndWait(api, R"({"items":[{"path":)" + quoted(take3)
+                                                + R"(}],"layout":"single","trackId":1,"focus":false})");
+        CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+        const auto& result = memberOf(job, "result");
+        const auto& item = memberOf(result, "items").at(0);
+        CONTROL_CHECK(memberOf(item, "imported").asBoolean() && !memberOf(item, "notesGenerated").asBoolean()
+                      && memberOf(item, "notesGeneratedBy").isNull());
+        CONTROL_CHECK(bridge.focused.size() == focusedBefore);
+        CONTROL_CHECK(arrangement.getActiveTrackId() == activeBefore
+                      && arrangement.getSelectedPlacementId(activeBefore) == selectedBefore);
+        CONTROL_CHECK(memberOf(memberOf(result, "ui"), "activeTrackId").asDouble() == activeBefore);
     }
 
     // 4. Checks before the job: nothing starts and executed is false.
@@ -989,7 +1093,7 @@ void scenarioImport()
         bridge.busy.*member = true;
         CONTROL_CHECK(
             api.fails("import.start", json(take1Item + R"(,"layout":"single","trackId":4})"), "BUSY", reason));
-        CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 4);
+        CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 5);
     }
     CONTROL_CHECK(api.result("job.get", json(R"({"jobId":"j:)"
                                              + memberOf(api.discovery(), "instanceId").text().substr(0, 8) + R"(:1"})"))
@@ -1060,11 +1164,15 @@ void scenarioImportAfterOpen()
     CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 2);
 
     // The import commits although the first clip ids are in use; the repeated commits are logged, and the
-    // attempts that may be repeated commit a copy of the audio.
+    // attempts that may be repeated commit a copy of the audio. focus false: the failed attempts and the accepted
+    // one leave the selection as it was.
     const auto repeatedBefore = occurrences(logText(), "was repeated");
     const auto copiesBefore = controlImportCommitCopiesForTesting();
-    const auto job =
-        importAndWait(api, R"({"items":[{"path":)" + quoted(take3) + R"(}],"layout":"single","trackId":2})");
+    auto& arrangement = *processor->getStandaloneArrangement();
+    const int activeBefore = arrangement.getActiveTrackId();
+    const auto selectedBefore = arrangement.getSelectedPlacementId(activeBefore);
+    const auto job = importAndWait(api, R"({"items":[{"path":)" + quoted(take3)
+                                            + R"(}],"layout":"single","trackId":2,"focus":false})");
     CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
     const auto& item = memberOf(memberOf(job, "result"), "items").at(0);
     CONTROL_CHECK(memberOf(item, "imported").asBoolean() && memberOf(item, "f0State").text() == "ready");
@@ -1085,6 +1193,9 @@ void scenarioImportAfterOpen()
         CONTROL_CHECK(found == 1);
     }
     CONTROL_CHECK(controlImportCommitCopiesForTesting() > copiesBefore);
+    // The repeated commit selected the clip it finally accepted; the job put the selection back.
+    CONTROL_CHECK(arrangement.getActiveTrackId() == activeBefore
+                  && arrangement.getSelectedPlacementId(activeBefore) == selectedBefore);
     const auto project = api.result("project.get");
     CONTROL_CHECK(memberOf(project, "placements").size() == 3 && memberOf(project, "contents").size() == 3);
 
@@ -1104,6 +1215,8 @@ void scenarioImportAfterOpen()
     }
     CONTROL_CHECK(controlImportCommitCopiesForTesting() == copiesAfter);
     CONTROL_CHECK(occurrences(logText(), "was repeated") == repeatedBefore + 1);
+    // This one focuses the clip it commits, as the default says.
+    CONTROL_CHECK(arrangement.getActiveTrackId() == 3 && arrangement.getSelectedPlacementId(3) != 0);
     CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 4);
 }
 
@@ -1125,6 +1238,9 @@ void scenarioImportCancel()
     for (int i = 1; i <= 3; ++i)
         items += std::string(i > 1 ? "," : "") + R"({"path":)"
                  + quoted(writeTone(media, "take" + std::to_string(i), 1.0)) + "}";
+    auto& arrangement = *processor->getStandaloneArrangement();
+    const int activeBefore = arrangement.getActiveTrackId();
+    const auto selectedBefore = arrangement.getSelectedPlacementId(activeBefore);
     const auto start = api.result(
         "import.start", json(R"({"items":[)" + items + R"(],"layout":"sequential","trackId":0,"startTimelineSec":0})"));
     const auto jobId = memberOf(memberOf(start, "job"), "jobId").text();
@@ -1152,13 +1268,169 @@ void scenarioImportCancel()
     CONTROL_CHECK(!memberOf(resultItems.at(2), "imported").asBoolean()
                   && memberOf(resultItems.at(2), "error").isNull());
     CONTROL_CHECK(toJsonString(memberOf(result, "counts")) == R"({"requested":3,"imported":1,"failed":0})");
-    // The committed clip stays; the way back is reported: no undo entry, and without arrangement.v1 no
-    // request can delete it, so revert is null and the result says IRREVERSIBLE.
+    // The committed clip stays; the way back is reported: no undo entry, and a revert recipe that deletes the clips
+    // that were committed (the two that were never committed are not in it).
     CONTROL_CHECK(memberOf(result, "applied").asBoolean() && memberOf(result, "created").size() == 2);
-    CONTROL_CHECK(toJsonString(memberOf(result, "undo")) == R"({"undoable":false,"reason":"ui_parity","revert":null})");
-    CONTROL_CHECK(warningCodes(result) == std::vector<std::string>{"IRREVERSIBLE"});
+    CONTROL_CHECK(toJsonString(memberOf(result, "undo")) == importUndo(result, {placementOf(result, 0)}));
+    CONTROL_CHECK(warningCodes(result).empty());
     CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 1);
     CONTROL_CHECK(bridge.dirtyMarks >= 1);
+    // The commit selected the clip it committed; the cancelled job put the selection back, as it focuses no clip
+    // under the user's hands.
+    CONTROL_CHECK(arrangement.getActiveTrackId() == activeBefore
+                  && arrangement.getSelectedPlacementId(activeBefore) == selectedBefore);
+}
+
+// ---- The revert recipe of an import ---------------------------------------------------------------
+
+namespace {
+
+/** Leaves the capabilities out of the dispatchers created during its life (the seam of OpsRegistry.h). */
+class ScopedWithheldCapabilities
+{
+public:
+    explicit ScopedWithheldCapabilities(std::vector<std::string> withheld)
+    {
+        controlSetWithheldCapabilitiesForTesting(std::move(withheld));
+    }
+    ~ScopedWithheldCapabilities() { controlSetWithheldCapabilitiesForTesting({}); }
+
+    ScopedWithheldCapabilities(const ScopedWithheldCapabilities&) = delete;
+    ScopedWithheldCapabilities& operator=(const ScopedWithheldCapabilities&) = delete;
+};
+
+/** What a client reads of the clips and the view in project.get: unchanged by a delete that takes an import back. The
+    project's dirty flag is left out: the import marked the project as changed and nothing takes that back. */
+std::string clipsView(ApiSession& api)
+{
+    const auto project = api.result("project.get");
+    std::string view;
+    for (const char* member : {"placements", "contents", "tracks", "visibleTrackCount", "activeTrackId", "selection"})
+        view += std::string(member) + "=" + toJsonString(memberOf(project, member)) + "\n";
+    view += "asOf=" + toJsonString(memberOf(project, "asOf")) + "\n";
+    return view;
+}
+
+/** With arrangement.v1 the revert recipes of an import delete the imported clips: sent with the consent of the end
+    user, they bring the project back to its state before the import. */
+void importRevertRoundTrip()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    TestUiBridge bridge;
+    bridge.visibleTracks = 1;
+    ScopedBridge registered(service, bridge);
+    SyntheticAnalysis analysis;
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    CONTROL_CHECK(service.dispatcher()->implements("arrangement.edit"));
+    const auto media = mediaDirectory("revert");
+    const auto take1 = writeTone(media, "take1", 2.0);
+    const auto take2 = writeTone(media, "take2", 1.5);
+    // The openDyne scheme: the focused clip gets notes, the side effect that has a recipe of its own.
+    processor->getAppPreferences().setAudioEditingScheme(AudioEditingScheme::Scheme::NotesPrimary);
+    const auto params = R"({"items":[{"path":)" + quoted(take1) + R"(},{"path":)" + quoted(take2)
+                        + R"(}],"layout":"sequential","trackId":0,"startTimelineSec":0})";
+    const auto before = clipsView(api);
+    CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 0);
+
+    // 1. The recipe of undo deletes both clips. Without the consent of the end user the delete is refused and changes
+    //    nothing; the recipe is sent unchanged apart from confirm, and the project is as it was.
+    {
+        const auto job = importAndWait(api, params);
+        CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+        const auto& result = memberOf(job, "result");
+        CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 2);
+        const auto& recipe = memberOf(memberOf(result, "undo"), "revert");
+        CONTROL_CHECK(toJsonString(recipe) == deleteRecipe(result, {placementOf(result, 0), placementOf(result, 1)}));
+        CONTROL_CHECK(
+            api.fails("arrangement.edit", memberOf(recipe, "params"), "INVALID_ARGUMENT", "confirm_required"));
+        CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 2);
+        const auto reverted = sendDeleteRecipeWithConsent(api, recipe);
+        CONTROL_CHECK(memberOf(reverted, "applied").asBoolean() && memberOf(reverted, "removed").size() >= 2);
+        CONTROL_CHECK(clipsView(api) == before);
+    }
+
+    // 2. The recipe of sideEffects.notesGenerated deletes the focused clip alone, which is the one with the notes;
+    //    the other clip stays. The recipe of undo then names a clip that is gone: it fails and changes nothing.
+    std::string keptClip;
+    {
+        const auto job = importAndWait(api, params);
+        CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+        const auto& result = memberOf(job, "result");
+        const auto& notes = memberOf(memberOf(result, "sideEffects"), "notesGenerated");
+        CONTROL_CHECK(toJsonString(memberOf(notes, "revert")) == deleteRecipe(result, {placementOf(result, 1)}));
+        const auto reverted = sendDeleteRecipeWithConsent(api, memberOf(notes, "revert"));
+        CONTROL_CHECK(memberOf(reverted, "applied").asBoolean());
+        keptClip = placementOf(result, 0);
+        const auto project = api.result("project.get");
+        CONTROL_CHECK(memberOf(project, "placements").size() == 1
+                      && memberOf(memberOf(project, "placements").at(0), "placementId").text() == keptClip);
+        auto gone = memberOf(memberOf(memberOf(result, "undo"), "revert"), "params");
+        gone.appendMember("confirm", JsonValue::boolean(true));
+        CONTROL_CHECK(api.fails("arrangement.edit", std::move(gone), "NOT_FOUND", "unknown_handle"));
+        CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 1);
+    }
+
+    // 3. The recipe expects the arrangement as the import left it (rule 3): once another change moved a clip, it
+    //    fails with REVISION_CONFLICT and deletes nothing.
+    {
+        const auto next = R"({"items":[{"path":)" + quoted(take2) + R"(}],"layout":"single","trackId":0})";
+        const auto job = importAndWait(api, next);
+        CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+        const auto& result = memberOf(job, "result");
+        CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 2);
+        const auto revision = memberOf(memberOf(result, "tokens"), "arrangementRevision").text();
+        const auto move =
+            json(R"({"expectedArrangementRevision":)" + quoted(revision) + R"(,"ops":[{"op":"move","placementId":)"
+                 + quoted(std::string(keptClip)) + R"(,"startTimelineSec":8}]})");
+        CONTROL_CHECK(memberOf(api.result("arrangement.edit", move), "applied").asBoolean());
+        auto stale = memberOf(memberOf(memberOf(result, "undo"), "revert"), "params");
+        stale.appendMember("confirm", JsonValue::boolean(true));
+        CONTROL_CHECK(api.fails("arrangement.edit", std::move(stale), "REVISION_CONFLICT", "arrangement_changed"));
+        CONTROL_CHECK(memberOf(api.result("project.get"), "placements").size() == 2);
+    }
+}
+
+/** Without arrangement.v1 no request can delete the clips: revert is null and the result is IRREVERSIBLE. */
+void importRevertWithoutArrangement()
+{
+    ScopedWithheldCapabilities withheld({"arrangement.v1"});
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    TestUiBridge bridge;
+    bridge.visibleTracks = 1;
+    ScopedBridge registered(service, bridge);
+    SyntheticAnalysis analysis;
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    const auto capabilities = service.dispatcher()->capabilities();
+    CONTROL_CHECK(std::find(capabilities.begin(), capabilities.end(), "arrangement.v1") == capabilities.end());
+    CONTROL_CHECK(std::find(capabilities.begin(), capabilities.end(), "import.v1") != capabilities.end());
+    processor->getAppPreferences().setAudioEditingScheme(AudioEditingScheme::Scheme::NotesPrimary);
+    const auto take = writeTone(mediaDirectory("revert-none"), "take", 1.0);
+    const auto job = importAndWait(api, R"({"items":[{"path":)" + quoted(take)
+                                            + R"(}],"layout":"single","trackId":0,"startTimelineSec":0})");
+    CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+    const auto& result = memberOf(job, "result");
+    CONTROL_CHECK(memberOf(memberOf(result, "items").at(0), "imported").asBoolean());
+    CONTROL_CHECK(toJsonString(memberOf(result, "undo")) == R"({"undoable":false,"reason":"ui_parity","revert":null})");
+    CONTROL_CHECK((warningCodes(result) == std::vector<std::string>{"SELECTION_GENERATED_NOTES", "IRREVERSIBLE"}));
+    CONTROL_CHECK(memberOf(memberOf(memberOf(result, "sideEffects"), "notesGenerated"), "revert").isNull());
+}
+
+} // namespace
+
+void scenarioImportRevert()
+{
+    importRevertRoundTrip();
+    importRevertWithoutArrangement();
 }
 
 // ---- Every write against every busy condition ---------------------------------------------------------
@@ -1223,6 +1495,9 @@ void scenarioBusyMatrix()
     if (!CONTROL_CHECK(handles.has_value()))
         return;
     const auto& contentId = handles->contentId;
+    const auto& placementId = handles->placementId;
+    const auto arrangementRevision =
+        memberOf(memberOf(api.result("project.get"), "asOf"), "arrangementRevision").text();
     const auto revision = memberOf(handles->tokens, "revision").text();
     const auto gridRevision = memberOf(handles->tokens, "gridRevision").text();
     CONTROL_CHECK(!revision.empty() && !gridRevision.empty());
@@ -1253,6 +1528,13 @@ void scenarioBusyMatrix()
         {"content.editTimeGrid moveHandles", "content.editTimeGrid",
          "{" + content + ",\"op\":\"moveHandles\",\"expectedGridRevision\":" + quoted(gridRevision)
              + ",\"moves\":[{\"handleId\":" + quoted(clip.handleIds[0]) + ",\"outputSec\":1.1}]}"},
+        {"arrangement.edit", "arrangement.edit",
+         "{\"expectedArrangementRevision\":" + quoted(arrangementRevision)
+             + ",\"ops\":[{\"op\":\"move\",\"placementId\":" + quoted(placementId) + ",\"startTimelineSec\":4.0}]}"},
+        {"arrangement.copy", "arrangement.copy",
+         "{\"sources\":[{\"placementId\":" + quoted(placementId)
+             + "}],\"mode\":\"full\",\"toTrackId\":1,\"startTimelineSec\":12.0,\"expectedArrangementRevision\":"
+             + quoted(arrangementRevision) + "}"},
     };
     struct Condition
     {
@@ -1573,11 +1855,18 @@ bool establishJobs(ControlJobs& jobs, const JsonValue& given, VectorMatcher& mat
     and the synthetic analysis. Empty on success. */
 std::string runJobVector(const JsonValue& vector, const std::string& slug)
 {
+    const auto& given = memberOf(vector, "given");
+    // given.withoutCapabilities: the instance does not report these (import.start then has no revert recipe, which
+    // needs arrangement.v1). The dispatcher takes the capabilities when it is created, so they are set first.
+    std::vector<std::string> withheld;
+    const auto& without = memberOf(given, "withoutCapabilities");
+    for (std::size_t i = 0; i < without.size(); ++i)
+        withheld.push_back(without.at(i).text());
+    ScopedWithheldCapabilities capabilities(std::move(withheld));
     auto processor = startedProcessor();
     auto& service = processor->getControlService();
     if (!service.isRunning())
         return "the control API did not start";
-    const auto& given = memberOf(vector, "given");
     TestUiBridge bridge;
     bridge.project.dirty = memberOf(given, "dirty").isBoolean() && memberOf(given, "dirty").asBoolean();
     ScopedBridge registered(service, bridge);
@@ -1681,6 +1970,7 @@ void scenarioJobVectors()
     std::sort(files.begin(), files.end());
     int passed = 0;
     int skipped = 0;
+    VectorReport report("ControlProcessorTests.JobVectors");
     for (const auto& file : files) {
         const auto parsed = parseJson(readFile(file));
         if (!CONTROL_CHECK(parsed.ok))
@@ -1689,6 +1979,7 @@ void scenarioJobVectors()
         const auto id = memberOf(vector, "id").text();
         if (const auto reason = jobVectorSkipReason(vector); !reason.empty()) {
             ++skipped;
+            report.skip(id, reason);
             note("SKIP " + id + ": " + reason);
             continue;
         }
@@ -1696,11 +1987,13 @@ void scenarioJobVectors()
         auto slug = id;
         std::replace(slug.begin(), slug.end(), '/', '-');
         const auto failure = runJobVector(vector, slug);
+        report.ran(id, failure);
         if (CONTROL_CHECK(failure.empty()))
             ++passed;
         note((failure.empty() ? "PASS " : "FAIL ") + id + " (" + std::to_string(millisecondsSince(started)) + " ms)"
              + (failure.empty() ? "" : ": " + failure));
     }
+    report.write();
     // Every vector of job/ and import/ runs headless.
     CONTROL_CHECK(skipped == 0 && passed >= 18);
     note(std::to_string(passed) + " vectors passed, " + std::to_string(skipped) + " skipped");

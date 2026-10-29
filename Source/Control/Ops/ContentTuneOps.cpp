@@ -205,8 +205,7 @@ Result<JsonValue> runSetKey(ControlOpContext& context, const SetKeyParams& param
 enum class TuneMode {
     Regenerate,
     SnapNotes,
-    NotesOnly,
-    Reference
+    NotesOnly
 };
 
 const char* modeName(TuneMode mode)
@@ -218,8 +217,6 @@ const char* modeName(TuneMode mode)
             return "snapNotes";
         case TuneMode::NotesOnly:
             return "notesOnly";
-        case TuneMode::Reference:
-            return "reference";
     }
     return "regenerate";
 }
@@ -283,12 +280,10 @@ bool parseAutoTune(const JsonValue& params, AutoTuneParams& out, std::string& wh
 {
     ControlParamReader reader(params);
     std::optional<ControlHandle> contentId;
-    std::optional<ControlHandle> placementId;
     std::optional<std::string> expectedRevision;
-    if (!reader.onlyMembers({"contentId", "mode", "expectedRevision", "ranges", "key", "expectedKeyRevision", "params",
-                             "placementId", "dryRun"})
+    if (!reader.onlyMembers(
+            {"contentId", "mode", "expectedRevision", "ranges", "key", "expectedKeyRevision", "params", "dryRun"})
         || !reader.optionalHandle("contentId", ControlHandleKind::Content, contentId)
-        || !reader.optionalHandle("placementId", ControlHandleKind::Placement, placementId)
         || !controlReadRevisionToken(reader, "expectedRevision", expectedRevision)
         || !controlReadRevisionToken(reader, "expectedKeyRevision", out.expectedKeyRevision)
         || !readRanges(reader, out.ranges) || !readGeneratorParams(reader, out))
@@ -297,13 +292,13 @@ bool parseAutoTune(const JsonValue& params, AutoTuneParams& out, std::string& wh
         return reject(reader, why, "contentId, mode and expectedRevision are required");
     const JsonValue* mode = reader.member("mode");
     bool known = false;
-    for (const auto candidate : {TuneMode::Regenerate, TuneMode::SnapNotes, TuneMode::NotesOnly, TuneMode::Reference})
+    for (const auto candidate : {TuneMode::Regenerate, TuneMode::SnapNotes, TuneMode::NotesOnly})
         if (mode != nullptr && mode->isString() && mode->text() == modeName(candidate)) {
             out.mode = candidate;
             known = true;
         }
     if (!known)
-        return reject(reader, why, "mode must be regenerate, snapNotes, notesOnly or reference");
+        return reject(reader, why, "mode must be regenerate, snapNotes or notesOnly");
     if (const JsonValue* key = reader.member("key")) {
         DetectedKey parsed;
         if (key->isString() && key->text() == "clipKey")
@@ -321,24 +316,18 @@ bool parseAutoTune(const JsonValue& params, AutoTuneParams& out, std::string& wh
     const bool hasKey = reader.member("key") != nullptr;
     const bool hasRanges = reader.member("ranges") != nullptr;
     const bool hasParams = reader.member("params") != nullptr;
-    const bool hasPlacement = placementId.has_value();
     switch (out.mode) {
         case TuneMode::Regenerate:
-            if (!hasKey || hasPlacement)
-                return reject(reader, why, "mode regenerate needs key and takes no placementId");
+            if (!hasKey)
+                return reject(reader, why, "mode regenerate needs key");
             break;
         case TuneMode::SnapNotes:
-            if (!hasKey || hasPlacement || hasParams)
-                return reject(reader, why, "mode snapNotes needs key and takes no placementId or params");
+            if (!hasKey || hasParams)
+                return reject(reader, why, "mode snapNotes needs key and takes no params");
             break;
         case TuneMode::NotesOnly:
-            if (hasRanges || hasKey || hasPlacement)
-                return reject(reader, why, "mode notesOnly takes no ranges, key or placementId");
-            break;
-        case TuneMode::Reference:
-            if (!hasPlacement || hasRanges || hasKey || hasParams || reader.member("dryRun") != nullptr)
-                return reject(reader, why,
-                              "mode reference needs placementId and takes no ranges, key, params or dryRun");
+            if (hasRanges || hasKey)
+                return reject(reader, why, "mode notesOnly takes no ranges or key");
             break;
     }
     if (out.clipKey && !out.expectedKeyRevision)
@@ -640,7 +629,7 @@ Result<JsonValue> runRegenerate(ControlOpContext& context, const AutoTuneParams&
         auto action = std::make_unique<ControlOriginAction>(history.value(), undoId, description, std::move(inner));
         const auto names = action->innerActionNames();
         // UndoManager::addAction(), as the piano roll pushes its entry; it discards the redo history.
-        manager.addAction(std::move(action));
+        history.value()->record(manager, std::move(action));
         envelope.setUndoable(undoId, description.toStdString(), names);
         controlMarkDirty(context);
         if (const auto now = controlLiveSnapshot(context, ref.key))
@@ -807,7 +796,7 @@ Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& 
         auto action = std::make_unique<ControlOriginAction>(history.value(), undoId, description, std::move(inner));
         const auto names = action->innerActionNames();
         // UndoManager::addAction(), as the piano roll pushes its entry; it discards the redo history.
-        manager.addAction(std::move(action));
+        history.value()->record(manager, std::move(action));
         envelope.setUndoable(undoId, description.toStdString(), names);
         // PluginEditor::autoTuneRequested() marks the project as changed after the button's SNAP.
         controlMarkDirty(context);
@@ -841,10 +830,6 @@ Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& 
 
 Result<JsonValue> runAutoTune(ControlOpContext& context, const AutoTuneParams& params)
 {
-    // Reference alignment comes with the reference methods (x-otcp.valueCapabilities: reference.v1).
-    if (params.mode == TuneMode::Reference)
-        return controlOpError("UNSUPPORTED", "capability_missing",
-                              "content.autoTune mode reference needs the capability reference.v1");
     auto content = controlResolveContent(context, params.contentId);
     if (!content.ok())
         return content.error();

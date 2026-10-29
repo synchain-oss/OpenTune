@@ -228,7 +228,7 @@ void scenarioStartAndHello()
         // session.v1 and the capabilities of the methods the dispatcher implements.
         CONTROL_CHECK(
             toJsonString(memberOf(*hello, "capabilities"))
-            == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","edit.v1","history.v1","timing.v1","project.io"])");
+            == R"(["session.v1","read.v1","jobs.v1","import.v1","export.v1","ui.bridge","ui.onboardingClose","ui.workspace","edit.v1","history.v1","timing.v1","transport.v1","arrangement.v1","tracks.v1","project.io","project.copy","prefs.write","audio.device","app.quit"])");
     }
     // The runtime was initialised before the listener started: the logger writes under the data dir.
     checkLogInsideDataDirectory();
@@ -402,8 +402,9 @@ void scenarioDestroyBeforeStart()
     auto processor = std::make_unique<OpenTuneAudioProcessor>();
     CONTROL_CHECK(processor->getControlService().options().enabled);
     const auto messageThread = processor->getControlService().messageThread();
+    CONTROL_CHECK(messageThread->isAlive() && !messageThread->isStopped());
     processor.reset();
-    CONTROL_CHECK(messageThread->isStopped() && !messageThread->post([] {}));
+    CONTROL_CHECK(messageThread->isStopped() && !messageThread->isAlive() && !messageThread->post([] {}));
     pumpMessagesFor(kQuietPumpMs);
     CONTROL_CHECK(initialisations == 0);
     CONTROL_CHECK(!std::filesystem::exists(isolatedDiscoveryFile()));
@@ -441,7 +442,7 @@ void scenarioRepeatedStop()
     service.stop();
     CONTROL_CHECK(!service.start());
     const auto messageThread = service.messageThread();
-    CONTROL_CHECK(!messageThread->post([] {}));
+    CONTROL_CHECK(!messageThread->isAlive() && !messageThread->post([] {}));
     std::atomic<int> executed{0};
     auto result = ControlMessageThread::CallResult::Done;
     std::thread caller([&] { result = messageThread->call([&executed] { ++executed; }, kLongCallTimeoutMs); });
@@ -541,6 +542,7 @@ const Scenario kScenarios[] = {
     {"Import", scenarioImport, false},
     {"ImportAfterOpen", scenarioImportAfterOpen, false},
     {"ImportCancel", scenarioImportCancel, false},
+    {"ImportRevert", scenarioImportRevert, false},
     {"JobVectors", scenarioJobVectors, false},
     {"BusyMatrix", scenarioBusyMatrix, false},
     {"JobDisconnect", scenarioJobDisconnect, true},
@@ -572,7 +574,44 @@ const Scenario kScenarios[] = {
     {"ProjectRoundTrip", scenarioProjectRoundTrip, false},
     {"ProjectJobs", scenarioProjectJobs, false},
     {"ProjectWithoutEditor", scenarioProjectWithoutEditor, false},
+    {"ProjectSaveCopy", scenarioProjectSaveCopy, false},
+    {"ProjectSaveCopyChecks", scenarioProjectSaveCopyChecks, false},
+    {"ProjectSaveCopyCapability", scenarioProjectSaveCopyCapability, false},
+    {"ProjectReopenKeepsTuning", scenarioProjectReopenKeepsTuning, false},
     {"ProjectVectors", scenarioProjectVectors, false},
+    {"Transport", scenarioTransport, false},
+    {"Tracks", scenarioTracks, false},
+    {"TrackBarrier", scenarioTrackBarrier, false},
+    {"TrackVectors", scenarioTrackVectors, false},
+    {"UiState", scenarioUiState, false},
+    {"UiDismiss", scenarioUiDismiss, false},
+    {"UiOnboardingWithheld", scenarioUiOnboardingWithheld, false},
+    {"UiWorkspace", scenarioUiWorkspace, false},
+    {"UiVectors", scenarioUiVectors, false},
+    {"PrefsRoundTrip", scenarioPrefsRoundTrip, false},
+    {"PrefsSchemeJob", scenarioPrefsSchemeJob, false},
+    {"PrefsOptions", scenarioPrefsOptions, false},
+    {"PrefsVocoderJob", scenarioPrefsVocoderJob, false},
+    {"PrefsVocoderOverlap", scenarioPrefsVocoderOverlap, false},
+    {"PrefsVectors", scenarioPrefsVectors, false},
+    {"AudioDevice", scenarioAudioDevice, false},
+    {"AudioVectors", scenarioAudioVectors, false},
+    {"Arrangement", scenarioArrangement, false},
+    {"ArrangementUndo", scenarioArrangementUndo, false},
+    {"ArrangementCopy", scenarioArrangementCopy, false},
+    {"ArrangementVectors", scenarioArrangementVectors, false},
+    {"Selection", scenarioSelection, false},
+    {"SelectionMatrix", scenarioSelectionMatrix, false},
+    {"SelectionVectors", scenarioSelectionVectors, false},
+    {"AppQuit", scenarioAppQuit, false},
+    {"AppQuitWithoutWindow", scenarioAppQuitWithoutWindow, false},
+    {"AppQuitResult", scenarioAppQuitResult, false},
+    {"AppQuitSequence", scenarioAppQuitSequence, false},
+    {"AppQuitStopping", scenarioAppQuitStopping, false},
+    {"AppQuitVectors", scenarioAppQuitVectors, false},
+    {"ClipIdSkip", scenarioClipIdSkip, false},
+    {"ClipIdsAfterOpen", scenarioClipIdsAfterOpen, false},
+    {"ClipIdsWithoutOpen", scenarioClipIdsWithoutOpen, false},
 };
 
 /** How much earlier than the ctest TIMEOUT of its test the watchdog of a scenario ends it. */

@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://otcp.invalid/v1/methods/project.saveCopy.schema.json",
+  "title": "project.saveCopy",
+  "description": "Writes a copy of the project to a new project file, as a job of kind projectCopy, and leaves the project exactly as it was: the copy is not a save of the project. It differs from project.saveAs in what it does to the project. project.saveAs makes path the project's file (the window title and the next Save follow it), clears the unsaved-changes flag and puts path at the top of the recent-projects list. project.saveCopy changes none of these: not the current project file (project.get keeps reporting the same path, or none for a project that was never saved), not the unsaved-changes flag (a project with unsaved changes still has them, and the end user is still asked about them when the project is closed), not the recent-projects list, not the undo history and not the window. Clients use it to keep a restore point or a periodic backup of the work in progress without touching the project file the end user works with. path is an absolute path ending in .otproj (PROTOCOL.md section 20.1). The method never replaces a project file: when anything exists at path, including the current project file, the call fails with ALREADY_EXISTS(target_exists) and does nothing, and a client picks another name; there is no confirm param. The existence of path is decided when the call is validated and again by the final rename (section 20.4), which never replaces: a file that appears at path while the job runs makes the job fail with ALREADY_EXISTS(target_exists), delete its temporary file and leave the target untouched. If whether path exists cannot be determined, the call fails with IO_ERROR(read_failed) and starts no job (section 20.3 rule 4). A project that was never saved can be copied: the method needs no project file. The job writes what the project holds at the moment the call is validated (the snapshot is taken on the main thread, as for project.save), through a temporary file in the target directory and the final rename of section 20.4, and writes the project's media next to it as OpenTune does for a save, into the folder Project_Media beside path. OpenTune names a media file after the number of its source (the source number followed by the original extension), copies it from the file the source was loaded from (the imported audio file for a new import, the copy in the project's own Project_Media folder for a reopened project), does not copy it again when a file of that name is already there and is not older than the source, and replaces a file of that name that is older. The source numbers are kept when a project is reopened and new imports are numbered after them, but every project starts at 1, so in a folder that holds the media of another OpenTune project the copy can replace a media file of that project with audio of this one, and the result carries no warning for it. That is the behavior of OpenTune's own save and of project.saveAs as well (section 20.4 rule 3); a client therefore writes its copies into a folder of its own, for example one named after the project with the suffix .autosave, and never into a folder that holds another project. A media file that cannot be copied fails the job with IO_ERROR(write_failed), like a project file that cannot be written; a failed job deletes its temporary file and no file appears at path. The job cannot be cancelled. While it runs it is a project operation: the busy checks of every write (section 13.2) apply to the call, and writes are refused with BUSY(project_operation) until the job has ended, as while a save runs. The call itself changes no project state, like export.start: its result is the write envelope with applied false that names the job, and the result of the job (jobResult) is not a write envelope, because the project did not change. jobResult holds path (the file that was written), sizeBytes, projectPath (the current project file, an untrusted path, which the copy did not change; null with nullReasons.projectPath no_project_path when the project was never saved), projectDirty (the unsaved-changes flag after the copy, which the copy did not change, so that a client sees at once that the project file still lacks the unsaved changes) and warnings. Some state is not part of a project file: warnings holds NOT_SAVED_IN_PROJECT with data {items}, the names visibleTrackCount, undoHistory and preferences. The copy replaces no project file and changes no project state, and replacing an older media file is what OpenTune's own save does (section 20.4 rule 3), so the result carries neither IRREVERSIBLE nor an undo descriptor. The method acts through the OpenTune editor window and fails with UNSUPPORTED(no_editor_window) while no editor exists (section 7 rule 6). It needs the capability project.copy, which an instance of release candidate 7 or earlier does not report; a client then tells the end user that this OpenTune cannot write copies, and saves under the user's direction.",
+  "x-otcp": {
+    "method": "project.saveCopy",
+    "layer": "L8",
+    "capability": "project.copy",
+    "since": "1.0",
+    "write": "yes",
+    "resultKind": "write",
+    "startsJob": "projectCopy",
+    "requiresSession": true,
+    "mainThread": true,
+    "errors": [
+      "INVALID_ARGUMENT",
+      "ALREADY_EXISTS",
+      "IO_ERROR",
+      "UNSUPPORTED",
+      "BUSY",
+      "TIMEOUT",
+      "SHUTTING_DOWN",
+      "INTERNAL"
+    ],
+    "jobErrors": ["ALREADY_EXISTS", "IO_ERROR", "INTERNAL"]
+  },
+  "$defs": {
+    "params": {
+      "type": "object",
+      "required": ["path"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "Absolute path of the project file to write; the extension must be .otproj. Nothing may exist there.",
+          "$ref": "../schemas/common.schema.json#/$defs/path"
+        }
+      }
+    },
+    "result": {
+      "type": "object",
+      "allOf": [
+        { "$ref": "../schemas/common.schema.json#/$defs/writeEnvelope" }
+      ],
+      "properties": {},
+      "unevaluatedProperties": false
+    },
+    "jobResult": {
+      "type": "object",
+      "required": ["path", "sizeBytes", "projectPath", "projectDirty", "warnings"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "description": "The copy that was written. It is not the project's file.",
+          "$ref": "../schemas/common.schema.json#/$defs/path"
+        },
+        "sizeBytes": { "type": "integer", "minimum": 0 },
+        "projectPath": {
+          "description": "The file of the current project, which the copy did not change; null if the project was never saved. Untrusted data.",
+          "anyOf": [
+            { "$ref": "../schemas/common.schema.json#/$defs/path" },
+            { "type": "null" }
+          ]
+        },
+        "projectDirty": {
+          "description": "Whether the project has unsaved changes after the copy. The copy did not change it.",
+          "type": "boolean"
+        },
+        "warnings": {
+          "description": "NOT_SAVED_IN_PROJECT, with the names of the state that a project file does not hold.",
+          "type": "array",
+          "items": { "$ref": "../schemas/common.schema.json#/$defs/warning" }
+        },
+        "nullReasons": {
+          "$ref": "../schemas/common.schema.json#/$defs/nullReasons"
+        }
+      }
+    }
+  }
+}

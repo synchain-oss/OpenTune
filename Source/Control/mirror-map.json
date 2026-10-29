@@ -452,6 +452,12 @@
             "predictNotesOnly",
             "runNotesOnly"
           ]
+        },
+        {
+          "file": "Source/Control/Ops/SelectionOps.cpp",
+          "symbols": [
+            "predictNotes"
+          ]
         }
       ],
       "tests": [
@@ -506,8 +512,8 @@
       "tests": [
         "ControlProcessorTests.Details"
       ],
-      "note": "Which mode the AUTO button runs (autoModes.uiButtonRuns).",
-      "noteZh": "AUTO 按钮运行哪种模式（autoModes.uiButtonRuns）。"
+      "note": "Which mode the AUTO button runs (autoModes.uiButtonRuns): snapping in the openDyne scheme, else the reference alignment while the clip's binding can run it (the click takes that path through shouldRunReferenceAuto(), whatever the experimental setting), else regeneration. A read of upstream state that ends with the reference alignment when this fork is rebased.",
+      "noteZh": "AUTO 按钮运行哪种模式（autoModes.uiButtonRuns）：openDyne 方案下为吸附；否则，只要该片段的绑定能运行参考对齐就是参考对齐（点击经 shouldRunReferenceAuto() 走这条路，与实验功能开关无关）；再否则为重新生成。这是对上游状态的读取，本 fork 重新 rebase 到去掉参考对齐的上游后随之消失。"
     },
     {
       "id": "undo-add-action",
@@ -597,16 +603,19 @@
           "file": "Source/Control/Ops/ProjectOps.cpp",
           "symbols": [
             "SaveJob::step",
-            "startSave"
+            "startSave",
+            "CopyJob::step",
+            "startCopy"
           ]
         }
       ],
       "tests": [
         "ControlProcessorTests.ProjectRoundTrip",
-        "ControlProcessorTests.ProjectVectors"
+        "ControlProcessorTests.ProjectVectors",
+        "ControlProcessorTests.ProjectSaveCopy"
       ],
-      "note": "What the editor does around a save: the snapshot on the message thread, the write on the project worker, then the new project file, the flag cleared unless the project changed meanwhile, the recent project and the menu and title. The API writes through a temporary file and a final rename, and reports failures instead of showing a dialog.",
-      "noteZh": "编辑器保存时的步骤：消息线程取快照、工程 worker 写盘，之后设置新的工程文件、在工程期间没有再改动时清除脏标记、推入最近工程并更新菜单与标题。接口经临时文件和最终改名写入，失败时报告错误而不弹对话框。"
+      "note": "What the editor does around a save: the snapshot on the message thread, the write on the project worker, then the new project file, the flag cleared unless the project changed meanwhile, the recent project and the menu and title. The API writes through a temporary file and a final rename, and reports failures instead of showing a dialog. project.saveCopy (CopyJob) repeats the first half, the snapshot and the worker write, and stops where the editor takes the file as the project's own: it calls neither setCurrentProjectFile, clearDirty nor pushRecentProject and updates neither menu nor title, so a change in these steps has to be weighed for both ports.",
+      "noteZh": "编辑器保存时的步骤：消息线程取快照、工程 worker 写盘，之后设置新的工程文件、在工程期间没有再改动时清除脏标记、推入最近工程并更新菜单与标题。接口经临时文件和最终改名写入，失败时报告错误而不弹对话框。project.saveCopy（CopyJob）照抄前半段：取快照、worker 写盘，在编辑器把文件当作工程自己的文件之前停下：不调用 setCurrentProjectFile、clearDirty 和 pushRecentProject，也不更新菜单与标题，所以这些步骤有改动时两个移植都要权衡。"
     },
     {
       "id": "project-open-flow",
@@ -1140,6 +1149,1259 @@
       ],
       "note": "AlreadyReady means a ready timing analysis of the current producer and audio; with hasTimingAnchors() it is the seed's featuresReady, so the job calls ensureTimeToolAnchorSeed() only when that seeds at once.",
       "noteZh": "AlreadyReady 表示计时分析已就绪且 producer 与音频匹配；加上 hasTimingAnchors() 即种子的 featuresReady，因此 job 只在能立即种子时调用 ensureTimeToolAnchorSeed()。"
+    },
+    {
+      "id": "ui-track-colour-dialog",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::trackColorChangeRequested",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "d94e32c47a816cde0f730ba063675e288f29e15344d7d16b1ec22fd8ccd5313b"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeModals.cpp",
+          "symbols": [
+            "trackOfColourTitle",
+            "classify"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/UiOps.cpp",
+          "symbols": [
+            "closeDialogs"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiDismiss",
+        "ControlProcessorTests.UiVectors"
+      ],
+      "note": "The track colour dialog is a DialogWindow titled \"Track <n> Color\" (n = trackId + 1) whose content holds a ColourSelector; the content's destructor sets the track's colour, the track panel's colour, redraws the arrangement and marks the project dirty however the window closes, so the bridge classifies it as trackColour with closeCommits and ui.dismiss reports the commit.",
+      "noteZh": "轨道颜色对话框是标题为 \"Track <n> Color\"（n = trackId + 1）、内容含 ColourSelector 的 DialogWindow；无论窗口怎样关闭，内容的析构都会设置轨道颜色与轨道面板颜色、重绘编排视图并把工程标为已修改，因此 bridge 把它归为 closeCommits 为真的 trackColour，ui.dismiss 报告这次提交。"
+    },
+    {
+      "id": "ui-confirm-dialog-buttons",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Editor/ConfirmDialogContent.h",
+        "symbol": "showDiagnostic",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "7609e9f6a7966d92096c234b96b3bdf8fc74b41eaa121e1b7880753c43b74b10"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeModals.cpp",
+          "symbols": [
+            "confirmDialogKind"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiState",
+        "ControlProcessorTests.UiDismiss"
+      ],
+      "note": "A diagnostic is a ConfirmDialogContent with the buttons Copy, then OK (showMessage has one button); the bridge tells a message from a confirm dialog by these buttons, so the OriginalF0 and render-failure diagnostics are listed as message.",
+      "noteZh": "诊断提示是按钮为 Copy、OK 的 ConfirmDialogContent（showMessage 只有一个按钮）；bridge 凭这些按钮区分 message 与 confirm，因此 OriginalF0 与渲染失败的诊断列为 message。"
+    },
+    {
+      "id": "ui-onboarding-escape",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Editor/OnboardingOverlayComponent.cpp",
+        "symbol": "OnboardingOverlayComponent::keyPressed",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "992c67c954dd62ef1e9ed9bd6401f23810ab6e7ffc46ff324002959388d60d60"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeModals.cpp",
+          "symbols": [
+            "closeOnboarding"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiDismiss",
+        "ControlProcessorTests.UiVectors"
+      ],
+      "note": "Escape finishes the overlay (its private finish(), which the exit button calls as well); the bridge closes a showing overlay through this public keyPressed() instead of a hook.",
+      "noteZh": "Esc 会结束引导层（私有的 finish()，退出按钮也调用它）；bridge 经这个公开的 keyPressed() 关闭正在显示的引导层，不需要钩子。"
+    },
+    {
+      "id": "ui-onboarding-choice",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Editor/OnboardingOverlayComponent.cpp",
+        "symbol": "OnboardingOverlayComponent::showWorkflowChoice",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "8166989dc823bdcdabff1fe16b50f2ab7e14aa49285c211d3fa89ea77707ab04"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeModals.cpp",
+          "symbols": [
+            "confirmDialogKind"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/UiOps.cpp",
+          "symbols": [
+            "dismissOnboarding"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiDismiss",
+        "ControlProcessorTests.UiVectors"
+      ],
+      "note": "The workflow choice is a ConfirmDialogContent with three buttons (a confirm dialog) whose dismissal finishes the overlay, and showing it sets onboardingShown; ui.dismiss with target onboarding closes it first and then reports no change of the preference in the real window.",
+      "noteZh": "工作流选择是三个按钮的 ConfirmDialogContent（confirm 对话框），关闭它会结束引导层，显示时就把 onboardingShown 置为真；ui.dismiss 以 onboarding 为目标时先关闭它，因此在真实窗口里不报告首选项的改动。"
+    },
+    {
+      "id": "ui-onboarding-start",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "!appPreferences_.getState().shared.onboardingShown",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "f3e8e0b7262fa465ea03cf171426507552904a567147628977a8b2a9b7dabfec"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/UiOps.cpp",
+          "symbols": [
+            "dismissOnboarding"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiDismiss",
+        "ControlProcessorTests.UiOnboardingWithheld"
+      ],
+      "note": "The editor's timer starts the overlay only while onboardingShown is false (and no modal window, project operation, import or export is running); ui.dismiss prevents the overlay by setting that preference.",
+      "noteZh": "编辑器的定时器只在 onboardingShown 为假时启动引导层（且没有模态窗口、工程操作、导入或导出）；ui.dismiss 通过设置这个首选项阻止引导层出现。"
+    },
+    {
+      "id": "ui-scale",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::applyResolvedScaleForPlacementContent",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "1a44cea413389d578bb28e542e65913ae31a870d22e628a08b59fae4f1da0822"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeModals.cpp",
+          "symbols": [
+            "uiScale"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/UiOps.cpp",
+          "symbols": [
+            "runGetState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiState",
+        "ControlProcessorTests.UiVectors"
+      ],
+      "note": "lastResolvedScaleRootNote_ and lastResolvedScaleType_ (UI scale types 1..8) are the scale the editor last applied for the selected clip; ui.getState reports them as uiScale.",
+      "noteZh": "lastResolvedScaleRootNote_ 与 lastResolvedScaleType_（界面调式类型 1..8）是编辑器最近为所选片段应用的调式；ui.getState 把它们报告为 uiScale。"
+    },
+    {
+      "id": "workspace-track-view",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/UI/TransportBarComponent.cpp",
+        "symbol": "TransportBarComponent::onTrackViewClicked",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "d4e1f1d9ba880e538909bb031116ab8766ea21ed0d734a0990cf44afa66dccb5"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeWorkspace.cpp",
+          "symbols": [
+            "ControlEditorBridge::setWorkspace"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/WorkspaceOps.cpp",
+          "symbols": [
+            "runSetWorkspace"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiWorkspace",
+        "ControlProcessorTests.UiVectors",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "The arrangement view button: it re-asserts its toggle state when the arrangement is shown already; otherwise it sets the workspace state of the transport bar (setWorkspaceView) and tells the listener, the editor, with viewToggled. ui.setWorkspace with arrangement makes the same two calls and does nothing when the arrangement is shown.",
+      "noteZh": "编排视图按钮：已经在编排视图时只重新确认自己的切换状态；否则设置走带栏的工作区状态（setWorkspaceView），再用 viewToggled 通知监听者，也就是编辑器。ui.setWorkspace 选 arrangement 时做同样的两次调用，已经在编排视图时什么也不做。"
+    },
+    {
+      "id": "workspace-piano-view",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/UI/TransportBarComponent.cpp",
+        "symbol": "TransportBarComponent::onPianoViewClicked",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "1b7b68ac0379f505acd0b1279f9ec66a8e300266cc42507d78cba88af4dfcacc"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeWorkspace.cpp",
+          "symbols": [
+            "ControlEditorBridge::setWorkspace"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/WorkspaceOps.cpp",
+          "symbols": [
+            "runSetWorkspace"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiWorkspace",
+        "ControlProcessorTests.UiVectors",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "The piano roll button: it re-asserts its toggle state when the piano roll is shown already; otherwise it sets the workspace state of the transport bar (setWorkspaceView) and tells the listener, the editor, with viewToggled. ui.setWorkspace with pianoRoll makes the same two calls and does nothing when the piano roll is shown.",
+      "noteZh": "钢琴卷帘按钮：已经在钢琴卷帘时只重新确认自己的切换状态；否则设置走带栏的工作区状态（setWorkspaceView），再用 viewToggled 通知监听者，也就是编辑器。ui.setWorkspace 选 pianoRoll 时做同样的两次调用，已经在钢琴卷帘时什么也不做。"
+    },
+    {
+      "id": "workspace-view-toggled",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::viewToggled",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "8b4b38da1bcef0091eab876c4d76f111356c9546eb609829338258a9201ebbac"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgeWorkspace.cpp",
+          "symbols": [
+            "ControlEditorBridge::setWorkspace"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiWorkspace",
+        "ControlProcessorTests.UiVectors",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "What the editor does when the view changes: it captures the timeline camera of the outgoing view, runs the piano roll's heartbeat tick when the piano roll comes, switches the visibility and the keyboard focus of the two views, and hands the camera to the incoming one. ui.setWorkspace relies on it changing the view only (no content, key, note, clip or track, nothing generated or queued), in either editing scheme, so that revisionDiff stays empty and dirty does not change; a change of this function needs that checked again.",
+      "noteZh": "视图切换时编辑器做的事：取下离开视图的时间轴相机，切到钢琴卷帘时先运行它的心跳收束，切换两个视图的可见性与键盘焦点，再把相机交给进入的视图。ui.setWorkspace 依赖它只改变视图（不碰内容、调式、音符、片段或轨道，不生成也不排队任何东西），两种编辑方案都一样，所以 revisionDiff 为空、dirty 不变；这个函数改动后需要重新核对。"
+    },
+    {
+      "id": "selection-click",
+      "group": "selection",
+      "upstream": {
+        "file": "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "symbol": "ArrangementViewComponent::mouseDown",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "6be27ec917759871b5d36e72ffe645dad10b38c59369244c22b50bdc9605fbb7"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/UI/ArrangementViewComponent.cpp",
+          "symbols": [
+            "commitControlSelection"
+          ]
+        },
+        {
+          "file": "Source/Standalone/ControlEditorBridgeSelection.cpp",
+          "symbols": [
+            "ControlEditorBridge::select"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Selection"
+      ],
+      "note": "A plain click on a clip that is not selected: only that clip in the view's selection, the shift anchor, then commitPlacementSelection(); a click on an empty area: commitEmptyPlacementSelection(). The view's hook repeats these steps for ui.setSelection.",
+      "noteZh": "单击未选中的片段：视图选择中只留该片段，设置 Shift 锚点，再 commitPlacementSelection()；单击空白处：commitEmptyPlacementSelection()。视图的钩子为 ui.setSelection 重复这些步骤。"
+    },
+    {
+      "id": "selection-context",
+      "group": "selection",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::applyPlacementSelectionContext",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "984647e426604e7052cc472ce2cbb5571efc08e7f1e17879344f69732cff4680"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/SelectionOps.cpp",
+          "symbols": [
+            "predict",
+            "observe"
+          ]
+        },
+        {
+          "file": "Source/Standalone/ControlEditorBridgeSelection.cpp",
+          "symbols": [
+            "ControlEditorBridge::select"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Selection",
+        "ControlProcessorTests.SelectionMatrix",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "What selecting a clip or a track sets: the active track, the selected clip (none for a track), the piano roll's content and the scale of the transport bar (only for a clip). The prediction of the selection, the scale and the piano roll follows it.",
+      "noteZh": "选中片段或轨道会设置什么：活动轨道、所选片段（选轨道时为无）、钢琴卷帘的内容与走带栏的调式（只在选片段时）。对选择、调式与钢琴卷帘的预测照此进行。"
+    },
+    {
+      "id": "selection-piano-roll-sync",
+      "group": "selection",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::setEditedContentAndProjection",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "5f98d0d64ccbb32d9a187b41aab028b0fca72adbdb5ba78d2b57054c309ee299"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/SelectionOps.cpp",
+          "symbols": [
+            "predictNotes"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Selection",
+        "ControlProcessorTests.SelectionMatrix"
+      ],
+      "note": "The piano roll returns early when nothing changed (the same content, projection, curve and audio), so selecting the clip it already shows generates no notes. The prediction judges this by the shown placementId alone, which is coarser: in the narrow window where the clip's F0 has just become ready and the piano roll still shows it without the new curve, a dryRun can under-report notesGenerated; the committed path reports what it observed.",
+      "noteZh": "没有任何变化时（同一内容、投影、曲线与音频）钢琴卷帘提前返回，所以选中它正在显示的片段不会生成音符。预测只按正在显示的 placementId 判断是否提前返回，比上游粗：在片段的 F0 刚就绪、钢琴卷帘还显示该片段但尚未同步新曲线的窄窗口里，dryRun 可能少报 notesGenerated；提交路径以观察结果为准。"
+    },
+    {
+      "id": "selection-opendyne-notes",
+      "group": "selection",
+      "upstream": {
+        "file": "Source/Standalone/UI/PianoRollComponent.cpp",
+        "symbol": "PianoRollComponent::ensureOpenDyneNotesIfNeeded",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "abcaee920c4b1fec8bb4928f07fb5223f148de15856d7aaf6e5bce8a094412f0"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/SelectionOps.cpp",
+          "symbols": [
+            "predictNotes",
+            "observe"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Selection",
+        "ControlProcessorTests.SelectionMatrix",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "In the openDyne scheme, showing a content whose notes were never generated and whose pitch analysis is ready generates its notes (generateNotesOnly with the editor's parameters) and marks the project as changed. The merge of the generated notes is pinned in auto-notes-only.",
+      "noteZh": "openDyne 方案下，显示一个从未生成音符且音高分析已就绪的内容时会生成音符（用编辑器的参数调用 generateNotesOnly），并把工程标记为已修改。生成音符的合并由 auto-notes-only 锁定。"
+    },
+    {
+      "id": "selection-double-click",
+      "group": "selection",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::placementDoubleClicked",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "f2a155a6ad6b179a18d781c63ac5570d6bba691683ac5c7d5b11411f628b785c"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/SelectionOps.cpp",
+          "symbols": [
+            "predict"
+          ]
+        },
+        {
+          "file": "Source/Standalone/ControlEditorBridgeSelection.cpp",
+          "symbols": [
+            "ControlEditorBridge::select"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Selection",
+        "ControlProcessorTests.SelectionVectors"
+      ],
+      "note": "A double click selects the clip again and switches to the piano roll when the arrangement is shown; openEditor calls it and predicts workspaceSwitched from the shown workspace.",
+      "noteZh": "双击会再次选中片段，并在显示编排视图时切换到钢琴卷帘；openEditor 调用它，并按当前显示的工作区预测 workspaceSwitched。"
+    },
+    {
+      "id": "prefs-tuning",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "tuningSlider_.onValueChange",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "66f9e08b43190d050b10b42dfe24b9cbf3f56b3e85e6c08e76e52007c0ee96a6"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsRoundTrip",
+        "ControlProcessorTests.PrefsSchemeJob",
+        "ControlProcessorTests.PrefsVectors"
+      ],
+      "note": "The tuning slider of the preferences window stores the frequency of A4 (AppPreferences::setTuning) and has the editor apply the preferences; prefs.set tuningHz does the same.",
+      "noteZh": "偏好设置窗口的调音滑块用 AppPreferences::setTuning 保存 A4 频率，并让编辑器应用偏好；prefs.set 的 tuningHz 做同样的事。"
+    },
+    {
+      "id": "prefs-editing-scheme",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "schemeSelector_.onChange",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "b52d24642074c172d077dd5fcb7a4faad424054758ef0868006a754d5b37d54d"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsRoundTrip",
+        "ControlProcessorTests.PrefsSchemeJob",
+        "ControlProcessorTests.PrefsVectors"
+      ],
+      "note": "The scheme selector stores the editing scheme (AppPreferences::setAudioEditingScheme) and has the editor apply the preferences; prefs.set editingScheme does the same, as a job that waits for the editor.",
+      "noteZh": "编辑方案下拉框用 AppPreferences::setAudioEditingScheme 保存方案，并让编辑器应用偏好；prefs.set 的 editingScheme 做同样的事，但作为等待编辑器的 job。"
+    },
+    {
+      "id": "prefs-experimental-features",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "experimentalFeaturesToggle_.onClick",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "8db49147776f7c136e8dec4369bc0b20bfae1cce61afd6082793957d86da0013"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsRoundTrip",
+        "ControlProcessorTests.PrefsSchemeJob",
+        "ControlProcessorTests.PrefsVectors"
+      ],
+      "note": "The experimental-features toggle stores the switch (AppPreferences::setExperimentalFeaturesEnabled) and has the editor apply the preferences; prefs.set experimentalFeatures does the same.",
+      "noteZh": "实验功能开关用 AppPreferences::setExperimentalFeaturesEnabled 保存开关，并让编辑器应用偏好；prefs.set 的 experimentalFeatures 做同样的事。"
+    },
+    {
+      "id": "prefs-hybrid-mode",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "lightPitchCorrectionToggle_.onClick",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "a17c133ad7bfcd10a053edc8f8672d073139e7506f928be064ae24794c51cc7e"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsRoundTrip",
+        "ControlProcessorTests.PrefsSchemeJob",
+        "ControlProcessorTests.PrefsVectors"
+      ],
+      "note": "The hybrid toggle stores the switch (AppPreferences::setLightPitchCorrectionEnabled), calls the processor callback below and has the editor apply the preferences; prefs.set hybridMode does the same.",
+      "noteZh": "混合模式开关用 AppPreferences::setLightPitchCorrectionEnabled 保存开关，调用下面的 processor 回调，并让编辑器应用偏好；prefs.set 的 hybridMode 做同样的事。"
+    },
+    {
+      "id": "prefs-hybrid-render",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "auto onLightPitchCorrectionChanged",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "bfc69ae92af42c5fdda968e455b0f3e1f766000e3ee4578eb4e67dc436ecb4ff"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "recordDelta"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsRoundTrip",
+        "ControlProcessorTests.PrefsSchemeJob",
+        "ControlProcessorTests.PrefsVectors"
+      ],
+      "note": "The processor callback of the hybrid toggle makes every content render again (invalidateAllContentCaches); prefs.set hybridMode calls it too and reports reRenderQueued.",
+      "noteZh": "混合模式开关的 processor 回调让所有内容重新渲染（invalidateAllContentCaches）；prefs.set 的 hybridMode 也调用它，并报告 reRenderQueued。"
+    },
+    {
+      "id": "prefs-vocoder-weight",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "vocoderWeightSelector_.onChange",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "1f2e5b5ca8d7619a6b4c32650935861335c6ad239d55a6cdcce43e3a065d797d"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions",
+        "ControlProcessorTests.PrefsVocoderJob",
+        "ControlProcessorTests.PrefsVocoderOverlap"
+      ],
+      "note": "The weight selector stores the vocoder weight (AppPreferences::setVocoderModelWeight), calls the processor callback below and has the editor apply the preferences; prefs.set vocoderWeight does the same, as a job that waits for the vocoder.",
+      "noteZh": "声码器权重下拉框用 AppPreferences::setVocoderModelWeight 保存权重，调用下面的 processor 回调，并让编辑器应用偏好；prefs.set 的 vocoderWeight 做同样的事，但作为等待声码器的 job。"
+    },
+    {
+      "id": "prefs-vocoder-weight-processor",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "auto onVocoderModelWeightChanged",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "77b3e9be5dcb6e928d5c0d4407138b120934918a9caa6b12884b242dfa601ab0"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsModels.cpp",
+          "symbols": [
+            "controlSetVocoderWeight"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "recordDelta"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions",
+        "ControlProcessorTests.PrefsVocoderJob"
+      ],
+      "note": "The processor callback of the weight selector asks the processor for the new weight (setVocoderModelWeight), which makes every content render again once the runtime has switched; prefs.set vocoderWeight calls it too and reports reRenderQueued.",
+      "noteZh": "权重下拉框的 processor 回调向 processor 请求新权重（setVocoderModelWeight），运行时切换完成后所有内容重新渲染；prefs.set 的 vocoderWeight 也调用它，并报告 reRenderQueued。"
+    },
+    {
+      "id": "prefs-rendering-priority",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "renderingPrioritySelector_.onChange",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "035ba82218d936f12522457677574920be8bbe3350333a159534a7ccdef6ed39"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsModels.cpp",
+          "symbols": [
+            "controlResetInferenceBackend"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions",
+        "ControlProcessorTests.PrefsVocoderJob",
+        "ControlProcessorTests.PrefsVocoderOverlap"
+      ],
+      "note": "The priority selector stores the rendering priority (AppPreferences::setRenderingPriority), resets the inference backend through the processor (resetInferenceBackend(forceCpu), passed to the preferences page as an inline lambda in showPreferencesDialog) and has the editor apply the preferences; prefs.set renderingPriority does the same and reports no render.",
+      "noteZh": "优先级下拉框用 AppPreferences::setRenderingPriority 保存渲染优先级，经 processor 重置推理后端（resetInferenceBackend(forceCpu)，在 showPreferencesDialog 里以内联 lambda 传给偏好页），并让编辑器应用偏好；prefs.set 的 renderingPriority 做同样的事，不报告重新渲染。"
+    },
+    {
+      "id": "prefs-f0-model",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Editor/Preferences/SharedPreferencePages.cpp",
+        "symbol": "f0ModelSelector_.onChange",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "0b559059442b9ad017ee4363048ac9eccd620b060009f10b330c12de97f09a90"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta",
+            "restoreState"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions"
+      ],
+      "note": "The pitch-model selector first asks the processor to switch (the processor callback below) and, only when that succeeds, stores the model (AppPreferences::setF0ModelType) and has the editor apply the preferences; prefs.set f0Model does the same in that order and fails with MODEL_UNAVAILABLE when the processor refuses.",
+      "noteZh": "音高模型下拉框先请求 processor 切换（下面的 processor 回调），成功后才用 AppPreferences::setF0ModelType 保存并让编辑器应用偏好；prefs.set 的 f0Model 按同样顺序执行，processor 拒绝时返回 MODEL_UNAVAILABLE。"
+    },
+    {
+      "id": "prefs-f0-model-processor",
+      "group": "prefs",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "auto onF0ModelChanged",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "84fde8935140179daad231230128738a88745ed5441a8a24026281cb29c043d5"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/PrefsModels.cpp",
+          "symbols": [
+            "controlSetF0Model"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/PrefsOps.cpp",
+          "symbols": [
+            "applyDelta"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.PrefsOptions"
+      ],
+      "note": "The processor callback of the pitch-model selector is setF0ModelType, whose result says whether the model was switched; prefs.set f0Model calls it and treats false as a refusal.",
+      "noteZh": "音高模型下拉框的 processor 回调是 setF0ModelType，其返回值表示模型是否已切换；prefs.set 的 f0Model 调用它，并把 false 当作拒绝。"
+    },
+    {
+      "id": "audio-list-types",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "refreshTypeSelector",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "e90f77cf83f2ec1f8bbfc28b8464bca8ae9c331ff6a01b356e4a3e6b9639910c"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "readAvailable"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "The device types the settings page lists: every available type of the device manager.",
+      "noteZh": "音频设置页列出的设备类型：设备管理器的全部可用类型。"
+    },
+    {
+      "id": "audio-list-devices",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "refreshDeviceSelector",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "0dae83bdc14965617d6befc5dd5efb56ad691826e3df33f3abad47f33d1b4e5b"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "readAvailable"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "The output devices the page lists: the output device names of the current type.",
+      "noteZh": "音频设置页列出的输出设备：当前类型的输出设备名称。"
+    },
+    {
+      "id": "audio-list-sample-rates",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "refreshSampleRateSelector",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "c805ce0ecf16691765914ed9420de715088b37c93ebf1d11dba6cd8abe8c44d8"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "readAvailable",
+            "readDevice"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "The sample rates the page lists: the rates of the open device, with the current one selected (compared within 0.01 Hz).",
+      "noteZh": "音频设置页列出的采样率：已打开设备支持的采样率，当前值按 0.01 Hz 容差选中。"
+    },
+    {
+      "id": "audio-list-buffer-sizes",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "refreshBufferSizeSelector",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "ecd243d7e8ac41ab14fa69d1f09d1d0ce86169f65b6d65a6c4cb2fecc3f6a972"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "readAvailable",
+            "readDevice"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "The buffer sizes the page lists: the sizes of the open device, with the current one selected.",
+      "noteZh": "音频设置页列出的缓冲区大小：已打开设备支持的大小，当前值被选中。"
+    },
+    {
+      "id": "audio-list-channel-pairs",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "refreshChannelToggles",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "47efbf0baf66c797357648d785f392ba826a1ad51bcf2eeda835e36f90346682"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "outputChannelCount",
+            "outputChannelPairCount",
+            "readDevice"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "The output channel pairs the page offers: at most two output channels (one pair); a pair is active when one of its channels is.",
+      "noteZh": "音频设置页提供的输出声道对：最多两个输出声道（一对）；声道对中任一声道启用即视为启用。"
+    },
+    {
+      "id": "audio-refresh",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "refresh",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "787f1bd415041c85b9ddd859669b79318f48f60269c9ddd37b0aedb298c4f57b"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "rescanDevices"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "The page scans the current device type for devices before it fills its selectors; audio.get and audio.set scan first as well.",
+      "noteZh": "设置页在填充下拉框前先重新扫描当前设备类型的设备；audio.get 与 audio.set 同样先扫描。"
+    },
+    {
+      "id": "audio-apply-setup",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "applySetup",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "6a3fb2f78606b37cfb1697d43b41b5ecf178fd597261d340310f9fa256513434"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "applySetup",
+            "restoreToPrior"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "A new setup is opened with setAudioDeviceSetup and chosen as the device; when it fails the page opens the previous setup again. audio.set restores the setup from before the whole call.",
+      "noteZh": "新配置用 setAudioDeviceSetup 打开并设为所选设备；失败时设置页重新打开之前的配置。audio.set 恢复到整个调用之前的配置。"
+    },
+    {
+      "id": "audio-type-switch",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "typeChanged",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "bd515cc391a1e93926308e68c50f90e7acb9a32c5f5778d1c450c802275a5fe0"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "applyRequest",
+            "restoreToPrior"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "Switching the device type: an ASIO device is first restored to the system sample rate; a type that does not take over, or a device that does not open, switches the type back and restores the previous setup.",
+      "noteZh": "切换设备类型：ASIO 设备先恢复到系统采样率；类型未切换成功或设备打不开时，切回原类型并恢复之前的配置。"
+    },
+    {
+      "id": "audio-output-switch",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "outputDeviceChanged",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "661b2e040ff89412baee2c066a42141169fea5636981ebcd4b47829749437b53"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "applyRequest"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "Switching the output device: the new device opens with its default channels, a type without separate inputs and outputs takes the output as its input, and ASIO is restored to the system sample rate first.",
+      "noteZh": "切换输出设备：新设备用默认声道打开，没有独立输入输出的类型把输出设备同时作为输入设备，ASIO 先恢复到系统采样率。"
+    },
+    {
+      "id": "audio-sample-rate",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "sampleRateChanged",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "0426085a9a471db91e273025b5b596d3b491f4bb7435d223ebeb8d41700c3d85"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "applyRequest"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "A new sample rate is taken from the list of the open device and set into the current setup.",
+      "noteZh": "新采样率取自已打开设备的列表，并写入当前配置。"
+    },
+    {
+      "id": "audio-buffer-size",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "bufferSizeChanged",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "674ba10d4615d1341999a7d201bc662153776915ca1b09a5d664d3d81967acf4"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "applyRequest"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "A new buffer size is taken from the list of the open device and set into the current setup.",
+      "noteZh": "新缓冲区大小取自已打开设备的列表，并写入当前配置。"
+    },
+    {
+      "id": "audio-channel-pair",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Editor/Preferences/StandalonePreferencePages.cpp",
+        "symbol": "channelPairClicked",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "002c3b41ed3e1eb608686f869aeb2483a471983e46fda7577f9654751f80e95d"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/AudioDeviceOps.cpp",
+          "symbols": [
+            "applyRequest"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "A channel pair is chosen by activating only its channels (at most two output channels) and no longer using the default channels.",
+      "noteZh": "选择声道对时只启用该对的声道（最多两个输出声道），并不再使用默认声道。"
+    },
+    {
+      "id": "track-add",
+      "group": "tracks",
+      "upstream": {
+        "file": "Source/Standalone/UI/TrackPanelComponent.cpp",
+        "symbol": "TrackPanelComponent::showMoreTracks",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "57d1c3ebe110ec17bb6e25a2f083baffb752bd467299f7ff122ea71e5da86924"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TrackOps.cpp",
+          "symbols": [
+            "runAdd"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Tracks",
+        "ControlProcessorTests.TrackVectors"
+      ],
+      "note": "The + button shows one more track slot; track.add repeats it count times. It marks nothing as changed (the panel's menu entry trackAddRequested does).",
+      "noteZh": "+ 按钮多显示一个轨道槽位；track.add 重复 count 次。它不标脏（轨道面板菜单里的 trackAddRequested 会标脏）。"
+    },
+    {
+      "id": "track-duplicate",
+      "group": "tracks",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::trackDuplicateRequested",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "ab88da61de0c340ee2dbec3a29f3024ab23da62a09c5fb9231473564484e065c"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TrackOps.cpp",
+          "symbols": [
+            "runDuplicate"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Tracks",
+        "ControlProcessorTests.TrackVectors"
+      ],
+      "note": "Duplicate Track: mix state and every clip of the track go to the first hidden slot, which is then shown; the clips keep gain, fades and reference binding.",
+      "noteZh": "复制轨道：轨道的混音状态和全部片段进入第一个隐藏槽位并显示；片段保留增益、淡入淡出和参考绑定。"
+    },
+    {
+      "id": "track-delete",
+      "group": "tracks",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::trackDeleteRequested",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "26a5e4725c859bdd4d1a41a5322c0b1d405b30423f62265a9e714242107a10ac"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TrackOps.cpp",
+          "symbols": [
+            "runDelete"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Tracks",
+        "ControlProcessorTests.TrackBarrier",
+        "ControlProcessorTests.TrackVectors"
+      ],
+      "note": "Delete Track: only a shown track and never the last one; removeTrackAndShift moves the later tracks up, then the panel shows their mix and one track fewer.",
+      "noteZh": "删除轨道：只删可见轨道且不删最后一条；removeTrackAndShift 把后面的轨道上移，随后面板显示它们的混音并少一条轨道。"
+    },
+    {
+      "id": "transport-play-from-start",
+      "group": "transport",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::playFromStartToggleRequested",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b1e8d0baa669ea5b8ad41e3a02183dbe282a27a72655426d166afee30ac68370"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TransportOps.cpp",
+          "symbols": [
+            "runControl"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Transport",
+        "ControlProcessorTests.TrackVectors"
+      ],
+      "note": "The play-from-start button: while playing it pauses at the last start, otherwise it moves there and plays; the last start is the position of the last play or seek.",
+      "noteZh": "从起点播放按钮：播放中暂停在上次起点，否则回到那里播放；上次起点是上次播放或定位的位置。"
+    },
+    {
+      "id": "track-volume-range",
+      "group": "tracks",
+      "upstream": {
+        "file": "Source/Standalone/UI/TrackPanelComponent.h",
+        "symbol": "setRange(0.0, 4.0, 0.001)",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "22470180421ad465f92af82b88aa58c03b7dfdef4dbf99d37f8a1c4f9ba23034"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/TrackOps.cpp",
+          "symbols": [
+            "kMaxVolumeLinear",
+            "requestedVolume"
+          ]
+        },
+        {
+          "file": "Source/Control/Ops/ArrangementOps.cpp",
+          "symbols": [
+            "kMaxClipGainLinear",
+            "runInPlace"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Tracks",
+        "ControlProcessorTests.TrackVectors",
+        "ControlProcessorTests.Arrangement"
+      ],
+      "note": "The volume knob of the interface covers the linear range 0 to 4; track.set limits a larger volume to it and arrangement.edit op setGain limits a larger clip gain to it (CLAMPED).",
+      "noteZh": "界面的音量旋钮覆盖 0 到 4 的线性范围；track.set 把更大的轨道音量限制到该范围，arrangement.edit 的 setGain 把更大的片段增益也限制到该范围（CLAMPED）。"
+    },
+    {
+      "id": "arrangement-trim-left",
+      "group": "arrangement",
+      "upstream": {
+        "file": "Source/Standalone/UI/ArrangementViewComponent.cpp",
+        "symbol": "const double outputCut = outputStart + (trimStartDurationSeconds_ - newDuration)",
+        "kind": "statement",
+        "normalization": "stmt-v1",
+        "sha256": "10495adb5acec842c4089baaf592b559f982632e700861baa125cfb92143bfc8"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ArrangementOps.cpp",
+          "symbols": [
+            "planTrim"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Arrangement",
+        "ControlProcessorTests.ArrangementVectors"
+      ],
+      "note": "Dragging the left edge of a clip moves the content window by the same output time through the time grid (tauForward, then tauInverse); op trim with edge start computes the new clipIn the same way.",
+      "noteZh": "拖动片段左边缘时，内容窗口经时间网格（先 tauForward 再 tauInverse）移动同样的输出时长；op trim 的 edge start 用同样的算法求新的 clipIn。"
+    },
+    {
+      "id": "arrangement-trim-fades",
+      "group": "arrangement",
+      "upstream": {
+        "file": "Source/StandaloneArrangement.cpp",
+        "symbol": "StandaloneArrangement::setPlacementTrim",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "45d0122fe8dca4d8f5f602f2ccd78841840d0a76b0c47e919985a3425fc91261"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ArrangementOps.cpp",
+          "symbols": [
+            "planTrim"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Arrangement",
+        "ControlProcessorTests.ArrangementUndo"
+      ],
+      "note": "A trim shortens fades longer than 90 % of the new length; op trim predicts that, reports FADES_RECLAMPED and records the old fades so that undo restores them.",
+      "noteZh": "裁剪会把超过新长度 90% 的淡入淡出缩短；op trim 预先算出结果、报告 FADES_RECLAMPED，并记录原来的淡入淡出，撤销时一并恢复。"
+    },
+    {
+      "id": "arrangement-fade-limit",
+      "group": "arrangement",
+      "upstream": {
+        "file": "Source/StandaloneArrangement.cpp",
+        "symbol": "StandaloneArrangement::setPlacementFade",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "dc8c04657ef6fc5edbb7d5038a3c7c879184e6c39f828de12fbedd9d0b7a728d"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ArrangementOps.cpp",
+          "symbols": [
+            "kMaxFadeShare"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Arrangement",
+        "ControlProcessorTests.ArrangementVectors"
+      ],
+      "note": "A fade is at most 90 % of the clip; op setFade predicts the limit and reports CLAMPED with the applied value.",
+      "noteZh": "淡入淡出最长为片段长度的 90%；op setFade 预先算出限制，并以 CLAMPED 报告实际值。"
+    },
+    {
+      "id": "arrangement-split",
+      "group": "arrangement",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::splitPlacementAtSeconds",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "7c01f5e8a1bb7fb159ea602495a246c1c960ac8bf1dd0fec29f2da25b1c9692e"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ArrangementOps.cpp",
+          "symbols": [
+            "checkSplit"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Arrangement",
+        "ControlProcessorTests.ArrangementVectors"
+      ],
+      "note": "OpenTune splits only a clip with a ready analysis and an unedited time grid, at the nearest analysis frame boundary, with both parts longer than 0.1 s, and refuses the rest silently; op split checks the same conditions first and names the reason.",
+      "noteZh": "OpenTune 只切分分析已就绪、时间网格未编辑的片段，切点吸附到最近的分析帧边界，且两段都要长于 0.1 秒，其余情况静默拒绝；op split 预先检查同样的条件并给出原因。"
+    },
+    {
+      "id": "arrangement-merge",
+      "group": "arrangement",
+      "upstream": {
+        "file": "Source/PluginProcessor.cpp",
+        "symbol": "OpenTuneAudioProcessor::mergePlacements",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "b881a16f7d7c7e60e9e37ad71510080ff5fefc509b700217ea42b9253d70ca97"
+      },
+      "control": [
+        {
+          "file": "Source/Control/Ops/ArrangementOps.cpp",
+          "symbols": [
+            "checkMerge"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.Arrangement",
+        "ControlProcessorTests.ArrangementVectors"
+      ],
+      "note": "OpenTune merges two adjacent clips of one track that show adjacent parts of one source with equal gain and name; op merge checks those conditions first (merge_not_possible) and reports a later refusal with the same reason.",
+      "noteZh": "OpenTune 合并同一轨道上相邻、显示同一音源相邻部分且增益与名称相同的两个片段；op merge 预先检查这些条件（merge_not_possible），之后的拒绝也用同一原因报告。"
     }
   ]
 }

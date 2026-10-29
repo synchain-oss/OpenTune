@@ -1,6 +1,6 @@
 {
   "source": "synchain-oss/opentune-mcp-server",
-  "ref": "feature/v1",
+  "ref": "spec-v1.0.0-rc.8",
   "commit": "d8da1b869a8f4ee353882e0d6cf33727537c4e55",
   "path": "spec/otcp/v1",
   "copy": "Tests/Control/spec/otcp/v1",

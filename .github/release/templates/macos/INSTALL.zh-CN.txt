@@ -1,0 +1,94 @@
+OpenTune {{APP_VERSION}}（含本机控制接口）非官方测试版 {{BUILD_LABEL}}
+安装说明（macOS {{MIN_MACOS}} 或更新版本，只支持 Apple 芯片）
+
+(English: INSTALL.txt)
+
+这不是 OpenTune 官方版本。唯一的官方渠道是
+{{OFFICIAL_RELEASES_URL}}。请先阅读 README-UNOFFICIAL.zh-CN.txt。
+
+以下命令在「终端」App 中运行。把 <文件夹> 换成你解压到的文件夹。
+
+
+1. 先安装官方 OpenTune
+----------------------
+
+- 从 {{OFFICIAL_RELEASES_URL}}
+  安装官方 OpenTune for macOS，版本 {{MIN_OFFICIAL_VERSION}} 或更新，使用默认位置
+  （/Applications/OpenTune.app）。
+- 本压缩包不含任何模型权重。本测试版使用该官方安装中的模型（在 OpenTune.app 里面，
+  即 Contents/Resources/models）。没有这些模型时，音高检测、音符生成与渲染都无法使用。
+- 本测试版需要 Apple 芯片的 Mac（M1 及以后）和 macOS {{MIN_MACOS}} 或更新版本，
+  不支持 Intel Mac。
+
+
+2. 校验下载的文件
+-----------------
+
+- 计算 zip 的 SHA-256，与发布页面上的值比对：
+
+    shasum -a 256 ~/Downloads/{{PACKAGE_NAME}}.zip
+
+
+3. 解压
+-------
+
+- 解压到你自己的文件夹，例如 ~/OpenTune-test（先创建它）。在访达里双击 zip 即可，
+  或者：
+
+    mkdir -p <文件夹>
+    ditto -x -k ~/Downloads/{{PACKAGE_NAME}}.zip <文件夹>
+
+  不要把 OpenTune-ctl.app 放进官方的 OpenTune.app 里，也不要替换官方的 OpenTune.app。
+  两者名字不同，可以并存。
+- 按 SHA256SUMS 校验解压出的每个文件（每一行都必须显示 OK），再校验应用的签名（没有输出
+  即完好）：
+
+    cd <文件夹>/{{PACKAGE_NAME}}
+    shasum -a 256 -c SHA256SUMS
+    codesign --verify --deep --strict OpenTune-ctl.app
+
+
+4. 放行第一次启动
+-----------------
+
+应用使用临时签名（ad hoc），没有经过 Apple 公证，所以 macOS 的 Gatekeeper 会拦截
+OpenTune-AI.command 与 OpenTune-ctl.app 的第一次启动。如果第 2、3 步的校验一致，
+用下面两种办法之一放行：
+
+- 系统设置 -> 隐私与安全性：被拦截后向下滚动，找到关于被拦截项目的提示，点击「仍要打开」
+  （macOS 会要求输入密码）。OpenTune-AI.command 要放行一次，OpenTune-ctl.app 被拦截时
+  再放行一次。
+- 或者在终端里移除整个文件夹的隔离标记（zip 来自浏览器时，解压出的每个文件都带有该标记）：
+
+    xattr -dr com.apple.quarantine <文件夹>/{{PACKAGE_NAME}}
+
+
+5. 启动
+-------
+
+- OpenTune-AI.command（在访达里双击，终端会短暂打开）：以开启本机控制接口的方式启动
+  OpenTune-ctl.app。需要让 OpenTune MCP Server 操作 OpenTune 时用它。给脚本的其他参数会
+  原样转交给 OpenTune。它不改任何设置，也不写文件。
+- 让 OpenTune MCP Server 自己启动 OpenTune：把它的环境变量 OPENTUNE_MCP_OPENTUNE_PATH 设为本文件夹里
+  OpenTune-AI.command 的完整路径。MCP 要求它所启动的程序旁边有 opentune-control.json，这个文件就在
+  OpenTune-AI.command 旁边（放进应用包里会破坏应用的签名）。
+- 直接打开 OpenTune-ctl.app（双击）：以关闭控制接口的方式启动 OpenTune。
+- 启动本测试版之前先退出官方 OpenTune，不要同时运行两个。
+
+
+6. 设置与日志与官方 OpenTune 共用
+--------------------------------
+
+- 本测试版与官方 OpenTune 使用同一份设置与日志文件（在你的用户资源库 ~/Library/OpenTune
+  下）。在其中一个里做的修改，另一个里也会看到。
+- 控制接口开启期间，OpenTune 会在 ~/Library/Application Support/OpenTune/control/instances/
+  写入发现文件，正常退出时删除。
+
+
+7. 卸载
+-------
+
+- 退出 OpenTune。
+- 删除 <文件夹>/{{PACKAGE_NAME}}（或你解压到的文件夹）。
+- 删除 ~/Library/Application Support/OpenTune/control/（控制接口的文件）。
+- 不要删除 ~/Library/OpenTune：官方 OpenTune 也在使用它。

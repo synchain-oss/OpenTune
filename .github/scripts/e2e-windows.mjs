@@ -106,8 +106,13 @@ export const hashPrefix = (hex) => `${String(hex).slice(0, 12)}...`;
 /**
  * The pinned installer of a version: the main `installer` when no version is given or it matches,
  * otherwise the entry of `olderInstallers[]` with that version; null when there is none.
+ * platform 'macos': the entry of `macos.installers[]` with that version (the first one when no version is given).
  */
-export function pinnedInstaller(pin, version) {
+export function pinnedInstaller(pin, version, platform = 'windows') {
+  if (platform === 'macos') {
+    const list = pin.macos?.installers ?? [];
+    return (version ? list.find((i) => i?.version === version) : list[0]) ?? null;
+  }
   if (!version || pin.installer?.version === version) return pin.installer ?? null;
   return (pin.olderInstallers ?? []).find((i) => i?.version === version) ?? null;
 }
@@ -117,17 +122,17 @@ export function pinnedInstaller(pin, version) {
  * `{app}` stands for the install folder (official 1.7.9 installs the models there; 1.8.1 uses the shared
  * %ProgramData% folder), `%NAME%` for an environment variable. Null when the version is not pinned.
  */
-export function pinnedModelsDir(pin, version, { appDir = '', env = process.env } = {}) {
-  const inst = pinnedInstaller(pin, version);
+export function pinnedModelsDir(pin, version, { appDir = '', env = process.env, platform = 'windows' } = {}) {
+  const inst = pinnedInstaller(pin, version, platform);
   if (!inst) return null;
-  const raw = String(inst.modelsDir ?? pin.modelsDir ?? '');
+  const raw = String(inst.modelsDir ?? (platform === 'macos' ? pin.macos?.modelsDir : pin.modelsDir) ?? '');
   return raw.replace(/\{app\}/gi, appDir.replace(/[\\/]+$/, '')).replace(/%([A-Za-z0-9_()]+)%/g, (m, name) => env[name] ?? m);
 }
 
 /** Problems (strings) with the installer file against the pin; empty when it matches. */
-export function checkInstaller(pin, file, version) {
+export function checkInstaller(pin, file, version, platform = 'windows') {
   const problems = [];
-  const inst = pinnedInstaller(pin, version);
+  const inst = pinnedInstaller(pin, version, platform);
   if (!inst) return [`no pinned installer for version ${version}`];
   if (!fs.existsSync(file)) return [`installer not found: ${path.basename(file)}`];
   const size = fs.statSync(file).size;
@@ -137,10 +142,10 @@ export function checkInstaller(pin, file, version) {
   return problems;
 }
 
-/** Problems with the installed models against the pin; empty when every model matches. */
-export function checkModels(pin, dir) {
+/** Problems with the installed models against the pin; empty when every model matches. A macOS section may list its own models. */
+export function checkModels(pin, dir, platform = 'windows') {
   const problems = [];
-  for (const m of pin.models) {
+  for (const m of (platform === 'macos' ? pin.macos?.models : null) ?? pin.models) {
     const file = path.join(dir, ...m.path.split('/'));
     if (!fs.existsSync(file)) {
       problems.push(`missing model: ${m.path}`);
@@ -165,16 +170,18 @@ const SECRET_PATTERNS = [
   [/(?<![0-9A-Za-z])[0-9a-fA-F]{32,128}(?![0-9A-Za-z])/g, '<redacted-hex>'],
 ];
 
-/** Redact session tokens, serverProof values and Windows user profile names from log text. */
+/** Redact session tokens, serverProof values and Windows and macOS user profile names from log text. */
 export function scrubLog(text) {
   let out = String(text);
   for (const [re, to] of SECRET_PATTERNS) out = out.replace(re, to);
-  return out.replace(/([A-Za-z]:[\\/]+Users[\\/]+)[^\\/\s"']+/gi, '$1<user>');
+  out = out.replace(/([A-Za-z]:[\\/]+Users[\\/]+)[^\\/\s"']+/gi, '$1<user>');
+  // macOS: /Users/<name>/... (but not the shared folder /Users/Shared)
+  return out.replace(/(^|[^A-Za-z0-9_.-])(\/Users\/)(?!Shared(?:[\/\s"']|$))(?!<user>)[^\/\s"']+/g, '$1$2<user>');
 }
 
 /** Like scrubLog, and also folds a user profile directory (`C:\Users\<name>`) into `<home>`; for paths in errors and reports. */
 export function scrubPath(text) {
-  return scrubLog(text).replace(/[A-Za-z]:[\\/]+Users[\\/]+<user>/gi, '<home>');
+  return scrubLog(text).replace(/[A-Za-z]:[\\/]+Users[\\/]+<user>/gi, '<home>').replace(/(^|[^A-Za-z0-9_.-])\/Users\/<user>/g, '$1<home>');
 }
 
 /** Text files that are scrubbed: known text extensions, plus files without an extension (preferences). */
@@ -456,6 +463,7 @@ function usage(msg) {
 
 const CLI_SPEC = {
   pin: 'string',
+  platform: 'string',
   file: 'string',
   version: 'string',
   app: 'string',
@@ -487,6 +495,10 @@ function main(argv) {
     usage(e.message);
   }
   const need = (...names) => names.forEach((n) => opts[n] ?? usage(`--${n} is required for ${cmd}`));
+  const platformOpt = () => {
+    if (opts.platform !== undefined && opts.platform !== 'windows' && opts.platform !== 'macos') usage('--platform must be windows or macos');
+    return opts.platform ?? 'windows';
+  };
   const report = (problems, okText) => {
     if (problems.length) {
       for (const p of problems) process.stdout.write(`::error::${scrubPath(p)}\n`);
@@ -497,11 +509,11 @@ function main(argv) {
   switch (cmd) {
     case 'check-installer':
       need('pin', 'file');
-      report(checkInstaller(readJson(opts.pin), opts.file, opts.version), 'installer sha256 and size match the pin');
+      report(checkInstaller(readJson(opts.pin), opts.file, opts.version, platformOpt()), 'installer sha256 and size match the pin');
       break;
     case 'models-dir': {
       need('pin');
-      const dir = pinnedModelsDir(readJson(opts.pin), opts.version, { appDir: opts.app ?? '' });
+      const dir = pinnedModelsDir(readJson(opts.pin), opts.version, { appDir: opts.app ?? '', platform: platformOpt() });
       if (!dir) {
         process.stdout.write(`::error::no pinned installer for version ${opts.version}\n`);
         process.exit(1);
@@ -512,7 +524,8 @@ function main(argv) {
     case 'check-models': {
       need('pin', 'dir');
       const pin = readJson(opts.pin);
-      report(checkModels(pin, opts.dir), `${pin.models.length} models match the pinned sha256`);
+      const platform = platformOpt();
+      report(checkModels(pin, opts.dir, platform), `${((platform === 'macos' ? pin.macos?.models : null) ?? pin.models).length} models match the pinned sha256`);
       break;
     }
     case 'check-log': {

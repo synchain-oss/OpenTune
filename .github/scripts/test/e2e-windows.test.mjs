@@ -152,6 +152,13 @@ describe('scrubPath and scrubDir', () => {
     assert.equal(scrubPath('c:/Users/someone/x'), '<home>/x');
   });
 
+  test('scrubLog and scrubPath handle macOS home directories and keep /Users/Shared', () => {
+    assert.equal(scrubLog('Log file: /Users/runner/Library/OpenTune/Logs/OpenTune.log'), 'Log file: /Users/<user>/Library/OpenTune/Logs/OpenTune.log');
+    assert.equal(scrubPath('/Users/runner/Library/OpenTune/x'), '<home>/Library/OpenTune/x');
+    assert.equal(scrubPath('opened "/Users/someone/a b" and /Users/Shared/OpenTune'), 'opened "<home>/a b" and /Users/Shared/OpenTune');
+    assert.equal(scrubPath('/Applications/OpenTune.app/Contents/MacOS/OpenTune'), '/Applications/OpenTune.app/Contents/MacOS/OpenTune');
+  });
+
   test('scrubDir redacts nested json and log files in place', () => {
     const dir = makeTempDir('e2e-scrub');
     try {

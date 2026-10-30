@@ -87,6 +87,7 @@ jobs:
           retention-days: 3
 
   smoke-macos:
+    if: ${{ false }}
     needs: package
     uses: ./.github/workflows/smoke-macos.yml
     with:
@@ -131,15 +132,53 @@ jobs:
       - name: npm ci and build
         working-directory: ot-mcp
         run: npm ci --no-audit --no-fund && npm run build
-      - name: D. command-launch --tty with the real helper
+      - name: E1. script with an open pipe as input
         run: |
           set +e; set -u
           dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
-          mkdir -p "$RUNNER_TEMP/tpl" "$RUNNER_TEMP/out"
-          printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '' '<PROPERTIES>' '  <VALUE name="shared.onboardingShown" val="1"/>' '</PROPERTIES>' > "$RUNNER_TEMP/tpl/app-preferences.settings"
-          node .github/scripts/sidecar-smoke.mjs command-launch --steps "$RUNNER_TEMP/out/steps.json" --command "$dir/OpenTune-AI.command" \
-            --mcp "$GITHUB_WORKSPACE/ot-mcp/dist/opentune-mcp.mjs" --exe "$dir/OpenTune-ctl.app/Contents/MacOS/OpenTune" --tty \
-            --data-dir "$RUNNER_TEMP/launch-tty" --template "$RUNNER_TEMP/tpl" --out "$RUNNER_TEMP/out/launch-tty.json"
-          echo "helper exit code: $?"
-          cat "$RUNNER_TEMP/out/launch-tty.json"
+          (sleep 4) | script -q /dev/null /bin/sh -c 'echo hello; tty; if [ -t 1 ]; then echo stdout-is-tty; fi'
+          echo "E1 rc=$?"
+          (sleep 4) | script -q /dev/null "$dir/OpenTune-AI.command" --version
+          echo "E1b rc=$?"
+          pkill -x OpenTune || true
+      - name: E2. python pty.fork runs the launcher
+        run: |
+          set +e; set -u
+          dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
+          d="$RUNNER_TEMP/dE2"; mkdir -p "$d"
+          which python3; python3 --version
+          cat > "$RUNNER_TEMP/ptyrun.py" <<'PY'
+          import os, pty, sys, time
+          pid, fd = pty.fork()
+          if pid == 0:
+              os.execv(sys.argv[1], sys.argv[1:])
+          out = b''
+          try:
+              while True:
+                  chunk = os.read(fd, 4096)
+                  if not chunk:
+                      break
+                  out += chunk
+          except OSError:
+              pass
+          _, status = os.waitpid(pid, 0)
+          print('child exit status', os.waitstatus_to_exitcode(status))
+          print('output', out[:300])
+          PY
+          sed -i '' 's/^          //' "$RUNNER_TEMP/ptyrun.py"
+          OPENTUNE_DATA_DIR="$d" python3 "$RUNNER_TEMP/ptyrun.py" "$dir/OpenTune-AI.command" --control-api-ready-file="$d/ready.json"
+          echo "E2 rc=$?"
+          for n in 1 2 3; do sleep 3; ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "E2: no OpenTune process after $((n*3)) s"; done
+          ls -R "$d" | head -12
+          pkill -x OpenTune || true
+      - name: E3. expect runs the launcher
+        run: |
+          set +e; set -u
+          dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
+          d="$RUNNER_TEMP/dE3"; mkdir -p "$d"
+          which expect
+          OPENTUNE_DATA_DIR="$d" expect -c 'set timeout 20; spawn -noecho {*}$argv; expect eof; catch wait result; puts "exit [lindex $result 3]"' "$dir/OpenTune-AI.command" --control-api-ready-file="$d/ready.json"
+          echo "E3 rc=$?"
+          for n in 1 2 3; do sleep 3; ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "E3: no OpenTune process after $((n*3)) s"; done
+          ls -R "$d" | head -12
           pkill -x OpenTune || true

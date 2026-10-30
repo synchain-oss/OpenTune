@@ -25,6 +25,7 @@ import {
   parseLaunchLog,
   renderStepSummary,
   REQUIRED_GROUPS_MACOS,
+  resultRows,
   RESULTS,
   runCommandLaunch,
   runMcpLaunch,
@@ -429,5 +430,24 @@ describe('OpenTune-AI.command template', () => {
     assert.ok(code.includes('if [ -t 1 ]; then'));
     // A background child of a terminal session can die with the session: the script does not start the app that way.
     assert.ok(!code.some((l) => /nohup|&\s*$/.test(l)), 'no background start');
+  });
+});
+
+describe('resultRows with an entry that does not repeat the contract vectors', () => {
+  const smoke = { result: 'PASS', counts: { PASS: 1, FAIL: 0, SKIP: 0, 'FLAKY-SKIP': 0 }, steps: [{ name: 'hello', result: 'PASS', ms: 5, note: 'protocol 1.0' }] };
+  const log = { ok: true, backend: 'CoreML', f0ModelPath: '/Applications/OpenTune.app/Contents/Resources/models/fcpe.onnx', problems: [] };
+
+  test('the contract row is N/A with the reason, and the skipped step is not a failure', () => {
+    const rows = resultRows({ smoke, log, contractNotRun: 'ran on the other entry', contractOutcome: 'skipped', smokeOutcome: 'success' });
+    const contract = rows.filter((r) => r.group === 'contract');
+    assert.equal(contract.length, 1);
+    assert.equal(contract[0].result, 'N/A');
+    assert.match(contract[0].note, /other entry/);
+    assert.ok(!rows.some((r) => r.result === 'FAIL'));
+  });
+
+  test('without the reason a missing contract report is still a failure', () => {
+    const rows = resultRows({ smoke, log, contractOutcome: 'skipped', smokeOutcome: 'success' });
+    assert.equal(rows.filter((r) => r.group === 'contract' && r.result === 'FAIL').length, 2);
   });
 });

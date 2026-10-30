@@ -25,7 +25,7 @@
 //            the instance it started (only after its discovery file in --data-dir names that pid)
 //   d3d12    --steps <json> --official-dir <dir> --sidecar <dir> [--seconds <n>]
 //   results  --steps <json> [--contract <vitest json>] [--smoke <json>] [--log <check-log report json>]
-//            [--contract-seconds <n>] [--smoke-seconds <n>] [--contract-outcome <outcome>] [--smoke-outcome <outcome>]
+//            [--contract-seconds <n>] [--smoke-seconds <n>] [--contract-outcome <outcome>] [--smoke-outcome <outcome>] [--contract-not-run <reason>]
 //   summary  --steps <json> [--title <t>] [--package <zip name>] [--mcp-ref <r>] [--out <md>] [--json <file>]
 //                                                             exit 1 on any FAIL or a missing required group
 //
@@ -443,7 +443,7 @@ export function inspectD3d12({ officialDir, sidecarDir, seconds = null }) {
 // results: contract vectors, smoke scenario and the log check, run against the side-car
 // ---------------------------------------------------------------------------------------------
 
-export function resultRows({ contract = null, smoke = null, log = null, contractSeconds = null, smokeSeconds = null, contractOutcome = null, smokeOutcome = null }) {
+export function resultRows({ contract = null, smoke = null, log = null, contractSeconds = null, smokeSeconds = null, contractOutcome = null, smokeOutcome = null, contractNotRun = '' }) {
   const rows = [];
   // The two runner steps are continue-on-error: a JSON report that looks fine does not make them pass, the step outcome does.
   // null = the caller does not check the outcome (unit use); the workflow always passes it.
@@ -452,7 +452,9 @@ export function resultRows({ contract = null, smoke = null, log = null, contract
     if (outcome !== 'success') rows.push(row(group, `${label}：步骤退出码非 0`, 'FAIL', `某步退出码非 0（步骤结果：${outcome || '(空)'}），即使报告文件看起来正常也不算通过`));
   };
   const counts = (c) => `PASS ${c.pass} / FAIL ${c.fail} / SKIP ${c.skip} / FLAKY-SKIP ${c.flakySkip}`;
-  if (!contract) rows.push(row('contract', '契约向量（对 side-car 的 exe）', 'FAIL', '没有结果文件', contractSeconds));
+  // contractNotRun: why this entry does not repeat the contract vectors (they test the package's program, not the official install).
+  if (contractNotRun) rows.push(row('contract', '契约向量（对 side-car 的 exe）', 'N/A', contractNotRun));
+  else if (!contract) rows.push(row('contract', '契约向量（对 side-car 的 exe）', 'FAIL', '没有结果文件', contractSeconds));
   else {
     const c = countVitest(contract);
     const empty = c.pass + c.fail + c.skip + c.flakySkip === 0;
@@ -469,7 +471,7 @@ export function resultRows({ contract = null, smoke = null, log = null, contract
       rows.push(row('smoke', `冒烟：${s.name}`, RESULTS.includes(r) ? r : 'FAIL', String(s.note ?? ''), Number.isFinite(Number(s.ms)) ? Number(s.ms) / 1000 : null));
     }
   }
-  outcomeRow('contract', '契约向量', contractOutcome);
+  if (!contractNotRun) outcomeRow('contract', '契约向量', contractOutcome);
   outcomeRow('smoke', '冒烟场景', smokeOutcome);
   if (!log) rows.push(row('log', 'F0 模型来自官方模型目录（契约与冒烟的日志）', 'FAIL', '没有日志检查结果'));
   else rows.push(row('log', 'F0 模型来自官方模型目录（契约与冒烟的日志）', log.ok ? 'PASS' : 'FAIL', `后端 ${log.backend}；${log.f0ModelPath ?? '(无)'}${(log.problems ?? []).length ? `；${log.problems.slice(0, 2).join('；')}` : ''}`));
@@ -869,7 +871,7 @@ const CLI_SPEC = {
   dir: 'string', 'expect-dir': 'string', 'models-dir': 'string', location: 'string', version: 'string', 'registry-version': 'string', out: 'string',
   documented: 'string', report: 'string', phase: 'string', 'install-dir': 'string', 'mcp-ref': 'string',
   mcp: 'string', exe: 'string', 'data-dir': 'string', template: 'string', 'official-dir': 'string', 'logs-out': 'string', timeout: 'string',
-  sidecar: 'string', contract: 'string', smoke: 'string', log: 'string', 'contract-seconds': 'string', 'smoke-seconds': 'string', 'contract-outcome': 'string', 'smoke-outcome': 'string',
+  sidecar: 'string', contract: 'string', smoke: 'string', log: 'string', 'contract-seconds': 'string', 'smoke-seconds': 'string', 'contract-outcome': 'string', 'smoke-outcome': 'string', 'contract-not-run': 'string',
   title: 'string', package: 'string', json: 'string',
   // macOS
   platform: 'string', app: 'string', 'expect-app': 'string', kind: 'string', 'official-app': 'string', command: 'string', home: 'string', tty: 'bool',
@@ -987,7 +989,7 @@ async function main(argv) {
     case 'results': {
       need('steps');
       const secs = (v) => (v === undefined || v === '' || !Number.isFinite(Number(v)) ? null : Number(v));
-      record(resultRows({ contract: optJson(o.contract), smoke: optJson(o.smoke), log: optJson(o.log), contractSeconds: secs(o['contract-seconds']), smokeSeconds: secs(o['smoke-seconds']), contractOutcome: o['contract-outcome'] ?? null, smokeOutcome: o['smoke-outcome'] ?? null }));
+      record(resultRows({ contract: optJson(o.contract), smoke: optJson(o.smoke), log: optJson(o.log), contractSeconds: secs(o['contract-seconds']), smokeSeconds: secs(o['smoke-seconds']), contractOutcome: o['contract-outcome'] ?? null, smokeOutcome: o['smoke-outcome'] ?? null, contractNotRun: o['contract-not-run'] ?? '' }));
       break;
     }
     case 'summary': {

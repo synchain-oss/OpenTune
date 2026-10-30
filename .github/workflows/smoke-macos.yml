@@ -15,7 +15,8 @@ name: smoke-macos
 #      modelsDir 是官方安装的模型目录、推理不崩溃。
 #   4. 像用户那样运行 OpenTune-AI.command：由程序启动（没有终端，脚本变成 OpenTune）、在终端里（伪终端，脚本请 macOS 打开应用后返回，OpenTune 继续运行）、
 #      以及用真实用户目录的默认位置，MCP 连上实例。
-#   5. 对 OpenTune-AI.command 跑 MCP 仓库的契约向量与冒烟场景，检查日志里的模型目录。
+#   5. 对 OpenTune-AI.command 跑 MCP 仓库的契约向量与冒烟场景，检查日志里的模型目录。契约向量（约半小时，每个向量都启动一个新的
+#      OpenTune）只在官方 1.8.1 这一台上运行，另一台记 N/A 并写明原因；冒烟场景两台都跑。
 # macOS 没有 D3D12：这部分和 doctor 里 Windows 专有的检查记 N/A（既不算失败也不算通过）。每步的结果与耗时写进 job 摘要与 artifact（上传前脱敏）。
 # 只有 FAIL 或某组没有结果才使 job 失败。
 
@@ -43,7 +44,13 @@ jobs:
       fail-fast: false
       matrix:
         # 钉版文件里的两个受支持版本：1.8.1（universal2）与 1.8.0（Apple 芯片）。1.7.9 的 dmg 里放的是 Git LFS 指针而不是模型，不支持。
-        version: ['1.8.1', '1.8.0']
+        # 契约向量检查的是测试包里的程序本身（不看官方安装，两个版本的模型文件相同），在 macOS runner 上要跑半个多小时
+        # （每个向量都启动一个新的 OpenTune），所以只在 1.8.1 这一台上完整运行；1.8.0 记 N/A 并写明原因，其余步骤两台都跑。
+        include:
+          - version: '1.8.1'
+            contract: true
+          - version: '1.8.0'
+            contract: false
     defaults:
       run:
         shell: bash
@@ -261,6 +268,7 @@ jobs:
       # 契约与冒烟各自 continue-on-error，结果由最后的汇总统一判定（同 e2e-windows）。
       - name: Contract vectors against the package
         id: contract
+        if: ${{ matrix.contract }}
         continue-on-error: true
         timeout-minutes: 50
         working-directory: ot-mcp
@@ -301,12 +309,17 @@ jobs:
         env:
           # The two runner steps are continue-on-error: their outcome, not only their JSON report, decides the result.
           CONTRACT_OUTCOME: ${{ steps.contract.outcome }}
+          CONTRACT_RUN: ${{ matrix.contract }}
           SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
         run: |
           set -uo pipefail
+          not_run=""
+          if [ "$CONTRACT_RUN" != true ]; then
+            not_run="这一台不重复运行：契约向量检查的是测试包里的程序本身，与官方安装无关（两个官方版本的模型文件相同），已在官方 1.8.1 那一台上完整运行"
+          fi
           node "$SC_SCRIPT" results --steps "$SC_STEPS" --contract "$SC_OUT/contract.json" --smoke "$SC_OUT/smoke.json" \
             --log "$SC_OUT/log-report.json" "--contract-outcome=$CONTRACT_OUTCOME" "--smoke-outcome=$SMOKE_OUTCOME" \
-            "--contract-seconds=${SC_CONTRACT_SECONDS:-}" "--smoke-seconds=${SC_SMOKE_SECONDS:-}"
+            "--contract-seconds=${SC_CONTRACT_SECONDS:-}" "--smoke-seconds=${SC_SMOKE_SECONDS:-}" "--contract-not-run=$not_run"
           code=0
           node "$SC_SCRIPT" summary --steps "$SC_STEPS" --platform macos --title "macOS 冒烟：官方 OpenTune $OT_VERSION" \
             --package "$PACKAGE_NAME.zip" --mcp-ref "$MCP_REF" --out "$GITHUB_STEP_SUMMARY" --json "$SC_OUT/sidecar-report.json" || code=$?

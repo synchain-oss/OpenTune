@@ -13,7 +13,7 @@ name: smoke-macos
 #      MCP 要求被启动的程序旁边有 opentune-control.json，该文件在包的顶层、紧挨着 .command，不能放进应用包：codesign 把
 #      Contents/MacOS 里的每个文件都当作代码）启动并导入一段生成的音频：ONNX Runtime 动态库来自测试包自己的应用包、
 #      modelsDir 是官方安装的模型目录、推理不崩溃。
-#   4. 像用户那样运行 OpenTune-AI.command：由程序启动（没有终端，脚本变成 OpenTune）、在终端里（伪终端，OpenTune 在后台继续运行）、
+#   4. 像用户那样运行 OpenTune-AI.command：由程序启动（没有终端，脚本变成 OpenTune）、在终端里（伪终端，脚本请 macOS 打开应用后返回，OpenTune 继续运行）、
 #      以及用真实用户目录的默认位置，MCP 连上实例。
 #   5. 对 OpenTune-AI.command 跑 MCP 仓库的契约向量与冒烟场景，检查日志里的模型目录。
 # macOS 没有 D3D12：这部分和 doctor 里 Windows 专有的检查记 N/A（既不算失败也不算通过）。每步的结果与耗时写进 job 摘要与 artifact（上传前脱敏）。
@@ -232,7 +232,7 @@ jobs:
         run: node "$SC_SCRIPT" d3d12 --steps "$SC_STEPS" --platform macos
 
       # 像用户那样运行 OpenTune-AI.command：由程序启动（没有终端，脚本变成 OpenTune）与在终端窗口里（用伪终端 script -q /dev/null，
-      # 后台启动后脚本返回）各一次，数据目录隔离、参数原样传给应用；最后用真实用户目录里的默认位置再运行一次。
+      # 脚本请 macOS 打开应用后返回）各一次，数据目录隔离、参数原样传给应用；最后用真实用户目录里的默认位置再运行一次。
       - name: Run OpenTune-AI.command without a terminal (isolated data folder, arguments pass through)
         run: |
           set -euo pipefail

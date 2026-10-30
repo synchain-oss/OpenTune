@@ -103,6 +103,14 @@ jobs:
       run:
         shell: bash
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ot-dev-package-macos
@@ -111,36 +119,28 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/x"
           ditto -x -k "$RUNNER_TEMP"/pkg/*.zip "$RUNNER_TEMP/x"
-      - name: G. launcher variants under script (open pipe as input)
+          ls "$RUNNER_TEMP/x"
+      - name: Check out the MCP repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: synchain-oss/opentune-mcp-server
+          ref: feature/v1
+          path: ot-mcp
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+      - name: npm ci and build
+        working-directory: ot-mcp
+        run: npm ci --no-audit --no-fund && npm run build
+      - name: D. command-launch --tty with the real helper
         run: |
           set +e; set -u
           dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
-          mk() { # name, body line for the tty branch
-            f="$dir/variant-$1.command"
-            {
-              echo '#!/bin/sh'
-              echo 'here=$(cd "$(dirname "$0")" && pwd) || exit 1'
-              echo 'exe="$here/OpenTune-ctl.app/Contents/MacOS/OpenTune"'
-              echo 'echo "started $$ tty=$([ -t 1 ] && echo yes || echo no)" >> "$OPENTUNE_DATA_DIR/marker.txt"'
-              echo "$2"
-              echo 'echo "after launch" >> "$OPENTUNE_DATA_DIR/marker.txt"'
-              echo 'exit 0'
-            } > "$f"
-            chmod +x "$f"
-          }
-          mk v1 'nohup "$exe" --control-api "$@" >/dev/null 2>&1 &'
-          mk v2 '( trap "" HUP; exec "$exe" --control-api "$@" </dev/null >/dev/null 2>&1 ) &'
-          mk v4 'nohup "$exe" --control-api "$@" </dev/null >/dev/null 2>&1 &'
-          mk v5 'trap "" HUP; "$exe" --control-api "$@" </dev/null >/dev/null 2>&1 &'
-          mk v6 '( trap "" HUP TERM; exec "$exe" --control-api "$@" </dev/null >/dev/null 2>&1 ) & sleep 3'
-          for v in v1 v2 v4 v5 v6; do
-            d="$RUNNER_TEMP/dG$v"; mkdir -p "$d"
-            echo "=== $v"
-            (sleep 12) | OPENTUNE_DATA_DIR="$d" script -q /dev/null "$dir/variant-$v.command" --control-api-ready-file="$d/ready.json"
-            echo "$v: script returned rc=$?"
-            ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "$v: no OpenTune process"
-            echo "$v: marker:"; cat "$d/marker.txt" 2>&1
-            ls "$d"
-            pkill -x OpenTune || true
-            sleep 1
-          done
+          mkdir -p "$RUNNER_TEMP/tpl" "$RUNNER_TEMP/out"
+          printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '' '<PROPERTIES>' '  <VALUE name="shared.onboardingShown" val="1"/>' '</PROPERTIES>' > "$RUNNER_TEMP/tpl/app-preferences.settings"
+          node .github/scripts/sidecar-smoke.mjs command-launch --steps "$RUNNER_TEMP/out/steps.json" --command "$dir/OpenTune-AI.command" \
+            --mcp "$GITHUB_WORKSPACE/ot-mcp/dist/opentune-mcp.mjs" --exe "$dir/OpenTune-ctl.app/Contents/MacOS/OpenTune" --tty \
+            --data-dir "$RUNNER_TEMP/launch-tty" --template "$RUNNER_TEMP/tpl" --out "$RUNNER_TEMP/out/launch-tty.json"
+          echo "helper exit code: $?"
+          cat "$RUNNER_TEMP/out/launch-tty.json"
+          pkill -x OpenTune || true

@@ -737,6 +737,15 @@ function singleInstance(root) {
 }
 
 /**
+ * Runs the command ("$@") under a pseudo terminal, as a Terminal window does: macOS's `script` gives it one. `script`
+ * copies its own standard input to the pseudo terminal and ends the command when that input ends, and it needs the input
+ * to be a pipe or a terminal (not /dev/null, which ends it at once, and not a socket, which Node's 'pipe' stdio is:
+ * "tcgetattr/ioctl: Operation not supported on socket"). The process substitution is a real pipe that stays open and idle
+ * until the command has returned.
+ */
+export const TTY_WRAPPER = 'script -q /dev/null "$@" < <(sleep 30)';
+
+/**
  * Starts OpenTune the way a macOS user does after unpacking the package: by running OpenTune-AI.command.
  * With a data folder (OPENTUNE_DATA_DIR) the instance is isolated, and a ready file is asked for through an
  * extra argument to show that arguments reach the app. Without one (`dataDir` empty, `home` given) the
@@ -746,8 +755,8 @@ function singleInstance(root) {
  * Two ways of running the script, as the script itself tells them apart by whether it has a terminal:
  *   - default: no terminal (stdio ignored, like a program that starts it, e.g. OpenTune MCP Server): the script
  *     becomes OpenTune (exec), so the process that was started is the one the discovery file names;
- *   - tty: under a pseudo terminal (`script -q /dev/null <command>`, as in a Terminal window): OpenTune is started in the
- *     background and the script returns; OpenTune must still be running afterwards.
+ *   - tty: under a pseudo terminal (TTY_WRAPPER, as in a Terminal window): the script asks macOS to open the app
+ *     (open(1)) and returns; OpenTune must be running, and still be, after the script has returned.
  */
 export async function runCommandLaunch({ command, mcp, dataDir = '', home = '', template = '', timeoutMs = 90000, spawnFn = spawn, psFn = null, tty = false }) {
   const facts = { mode: tty ? 'tty' : 'exec', exitCode: null, scriptExited: null, scriptPid: 0, pid: 0, sameProcess: null, aliveAfterScript: null, commandLine: '', readyFile: null, status: null, ended: null, seconds: null, settingsDir: null, logs: null, problems: [] };
@@ -765,11 +774,7 @@ export async function runCommandLaunch({ command, mcp, dataDir = '', home = '', 
   let pid = 0;
   try {
     const args = readyFile ? [`--control-api-ready-file=${readyFile}`] : [];
-    // `script` copies its standard input to the pseudo terminal and, at the end of that input, ends the command it runs:
-    // a closed or empty input (stdio 'ignore') would kill the launcher before it starts OpenTune. The pipe stays open and
-    // idle, as a Terminal window's input does, until the command returns.
-    const sh = tty ? spawnFn('script', ['-q', '/dev/null', command, ...args], { stdio: ['pipe', 'ignore', 'ignore'], env }) : spawnFn(command, args, { stdio: 'ignore', env });
-    sh.stdin?.on?.('error', () => undefined);
+    const sh = tty ? spawnFn('bash', ['-c', TTY_WRAPPER, 'bash', command, ...args], { stdio: 'ignore', env }) : spawnFn(command, args, { stdio: 'ignore', env });
     facts.scriptPid = sh.pid ?? 0;
     facts.scriptExited = false;
     const exited = new Promise((resolve) => {
@@ -833,9 +838,9 @@ export function evaluateCommandLaunch({ facts, appExe, isolated }) {
   const found = facts.pid ? `pid ${facts.pid}，${Number(facts.seconds).toFixed(1)} 秒后出现发现文件` : '没有发现文件';
   const problems = facts.problems.length ? `；${facts.problems.join('；')}` : '';
   if (facts.mode === 'tty') {
-    // In a Terminal window the script starts OpenTune in the background and returns; OpenTune must outlive it.
+    // In a Terminal window the script has macOS open the app (open) and returns; OpenTune must outlive it.
     const ok = Boolean(facts.pid) && facts.scriptExited === true && facts.aliveAfterScript === true;
-    rows.push(row(group, `在终端里运行 OpenTune-AI.command：后台启动 OpenTune，脚本随即返回，OpenTune 继续运行${where}`, ok ? 'PASS' : 'FAIL', `${found}；脚本${facts.scriptExited ? `已返回（退出码 ${facts.exitCode ?? '?'}）` : '没有返回'}；返回后 OpenTune ${facts.aliveAfterScript === true ? '仍在运行' : facts.aliveAfterScript === false ? '已退出' : '未知'}${problems}`, facts.seconds));
+    rows.push(row(group, `在终端里运行 OpenTune-AI.command：请 macOS 打开应用（open），脚本随即返回，OpenTune 继续运行${where}`, ok ? 'PASS' : 'FAIL', `${found}；脚本${facts.scriptExited ? `已返回（退出码 ${facts.exitCode ?? '?'}）` : '没有返回'}；返回后 OpenTune ${facts.aliveAfterScript === true ? '仍在运行' : facts.aliveAfterScript === false ? '已退出' : '未知'}${problems}`, facts.seconds));
   } else {
     // Started by a program (no terminal): the script becomes OpenTune, so the started process is OpenTune itself.
     const ok = Boolean(facts.pid) && facts.sameProcess === true;

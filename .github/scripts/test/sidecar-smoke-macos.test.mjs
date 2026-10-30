@@ -29,6 +29,7 @@ import {
   runCommandLaunch,
   runMcpLaunch,
   samePosix,
+  TTY_WRAPPER,
 } from '../sidecar-smoke.mjs';
 import { SCRIPTS } from './helpers.mjs';
 
@@ -295,14 +296,13 @@ describe('runCommandLaunch and evaluateCommandLaunch (stand-in launcher scripts 
       ].join('\n'),
     );
   });
-  // `exec-cmd` is the stand-in for the script without a terminal, `bg-cmd` the one under a terminal; `script -q /dev/null <cmd>`
-  // (what the tty mode runs) is mapped to the command it wraps, as macOS's script would run it.
+  // `exec-cmd` is the stand-in for the script without a terminal, `bg-cmd` the one under a terminal; the wrapper that runs a
+  // command under a pseudo terminal (what the tty mode runs) is mapped to the command it wraps.
   const spawnFn = (cmd, args, opts) => {
-    if (cmd === 'script') {
-      // macOS's script ends the command it runs when its own standard input ends: the input must be an open pipe.
-      assert.deepEqual(args.slice(0, 2), ['-q', '/dev/null']);
-      assert.equal(opts.stdio[0], 'pipe', 'script is not given a closed or empty standard input');
-      return spawnFn(args[2], args.slice(3), opts);
+    if (cmd === 'bash') {
+      // The tty mode runs the command through TTY_WRAPPER: macOS's script, whose standard input must be a pipe that stays open.
+      assert.deepEqual(args.slice(0, 3), ['-c', TTY_WRAPPER, 'bash']);
+      return spawnFn(args[3], args.slice(4), opts);
     }
     if (cmd === 'exec-cmd') return spawn(process.execPath, [execScript, ...args], opts);
     if (cmd === 'bg-cmd') return spawn(process.execPath, [backgroundScript, ...args], opts);
@@ -408,5 +408,26 @@ describe('runCommandLaunch and evaluateCommandLaunch (stand-in launcher scripts 
       delete process.env.STAND_IN_HOME;
     }
     assert.ok(macosDefaultControlRoot('/Users/x').endsWith('/Library/Application Support/OpenTune') || macosDefaultControlRoot('/Users/x').endsWith('\\Library\\Application Support\\OpenTune'));
+  });
+});
+
+describe('OpenTune-AI.command template', () => {
+  const template = fs.readFileSync(path.join(SCRIPTS, '..', 'release', 'templates', 'macos', 'OpenTune-AI.command'), 'utf8').replace(/\r\n/g, '\n');
+  const code = template.split('\n').filter((l) => !l.startsWith('#'));
+
+  test('starts with a shebang and the SPDX header, so the script runs in sh', () => {
+    const lines = template.split('\n');
+    assert.equal(lines[0], '#!/bin/sh');
+    assert.match(lines[1], /SPDX-FileCopyrightText/);
+    assert.match(lines[2], /SPDX-License-Identifier: AGPL-3\.0-or-later/);
+  });
+
+  test('without a terminal it becomes OpenTune (exec), under a terminal it has macOS open the app', () => {
+    assert.ok(code.includes('exec "$exe" --control-api "$@"'), 'exec of the executable, switch first and the arguments passed on');
+    assert.ok(code.some((l) => l.trim() === 'exec open "$app" --args --control-api "$@"'));
+    assert.ok(code.some((l) => l.trim() === 'exec open "$app" --env "OPENTUNE_DATA_DIR=$OPENTUNE_DATA_DIR" --args --control-api "$@"'));
+    assert.ok(code.includes('if [ -t 1 ]; then'));
+    // A background child of a terminal session can die with the session: the script does not start the app that way.
+    assert.ok(!code.some((l) => /nohup|&\s*$/.test(l)), 'no background start');
   });
 });

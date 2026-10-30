@@ -12,10 +12,21 @@ name: Build macOS
 # 触发：PR → dev（完整编译与 ctest）；手动；PR → feature/** 改到本 workflow、依赖锁定脚本或锁文件时（用来在
 # 引入或修改它的 PR 上首跑，见 gate job）。不是必需检查：阻塞与否由合并前的聚合检查另行决定。
 # runner 能力不足（核数、内存、时长）时如实降级：job summary 写明 runner 配置与每一步耗时，失败就是失败，不假装通过。
+# 出包模式（workflow_call 输入 release-package: true，由 prerelease.yml 调用）：只构建 Standalone 的 Release，
+# 控制接口选项 ON，不构建、不运行测试；删除 POST_BUILD 复制进 .app 的 models 后断言不存在，用 release-notices.mjs
+# （--platform macos）按产物实际内容生成 THIRD-PARTY-NOTICES.txt 与 build-info.json，再把 OpenTune.app（tar 打包以保留
+# 权限）连同二者上传为 artifact opentune-macos-release-inputs（3 天）。出包模式总是编译（不看 gate 的改动判定）。
+# 改名、改 Info.plist、签名与打 zip 在 prerelease.yml 的 package-macos（release-macos.mjs）。
 on:
   pull_request:
     branches: [dev, 'feature/**']
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      release-package:
+        description: 'true：出包模式（Standalone Release、控制接口 ON、不跑测试），上传打包输入；默认 false'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -44,10 +55,13 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
+          RELEASE_PACKAGE: ${{ inputs.release-package == true && 'true' || 'false' }}
         run: |
           set -euo pipefail
           run=true
-          if [ "$EVENT_NAME" = "pull_request" ] && [ "$BASE_REF" != "dev" ]; then
+          if [ "$RELEASE_PACKAGE" = "true" ]; then
+            echo "出包模式（release-package），编译" >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$EVENT_NAME" = "pull_request" ] && [ "$BASE_REF" != "dev" ]; then
             files=$(git diff --name-only "$(git merge-base "origin/$BASE_REF" HEAD)" HEAD)
             if printf '%s\n' "$files" | grep -Eq '^(\.github/workflows/build-macos\.yml|\.github/scripts/(bootstrap-deps\.ps1|deps\.lock\.json|list-test-targets\.ps1|run-ctest\.ps1))$'; then
               echo "PR → $BASE_REF 改到 macOS 流水线或它依赖的脚本，编译" >> "$GITHUB_STEP_SUMMARY"
@@ -66,7 +80,9 @@ jobs:
     timeout-minutes: 150
     env:
       GIT_LFS_SKIP_SMUDGE: '1'
-      OT_CONFIG: RelWithDebInfo
+      # 出包模式只在被 prerelease.yml 以 release-package: true 调用时打开；其他触发方式下 inputs 为空，值为 false。
+      OT_PACKAGE: ${{ inputs.release-package == true && 'true' || 'false' }}
+      OT_CONFIG: ${{ inputs.release-package == true && 'Release' || 'RelWithDebInfo' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -119,6 +135,7 @@ jobs:
           : > "$voc"
 
       - name: Configure (Ninja, RelWithDebInfo, arm64)
+        if: env.OT_PACKAGE != 'true'
         run: |
           cmake -S "$GITHUB_WORKSPACE" -B "$OT_BUILD" -G Ninja \
             -DCMAKE_BUILD_TYPE="$OT_CONFIG" \
@@ -126,12 +143,29 @@ jobs:
             -DOPENTUNE_BUILD_TESTS=ON \
             -DOPENTUNE_ENABLE_CONTROL_API=ON
 
+      # 出包模式：只要 Standalone 的 Release，控制接口必须 ON，不注册测试。实际执行的命令（路径换成占位符）记下来，
+      # 写进发布说明的「精确构建命令」。
+      - name: Configure (Ninja, Release, arm64; release package)
+        if: env.OT_PACKAGE == 'true'
+        shell: pwsh
+        run: |
+          $configure = @(
+            'cmake', '-S', $env:GITHUB_WORKSPACE, '-B', $env:OT_BUILD, '-G', 'Ninja',
+            "-DCMAKE_BUILD_TYPE=$env:OT_CONFIG", '-DCMAKE_OSX_ARCHITECTURES=arm64',
+            '-DOPENTUNE_BUILD_TESTS=OFF', '-DOPENTUNE_ENABLE_CONTROL_API=ON'
+          )
+          ConvertTo-Json -Compress -InputObject @($configure | ForEach-Object { ([string]$_).Replace($env:GITHUB_WORKSPACE, '<src>').Replace($env:OT_BUILD, '<build>') }) |
+            Set-Content -LiteralPath "$env:RUNNER_TEMP/ot-cmd-configure.json" -Encoding utf8
+          & $configure[0] $configure[1..($configure.Count - 1)]
+          if ($LASTEXITCODE -ne 0) { throw "configure failed ($LASTEXITCODE)" }
+
       # ControlProcessorTests 也在 macOS 上构建并运行（无界面的 POSIX 消息泵用 CFRunLoopRunInMode，测试目标在 APPLE 下链接
       # CoreFoundation）。
       # 目标：Standalone 与所有已注册测试的可执行文件，不含 ARALifecycleContractTests（在锁定的 ARA SDK 2.3.0 下
       # 编不过，上游问题）。测试与目标的对应关系读自生成的 CTestTestfile.cmake。
       - name: Build (--parallel = runner cores)
         id: build
+        if: env.OT_PACKAGE != 'true'
         shell: pwsh
         run: |
           $targets = @('OpenTuneStandalone_Standalone') + @(pwsh -NoProfile -File .github/scripts/list-test-targets.ps1 -BuildDir $env:OT_BUILD -Exclude 'ARALifecycleContractTests')
@@ -150,6 +184,7 @@ jobs:
       # 两段都调用了 runDispatchLoop() / stopDispatchLoop()，与 JUCE 9.0.3 的锁存有关。已知上游行为，见上游 PR 附带的
       # 发现清单。不改测试本身；仍然编译它，只是不在 ctest 中运行。
       - name: ctest (-E ARALifecycleContractTests,RenderRuntimeLifecycleTests, per-test OPENTUNE_DATA_DIR)
+        if: env.OT_PACKAGE != 'true'
         shell: pwsh
         run: |
           $summary = "$env:RUNNER_TEMP/ot-ctest-summary.json"
@@ -168,3 +203,116 @@ jobs:
             }
           }
           if ($code -ne 0) { throw "ctest failed ($code)" }
+
+      # ---- 出包模式 -------------------------------------------------------------------------------------------
+
+      - name: Build the Standalone (Release, --parallel = runner cores; release package)
+        id: buildpkg
+        if: env.OT_PACKAGE == 'true'
+        shell: pwsh
+        run: |
+          $jobs = [Environment]::ProcessorCount
+          $build = @('cmake', '--build', $env:OT_BUILD, '--parallel', "$jobs", '--target', 'OpenTuneStandalone_Standalone')
+          ConvertTo-Json -Compress -InputObject @($build | ForEach-Object { ([string]$_).Replace($env:OT_BUILD, '<build>') }) |
+            Set-Content -LiteralPath "$env:RUNNER_TEMP/ot-cmd-build.json" -Encoding utf8
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          & $build[0] $build[1..($build.Count - 1)]
+          $code = $LASTEXITCODE
+          "- 编译耗时：$([math]::Round($sw.Elapsed.TotalMinutes, 1)) 分钟（$jobs 个并行任务，出包模式）" >> $env:GITHUB_STEP_SUMMARY
+          if ($code -ne 0) { throw "build failed ($code)" }
+
+      # 上游 POST_BUILD 在 .app 里生成的 Contents/Resources/models（LFS 指针 + 0 字节声码器占位）会遮住官方安装的模型：
+      # 删除它，并断言 build 输出里已不存在任何 models 目录。
+      - name: Remove POST_BUILD models folders and assert none is left
+        id: models
+        if: ${{ !cancelled() && env.OT_PACKAGE == 'true' && steps.buildpkg.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          found=$(find "$OT_BUILD" -type d -iname models -prune -print)
+          count=0
+          while IFS= read -r d; do
+            [ -n "$d" ] || continue
+            rm -rf "$d"
+            echo "removed $d"
+            count=$((count + 1))
+          done <<< "$found"
+          left=$(find "$OT_BUILD" -type d -iname models -print)
+          if [ -n "$left" ]; then echo "models still present: $left"; exit 1; fi
+          echo "removed $count models folder(s); none left"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: ${{ !cancelled() && env.OT_PACKAGE == 'true' && steps.models.outcome == 'success' }}
+        with:
+          node-version: 22
+
+      # 出包模式：按产物实际内容生成 THIRD-PARTY-NOTICES.txt 与 build-info.json（链接了哪些组件、ARA 是否被链接、
+      # 二进制要求的最低 macOS 版本与实际执行的构建命令）。
+      - name: Generate THIRD-PARTY-NOTICES and build info (release package)
+        id: notices
+        if: ${{ !cancelled() && env.OT_PACKAGE == 'true' && steps.models.outcome == 'success' }}
+        shell: pwsh
+        run: |
+          $out = "$env:RUNNER_TEMP/ot-release"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $voc = 'pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx'
+          $commands = @(
+            @{ step = 'Fetch the pinned dependencies (sha256 verified; never any model weights)'; argv = @('pwsh', '-NoProfile', '-File', '.github/scripts/bootstrap-deps.ps1', '-DepsRoot', '<deps>', '-LinkInto', '<src>', '-Platform', 'macos') },
+            @{ step = 'Empty placeholder for the vocoder file that the POST_BUILD step copies (no model is downloaded)'; argv = @('sh', '-c', "mkdir -p <src>/$(Split-Path -Parent $voc) && : > <src>/$voc") },
+            @{ step = 'Configure (Xcode command line tools, CMake and Ninja on an Apple silicon Mac)'; argv = @(Get-Content -Raw -LiteralPath "$env:RUNNER_TEMP/ot-cmd-configure.json" | ConvertFrom-Json) },
+            @{ step = 'Build'; argv = @(Get-Content -Raw -LiteralPath "$env:RUNNER_TEMP/ot-cmd-build.json" | ConvertFrom-Json) },
+            @{ step = 'Delete the models folder that the POST_BUILD step copied into the app bundle (placeholders that would hide the official models)'; argv = @('find', '<build>', '-type', 'd', '-iname', 'models', '-exec', 'rm', '-rf', '{}', '+') },
+            @{ step = 'Third-party notices and build information'; argv = @('node', '.github/scripts/release-notices.mjs', '--platform', 'macos', '--build', '<build>', '--deps', '<deps>', '--config', $env:OT_CONFIG, '--out-notices', 'THIRD-PARTY-NOTICES.txt', '--out-info', 'build-info.json') }
+          )
+          ConvertTo-Json -Depth 5 -InputObject $commands | Set-Content -LiteralPath "$out/commands.json" -Encoding utf8
+          $notices = @(
+            '.github/scripts/release-notices.mjs', '--platform', 'macos', '--build', $env:OT_BUILD, '--deps', $env:OT_DEPS, '--config', $env:OT_CONFIG,
+            '--commands', "$out/commands.json", '--out-notices', "$out/THIRD-PARTY-NOTICES.txt", '--out-info', "$out/build-info.json"
+          )
+          node @notices
+          if ($LASTEXITCODE -ne 0) { throw "release-notices failed ($LASTEXITCODE)" }
+
+      # 产物里的东西：.app 用 tar 打包（artifact 上传会丢文件权限），先递归、大小写不敏感地扫描：出现 *.onnx、models 目录、
+      # LFS 指针或 D3D12* 即失败。同时把构建的诊断信息（build.ninja、CMakeCache.txt、.app 的文件列表）单独上传，便于排查。
+      - name: Stage the packaging inputs (app bundle as tar, notices, build info) and scan them
+        id: stage
+        if: ${{ !cancelled() && env.OT_PACKAGE == 'true' && steps.notices.outcome == 'success' }}
+        run: |
+          set -euo pipefail
+          stage="$RUNNER_TEMP/ot-stage"
+          rel="$RUNNER_TEMP/ot-release"
+          rm -rf "$stage"
+          mkdir -p "$stage"
+          apps=$(find "$OT_BUILD" -type d -name OpenTune.app -prune -print)
+          if [ "$(printf '%s\n' "$apps" | grep -c .)" != 1 ]; then echo "expected exactly one OpenTune.app in the build, found: $apps"; exit 1; fi
+          app="$apps"
+          echo "app bundle: $app"
+          find "$app" -print | sed "s|^$app|OpenTune.app|" | sort > "$RUNNER_TEMP/ot-app-tree.txt"
+          cat "$RUNNER_TEMP/ot-app-tree.txt"
+          bad=$(find "$app" \( -iname '*.onnx' -o -iname 'd3d12*' -o -iname models \) -print)
+          if [ -n "$bad" ]; then echo "forbidden entries in the app bundle:"; echo "$bad"; exit 1; fi
+          lfs=$(find "$app" -type f -size -2k -exec grep -l '^version https://git-lfs.github.com/spec/' {} + || true)
+          if [ -n "$lfs" ]; then echo "Git LFS pointers in the app bundle:"; echo "$lfs"; exit 1; fi
+          (cd "$(dirname "$app")" && COPYFILE_DISABLE=1 tar -cf "$stage/app.tar" OpenTune.app)
+          cp "$rel/THIRD-PARTY-NOTICES.txt" "$rel/build-info.json" "$stage/"
+          if tar -tf "$stage/app.tar" | grep -iE '(^|/)models(/|$)|\.onnx$|(^|/)d3d12'; then echo "forbidden entries in app.tar"; exit 1; fi
+          dbg="$RUNNER_TEMP/ot-debug"
+          rm -rf "$dbg"
+          mkdir -p "$dbg"
+          cp "$OT_BUILD/build.ninja" "$OT_BUILD/CMakeCache.txt" "$RUNNER_TEMP/ot-app-tree.txt" "$dbg/"
+          echo "staged: $(ls -l "$stage" | tail -n +2 | awk '{print $9 " " $5}' | tr '\n' ';')"
+      - name: Upload the packaging inputs (3 days)
+        if: ${{ !cancelled() && steps.stage.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: opentune-macos-release-inputs
+          path: ${{ runner.temp }}/ot-stage
+          if-no-files-found: error
+          retention-days: 3
+      - name: Upload the build diagnostics (3 days)
+        if: ${{ !cancelled() && env.OT_PACKAGE == 'true' && steps.stage.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: opentune-macos-build-diagnostics
+          path: ${{ runner.temp }}/ot-debug
+          if-no-files-found: warn
+          retention-days: 3

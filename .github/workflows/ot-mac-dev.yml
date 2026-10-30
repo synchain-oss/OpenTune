@@ -103,14 +103,6 @@ jobs:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 1
-          lfs: false
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 22
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: ot-dev-package-macos
@@ -119,66 +111,41 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/x"
           ditto -x -k "$RUNNER_TEMP"/pkg/*.zip "$RUNNER_TEMP/x"
-          ls "$RUNNER_TEMP/x"
-      - name: Check out the MCP repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: synchain-oss/opentune-mcp-server
-          ref: feature/v1
-          path: ot-mcp
-          fetch-depth: 1
-          lfs: false
-          persist-credentials: false
-      - name: npm ci and build
-        working-directory: ot-mcp
-        run: npm ci --no-audit --no-fund && npm run build
-      - name: E1. script with an open pipe as input
+      - name: F1. script with a pipe from sleep (bash pipeline)
         run: |
           set +e; set -u
           dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
-          (sleep 4) | script -q /dev/null /bin/sh -c 'echo hello; tty; if [ -t 1 ]; then echo stdout-is-tty; fi'
-          echo "E1 rc=$?"
-          (sleep 4) | script -q /dev/null "$dir/OpenTune-AI.command" --version
-          echo "E1b rc=$?"
+          d="$RUNNER_TEMP/dF1"; mkdir -p "$d"
+          t0=$(date +%s)
+          (sleep 8) | OPENTUNE_DATA_DIR="$d" script -q /dev/null "$dir/OpenTune-AI.command" --control-api-ready-file="$d/ready.json"
+          echo "F1 pipeline returned rc=$? after $(( $(date +%s) - t0 )) s"
+          for n in 1 2 3; do ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "F1: no OpenTune process (check $n)"; sleep 3; done
+          ls "$d" "$d"/control/instances 2>&1 | head
           pkill -x OpenTune || true
-      - name: E2. python pty.fork runs the launcher
+      - name: F2. script with process substitution (bash returns when script returns)
         run: |
           set +e; set -u
           dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
-          d="$RUNNER_TEMP/dE2"; mkdir -p "$d"
-          which python3; python3 --version
-          cat > "$RUNNER_TEMP/ptyrun.py" <<'PY'
-          import os, pty, sys, time
-          pid, fd = pty.fork()
-          if pid == 0:
-              os.execv(sys.argv[1], sys.argv[1:])
-          out = b''
-          try:
-              while True:
-                  chunk = os.read(fd, 4096)
-                  if not chunk:
-                      break
-                  out += chunk
-          except OSError:
-              pass
-          _, status = os.waitpid(pid, 0)
-          print('child exit status', os.waitstatus_to_exitcode(status))
-          print('output', out[:300])
-          PY
-          sed -i '' 's/^          //' "$RUNNER_TEMP/ptyrun.py"
-          OPENTUNE_DATA_DIR="$d" python3 "$RUNNER_TEMP/ptyrun.py" "$dir/OpenTune-AI.command" --control-api-ready-file="$d/ready.json"
-          echo "E2 rc=$?"
-          for n in 1 2 3; do sleep 3; ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "E2: no OpenTune process after $((n*3)) s"; done
-          ls -R "$d" | head -12
+          d="$RUNNER_TEMP/dF2"; mkdir -p "$d"
+          t0=$(date +%s)
+          OPENTUNE_DATA_DIR="$d" bash -c 'script -q /dev/null "$@" < <(sleep 60)' bash "$dir/OpenTune-AI.command" --control-api-ready-file="$d/ready.json"
+          echo "F2 returned rc=$? after $(( $(date +%s) - t0 )) s"
+          for n in 1 2 3; do ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "F2: no OpenTune process (check $n)"; sleep 3; done
+          ls "$d" "$d"/control/instances 2>&1 | head
           pkill -x OpenTune || true
-      - name: E3. expect runs the launcher
+      - name: F3. a node socket as input (what the helper did)
         run: |
           set +e; set -u
           dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
-          d="$RUNNER_TEMP/dE3"; mkdir -p "$d"
-          which expect
-          OPENTUNE_DATA_DIR="$d" expect -c 'set timeout 20; spawn -noecho {*}$argv; expect eof; catch wait result; puts "exit [lindex $result 3]"' "$dir/OpenTune-AI.command" --control-api-ready-file="$d/ready.json"
-          echo "E3 rc=$?"
-          for n in 1 2 3; do sleep 3; ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "E3: no OpenTune process after $((n*3)) s"; done
-          ls -R "$d" | head -12
+          d="$RUNNER_TEMP/dF3"; mkdir -p "$d"
+          cat > "$RUNNER_TEMP/f3.mjs" <<'JS'
+          import { spawn } from 'node:child_process';
+          const c = spawn('script', ['-q', '/dev/null', process.argv[2], process.argv[3]], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, OPENTUNE_DATA_DIR: process.argv[4] } });
+          c.stdout.on('data', (b) => console.log('stdout:', JSON.stringify(String(b))));
+          c.stderr.on('data', (b) => console.log('stderr:', JSON.stringify(String(b))));
+          c.on('exit', (code, sig) => { console.log('exit', code, sig); setTimeout(() => process.exit(0), 100); });
+          JS
+          sed -i '' 's/^          //' "$RUNNER_TEMP/f3.mjs"
+          node "$RUNNER_TEMP/f3.mjs" "$dir/OpenTune-AI.command" "--control-api-ready-file=$d/ready.json" "$d"
+          for n in 1 2; do ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "F3: no OpenTune process (check $n)"; sleep 3; done
           pkill -x OpenTune || true

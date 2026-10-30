@@ -98,7 +98,7 @@ jobs:
           report() {
             result=FAIL
             if [ "$ok" = true ]; then result=PASS; fi
-            node "$SC_SCRIPT" step --steps "$SC_STEPS" --group install --name "下载官方 OpenTune $OT_VERSION，核对 sha256 与大小" \
+            node "$SC_SCRIPT" step --steps "$SC_STEPS" --group install --name "下载官方 OpenTune ${OT_VERSION}，核对 sha256 与大小" \
               --result "$result" --seconds "$(( $(date +%s) - start ))"
           }
           trap report EXIT

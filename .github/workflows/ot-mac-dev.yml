@@ -111,41 +111,36 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/x"
           ditto -x -k "$RUNNER_TEMP"/pkg/*.zip "$RUNNER_TEMP/x"
-      - name: F1. script with a pipe from sleep (bash pipeline)
+      - name: G. launcher variants under script (open pipe as input)
         run: |
           set +e; set -u
           dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
-          d="$RUNNER_TEMP/dF1"; mkdir -p "$d"
-          t0=$(date +%s)
-          (sleep 8) | OPENTUNE_DATA_DIR="$d" script -q /dev/null "$dir/OpenTune-AI.command" --control-api-ready-file="$d/ready.json"
-          echo "F1 pipeline returned rc=$? after $(( $(date +%s) - t0 )) s"
-          for n in 1 2 3; do ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "F1: no OpenTune process (check $n)"; sleep 3; done
-          ls "$d" "$d"/control/instances 2>&1 | head
-          pkill -x OpenTune || true
-      - name: F2. script with process substitution (bash returns when script returns)
-        run: |
-          set +e; set -u
-          dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
-          d="$RUNNER_TEMP/dF2"; mkdir -p "$d"
-          t0=$(date +%s)
-          OPENTUNE_DATA_DIR="$d" bash -c 'script -q /dev/null "$@" < <(sleep 60)' bash "$dir/OpenTune-AI.command" --control-api-ready-file="$d/ready.json"
-          echo "F2 returned rc=$? after $(( $(date +%s) - t0 )) s"
-          for n in 1 2 3; do ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "F2: no OpenTune process (check $n)"; sleep 3; done
-          ls "$d" "$d"/control/instances 2>&1 | head
-          pkill -x OpenTune || true
-      - name: F3. a node socket as input (what the helper did)
-        run: |
-          set +e; set -u
-          dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
-          d="$RUNNER_TEMP/dF3"; mkdir -p "$d"
-          cat > "$RUNNER_TEMP/f3.mjs" <<'JS'
-          import { spawn } from 'node:child_process';
-          const c = spawn('script', ['-q', '/dev/null', process.argv[2], process.argv[3]], { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, OPENTUNE_DATA_DIR: process.argv[4] } });
-          c.stdout.on('data', (b) => console.log('stdout:', JSON.stringify(String(b))));
-          c.stderr.on('data', (b) => console.log('stderr:', JSON.stringify(String(b))));
-          c.on('exit', (code, sig) => { console.log('exit', code, sig); setTimeout(() => process.exit(0), 100); });
-          JS
-          sed -i '' 's/^          //' "$RUNNER_TEMP/f3.mjs"
-          node "$RUNNER_TEMP/f3.mjs" "$dir/OpenTune-AI.command" "--control-api-ready-file=$d/ready.json" "$d"
-          for n in 1 2; do ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "F3: no OpenTune process (check $n)"; sleep 3; done
-          pkill -x OpenTune || true
+          mk() { # name, body line for the tty branch
+            f="$dir/variant-$1.command"
+            {
+              echo '#!/bin/sh'
+              echo 'here=$(cd "$(dirname "$0")" && pwd) || exit 1'
+              echo 'exe="$here/OpenTune-ctl.app/Contents/MacOS/OpenTune"'
+              echo 'echo "started $$ tty=$([ -t 1 ] && echo yes || echo no)" >> "$OPENTUNE_DATA_DIR/marker.txt"'
+              echo "$2"
+              echo 'echo "after launch" >> "$OPENTUNE_DATA_DIR/marker.txt"'
+              echo 'exit 0'
+            } > "$f"
+            chmod +x "$f"
+          }
+          mk v1 'nohup "$exe" --control-api "$@" >/dev/null 2>&1 &'
+          mk v2 '( trap "" HUP; exec "$exe" --control-api "$@" </dev/null >/dev/null 2>&1 ) &'
+          mk v4 'nohup "$exe" --control-api "$@" </dev/null >/dev/null 2>&1 &'
+          mk v5 'trap "" HUP; "$exe" --control-api "$@" </dev/null >/dev/null 2>&1 &'
+          mk v6 '( trap "" HUP TERM; exec "$exe" --control-api "$@" </dev/null >/dev/null 2>&1 ) & sleep 3'
+          for v in v1 v2 v4 v5 v6; do
+            d="$RUNNER_TEMP/dG$v"; mkdir -p "$d"
+            echo "=== $v"
+            (sleep 12) | OPENTUNE_DATA_DIR="$d" script -q /dev/null "$dir/variant-$v.command" --control-api-ready-file="$d/ready.json"
+            echo "$v: script returned rc=$?"
+            ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "$v: no OpenTune process"
+            echo "$v: marker:"; cat "$d/marker.txt" 2>&1
+            ls "$d"
+            pkill -x OpenTune || true
+            sleep 1
+          done

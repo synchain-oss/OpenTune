@@ -1,0 +1,101 @@
+OpenTune {{APP_VERSION}} with the local control API - unofficial test build {{BUILD_LABEL}}
+INSTALL (macOS {{MIN_MACOS}} or later, Apple silicon only)
+
+(中文：INSTALL.zh-CN.txt)
+
+This is NOT an official OpenTune release. The only official channel is
+{{OFFICIAL_RELEASES_URL}}. Read README-UNOFFICIAL.txt first.
+
+The commands below are for the Terminal app. Replace <folder> with the folder
+you extract the package to.
+
+
+1. Install official OpenTune first
+----------------------------------
+
+- Install official OpenTune for macOS, version {{MIN_OFFICIAL_VERSION}} or later,
+  from {{OFFICIAL_RELEASES_URL}}
+  in the default location (/Applications/OpenTune.app).
+- This package contains no model weights. This build uses the models of that
+  installation (inside OpenTune.app, in Contents/Resources/models). Without
+  them, pitch detection, note generation and rendering do not work.
+- This build runs on Apple silicon Macs (M1 and later) with macOS {{MIN_MACOS}}
+  or later. Intel Macs are not supported.
+
+
+2. Check the download
+---------------------
+
+- Compare the SHA-256 of the zip with the value on the release page:
+
+    shasum -a 256 ~/Downloads/{{PACKAGE_NAME}}.zip
+
+
+3. Extract
+----------
+
+- Extract the zip to a folder of your own, for example ~/OpenTune-test
+  (create it first). Double-clicking the zip in Finder works, or:
+
+    mkdir -p <folder>
+    ditto -x -k ~/Downloads/{{PACKAGE_NAME}}.zip <folder>
+
+  Do not put OpenTune-ctl.app into the official OpenTune.app or replace the
+  official OpenTune.app. The names differ, so both can sit side by side.
+- Check every extracted file against SHA256SUMS (every line must say OK) and
+  the signature of the app (no output means it is intact):
+
+    cd <folder>/{{PACKAGE_NAME}}
+    shasum -a 256 -c SHA256SUMS
+    codesign --verify --deep --strict OpenTune-ctl.app
+
+
+4. Allow the first start
+------------------------
+
+The app is signed ad hoc and not notarized by Apple, so macOS Gatekeeper
+blocks the first start of OpenTune-AI.command and of OpenTune-ctl.app. If the
+hashes in steps 2 and 3 matched, allow them in one of two ways:
+
+- System Settings -> Privacy & Security: after the blocked start, scroll down
+  to the message about the blocked item and click "Open Anyway" (macOS asks
+  for your password). Do this for OpenTune-AI.command, and again for
+  OpenTune-ctl.app when it is blocked.
+- Or remove the quarantine mark of the whole folder in Terminal (the zip
+  extraction marks every file when the zip came from a browser):
+
+    xattr -dr com.apple.quarantine <folder>/{{PACKAGE_NAME}}
+
+
+5. Start
+--------
+
+- OpenTune-AI.command (double-click it in Finder; Terminal opens briefly)
+  starts OpenTune-ctl.app with the local control API on. Use it when OpenTune
+  MCP Server should operate OpenTune. Extra arguments given to the script are
+  passed on to OpenTune. It changes no settings and writes no files.
+- Opening OpenTune-ctl.app directly (double-click) starts OpenTune with the
+  control API off.
+- Quit official OpenTune before you start this build, and do not run both at
+  the same time.
+
+
+6. Settings and logs are shared with official OpenTune
+------------------------------------------------------
+
+- This build uses the same settings and log files as official OpenTune (in
+  your user Library folder, ~/Library/OpenTune). Changes made in one appear in
+  the other.
+- While the control API is on, OpenTune writes a discovery file to
+  ~/Library/Application Support/OpenTune/control/instances/ and deletes it on
+  normal exit.
+
+
+7. Uninstall
+------------
+
+- Quit OpenTune.
+- Delete <folder>/{{PACKAGE_NAME}} (or the folder you extracted to).
+- Delete ~/Library/Application Support/OpenTune/control/ (files of the control
+  API).
+- Do not delete ~/Library/OpenTune: official OpenTune uses it too.

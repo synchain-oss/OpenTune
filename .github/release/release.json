@@ -1,8 +1,13 @@
 {
   "schema": 1,
-  "comment": "Settings of the unofficial Windows test build, read by .github/scripts/release-package.mjs. minOfficialVersion is the official OpenTune release that must be installed on the machine (it provides the models and D3D12Core.dll); the side-car smoke test of prerelease.yml installs this version too (olderInstallers in .github/e2e/official-install.json), unpacks the package next to it and runs it, so a version that no longer works fails the build.",
+  "comment": "Settings of the unofficial test builds (Windows x64 and macOS arm64), read by .github/scripts/release-package.mjs. minOfficialVersion is the official OpenTune release that must be installed on the machine (it provides the models and, on Windows, D3D12Core.dll); the side-car smoke test of prerelease.yml installs this version too (olderInstallers in .github/e2e/official-install.json), unpacks the package next to it and runs it, so a version that no longer works fails the build. The macos section is the same for the macOS package: minOfficialVersion is the oldest official macOS release the smoke test passed with, bundleName / bundleIdentifier are written into the Info.plist of the renamed app bundle.",
   "officialRepository": "YuFeng926/OpenTune",
   "mcpRepository": "synchain-oss/opentune-mcp-server",
   "issuesUrl": "https://github.com/synchain-oss/opentune-mcp-server/issues",
-  "minOfficialVersion": "1.7.9"
+  "minOfficialVersion": "1.7.9",
+  "macos": {
+    "minOfficialVersion": "1.8.1",
+    "bundleName": "OpenTune-ctl",
+    "bundleIdentifier": "ca.synchain.opentune.ctltest"
+  }
 }

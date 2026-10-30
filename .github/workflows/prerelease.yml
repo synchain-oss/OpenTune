@@ -4,15 +4,17 @@
 # fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
 name: Prerelease
 
-# 非官方 Windows x64 测试版（zip）的出包流水线。说明见 .github/release/README.md。
-#   push tag synchain-test/*   正式出包：校验 tag → 构建 → 打包与校验 → side-car 冒烟 → 创建「草稿」预发布。
-#                              side-car 冒烟任一矩阵项失败就不建草稿。草稿只有维护者手动发布；本 workflow 从不发布、从不推 tag。
-#   workflow_dispatch          演练：构建 + 打包 + 白名单与 SHA256SUMS 校验 + side-car 冒烟 + 短保留期 artifact，不建 release。
-#   pull_request（改到打包相关路径）  同上，演练。
+# 非官方测试版（Windows x64 与 macOS Apple 芯片 arm64，各一个 zip）的出包流水线。说明见 .github/release/README.md。
+#   push tag synchain-test/*   正式出包：校验 tag → 两个平台各自构建 → 打包与校验 → side-car 冒烟 → 创建「草稿」预发布。
+#                              任一平台的 side-car 冒烟任一矩阵项失败就不建草稿。草稿只有维护者手动发布；本 workflow 从不发布、从不推 tag。
+#   workflow_dispatch          演练：两个平台各自构建 + 打包 + 白名单与 SHA256SUMS 校验 + side-car 冒烟 + 短保留期 artifact，不建 release。
+#   pull_request（改到打包相关路径）  同上，演练（macOS 的 job 同样运行）。
 # 校验 tag（只在 tag 触发时）：名字是 synchain-test/v<x.y.z>-ctl.<n>、x.y.z 等于 CMakeLists.txt 的 VERSION、
 # 提交是 dev 的祖先、该提交上由 GitHub Actions 创建的 fork-gate 为绿（其他 App 建的同名 check run 不算）。
 # 构建经 workflow_call 调 build-windows.yml 的出包模式：Standalone、Release（LTCG）、控制接口 ON，
-# 删除 POST_BUILD 生成的 models\ 并断言不存在，按产物实际内容生成 THIRD-PARTY-NOTICES.txt。
+# 删除 POST_BUILD 生成的 models\ 并断言不存在，按产物实际内容生成 THIRD-PARTY-NOTICES.txt。macOS 经 workflow_call 调
+# build-macos.yml 的出包模式（macos-14，arm64，Release，Ninja），同样删除 .app 里的 models 并生成 THIRD-PARTY-NOTICES.txt；
+# package-macos（release-macos.mjs）改名为 OpenTune-ctl.app、改 Info.plist、ad hoc 签名、用 ditto 打 zip。
 # 打包（release-package.mjs）：严格白名单，多一个文件、或出现 *.onnx、models/、LFS 指针、D3D12*、d3dconfig.exe、
 # STATEMENTS.txt（递归、大小写不敏感）即失败；生成 SHA256SUMS 并在 zip 里复核；发布正文过署名检查。
 # 任何 workflow 一律不用 pull_request 的 target 变体（CLAUDE.md §0 第 4 条）；默认只读权限，只有创建草稿的 job
@@ -27,9 +29,11 @@ on:
     paths:
       - '.github/workflows/prerelease.yml'
       - '.github/workflows/build-windows.yml'
+      - '.github/workflows/build-macos.yml'
       - '.github/release/**'
       - '.github/scripts/release-*.mjs'
       - '.github/scripts/test/release-lib.test.mjs'
+      - '.github/scripts/test/release-macos.test.mjs'
       - '.github/scripts/sidecar-smoke.mjs'
       - '.github/scripts/test/sidecar-smoke.test.mjs'
       - '.github/scripts/e2e-windows.mjs'
@@ -65,6 +69,7 @@ jobs:
       label: ${{ steps.v.outputs.label }}
       tag: ${{ steps.v.outputs.tag }}
       name: ${{ steps.v.outputs.name }}
+      name_macos: ${{ steps.v.outputs.name_macos }}
     steps:
       # lfs: false —— 绝不下载模型权重（CLAUDE.md §11）。
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -164,6 +169,80 @@ jobs:
             ${{ runner.temp }}/ot-out/*.zip
             ${{ runner.temp }}/ot-out/release-body.md
             ${{ runner.temp }}/ot-out/manifest.json
+          if-no-files-found: error
+          retention-days: ${{ needs.validate.outputs.mode == 'release' && 14 || 3 }}
+
+  # macOS：构建（build-macos.yml 的出包模式，macos-14）与打包（release-macos.mjs，需要 PlistBuddy、codesign、ditto，所以在 macOS 上）。
+  build-macos:
+    name: build-macos
+    needs: validate
+    uses: ./.github/workflows/build-macos.yml
+    with:
+      release-package: true
+
+  package-macos:
+    name: package-macos
+    needs: [validate, build-macos]
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: false
+          persist-credentials: false
+      # MODIFICATIONS.md 列出相对锁定上游快照的改动：显式取 upstream-mirror 与 upstream/* tag。
+      - name: Fetch the upstream mirror and snapshot tags
+        run: >-
+          git fetch --no-tags --force origin
+          '+refs/heads/upstream-mirror:refs/remotes/origin/upstream-mirror'
+          '+refs/tags/upstream/*:refs/tags/upstream/*'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: opentune-macos-release-inputs
+          path: ${{ runner.temp }}/ot-inputs
+      - name: Package (rename, Info.plist, ad hoc signature, allow-list, SHA256SUMS, zip, release body)
+        env:
+          LABEL: ${{ needs.validate.outputs.label }}
+          TAG: ${{ needs.validate.outputs.tag }}
+          NAME: ${{ needs.validate.outputs.name_macos }}
+          REPO: ${{ github.repository }}
+          SERVER: ${{ github.server_url }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          # 发布正文在 side-car 冒烟之前渲染；带这段正文的草稿只在冒烟的每个矩阵项都通过后才创建，所以凡是存在的草稿这句话都成立。
+          SMOKE_TEXT: >-
+            passed on GitHub-hosted macOS 14 (Apple silicon) runners with official OpenTune for macOS installed (the versions
+            are listed in the build run below; the draft is only created after the test passed); the runners have no
+            audio hardware or GPU, so playback and Core ML acceleration were not tested
+        run: |
+          set -euo pipefail
+          head=$(git rev-parse HEAD)
+          up_tag=$(git describe --tags --match 'upstream/*' --abbrev=0 HEAD)
+          up_commit=$(git rev-parse "$up_tag^{commit}")
+          git diff --no-renames --name-status "$up_commit" HEAD > "$RUNNER_TEMP/ot-name-status.txt"
+          args=(build --inputs "$RUNNER_TEMP/ot-inputs" --out "$RUNNER_TEMP/ot-out" --label "$LABEL"
+            --commit "$head" --date "$(git show -s --format=%cI HEAD)" --repository "$REPO" --server-url "$SERVER"
+            --name-status "$RUNNER_TEMP/ot-name-status.txt" --upstream-tag "$up_tag" --upstream-commit "$up_commit"
+            --run-url "$RUN_URL" --smoke "$SMOKE_TEXT")
+          if [ -n "$TAG" ]; then args+=(--tag "$TAG"); fi
+          node .github/scripts/release-macos.mjs "${args[@]}"
+          node .github/scripts/release-package.mjs verify --zip "$RUNNER_TEMP/ot-out/$NAME.zip" --name "$NAME"
+      - name: List the package folder (on failure)
+        if: failure()
+        run: |
+          ls -la "$RUNNER_TEMP/ot-out" || true
+          find "$RUNNER_TEMP/ot-out" -maxdepth 6 -print 2>/dev/null | head -200 || true
+      - name: Upload the package (rehearsal 3 days, tag build 14 days)
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: opentune-unofficial-macos-${{ needs.validate.outputs.label }}
+          path: |
+            ${{ runner.temp }}/ot-out/*.zip
+            ${{ runner.temp }}/ot-out/release-body-macos.md
+            ${{ runner.temp }}/ot-out/manifest-macos.json
           if-no-files-found: error
           retention-days: ${{ needs.validate.outputs.mode == 'release' && 14 || 3 }}
 

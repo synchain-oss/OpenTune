@@ -3,9 +3,9 @@ SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
 SPDX-License-Identifier: AGPL-3.0-or-later
 -->
 
-# Unofficial Windows test build: packaging
+# Unofficial test builds: packaging
 
-Fork-only (never goes upstream). This directory holds everything that goes into the unofficial Windows x64 test build of OpenTune with the local control API, apart from the binaries:
+Fork-only (never goes upstream). This directory holds everything that goes into the unofficial Windows x64 test build of OpenTune with the local control API, apart from the binaries. The macOS (Apple silicon, arm64) test build uses the same chain; what differs is described in [The macOS arm64 package](#the-macos-arm64-package) below.
 
 | Path | What it is |
 |---|---|
@@ -33,9 +33,31 @@ The zip contains one folder, `OpenTune-<version>-ctl.<n>-unofficial-win-x64/` (r
 
 Any other file, any subdirectory, two entries with the same name (or names that differ only in case, which collide when the zip is extracted on Windows), or anything that matches the forbidden list fails the build. The forbidden list is checked recursively and case-insensitively: `*.onnx`, a `models` path segment, a Git LFS pointer, any name starting with `D3D12`, `d3dconfig.exe` and `STATEMENTS.txt`. The same rules are applied to the staged files and to the zip as written.
 
+## The macOS arm64 package
+
+Same chain, different jobs: `build-macos.yml` (release-package mode, macos-14, arm64, Release, `OPENTUNE_ENABLE_CONTROL_API=ON`, Standalone only, no tests) builds the app and `.github/scripts/release-notices.mjs` writes the notices from the Ninja graph; job `package-macos` of `prerelease.yml` runs `.github/scripts/release-macos.mjs build` on a macOS runner, and `release-package.mjs verify` (platform taken from the package name) checks the finished zip. Templates are in `templates/macos/` (same names in the package, plus the executable `OpenTune-AI.command`).
+
+What `release-macos.mjs` does: unpack the app (`app.tar`, to keep file modes), rename `OpenTune.app` to `OpenTune-ctl.app` (so the official app is never replaced), delete the POST_BUILD `Contents/Resources/models` and `Contents/Resources/docs`, set `CFBundleName`, `CFBundleDisplayName` and `CFBundleIdentifier` from the `macos` section of `release.json` (`CFBundleExecutable` stays `OpenTune`), sign ad hoc (`codesign --force --sign -`, the ONNX Runtime dylib first, then the app) and check `codesign --verify --deep --strict`, write `SHA256SUMS` (after signing), check the allow-list, and zip with `ditto -c -k --sequesterRsrc --keepParent`. The zip is read back and checked again.
+
+The zip contains one folder, `OpenTune-<version>-ctl.<n>-unofficial-macos-arm64/` (rehearsals: `…-rehearsal-<sha7>-…`):
+
+`OpenTune-ctl.app` (`Contents/Info.plist`, `Contents/MacOS/OpenTune`, `Contents/Frameworks/libonnxruntime.<x.y.z>.dylib`, `Contents/_CodeSignature/CodeResources`, and optionally `PkgInfo`, `Resources/Icon.icns`, `Resources/RecentFilesMenuTemplate.nib`), `OpenTune-AI.command`, `opentune-control.json`, `LICENSE.txt`, `THIRD-PARTY-NOTICES.txt`, `README-UNOFFICIAL.txt`, `README-UNOFFICIAL.zh-CN.txt`, `MODIFICATIONS.md`, `INSTALL.txt`, `INSTALL.zh-CN.txt`, `SHA256SUMS`.
+
+Same forbidden list as Windows (no models, no `*.onnx`, no LFS pointers, no `D3D12*`); in addition, symbolic links are refused. There is no DirectML and no D3D12 on macOS.
+
+**Where `opentune-control.json` is.** OpenTune MCP Server only starts a program that has this file in the same folder (`dirname(OPENTUNE_MCP_OPENTUNE_PATH)`). The app inside the package cannot hold it: `codesign` treats every file in `Contents/MacOS` as code, and a JSON file there makes signing fail ("code object is not signed at all"). So the package points MCP at `OpenTune-AI.command`, and the manifest sits at the top level next to it. The members are those of the Windows file (below) except `d3d12`, which is absent on macOS.
+
+**`OpenTune-AI.command`** starts `OpenTune-ctl.app/Contents/MacOS/OpenTune --control-api "$@"`. Started by a program (no terminal, which is how MCP starts it) it `exec`s the app, so the process MCP started is OpenTune itself (MCP tracks that pid). Run in a Terminal window (double click) it starts the app in the background and returns, so OpenTune keeps running when the window is closed. It changes no settings and writes no files.
+
+**Gatekeeper.** The app is signed ad hoc and not notarized, like the official macOS packages, so macOS blocks the first launch of the `.command` and the app; `INSTALL.txt` explains the two ways to allow it (System Settings, or `xattr -dr com.apple.quarantine`). The macOS smoke test never has a quarantine flag because the runner downloads with `curl`/`ditto`, so it does not exercise that dialog.
+
+**Minimum official version.** `macos.minOfficialVersion` in `release.json` is `1.8.0`, the oldest official macOS release whose package carries the models: the official 1.7.9 `.dmg` has Git LFS pointers (133 bytes) instead of `fcpe.onnx` and the GAME models, so the F0 model cannot load and the version is not supported. The models are read from `/Applications/OpenTune.app/Contents/Resources/models` (the upstream fallback path on macOS, so the official app has to be in `/Applications`). Settings and logs of both apps live in `~/Library/OpenTune`; the control API writes its discovery files to `~/Library/Application Support/OpenTune/control/instances`.
+
+**Smoke test** (`.github/workflows/smoke-macos.yml`, called by job `smoke-macos` of `prerelease.yml`, helper `sidecar-smoke.mjs --platform macos`): one fresh macos-14 runner per official version in the pin (`1.8.1` universal2 `.pkg`, `1.8.0` Apple silicon `.pkg`; the installer is pinned in `.github/e2e/official-install.json`, section `macos`, and installed with `sudo installer` **on the runner only**). It checks the installed app and its models, extracts the zip with `ditto -x -k` and checks `shasum -a 256 -c SHA256SUMS`, `codesign --verify --deep --strict` and the allow-list, runs `opentune-mcp doctor --json`, starts OpenTune through MCP's `opentune_launch` with `OPENTUNE_MCP_OPENTUNE_PATH` set to `OpenTune-AI.command` and imports a generated tone (the ONNX Runtime image must be the dylib inside the package's app, `modelsDir` must be the official models folder, inference must not crash), runs `OpenTune-AI.command` the way a user would (no terminal; under a pseudo terminal; default data locations), and finally runs the MCP contract vectors and smoke scenario. Each step's result and time goes to the job summary and the artifact `sidecar-smoke-macos-<version>` (scrubbed). **N/A** means the check does not exist on macOS (D3D12, and the Windows-only doctor checks); it counts neither as a pass nor as a failure. Only FAIL, or a group without any result, fails the entry, and a tag build then creates no draft.
+
 ## `opentune-control.json`
 
-A small UTF-8 JSON object (no BOM, at most 8 KiB) next to `OpenTune.exe`. OpenTune MCP Server only launches an executable that has this file beside it, and it reads only `protocolMajors`. The other members describe the build for diagnostics (for example the MCP `doctor` command). Unknown members must be ignored by readers; new members may be added without changing `schema`, while removing or redefining a member increments it.
+A small UTF-8 JSON object (no BOM, at most 8 KiB) next to `OpenTune.exe` (macOS: next to `OpenTune-AI.command`). OpenTune MCP Server only launches an executable that has this file beside it, and it reads only `protocolMajors`. The other members describe the build for diagnostics (for example the MCP `doctor` command). Unknown members must be ignored by readers; new members may be added without changing `schema`, while removing or redefining a member increments it.
 
 | Member | Type | Meaning |
 |---|---|---|

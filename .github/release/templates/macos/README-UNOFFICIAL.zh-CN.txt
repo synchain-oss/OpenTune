@@ -42,11 +42,11 @@ Apple 开发者 ID。所以 macOS 的 Gatekeeper 会拦截第一次启动，INST
   OpenTune-ctl.app                程序本体；名字与官方的 OpenTune.app 不同，
                                   不会覆盖官方版（Bundle 标识 ca.synchain.opentune.ctltest）
     Contents/MacOS/OpenTune       可执行文件
-    Contents/MacOS/opentune-control.json
-                                  构建信息，供 OpenTune MCP Server 读取
     Contents/Frameworks/{{ORT_DYLIB}}
                                   ONNX Runtime（macOS arm64）
   OpenTune-AI.command             以开启控制接口的方式启动 OpenTune-ctl.app
+  opentune-control.json           构建信息，供 OpenTune MCP Server 读取；MCP 在它所启动的程序旁边找这个
+                                  文件，所以放在 OpenTune-AI.command 旁边（放进应用包里会破坏应用的签名）
   LICENSE.txt                     GNU AGPL v3（OpenTune 的许可）
   THIRD-PARTY-NOTICES.txt         第三方组件及其许可
   README-UNOFFICIAL.zh-CN.txt     本文件（README-UNOFFICIAL.txt 为英文版）

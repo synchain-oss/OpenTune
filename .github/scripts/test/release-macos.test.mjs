@@ -554,7 +554,8 @@ describe('release-macos.mjs build (fake programs)', () => {
       assert.deepEqual(problems, []);
 
       const names = readZip(zipBuf).map((e) => e.name.slice(name.length + 1)).filter((n) => n && !n.endsWith('/'));
-      assert.ok(names.includes(`${APP}/Contents/MacOS/opentune-control.json`));
+      assert.ok(names.includes('opentune-control.json'));
+      assert.ok(!names.some((n) => n.startsWith(`${APP}/Contents/MacOS/`) && n !== `${APP}/Contents/MacOS/OpenTune`), 'only the program may be in Contents/MacOS: codesign treats every file there as code');
       assert.ok(names.includes(`${APP}/Contents/_CodeSignature/CodeResources`));
       assert.ok(!names.some((n) => /models|\.onnx|UserGuide|docs\//i.test(n)), names.join(', '));
       assert.deepEqual(manifest.files.map((f) => f.name), [...manifest.files.map((f) => f.name)].sort());
@@ -568,8 +569,8 @@ describe('release-macos.mjs build (fake programs)', () => {
       assert.equal(plistString(plist, 'CFBundleIdentifier'), 'ca.synchain.opentune.ctltest');
       assert.equal(plistString(plist, 'CFBundleExecutable'), 'OpenTune');
 
-      // The side-car file: valid, for macOS, next to the program.
-      const control = JSON.parse(fs.readFileSync(path.join(dir, 'out', name, APP, 'Contents', 'MacOS', 'opentune-control.json'), 'utf8'));
+      // The side-car file: valid, for macOS, next to OpenTune-AI.command (not inside the app, which codesign would reject).
+      const control = JSON.parse(fs.readFileSync(path.join(dir, 'out', name, 'opentune-control.json'), 'utf8'));
       assert.equal(control.platform, 'macos-arm64');
       assert.equal(control.modelsBundled, false);
       assert.equal('d3d12' in control, false);

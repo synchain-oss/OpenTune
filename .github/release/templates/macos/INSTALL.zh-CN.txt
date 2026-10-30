@@ -69,6 +69,9 @@ OpenTune-AI.command 与 OpenTune-ctl.app 的第一次启动。如果第 2、3 �
 - OpenTune-AI.command（在访达里双击，终端会短暂打开）：以开启本机控制接口的方式启动
   OpenTune-ctl.app。需要让 OpenTune MCP Server 操作 OpenTune 时用它。给脚本的其他参数会
   原样转交给 OpenTune。它不改任何设置，也不写文件。
+- 让 OpenTune MCP Server 自己启动 OpenTune：把它的环境变量 OPENTUNE_MCP_OPENTUNE_PATH 设为本文件夹里
+  OpenTune-AI.command 的完整路径。MCP 要求它所启动的程序旁边有 opentune-control.json，这个文件就在
+  OpenTune-AI.command 旁边（放进应用包里会破坏应用的签名）。
 - 直接打开 OpenTune-ctl.app（双击）：以关闭控制接口的方式启动 OpenTune。
 - 启动本测试版之前先退出官方 OpenTune，不要同时运行两个。
 

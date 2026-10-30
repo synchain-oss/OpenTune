@@ -50,11 +50,13 @@ Files in this folder
                                   replaces it (bundle identifier
                                   ca.synchain.opentune.ctltest)
     Contents/MacOS/OpenTune       the program
-    Contents/MacOS/opentune-control.json
-                                  build information read by OpenTune MCP Server
     Contents/Frameworks/{{ORT_DYLIB}}
                                   ONNX Runtime (macOS arm64)
   OpenTune-AI.command             starts OpenTune-ctl.app with the control API on
+  opentune-control.json           build information read by OpenTune MCP Server
+                                  next to the program it starts, which is
+                                  OpenTune-AI.command (it cannot sit inside the
+                                  app: the signature of the app would not hold)
   LICENSE.txt                     GNU AGPL v3 (OpenTune's license)
   THIRD-PARTY-NOTICES.txt         third-party components and their licenses
   README-UNOFFICIAL.txt           this file (README-UNOFFICIAL.zh-CN.txt: Chinese)

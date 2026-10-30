@@ -1,0 +1,327 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 Synchain
+# SPDX-License-Identifier: AGPL-3.0-or-later
+#
+# fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
+name: smoke-macos
+
+# macOS 测试版的 side-car 冒烟（由 prerelease.yml 的 job smoke-macos 调用）：验证「测试包解压到已装官方 OpenTune 的 Mac 上就能用」。
+# 每个官方版本一台新的 macOS 14（Apple 芯片）runner：
+#   1. 按钉版文件（.github/e2e/official-install.json 的 macos 一节）下载并核对官方安装包，用 sudo installer 静默安装到 /Applications
+#      （官方安装包只在 runner 上运行，绝不在开发机上运行）；核对 Info.plist 的版本和模型。
+#   2. 解压本次打出的 zip（ditto -x -k），按 INSTALL 的命令跑 shasum 与 codesign --verify --deep --strict，再由脚本按 SHA256SUMS 与白名单核对。
+#   3. OpenTune MCP Server 的 doctor --json，以及经 MCP 的 opentune_launch（OPENTUNE_MCP_OPENTUNE_PATH = OpenTune-AI.command；
+#      MCP 要求被启动的程序旁边有 opentune-control.json，该文件在包的顶层、紧挨着 .command，不能放进应用包：codesign 把
+#      Contents/MacOS 里的每个文件都当作代码）启动并导入一段生成的音频：ONNX Runtime 动态库来自测试包自己的应用包、
+#      modelsDir 是官方安装的模型目录、推理不崩溃。
+#   4. 像用户那样运行 OpenTune-AI.command：由程序启动（没有终端，脚本变成 OpenTune）、在终端里（伪终端，OpenTune 在后台继续运行）、
+#      以及用真实用户目录的默认位置，MCP 连上实例。
+#   5. 对 OpenTune-AI.command 跑 MCP 仓库的契约向量与冒烟场景，检查日志里的模型目录。
+# macOS 没有 D3D12：这部分和 doctor 里 Windows 专有的检查记 N/A（既不算失败也不算通过）。每步的结果与耗时写进 job 摘要与 artifact（上传前脱敏）。
+# 只有 FAIL 或某组没有结果才使 job 失败。
+
+on:
+  workflow_call:
+    inputs:
+      package-artifact:
+        description: 'Name of the artifact that holds the macOS package zip (made by package-macos)'
+        required: true
+        type: string
+      package-name:
+        description: 'Package name without .zip (OpenTune-<version>-ctl.<n>-unofficial-macos-arm64)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: smoke-macos (official ${{ matrix.version }})
+    runs-on: macos-14
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        # 钉版文件里的两个受支持版本：1.8.1（universal2）与 1.8.0（Apple 芯片）。1.7.9 的 dmg 里放的是 Git LFS 指针而不是模型，不支持。
+        version: ['1.8.1', '1.8.0']
+    defaults:
+      run:
+        shell: bash
+    env:
+      MCP_REPOSITORY: synchain-oss/opentune-mcp-server
+      MCP_REF: feature/v1
+      # 契约向量里针对可执行文件的那一组（同 e2e-windows）。
+      CONTRACT_FILTER: against the exe
+      OT_VERSION: ${{ matrix.version }}
+      PACKAGE_NAME: ${{ inputs.package-name }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+
+      - name: Set work paths
+        run: |
+          work="$RUNNER_TEMP/ot-sc"
+          mkdir -p "$work/out/logs" "$work/kept" "$work/data" "$work/template" "$work/side-car" "$work/doctor-data" "$work/pkg"
+          {
+            echo "SC_WORK=$work"
+            echo "SC_OUT=$work/out"
+            echo "SC_STEPS=$work/out/steps.json"
+            echo "SC_PKG=$work/pkg"
+            echo "SC_SIDECAR=$work/side-car/$PACKAGE_NAME"
+            echo "SC_EXE=$work/side-car/$PACKAGE_NAME/OpenTune-ctl.app/Contents/MacOS/OpenTune"
+            echo "SC_LAUNCHER=$work/side-car/$PACKAGE_NAME/OpenTune-AI.command"
+            echo "SC_KEEP=$work/kept"
+            echo "SC_TEMPLATE=$work/template"
+            echo "SC_PIN=$GITHUB_WORKSPACE/.github/e2e/official-install.json"
+            echo "SC_SCRIPT=$GITHUB_WORKSPACE/.github/scripts/sidecar-smoke.mjs"
+            echo "E2E_SCRIPT=$GITHUB_WORKSPACE/.github/scripts/e2e-windows.mjs"
+            echo "OFFICIAL_APP=/Applications/OpenTune.app"
+          } >> "$GITHUB_ENV"
+
+      - name: Download the package of this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ inputs.package-artifact }}
+          path: ${{ runner.temp }}/ot-sc/pkg
+
+      - name: Download the pinned official installer (sha256 verified)
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          ok=false
+          report() {
+            result=FAIL
+            if [ "$ok" = true ]; then result=PASS; fi
+            node "$SC_SCRIPT" step --steps "$SC_STEPS" --group install --name "下载官方 OpenTune $OT_VERSION，核对 sha256 与大小" \
+              --result "$result" --seconds "$(( $(date +%s) - start ))"
+          }
+          trap report EXIT
+          url=$(jq -r --arg v "$OT_VERSION" '.macos.installers[] | select(.version == $v) | .url' "$SC_PIN")
+          kind=$(jq -r --arg v "$OT_VERSION" '.macos.installers[] | select(.version == $v) | .kind' "$SC_PIN")
+          if [ -z "$url" ] || [ -z "$kind" ]; then echo "no pinned macOS installer for OpenTune $OT_VERSION in official-install.json"; exit 1; fi
+          file="$SC_WORK/official.$kind"
+          curl -fsSL --retry 3 --retry-delay 5 -o "$file" "$url"
+          node "$E2E_SCRIPT" check-installer --pin "$SC_PIN" --platform macos --version "$OT_VERSION" --file "$file"
+          echo "SC_SETUP=$file" >> "$GITHUB_ENV"
+          echo "SC_KIND=$kind" >> "$GITHUB_ENV"
+          ok=true
+
+      # pkg：sudo installer（安装到 /Applications）；dmg：挂载后把 OpenTune.app 拷到 /Applications。官方应用包在 /Applications/OpenTune.app，
+      # 模型在它的 Contents/Resources/models（钉版文件里的 modelsDir）。
+      - name: Install the official OpenTune
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          if [ "$SC_KIND" = pkg ]; then
+            if ! sudo installer -pkg "$SC_SETUP" -target / > "$SC_OUT/official-install.log" 2>&1; then
+              tail -20 "$SC_OUT/official-install.log"
+              node "$SC_SCRIPT" step --steps "$SC_STEPS" --group install --name "安装官方 OpenTune $OT_VERSION" --result FAIL --note "sudo installer failed"
+              exit 1
+            fi
+            tail -5 "$SC_OUT/official-install.log"
+          else
+            mnt="$SC_WORK/dmg"
+            mkdir -p "$mnt"
+            hdiutil attach -nobrowse -readonly -mountpoint "$mnt" "$SC_SETUP"
+            ditto "$mnt/OpenTune.app" "$OFFICIAL_APP"
+            hdiutil detach "$mnt"
+          fi
+          seconds=$(( $(date +%s) - start ))
+          plist_version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$OFFICIAL_APP/Contents/Info.plist")
+          echo "installed OpenTune $plist_version"
+          models=$(node "$E2E_SCRIPT" models-dir --pin "$SC_PIN" --platform macos --version "$OT_VERSION" "--app=$OFFICIAL_APP")
+          echo "models folder of this version: $models"
+          echo "SC_MODELS=$models" >> "$GITHUB_ENV"
+          node "$SC_SCRIPT" install --steps "$SC_STEPS" --platform macos --app "$OFFICIAL_APP" --expect-app "$OFFICIAL_APP" \
+            --models-dir "$models" --version "$OT_VERSION" --registry-version "$plist_version" --kind "$SC_KIND" \
+            --seconds "$seconds" --out "$SC_OUT/official-install.json"
+      # 安装程序可能在安装后启动官方 OpenTune：结束它，并确认真实的 ~/Library/OpenTune 没被写过（同 Windows）。
+      # 后面经 MCP 启动时，任何没有发现文件的 OpenTune 进程都会让它报 RUNNING_WITHOUT_API。
+      - name: Stop any official OpenTune the installer started
+        run: |
+          set -euo pipefail
+          echo "official OpenTune processes started by the installer: $(pgrep -x OpenTune | wc -l | tr -d ' ')"
+          pkill -x OpenTune || true
+          if [ -e "$HOME/Library/OpenTune" ]; then echo "the real user data folder exists after the official install (it must stay untouched)"; exit 1; fi
+      - name: Official models match the pin (fcpe, GAME)
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          code=0
+          node "$E2E_SCRIPT" check-models --pin "$SC_PIN" --platform macos --dir "$SC_MODELS" || code=$?
+          result=PASS
+          if [ "$code" -ne 0 ]; then result=FAIL; fi
+          node "$SC_SCRIPT" step --steps "$SC_STEPS" --group models --name '官方模型与钉版 sha256 一致（fcpe、GAME）' \
+            --result "$result" --seconds "$(( $(date +%s) - start ))" --note "$SC_MODELS"
+          if [ "$code" -ne 0 ]; then echo "official models do not match the pin"; exit 1; fi
+
+      # INSTALL 的命令照用户的做法原样运行一次（shasum 全部 OK、codesign 无输出），再由脚本按 SHA256SUMS 与白名单逐项核对。
+      - name: Extract the package and check it (shasum, codesign, SHA256SUMS, allow-list)
+        run: |
+          set -euo pipefail
+          start=$(date +%s)
+          ditto -x -k "$SC_PKG/$PACKAGE_NAME.zip" "$SC_WORK/side-car"
+          cd "$SC_SIDECAR"
+          documented=""
+          if ! out=$(shasum -a 256 -c SHA256SUMS 2>&1); then documented=$(printf '%s\n' "$out" | grep -v ': OK$' | tr '\n' ';'); fi
+          cs=0
+          codesign --verify --deep --strict --verbose=2 OpenTune-ctl.app > "$SC_OUT/codesign-verify.txt" 2>&1 || cs=$?
+          cat "$SC_OUT/codesign-verify.txt"
+          codesign -dv --verbose=2 OpenTune-ctl.app > "$SC_OUT/codesign-details.txt" 2>&1 || true
+          cat "$SC_OUT/codesign-details.txt"
+          result=PASS
+          if [ "$cs" -ne 0 ]; then result=FAIL; fi
+          node "$SC_SCRIPT" step --steps "$SC_STEPS" --group package --name 'codesign --verify --deep --strict OpenTune-ctl.app（INSTALL 的命令，ad hoc 签名）' \
+            --result "$result" --note "exit code $cs"
+          node "$SC_SCRIPT" package --steps "$SC_STEPS" --platform macos --dir "$SC_SIDECAR" --official-app "$OFFICIAL_APP" \
+            "--documented=$documented" --seconds "$(( $(date +%s) - start ))"
+          if [ "$cs" -ne 0 ]; then exit 1; fi
+
+      - name: Check out the MCP repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ env.MCP_REPOSITORY }}
+          ref: ${{ env.MCP_REF }}
+          path: ot-mcp
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+      - name: npm ci and build the MCP bundle
+        working-directory: ot-mcp
+        run: |
+          set -euo pipefail
+          npm ci --no-audit --no-fund
+          npm run build
+          echo "SC_MCP=$(pwd)/dist/opentune-mcp.mjs" >> "$GITHUB_ENV"
+
+      # 首次引导模板（同 e2e-windows）：每次启动前复制进这次启动的数据目录，免得首次引导对话框挡住接口的写操作。
+      - name: Seed the onboarding-completed preferences template
+        run: |
+          printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '' '<PROPERTIES>' '  <VALUE name="shared.onboardingShown" val="1"/>' '</PROPERTIES>' > "$SC_TEMPLATE/app-preferences.settings"
+          cat "$SC_TEMPLATE/app-preferences.settings"
+
+      # doctor 有失败项时退出码为 1：这里不看退出码，由脚本按检查 ID 逐项判定（Windows 专有的检查记 N/A）。
+      - name: doctor
+        env:
+          OPENTUNE_MCP_OPENTUNE_PATH: ${{ env.SC_LAUNCHER }}
+          OPENTUNE_DATA_DIR: ${{ env.SC_WORK }}/doctor-data
+        run: |
+          set -euo pipefail
+          code=0
+          node "$SC_MCP" doctor --json > "$SC_OUT/doctor.json" || code=$?
+          echo "doctor exit code: $code"
+          cat "$SC_OUT/doctor.json"
+          node "$SC_SCRIPT" doctor --steps "$SC_STEPS" --platform macos --report "$SC_OUT/doctor.json" --mcp-ref "$MCP_REF"
+      # 之后结束本 job 启动的所有 OpenTune（runner 上没有别人的 OpenTune），免得下一次启动把它当成没开接口的实例。
+      - name: Launch the package through MCP (ONNX Runtime image, modelsDir, inference)
+        run: |
+          set -euo pipefail
+          code=0
+          node "$SC_SCRIPT" launch --steps "$SC_STEPS" --platform macos --mcp "$SC_MCP" --exe "$SC_LAUNCHER" \
+            --data-dir "$SC_WORK/launch-mcp" --template "$SC_TEMPLATE" --official-dir "$OFFICIAL_APP" \
+            --models-dir "$SC_MODELS" --out "$SC_OUT/launch-mcp.json" --logs-out "$SC_OUT/logs/launch-mcp" || code=$?
+          pkill -x OpenTune || true
+          if [ "$code" -ne 0 ]; then echo "launch helper failed"; exit 1; fi
+      - name: D3D12 (not applicable on macOS)
+        run: node "$SC_SCRIPT" d3d12 --steps "$SC_STEPS" --platform macos
+
+      # 像用户那样运行 OpenTune-AI.command：由程序启动（没有终端，脚本变成 OpenTune）与在终端窗口里（用伪终端 script -q /dev/null，
+      # 后台启动后脚本返回）各一次，数据目录隔离、参数原样传给应用；最后用真实用户目录里的默认位置再运行一次。
+      - name: Run OpenTune-AI.command without a terminal (isolated data folder, arguments pass through)
+        run: |
+          set -euo pipefail
+          code=0
+          node "$SC_SCRIPT" command-launch --steps "$SC_STEPS" --command "$SC_LAUNCHER" --mcp "$SC_MCP" --exe "$SC_EXE" \
+            --data-dir "$SC_WORK/launch-command" --template "$SC_TEMPLATE" --out "$SC_OUT/launch-command.json" || code=$?
+          pkill -x OpenTune || true
+          if [ "$code" -ne 0 ]; then echo "command-launch helper failed"; exit 1; fi
+      - name: Run OpenTune-AI.command under a terminal (pseudo terminal; OpenTune keeps running after the script returns)
+        run: |
+          set -euo pipefail
+          code=0
+          node "$SC_SCRIPT" command-launch --steps "$SC_STEPS" --command "$SC_LAUNCHER" --mcp "$SC_MCP" --exe "$SC_EXE" --tty \
+            --data-dir "$SC_WORK/launch-tty" --template "$SC_TEMPLATE" --out "$SC_OUT/launch-tty.json" || code=$?
+          pkill -x OpenTune || true
+          if [ "$code" -ne 0 ]; then echo "command-launch helper failed"; exit 1; fi
+      - name: Run OpenTune-AI.command (default locations under the real home folder of this throw-away runner)
+        run: |
+          set -euo pipefail
+          code=0
+          node "$SC_SCRIPT" command-launch --steps "$SC_STEPS" --command "$SC_LAUNCHER" --mcp "$SC_MCP" --exe "$SC_EXE" \
+            --home "$HOME" --out "$SC_OUT/launch-default.json" || code=$?
+          pkill -x OpenTune || true
+          if [ "$code" -ne 0 ]; then echo "command-launch helper failed"; exit 1; fi
+
+      # 契约与冒烟各自 continue-on-error，结果由最后的汇总统一判定（同 e2e-windows）。
+      - name: Contract vectors against the package
+        id: contract
+        continue-on-error: true
+        timeout-minutes: 20
+        working-directory: ot-mcp
+        env:
+          OTCP_TARGET_EXE: ${{ env.SC_LAUNCHER }}
+          OPENTUNE_DATA_DIR: ${{ env.SC_WORK }}/data
+          OTCP_TARGET_DATA_DIR: ${{ env.SC_KEEP }}
+          OTCP_TARGET_DATA_TEMPLATE: ${{ env.SC_TEMPLATE }}
+        run: |
+          start=$(date +%s)
+          trap 'echo "SC_CONTRACT_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"' EXIT
+          npm run test:contract -- --reporter=default --reporter=json "--outputFile.json=$SC_OUT/contract.json" -t "$CONTRACT_FILTER"
+      - name: Smoke scenario against the package (hello, import, F0 ready, AUTO, export)
+        id: smoke
+        continue-on-error: true
+        timeout-minutes: 20
+        working-directory: ot-mcp
+        env:
+          OTCP_TARGET_EXE: ${{ env.SC_LAUNCHER }}
+          OPENTUNE_DATA_DIR: ${{ env.SC_WORK }}/data
+          OTCP_TARGET_DATA_DIR: ${{ env.SC_KEEP }}
+          OTCP_TARGET_DATA_TEMPLATE: ${{ env.SC_TEMPLATE }}
+          OTCP_E2E_REPORT: ${{ env.SC_OUT }}/smoke.json
+        run: |
+          start=$(date +%s)
+          trap 'echo "SC_SMOKE_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"' EXIT
+          npm run e2e:exe -- test/e2e/exe-smoke.test.ts
+      - name: Check the OpenTune logs of the contract and smoke runs (models folder, backend) and scrub them
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          pkill -x OpenTune || true
+          node "$E2E_SCRIPT" check-log --data-root "$SC_KEEP" --models-dir "$SC_MODELS" --out-dir "$SC_OUT/logs/contract-smoke" --report "$SC_OUT/log-report.json"
+
+      - name: Summary (PASS / FAIL / SKIP / FLAKY-SKIP / N/A and time of every step)
+        if: ${{ !cancelled() }}
+        env:
+          # The two runner steps are continue-on-error: their outcome, not only their JSON report, decides the result.
+          CONTRACT_OUTCOME: ${{ steps.contract.outcome }}
+          SMOKE_OUTCOME: ${{ steps.smoke.outcome }}
+        run: |
+          set -uo pipefail
+          node "$SC_SCRIPT" results --steps "$SC_STEPS" --contract "$SC_OUT/contract.json" --smoke "$SC_OUT/smoke.json" \
+            --log "$SC_OUT/log-report.json" "--contract-outcome=$CONTRACT_OUTCOME" "--smoke-outcome=$SMOKE_OUTCOME" \
+            "--contract-seconds=${SC_CONTRACT_SECONDS:-}" "--smoke-seconds=${SC_SMOKE_SECONDS:-}"
+          code=0
+          node "$SC_SCRIPT" summary --steps "$SC_STEPS" --platform macos --title "macOS 冒烟：官方 OpenTune $OT_VERSION" \
+            --package "$PACKAGE_NAME.zip" --mcp-ref "$MCP_REF" --out "$GITHUB_STEP_SUMMARY" --json "$SC_OUT/sidecar-report.json" || code=$?
+          cp "$GITHUB_STEP_SUMMARY" "$SC_OUT/summary.md" 2>/dev/null || true
+          if [ "$code" -ne 0 ]; then echo "the macOS smoke test has failing or missing results"; exit 1; fi
+
+      # 上传前对整个输出目录（步骤表、doctor 与启动报告、契约与冒烟报告、日志、安装日志）再脱敏一遍。
+      - name: Scrub every file that will be uploaded
+        if: ${{ !cancelled() }}
+        run: node "$E2E_SCRIPT" scrub --dir "$SC_OUT"
+      - name: Upload the results (steps, doctor and launch reports, scrubbed logs)
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sidecar-smoke-macos-${{ matrix.version }}
+          path: ${{ env.SC_OUT }}
+          if-no-files-found: warn
+          retention-days: 14

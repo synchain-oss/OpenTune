@@ -6,7 +6,7 @@
   "issuesUrl": "https://github.com/synchain-oss/opentune-mcp-server/issues",
   "minOfficialVersion": "1.7.9",
   "macos": {
-    "minOfficialVersion": "1.8.1",
+    "minOfficialVersion": "1.8.0",
     "bundleName": "OpenTune-ctl",
     "bundleIdentifier": "ca.synchain.opentune.ctltest"
   }

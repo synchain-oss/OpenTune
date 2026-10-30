@@ -29,7 +29,7 @@
     { "path": "GAME/segmenter.onnx", "sha256": "7724db4ba59a388fff5aba2f08f0ac025d4ca59caef80e7f474053a1455c88e5", "size": 20906659 }
   ],
   "macos": {
-    "comment": "Pinned official OpenTune macOS packages for the macOS side-car smoke test of prerelease.yml (installed on the CI runner only, never on a developer machine). sha256 and size are the GitHub release asset digests. A pkg is installed with `sudo installer -pkg <file> -target /`; a dmg is mounted with hdiutil and its OpenTune.app copied to /Applications. appPath is where the official app ends up; modelsDir is the models folder of an installation ({app} is appPath; an installer entry may set its own). The models are checked against `models` of this section when it has one, else against the top-level list.",
+    "comment": "Pinned official OpenTune macOS packages for the macOS side-car smoke test of prerelease.yml (installed on the CI runner only, never on a developer machine). sha256 and size are the GitHub release asset digests. A pkg is installed with `sudo installer -pkg <file> -target /`; a dmg is mounted with hdiutil and its OpenTune.app copied to /Applications. appPath is where the official app ends up; modelsDir is the models folder of an installation ({app} is appPath; an installer entry may set its own). The models are checked against `models` of this section when it has one, else against the top-level list. Seen on a macOS 14 runner: 1.8.1 (universal2) and 1.8.0 (arm64) install OpenTune.app into /Applications with the real models in Contents/Resources/models (fcpe.onnx, GAME/*.onnx and hifigan.onnx, the F0 files the same size as the Windows ones), a VST3 in /Library/Audio/Plug-Ins/VST3 and licence files in /Applications/OpenTune; the app is signed ad hoc (not notarized) and keeps its settings and logs in ~/Library/OpenTune. 1.7.9 (dmg) has Git LFS pointers instead of the F0 models and is not supported.",
     "appPath": "/Applications/OpenTune.app",
     "modelsDir": "{app}/Contents/Resources/models",
     "installers": [
@@ -55,7 +55,8 @@
         "release": "https://github.com/YuFeng926/OpenTune/releases/tag/OpenTuneV1.7.9",
         "url": "https://github.com/YuFeng926/OpenTune/releases/download/OpenTuneV1.7.9/OpenTune-1.7.9-macOS-Apple-Silicon.dmg",
         "sha256": "eab82e8cd6012ebc252dfd9a75c15db0538a620e9c12b8032cee850ccb13d64c",
-        "size": 138398495
+        "size": 138398495,
+        "unsupported": "The Git LFS pointers of fcpe.onnx and GAME/*.onnx are shipped in Contents/Resources/models instead of the models (133 bytes each), so the F0 model cannot be loaded; not part of the smoke test matrix."
       }
     ]
   }

@@ -74,6 +74,11 @@ hashes in steps 2 and 3 matched, allow them in one of two ways:
   starts OpenTune-ctl.app with the local control API on. Use it when OpenTune
   MCP Server should operate OpenTune. Extra arguments given to the script are
   passed on to OpenTune. It changes no settings and writes no files.
+- To let OpenTune MCP Server start OpenTune itself, set its environment
+  variable OPENTUNE_MCP_OPENTUNE_PATH to the full path of OpenTune-AI.command
+  in this folder. The server wants opentune-control.json next to the program it
+  starts, and that file sits next to OpenTune-AI.command (it cannot be inside
+  the app: the signature of the app would not hold).
 - Opening OpenTune-ctl.app directly (double-click) starts OpenTune with the
   control API off.
 - Quit official OpenTune before you start this build, and do not run both at

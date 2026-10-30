@@ -123,6 +123,7 @@ const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
  */
 export const MACOS_PACKAGE_FILES = [
   'OpenTune-AI.command',
+  'opentune-control.json',
   'LICENSE.txt',
   'THIRD-PARTY-NOTICES.txt',
   'README-UNOFFICIAL.txt',
@@ -133,7 +134,6 @@ export const MACOS_PACKAGE_FILES = [
   'SHA256SUMS',
   `${MACOS_APP_FOLDER}/Contents/Info.plist`,
   `${MACOS_APP_FOLDER}/Contents/MacOS/OpenTune`,
-  `${MACOS_APP_FOLDER}/Contents/MacOS/opentune-control.json`,
   new RegExp(`^${escapeRegExp(MACOS_APP_FOLDER)}/Contents/Frameworks/${ORT_DYLIB_RE.source.slice(1)}`),
   `${MACOS_APP_FOLDER}/Contents/_CodeSignature/CodeResources`,
 ];
@@ -411,7 +411,7 @@ export function macosContentProblems(files, { bundleIdentifier, bundleName }) {
       }
     }
   }
-  const control = files.get(`${app}/Contents/MacOS/opentune-control.json`);
+  const control = files.get('opentune-control.json');
   if (control) {
     problems.push(...validateControlJson(control).map((p) => `opentune-control.json: ${p}`));
     try {

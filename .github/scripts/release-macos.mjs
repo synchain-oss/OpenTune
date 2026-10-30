@@ -21,8 +21,8 @@
 //      0-byte vocoder placeholder that would hide the official models; the user guide);
 //   3. PlistBuddy: CFBundleName / CFBundleDisplayName / CFBundleIdentifier from release.json (the macos section);
 //      CFBundleExecutable stays OpenTune;
-//   4. add opentune-control.json next to the program (Contents/MacOS), OpenTune-AI.command, the documents,
-//      LICENSE.txt and THIRD-PARTY-NOTICES.txt;
+//   4. add opentune-control.json next to OpenTune-AI.command (not inside the app: codesign treats every file in
+//      Contents/MacOS as code), the documents, LICENSE.txt and THIRD-PARTY-NOTICES.txt;
 //   5. sign ad hoc, after every change: the dylib first, then the app; codesign --verify --deep --strict must pass;
 //   6. SHA256SUMS over every file (after signing), the allow-list check, ditto -c -k --sequesterRsrc --keepParent,
 //      and the same checks again on the zip as it will be published.
@@ -222,7 +222,8 @@ export function buildMacosPackage(o, { exec = realExec } = {}) {
   for (const [n, b] of pkg) fs.writeFileSync(path.join(folder, n), b, { mode: n === 'OpenTune-AI.command' ? 0o755 : 0o644 });
   fs.chmodSync(path.join(folder, 'OpenTune-AI.command'), 0o755);
   const controlBuf = composeControlJson({ top, cfg, info, commit: o.commit, tag, label: o.label, day, server, forkUrl, platform: PLATFORM });
-  fs.writeFileSync(path.join(app, 'Contents', 'MacOS', 'opentune-control.json'), controlBuf, { mode: 0o644 });
+  // Next to OpenTune-AI.command, not inside the app: codesign treats every file in Contents/MacOS as code and refuses an app that has a JSON file there.
+  fs.writeFileSync(path.join(folder, 'opentune-control.json'), controlBuf, { mode: 0o644 });
 
   // 5. sign ad hoc, after every change: nested code first, then the app
   run('Remove extended attributes', 'xattr', ['-cr', folder]);

@@ -29,19 +29,36 @@
 //   summary  --steps <json> [--title <t>] [--package <zip name>] [--mcp-ref <r>] [--out <md>] [--json <file>]
 //                                                             exit 1 on any FAIL or a missing required group
 //
+// macOS (`--platform macos` on install | package | doctor | launch | d3d12 | summary; result N/A = no such check on macOS):
+//   install  --steps <json> --platform macos --app <installed OpenTune.app> --expect-app /Applications/OpenTune.app
+//            --models-dir <dir> --version <x.y.z> [--registry-version <Info.plist version>] [--kind pkg|dmg] [--out <json>]
+//   package  --steps <json> --platform macos --dir <extracted package folder> [--official-app <app>] [--documented <shasum output>]
+//   doctor   --steps <json> --platform macos --report <doctor --json output> [--mcp-ref <r>]   (Windows-only checks are N/A)
+//   launch   --steps <json> --platform macos --mcp <bundle> --exe <package folder>/OpenTune-AI.command --data-dir <new dir>
+//            --official-dir <official OpenTune.app> --models-dir <dir> ...   (the ONNX Runtime image is read with lsof)
+//   command-launch  --steps <json> --command <OpenTune-AI.command> --mcp <bundle> --exe <app executable> (--data-dir <new dir> | --home <home>)
+//            [--tty] [--template <dir>] [--out <json>] [--timeout <seconds>]   runs the launcher script (without a terminal, or
+//            with --tty under a pseudo terminal as in a Terminal window), waits for the discovery file, attaches through
+//            MCP (opentune_get_status) and ends the instance it started
+//   d3d12    --steps <json> --platform macos      (one N/A row)
+//
 // Exit codes: 0 = ok (rows may hold FAIL, see above), 1 = a check failed, 2 = usage error.
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { countSmoke, countVitest, findLogs, hashPrefix, parseModelLoad, scrubLog, scrubPath, sha256File } from './e2e-windows.mjs';
 import { isMainModule, parseArgs } from './fork-lib.mjs';
-import { checkPackageEntries, verifySha256Sums } from './release-lib.mjs';
+import { checkMacosModes, checkPackageEntries, verifySha256Sums } from './release-lib.mjs';
 
-export const RESULTS = ['PASS', 'FAIL', 'SKIP', 'FLAKY-SKIP'];
+/** N/A: the check does not exist on this platform (D3D12 and the Windows install checks on macOS). It never fails the job and is never a PASS. */
+export const RESULTS = ['PASS', 'FAIL', 'SKIP', 'FLAKY-SKIP', 'N/A'];
 
 /** Groups every complete run has; a group without any row means its step did not run. */
 export const REQUIRED_GROUPS = ['install', 'models', 'package', 'doctor:no-d3d12', 'launch:no-d3d12', 'd3d12', 'doctor:d3d12', 'launch:d3d12', 'contract', 'smoke', 'log'];
+
+/** The same for the macOS smoke test: one doctor and one launch phase, and a D3D12 group that is all N/A. */
+export const REQUIRED_GROUPS_MACOS = ['install', 'models', 'package', 'doctor', 'launch', 'd3d12', 'contract', 'smoke', 'log'];
 
 export const PHASES = { 'no-d3d12': '未复制 D3D12', d3d12: '已复制 D3D12' };
 
@@ -104,19 +121,21 @@ export function inspectInstall({ dir, expectDir, modelsDir, location, version, r
 // package: the extracted folder (outside Program Files, SHA256SUMS, allow-list)
 // ---------------------------------------------------------------------------------------------
 
-/** Every file and folder below dir, '/'-separated, with the first bytes of each file. */
+/** Every file and folder below dir, '/'-separated, with the first bytes and the Unix mode of each file (a symbolic link is listed, not followed). */
 export function listPackageDir(dir) {
   const out = [];
   for (const e of fs.readdirSync(dir, { withFileTypes: true, recursive: true })) {
     const full = path.join(e.parentPath ?? e.path, e.name);
     const rel = path.relative(dir, full).split(path.sep).join('/');
-    if (e.isDirectory()) out.push({ path: rel, isDir: true });
+    const st = fs.lstatSync(full);
+    if (st.isDirectory()) out.push({ path: rel, isDir: true, mode: st.mode });
+    else if (st.isSymbolicLink()) out.push({ path: rel, isDir: false, head: Buffer.alloc(0), mode: st.mode });
     else {
       const fd = fs.openSync(full, 'r');
       const head = Buffer.alloc(64);
       const n = fs.readSync(fd, head, 0, 64, 0);
       fs.closeSync(fd);
-      out.push({ path: rel, isDir: false, head: head.subarray(0, n) });
+      out.push({ path: rel, isDir: false, head: head.subarray(0, n), mode: st.mode });
     }
   }
   return out.sort((a, b) => (a.path < b.path ? -1 : 1));
@@ -144,6 +163,135 @@ export function inspectPackage({ dir, programFiles = [], documented = '', second
   rows.push(row('package', 'SHA256SUMS 与解压出的文件一致（含 INSTALL 第 3 步的命令）', sumProblems.length ? 'FAIL' : 'PASS', sumProblems.length ? sumProblems.slice(0, 5).join('；') : `${files} 个文件一致；INSTALL 的校验命令没有输出`));
   const listProblems = checkPackageEntries(entries);
   rows.push(row('package', '白名单：没有 models\\、*.onnx、D3D12 文件或子目录', listProblems.length ? 'FAIL' : 'PASS', listProblems.length ? listProblems.slice(0, 5).join('；') : '与白名单完全一致；没有会遮住官方模型的 models\\'));
+  return rows;
+}
+
+// ---------------------------------------------------------------------------------------------
+// macOS: the same questions for the macOS arm64 package next to an official OpenTune.app
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Path for comparisons on macOS: '/'-separated, no trailing slash. Paths are compared as written (the log prints the real
+ * path); the platform's own separator is mapped to '/', which changes nothing on macOS and lets the unit tests run on Windows.
+ */
+export const normPosix = (p) => String(p ?? '').split(path.sep).join('/').replace(/\/+$/, '');
+export const samePosix = (a, b) => Boolean(a) && Boolean(b) && normPosix(a) === normPosix(b);
+/** True when `p` is inside `root` (not the root itself). */
+export const isUnderPosix = (p, root) => Boolean(p) && Boolean(root) && normPosix(p).startsWith(`${normPosix(root)}/`);
+
+/** Rows for the official macOS installation (pkg: sudo installer; dmg: copied to /Applications), and a description of it for the artifact. */
+export function inspectInstallMacos({ app, expectApp, modelsDir, version, plistVersion = '', kind = 'pkg', seconds = null }) {
+  const rows = [];
+  const how = kind === 'dmg' ? '挂载 dmg，把 OpenTune.app 拷到 /Applications' : 'sudo installer -pkg … -target /';
+  const name = `安装官方 OpenTune ${version}（${how}）`;
+  const info = { version, kind, app: app || null, plistVersion: plistVersion || null, seconds, modelsDir, appHasModels: null };
+  if (!app) {
+    rows.push(row('install', name, 'FAIL', '安装后找不到 OpenTune.app', seconds));
+    return { rows, info };
+  }
+  const problems = [];
+  if (!fs.existsSync(path.join(app, 'Contents', 'MacOS', 'OpenTune'))) problems.push(`${app} 下没有 Contents/MacOS/OpenTune`);
+  if (!samePosix(app, expectApp)) problems.push(`实际位置 ${app}，期望 ${expectApp}`);
+  if (plistVersion && plistVersion !== version) problems.push(`Info.plist 的版本是 ${plistVersion}，期望 ${version}`);
+  const secs = seconds === null ? '' : `，耗时 ${Number(seconds).toFixed(1)} 秒`;
+  rows.push(row('install', name, problems.length ? 'FAIL' : 'PASS', problems.length ? problems.join('；') : `实际位置 ${app}（Info.plist 版本 ${plistVersion || '未记录'}）${secs}`, seconds));
+  info.appHasModels = fs.existsSync(path.join(app, 'Contents', 'Resources', 'models'));
+  const modelsOk = Boolean(modelsDir) && fs.existsSync(modelsDir) && fs.statSync(modelsDir).isDirectory();
+  const where = isUnderPosix(modelsDir, app) ? '应用包里' : '共享目录';
+  rows.push(row('install', `模型在这个版本的安装程序放置的目录（${where}）`, modelsOk ? 'PASS' : 'FAIL', `${modelsDir}${modelsOk ? ' 存在' : ' 不存在'}；应用包的 Contents/Resources 下${info.appHasModels ? '有' : '没有'} models/`));
+  return { rows, info };
+}
+
+/**
+ * Rows for the extracted macOS package folder: outside the official app, SHA256SUMS (the nested file list),
+ * and the allow-list with the Unix modes (executables, no symbolic links, no models or LFS pointers).
+ */
+export function inspectPackageMacos({ dir, officialApp = '', documented = '', seconds = null, listFn = listPackageDir }) {
+  const rows = [];
+  const inside = Boolean(officialApp) && (samePosix(dir, officialApp) || isUnderPosix(dir, officialApp));
+  rows.push(row('package', '解压到官方 OpenTune.app 之外的文件夹', inside ? 'FAIL' : 'PASS', inside ? `${dir} 在 ${officialApp} 里` : `${dir}`, seconds));
+  if (!fs.existsSync(dir)) {
+    rows.push(row('package', 'SHA256SUMS 与解压出的文件一致', 'FAIL', `${dir} 不存在`));
+    return rows;
+  }
+  const entries = listFn(dir);
+  const sumsFile = path.join(dir, 'SHA256SUMS');
+  let sumProblems;
+  if (!fs.existsSync(sumsFile)) sumProblems = ['SHA256SUMS missing'];
+  else {
+    const hashes = new Map(entries.filter((e) => !e.isDir && e.path !== 'SHA256SUMS' && !((e.mode & 0o170000) === 0o120000)).map((e) => [e.path, sha256File(path.join(dir, e.path))]));
+    sumProblems = verifySha256Sums(fs.readFileSync(sumsFile, 'utf8'), hashes);
+  }
+  if (documented.trim()) sumProblems.push(`INSTALL 的校验命令（shasum）有失败输出：${documented.trim()}`);
+  const files = entries.filter((e) => !e.isDir).length;
+  rows.push(row('package', 'SHA256SUMS 与解压出的文件一致（含 INSTALL 的 shasum 命令）', sumProblems.length ? 'FAIL' : 'PASS', sumProblems.length ? sumProblems.slice(0, 5).join('；') : `${files} 个文件一致；INSTALL 的校验命令没有失败行`));
+  const listProblems = [...checkPackageEntries(entries, { platform: 'macos-arm64' }), ...checkMacosModes(entries)];
+  rows.push(row('package', '白名单：没有 models/、*.onnx、D3D12 文件、符号链接或 LFS 指针；启动脚本与可执行文件有执行权限', listProblems.length ? 'FAIL' : 'PASS', listProblems.length ? listProblems.slice(0, 5).join('；') : '与白名单完全一致；没有会遮住官方模型的 models/'));
+  return rows;
+}
+
+/** macOS has no D3D12 and no Agility runtime: the group exists so that the table says so explicitly (never a PASS). */
+export function inspectD3d12Macos() {
+  return [row('d3d12', 'D3D12Core.dll 的复制（INSTALL 第 4 步）与 DirectML', 'N/A', 'macOS 没有 D3D12：包里没有 D3D12 文件（白名单已核对），推理后端由 Core ML 或 CPU 承担')];
+}
+
+/** The doctor checks that only exist for Windows (official-install detection, D3D12): on macOS they are N/A whatever the report says. */
+export const DOCTOR_WINDOWS_ONLY = ['OT_NO_OFFICIAL_INSTALL', 'OT_VERSION_UNSUPPORTED', 'OT_MODELS_MISSING', 'OT_SIDECAR_INCOMPLETE', 'OT_MODELS_SHADOWED', 'OT_D3D12_NOT_COPIED'];
+
+/**
+ * Rows for one doctor report on macOS. OT_OPENTUNE_PATH must pass (the variable points at the executable
+ * inside the app bundle); the Windows-only checks are N/A, with what the doctor said kept in the note; any other
+ * check the doctor reports passes when it passes and fails when it fails.
+ */
+export function evaluateDoctorMacos(report, { mcpRef = '' } = {}) {
+  const checks = new Map((Array.isArray(report?.checks) ? report.checks : []).map((c) => [c.id, c]));
+  if (!checks.size) return [row('doctor', 'doctor（macOS）', 'FAIL', 'doctor --json 没有输出检查结果')];
+  const rows = [];
+  const first = (c) => String(c?.message ?? '').split('\n')[0];
+  const opentunePath = checks.get('OT_OPENTUNE_PATH');
+  if (!opentunePath || opentunePath.status === 'not_implemented') rows.push(row('doctor', 'doctor OT_OPENTUNE_PATH：OPENTUNE_MCP_OPENTUNE_PATH 指向应用包里的可执行文件', 'SKIP', `MCP ${mcpRef || 'ref'} 没有实现或没有列出这一项`));
+  else rows.push(row('doctor', 'doctor OT_OPENTUNE_PATH：OPENTUNE_MCP_OPENTUNE_PATH 指向应用包里的可执行文件', opentunePath.status === 'pass' ? 'PASS' : 'FAIL', `${opentunePath.status}：${first(opentunePath)}`));
+  for (const id of DOCTOR_WINDOWS_ONLY) {
+    const c = checks.get(id);
+    rows.push(row('doctor', `doctor ${id}`, 'N/A', c ? `Windows 专有检查，macOS 不适用（doctor 报告 ${c.status}：${first(c)}）` : 'Windows 专有检查，macOS 不适用（doctor 输出里没有这一项）'));
+  }
+  for (const [id, c] of checks) {
+    if (id === 'OT_OPENTUNE_PATH' || DOCTOR_WINDOWS_ONLY.includes(id)) continue;
+    if (c.status === 'not_implemented') rows.push(row('doctor', `doctor ${id}`, 'SKIP', `MCP ${mcpRef || 'ref'} 尚未实现这一项`));
+    else rows.push(row('doctor', `doctor ${id}`, c.status === 'pass' ? 'PASS' : c.status === 'warn' ? 'SKIP' : 'FAIL', `${c.status}：${first(c)}`));
+  }
+  return rows;
+}
+
+/**
+ * Rows for one start through MCP on macOS: launch, ONNX Runtime image from the package's own app bundle,
+ * the models folder of the official app, inference without a crash, and the backend (Core ML or CPU).
+ * `facts.ortImages`: the onnxruntime images the process has mapped (lsof), from runMcpLaunch.
+ */
+export function evaluateLaunchMacos({ facts, log, appDir, officialApp, modelsDir }) {
+  const group = 'launch';
+  const rows = [];
+  const l = facts.launch ?? {};
+  const launchOk = l.state === 'READY' && l.launched === true && Boolean(l.pid) && !(facts.problems ?? []).some((p) => /no pid reported/.test(p));
+  rows.push(row(group, '经 MCP 的 opentune_launch 启动应用包里的可执行文件', launchOk ? 'PASS' : 'FAIL', `state ${l.state ?? '(无)'}，launched ${l.launched ?? '(无)'}，workingDirectory ${l.workingDirectory ?? '(无)'}${l.reason ? `，reason ${l.reason}` : ''}${facts.problems?.length ? `；${facts.problems.join('；')}` : ''}`, facts.launchSeconds ?? null));
+
+  const images = [...new Set([...(facts.ortImages ?? []), ...(log.runtime?.ortDll ? [log.runtime.ortDll] : [])])].filter((p) => /onnxruntime/i.test(p));
+  const ours = images.filter((p) => isUnderPosix(p, appDir));
+  const foreign = images.filter((p) => !isUnderPosix(p, appDir));
+  let ortNote = log.ortFailed ? 'ensureOnnxRuntimeLoaded failed' : facts.ortError ? `lsof: ${facts.ortError}` : '进程没有映射任何 onnxruntime 动态库（lsof），日志里也没有 ORT 路径';
+  if (images.length) ortNote = images.join('；');
+  rows.push(row(group, '加载的 ONNX Runtime 动态库来自这个包的应用包（Contents/Frameworks），不是官方 OpenTune.app', ours.length > 0 && foreign.length === 0 && !isUnderPosix(ours[0], officialApp) ? 'PASS' : 'FAIL', ortNote));
+
+  const rt = log.runtime;
+  const last = log.loads.at(-1) ?? null;
+  const modelsOk = rt ? samePosix(rt.modelsDir, modelsDir) : Boolean(last) && isUnderPosix(last.path, modelsDir);
+  rows.push(row(group, '日志里的模型目录是官方安装的模型目录', modelsOk ? 'PASS' : 'FAIL', rt ? `modelsDir=${rt.modelsDir}` : last ? `没有 ProcessF0Runtime 一行；F0 模型加载自 ${last.path}` : '日志里没有 modelsDir，也没有加载 F0 模型'));
+
+  const inferOk = Boolean(last) && facts.aliveAfter === true && facts.status === 'READY';
+  rows.push(row(group, '导入后推理不崩溃（F0 模型已加载，进程仍在，状态 READY）', inferOk ? 'PASS' : 'FAIL', `F0 模型${last ? `已加载（${last.backend}），用时 ${facts.f0Seconds ?? '?'} 秒` : '未加载'}；进程${facts.aliveAfter === true ? '仍在' : facts.aliveAfter === false ? '已退出' : '未知'}；opentune_get_status ${facts.status ?? '(无)'}${facts.open && !facts.open.ok ? `；opentune_open_audio 出错：${facts.open.note}` : ''}`, facts.f0Seconds ?? null));
+
+  const backendOk = last?.backend === 'CoreML' || last?.backend === 'CPU';
+  rows.push(row(group, '推理后端为 Core ML 或 CPU', backendOk ? 'PASS' : 'FAIL', `F0 后端 ${last?.backend ?? '(无推理)'}${last?.backend === 'CPU' ? '（runner 没有可用的 Core ML 加速时回退到 CPU，属正常）' : ''}`));
   return rows;
 }
 
@@ -347,10 +495,10 @@ export function renderStepSummary(steps, { title = 'side-car 冒烟', packageNam
   const lines = [`### ${title}`, ''];
   if (packageName) lines.push(`测试包：\`${packageName}\``);
   if (mcpRef) lines.push(`MCP 仓库 ref：\`${mcpRef}\``);
-  lines.push('', 'SKIP：MCP 的 doctor 尚未实现的检查。FLAKY-SKIP：环境原因（例如 runner 没有 GPU 时 DirectML 无法初始化），不算失败。只有 FAIL（或某组没有结果）使本 job 失败。', '');
+  lines.push('', 'SKIP：MCP 的 doctor 尚未实现的检查。FLAKY-SKIP：环境原因（例如 runner 没有 GPU 时 DirectML 无法初始化），不算失败。N/A：这个平台上没有这项检查（例如 macOS 上的 D3D12），不算失败，也不算通过。只有 FAIL（或某组没有结果）使本 job 失败。', '');
   lines.push('| 组 | 步骤 | 结果 | 耗时（秒） | 说明 |', '|---|---|---|---|---|');
   for (const s of all) lines.push(`| ${cell(s.group)} | ${cell(s.name)} | ${s.result} | ${s.seconds === null || s.seconds === undefined ? '' : Number(s.seconds).toFixed(1)} | ${cell(s.note)} |`);
-  lines.push('', `合计：PASS ${counts.PASS}，FAIL ${counts.FAIL}，SKIP ${counts.SKIP}，FLAKY-SKIP ${counts['FLAKY-SKIP']}`, '', failed ? '结果：**FAIL**' : '结果：**PASS**', '');
+  lines.push('', `合计：PASS ${counts.PASS}，FAIL ${counts.FAIL}，SKIP ${counts.SKIP}，FLAKY-SKIP ${counts['FLAKY-SKIP']}${counts['N/A'] ? `，N/A ${counts['N/A']}` : ''}`, '', failed ? '结果：**FAIL**' : '结果：**PASS**', '');
   return { markdown: scrubPath(lines.join('\n')), failed, counts, steps: all };
 }
 
@@ -499,13 +647,20 @@ export function pidAlive(pid) {
 
 const readLogs = (dir) => findLogs(dir).map((f) => fs.readFileSync(f.full, 'utf8')).join('\n');
 
+/** The onnxruntime images a process has mapped (macOS: lsof -p lists the loaded dylibs as 'txt' entries). */
+export function listOrtImages(pid, { exec = execFileSync } = {}) {
+  const out = exec('lsof', ['-p', String(pid), '-Fn'], { encoding: 'utf8', timeout: 30000, maxBuffer: 16 * 1024 * 1024 });
+  return [...new Set(String(out).split(/\r?\n/).filter((l) => l.startsWith('n') && /onnxruntime/i.test(l)).map((l) => l.slice(1).trim()))];
+}
+
 /**
  * One start through the MCP bundle: opentune_launch with OPENTUNE_MCP_OPENTUNE_PATH = exe and a data
  * folder of its own, an import of a generated tone, a wait for the F0 model to load, then the process
  * and opentune_get_status. The instance is ended at the end, but only when its discovery file in this
  * data folder names the pid that opentune_launch reported (it is then the one this call started).
+ * On macOS (`platform: 'macos'`) the onnxruntime images the process has mapped are recorded as well.
  */
-export async function runMcpLaunch({ mcp, exe, dataDir, template, timeoutMs = 120000, spawnFn = spawn }) {
+export async function runMcpLaunch({ mcp, exe, dataDir, template, timeoutMs = 120000, spawnFn = spawn, platform = 'windows', imagesFn = listOrtImages }) {
   const facts = { launch: null, open: null, f0Seconds: null, aliveAfter: null, status: null, ended: null, problems: [], launchSeconds: null };
   fs.mkdirSync(dataDir, { recursive: true });
   if (template) fs.cpSync(template, dataDir, { recursive: true });
@@ -534,6 +689,13 @@ export async function runMcpLaunch({ mcp, exe, dataDir, template, timeoutMs = 12
       if (parseModelLoad(readLogs(dataDir)).length) facts.f0Seconds = (Date.now() - t1) / 1000;
       await sleep(3000); // let inference run on before checking that the process is still there
       facts.aliveAfter = pidAlive(pid);
+      if (platform === 'macos' && facts.aliveAfter) {
+        try {
+          facts.ortImages = imagesFn(pid);
+        } catch (e) {
+          facts.ortError = String(e.message ?? e).split('\n')[0];
+        }
+      }
       const status = await client.callTool('opentune_get_status', {}, 30000).catch((e) => ({ isError: true, body: { state: `error: ${e.message}` } }));
       facts.status = status.body.state ?? null;
     }
@@ -563,6 +725,127 @@ export async function endOwnInstance(dataDir, pid) {
   return !pidAlive(pid);
 }
 
+/** The control folder OpenTune uses on macOS when OPENTUNE_DATA_DIR is not set: the parent of control/instances. */
+export const macosDefaultControlRoot = (home) => path.join(home, 'Library', 'Application Support', 'OpenTune');
+
+/** Pid of the single instance file <root>/control/instances/<pid>.json, or 0 when there is none yet (or more than one). */
+function singleInstance(root) {
+  const dir = path.join(root, 'control', 'instances');
+  if (!fs.existsSync(dir)) return 0;
+  const pids = fs.readdirSync(dir).map((n) => /^(\d+)\.json$/.exec(n)?.[1]).filter(Boolean).map(Number);
+  return pids.length === 1 ? pids[0] : 0;
+}
+
+/**
+ * Starts OpenTune the way a macOS user does after unpacking the package: by running OpenTune-AI.command.
+ * With a data folder (OPENTUNE_DATA_DIR) the instance is isolated, and a ready file is asked for through an
+ * extra argument to show that arguments reach the app. Without one (`dataDir` empty, `home` given) the
+ * default locations under the user's real home are used and the files the app leaves there are recorded.
+ * Then the discovery file is awaited and the MCP server attaches to the instance (opentune_get_status).
+ * The instance is ended at the end, but only when its discovery file names the pid.
+ * Two ways of running the script, as the script itself tells them apart by whether it has a terminal:
+ *   - default: no terminal (stdio ignored, like a program that starts it, e.g. OpenTune MCP Server): the script
+ *     becomes OpenTune (exec), so the process that was started is the one the discovery file names;
+ *   - tty: under a pseudo terminal (`script -q /dev/null <command>`, as in a Terminal window): OpenTune is started in the
+ *     background and the script returns; OpenTune must still be running afterwards.
+ */
+export async function runCommandLaunch({ command, mcp, dataDir = '', home = '', template = '', timeoutMs = 90000, spawnFn = spawn, psFn = null, tty = false }) {
+  const facts = { mode: tty ? 'tty' : 'exec', exitCode: null, scriptExited: null, scriptPid: 0, pid: 0, sameProcess: null, aliveAfterScript: null, commandLine: '', readyFile: null, status: null, ended: null, seconds: null, settingsDir: null, logs: null, problems: [] };
+  const isolated = Boolean(dataDir);
+  const root = isolated ? dataDir : macosDefaultControlRoot(home);
+  const readyFile = isolated ? path.join(dataDir, 'ready.json') : '';
+  if (isolated) {
+    fs.mkdirSync(dataDir, { recursive: true });
+    if (template) fs.cpSync(template, dataDir, { recursive: true });
+  }
+  const base = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/^OPENTUNE_/.test(k)));
+  const env = isolated ? { ...base, OPENTUNE_DATA_DIR: dataDir } : base;
+  const t0 = Date.now();
+  let client = null;
+  let pid = 0;
+  try {
+    const args = readyFile ? [`--control-api-ready-file=${readyFile}`] : [];
+    const sh = tty ? spawnFn('script', ['-q', '/dev/null', command, ...args], { stdio: 'ignore', env }) : spawnFn(command, args, { stdio: 'ignore', env });
+    facts.scriptPid = sh.pid ?? 0;
+    facts.scriptExited = false;
+    const exited = new Promise((resolve) => {
+      sh.once('error', () => {
+        facts.exitCode = -1;
+        facts.scriptExited = true;
+        resolve();
+      });
+      sh.once('exit', (code) => {
+        facts.exitCode = code;
+        facts.scriptExited = true;
+        resolve();
+      });
+    });
+    while (!pid && Date.now() - t0 < timeoutMs) {
+      pid = singleInstance(root);
+      if (pid) break;
+      if (facts.scriptExited && facts.exitCode !== 0 && !tty) break; // the script failed: nothing will appear
+      await sleep(500);
+    }
+    facts.pid = pid;
+    facts.seconds = (Date.now() - t0) / 1000;
+    if (!pid) facts.problems.push(`no discovery file appeared in ${path.join(root, 'control', 'instances')} within ${Math.round(timeoutMs / 1000)} s`);
+    else {
+      if (tty) {
+        await Promise.race([exited, sleep(15000)]);
+        facts.aliveAfterScript = pidAlive(pid);
+      } else facts.sameProcess = pid === facts.scriptPid;
+      for (let i = 0; i < 20 && readyFile && !(fs.existsSync(readyFile) && fs.statSync(readyFile).size > 0); i++) await sleep(250);
+      try {
+        facts.commandLine = psFn ? psFn(pid) : String(execFileSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' })).trim();
+      } catch (e) {
+        facts.problems.push(`ps: ${String(e.message ?? e).split('\n')[0]}`);
+      }
+      if (readyFile) facts.readyFile = fs.existsSync(readyFile) && fs.statSync(readyFile).size > 0;
+      const child = spawnFn(process.execPath, [mcp], { stdio: 'pipe', env });
+      client = new McpLineClient(child);
+      await client.initialize();
+      const status = await client.callTool('opentune_get_status', {}, 60000).catch((e) => ({ isError: true, body: { state: `error: ${e.message}` } }));
+      facts.status = status.body.state ?? null;
+      if (!isolated) {
+        const settings = path.join(home, 'Library', 'OpenTune');
+        facts.settingsDir = fs.existsSync(settings);
+        facts.logs = fs.existsSync(path.join(settings, 'Logs')) ? fs.readdirSync(path.join(settings, 'Logs')).filter((n) => n.endsWith('.log')).length : 0;
+      }
+    }
+  } catch (e) {
+    facts.problems.push(String(e.message ?? e).split('\n')[0]);
+  } finally {
+    if (client) await client.stop().catch(() => undefined);
+    facts.ended = await endOwnInstance(root, pid);
+  }
+  return { facts };
+}
+
+/** Rows for a start through OpenTune-AI.command. `appExe`: the executable inside the package's app bundle. */
+export function evaluateCommandLaunch({ facts, appExe, isolated }) {
+  const group = 'launch';
+  const where = isolated ? '（OPENTUNE_DATA_DIR 隔离）' : '（默认位置，真实用户目录）';
+  const rows = [];
+  const found = facts.pid ? `pid ${facts.pid}，${Number(facts.seconds).toFixed(1)} 秒后出现发现文件` : '没有发现文件';
+  const problems = facts.problems.length ? `；${facts.problems.join('；')}` : '';
+  if (facts.mode === 'tty') {
+    // In a Terminal window the script starts OpenTune in the background and returns; OpenTune must outlive it.
+    const ok = Boolean(facts.pid) && facts.scriptExited === true && facts.aliveAfterScript === true;
+    rows.push(row(group, `在终端里运行 OpenTune-AI.command：后台启动 OpenTune，脚本随即返回，OpenTune 继续运行${where}`, ok ? 'PASS' : 'FAIL', `${found}；脚本${facts.scriptExited ? `已返回（退出码 ${facts.exitCode ?? '?'}）` : '没有返回'}；返回后 OpenTune ${facts.aliveAfterScript === true ? '仍在运行' : facts.aliveAfterScript === false ? '已退出' : '未知'}${problems}`, facts.seconds));
+  } else {
+    // Started by a program (no terminal): the script becomes OpenTune, so the started process is OpenTune itself.
+    const ok = Boolean(facts.pid) && facts.sameProcess === true;
+    rows.push(row(group, `由程序运行 OpenTune-AI.command（没有终端）：脚本变成 OpenTune，被启动的进程就是 OpenTune${where}`, ok ? 'PASS' : 'FAIL', `${found}；启动的进程 pid ${facts.scriptPid || '(无)'}${facts.sameProcess === false ? '，与发现文件里的 pid 不同' : ''}${problems}`, facts.seconds));
+  }
+  const cmd = facts.commandLine || '';
+  const okCmd = Boolean(cmd) && cmd.includes(appExe) && /(^|\s)--control-api(\s|$)/.test(cmd);
+  rows.push(row(group, '应用进程是包里的可执行文件，命令行带 --control-api', okCmd ? 'PASS' : 'FAIL', cmd || '(没有取到命令行)'));
+  if (isolated) rows.push(row(group, '脚本的参数原样传给应用（--control-api-ready-file= 写出了就绪文件）', facts.readyFile === true ? 'PASS' : 'FAIL', facts.readyFile === true ? '就绪文件存在' : '就绪文件不存在或为空'));
+  rows.push(row(group, `MCP 连上这个实例，opentune_get_status 为 READY${where}`, facts.status === 'READY' ? 'PASS' : 'FAIL', `opentune_get_status ${facts.status ?? '(无)'}${facts.ended === false ? '；实例没有被正常结束' : ''}`));
+  if (!isolated) rows.push(row(group, '默认位置：设置与日志在 ~/Library/OpenTune，发现文件在 ~/Library/Application Support/OpenTune/control/instances', facts.settingsDir === true && facts.logs > 0 ? 'PASS' : 'FAIL', `~/Library/OpenTune ${facts.settingsDir ? '存在' : '不存在'}；日志文件 ${facts.logs ?? 0} 个；发现文件${facts.pid ? '在该目录' : '没有出现'}`));
+  return rows;
+}
+
 // ---------------------------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------------------------
@@ -579,6 +862,8 @@ const CLI_SPEC = {
   mcp: 'string', exe: 'string', 'data-dir': 'string', template: 'string', 'official-dir': 'string', 'logs-out': 'string', timeout: 'string',
   sidecar: 'string', contract: 'string', smoke: 'string', log: 'string', 'contract-seconds': 'string', 'smoke-seconds': 'string', 'contract-outcome': 'string', 'smoke-outcome': 'string',
   title: 'string', package: 'string', json: 'string',
+  // macOS
+  platform: 'string', app: 'string', 'expect-app': 'string', kind: 'string', 'official-app': 'string', command: 'string', home: 'string', tty: 'bool',
 };
 
 const secondsOpt = (o) => (o.seconds === undefined ? null : Number(o.seconds));
@@ -596,6 +881,8 @@ async function main(argv) {
   } catch (e) {
     usage(e.message);
   }
+  if (o.platform !== undefined && o.platform !== 'windows' && o.platform !== 'macos') usage('--platform must be windows or macos');
+  const mac = o.platform === 'macos';
   const need = (...names) => names.forEach((n) => o[n] ?? usage(`--${n} is required for ${cmd}`));
   const record = (rows, { strict = false } = {}) => {
     appendSteps(o.steps, rows);
@@ -610,6 +897,13 @@ async function main(argv) {
       break;
     }
     case 'install': {
+      if (mac) {
+        need('steps', 'expect-app', 'models-dir', 'version');
+        const { rows, info } = inspectInstallMacos({ app: o.app ?? '', expectApp: o['expect-app'], modelsDir: o['models-dir'], version: o.version, plistVersion: o['registry-version'] ?? '', kind: o.kind ?? 'pkg', seconds: secondsOpt(o) });
+        if (o.out) fs.writeFileSync(o.out, `${JSON.stringify(info, null, 2)}\n`);
+        record(rows, { strict: true });
+        break;
+      }
       need('steps', 'expect-dir', 'models-dir', 'location', 'version');
       const { rows, info } = inspectInstall({ dir: o.dir ?? '', expectDir: o['expect-dir'], modelsDir: o['models-dir'], location: o.location, version: o.version, registryVersion: o['registry-version'] ?? '', seconds: secondsOpt(o) });
       if (o.out) fs.writeFileSync(o.out, `${JSON.stringify(info, null, 2)}\n`);
@@ -618,36 +912,65 @@ async function main(argv) {
     }
     case 'package': {
       need('steps', 'dir');
+      if (mac) {
+        record(inspectPackageMacos({ dir: o.dir, officialApp: o['official-app'] ?? '', documented: o.documented ?? '', seconds: secondsOpt(o) }), { strict: true });
+        break;
+      }
       const programFiles = [process.env.ProgramFiles, process.env.ProgramW6432, process.env['ProgramFiles(x86)']].filter(Boolean);
       record(inspectPackage({ dir: o.dir, programFiles, documented: o.documented ?? '', seconds: secondsOpt(o) }), { strict: true });
       break;
     }
     case 'doctor': {
-      need('steps', 'report', 'phase', 'install-dir');
-      if (!PHASES[o.phase]) usage('--phase must be no-d3d12 or d3d12');
+      need('steps', 'report');
+      if (!mac) need('phase', 'install-dir');
+      if (!mac && !PHASES[o.phase]) usage('--phase must be no-d3d12 or d3d12');
       let report = null;
       try {
         report = readJson(o.report);
       } catch {
         report = null;
       }
+      if (mac) {
+        record(evaluateDoctorMacos(report, { mcpRef: o['mcp-ref'] ?? '' }));
+        break;
+      }
       record(evaluateDoctor(report, { phase: o.phase, installDir: o['install-dir'], mcpRef: o['mcp-ref'] ?? '' }));
       break;
     }
     case 'launch': {
-      need('steps', 'phase', 'mcp', 'exe', 'data-dir', 'official-dir', 'models-dir');
-      if (!PHASES[o.phase]) usage('--phase must be no-d3d12 or d3d12');
-      const { facts, logText } = await runMcpLaunch({ mcp: o.mcp, exe: o.exe, dataDir: o['data-dir'], template: o.template, timeoutMs: (Number(o.timeout) || 120) * 1000 });
+      need('steps', 'mcp', 'exe', 'data-dir', 'official-dir', 'models-dir');
+      if (!mac) need('phase');
+      if (!mac && !PHASES[o.phase]) usage('--phase must be no-d3d12 or d3d12');
+      const { facts, logText } = await runMcpLaunch({ mcp: o.mcp, exe: o.exe, dataDir: o['data-dir'], template: o.template, timeoutMs: (Number(o.timeout) || 120) * 1000, platform: mac ? 'macos' : 'windows' });
       const log = parseLaunchLog(logText);
       if (o['logs-out']) {
         fs.mkdirSync(o['logs-out'], { recursive: true });
         for (const f of findLogs(o['data-dir'])) fs.writeFileSync(path.join(o['logs-out'], f.rel.replace(/[\\/]+/g, '__')), scrubLog(fs.readFileSync(f.full, 'utf8')));
       }
-      if (o.out) fs.writeFileSync(o.out, `${scrubPath(JSON.stringify({ phase: o.phase, facts, log }, null, 2))}\n`);
+      if (o.out) fs.writeFileSync(o.out, `${scrubPath(JSON.stringify({ phase: o.phase ?? null, facts, log }, null, 2))}\n`);
+      if (mac) {
+        // exe = <package>/OpenTune-AI.command (the program the MCP server starts; opentune-control.json sits next to it): the app bundle is its neighbour.
+        record(evaluateLaunchMacos({ facts, log, appDir: path.join(path.dirname(o.exe), 'OpenTune-ctl.app'), officialApp: o['official-dir'], modelsDir: o['models-dir'] }));
+        break;
+      }
       record(evaluateLaunch({ phase: o.phase, facts, log, sidecarDir: path.dirname(o.exe), officialDir: o['official-dir'], modelsDir: o['models-dir'] }));
       break;
     }
+    case 'command-launch': {
+      // macOS only: start through OpenTune-AI.command (--data-dir: isolated; --home: default locations of that home).
+      need('steps', 'command', 'mcp', 'exe');
+      if (!o['data-dir'] && !o.home) usage('--data-dir or --home is required for command-launch');
+      const { facts } = await runCommandLaunch({ command: o.command, mcp: o.mcp, dataDir: o['data-dir'] ?? '', home: o.home ?? '', template: o.template ?? '', timeoutMs: (Number(o.timeout) || 90) * 1000, tty: Boolean(o.tty) });
+      if (o.out) fs.writeFileSync(o.out, `${scrubPath(JSON.stringify({ facts }, null, 2))}\n`);
+      record(evaluateCommandLaunch({ facts, appExe: o.exe, isolated: Boolean(o['data-dir']) }));
+      break;
+    }
     case 'd3d12': {
+      if (mac) {
+        need('steps');
+        record(inspectD3d12Macos());
+        break;
+      }
       need('steps', 'official-dir', 'sidecar');
       record(inspectD3d12({ officialDir: o['official-dir'], sidecarDir: o.sidecar, seconds: secondsOpt(o) }));
       break;
@@ -660,7 +983,7 @@ async function main(argv) {
     }
     case 'summary': {
       need('steps');
-      const r = renderStepSummary(readSteps(o.steps), { title: o.title, packageName: o.package ?? '', mcpRef: o['mcp-ref'] ?? '' });
+      const r = renderStepSummary(readSteps(o.steps), { title: o.title, packageName: o.package ?? '', mcpRef: o['mcp-ref'] ?? '', required: mac ? REQUIRED_GROUPS_MACOS : REQUIRED_GROUPS });
       if (o.out) fs.appendFileSync(o.out, r.markdown);
       else process.stdout.write(r.markdown);
       if (o.json) fs.writeFileSync(o.json, `${JSON.stringify({ result: r.failed ? 'FAIL' : 'PASS', counts: r.counts, steps: r.steps }, null, 2)}\n`);
@@ -668,7 +991,7 @@ async function main(argv) {
       break;
     }
     default:
-      usage('unknown command (step | install | package | doctor | launch | d3d12 | results | summary)');
+      usage('unknown command (step | install | package | doctor | launch | command-launch | d3d12 | results | summary)');
   }
 }
 

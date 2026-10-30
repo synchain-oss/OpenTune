@@ -170,16 +170,18 @@ const SECRET_PATTERNS = [
   [/(?<![0-9A-Za-z])[0-9a-fA-F]{32,128}(?![0-9A-Za-z])/g, '<redacted-hex>'],
 ];
 
-/** Redact session tokens, serverProof values and Windows user profile names from log text. */
+/** Redact session tokens, serverProof values and Windows and macOS user profile names from log text. */
 export function scrubLog(text) {
   let out = String(text);
   for (const [re, to] of SECRET_PATTERNS) out = out.replace(re, to);
-  return out.replace(/([A-Za-z]:[\\/]+Users[\\/]+)[^\\/\s"']+/gi, '$1<user>');
+  out = out.replace(/([A-Za-z]:[\\/]+Users[\\/]+)[^\\/\s"']+/gi, '$1<user>');
+  // macOS: /Users/<name>/... (but not the shared folder /Users/Shared)
+  return out.replace(/(^|[^A-Za-z0-9_.-])(\/Users\/)(?!Shared(?:[\/\s"']|$))(?!<user>)[^\/\s"']+/g, '$1$2<user>');
 }
 
 /** Like scrubLog, and also folds a user profile directory (`C:\Users\<name>`) into `<home>`; for paths in errors and reports. */
 export function scrubPath(text) {
-  return scrubLog(text).replace(/[A-Za-z]:[\\/]+Users[\\/]+<user>/gi, '<home>');
+  return scrubLog(text).replace(/[A-Za-z]:[\\/]+Users[\\/]+<user>/gi, '<home>').replace(/(^|[^A-Za-z0-9_.-])\/Users\/<user>/g, '$1<home>');
 }
 
 /** Text files that are scrubbed: known text extensions, plus files without an extension (preferences). */

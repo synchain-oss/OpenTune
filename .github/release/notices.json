@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "comment": "Catalogue for .github/scripts/release-notices.mjs, which writes THIRD-PARTY-NOTICES.txt of the unofficial Windows test build. A component is written only when its probe finds it in the build (compiled sources, include paths, data embedded in OpenTune.exe, files next to it, the ARA link check). Packages vendored inside JUCE come from JUCE.spdx.json; juceVendored.conditions excludes the ones whose code is switched off for the Standalone. redistribution 'unverified' keeps a component out of the notices and blocks a tagged release until its terms are confirmed (no component carries it at present). \"mustAppear\": true puts a component in the fail-closed class below although its terms ask for no license text. Fail closed: when the repository has a component (embedded files, or probe.repoFiles of a source / include probe) whose terms ask for something (unverified terms, license text, the GPL-3.0 appendix, \"mustAppear\": true) but its probe finds nothing in the build, the component is a release blocker too, unless the entry says \"absentOk\": \"<reason>\". See .github/release/README.md.",
+  "comment": "Catalogue for .github/scripts/release-notices.mjs, which writes THIRD-PARTY-NOTICES.txt of the unofficial Windows and macOS test builds. A component is written only when its probe finds it in the build (compiled sources, include paths, data embedded in the executable, files next to it, the ARA link check). \"platforms\": [\"windows\"] or [\"macos\"] limits a component to one platform (without it the component is considered on both). juceVendored.conditionsByPlatform overrides juceVendored.conditions per platform. Packages vendored inside JUCE come from JUCE.spdx.json; juceVendored.conditions excludes the ones whose code is switched off for the Standalone. redistribution 'unverified' keeps a component out of the notices and blocks a tagged release until its terms are confirmed (no component carries it at present). \"mustAppear\": true puts a component in the fail-closed class below although its terms ask for no license text. Fail closed: when the repository has a component (embedded files, or probe.repoFiles of a source / include probe) whose terms ask for something (unverified terms, license text, the GPL-3.0 appendix, \"mustAppear\": true) but its probe finds nothing in the build, the component is a release blocker too, unless the entry says \"absentOk\": \"<reason>\". See .github/release/README.md.",
   "components": [
     {
       "id": "opentune",
@@ -84,6 +84,7 @@
     },
     {
       "id": "onnxruntime",
+      "platforms": ["windows"],
       "name": "ONNX Runtime (DirectML build)",
       "license": "MIT",
       "copyright": "Copyright (c) Microsoft Corporation",
@@ -98,6 +99,7 @@
     },
     {
       "id": "directml",
+      "platforms": ["windows"],
       "name": "DirectML",
       "license": "Microsoft Software License Terms for DirectML (full text: DirectML-LICENSE.txt in this package)",
       "copyright": "Copyright (c) Microsoft Corporation",
@@ -106,6 +108,21 @@
       "probe": { "kind": "appFile", "pattern": "^DirectML\\.dll$" },
       "versionFromDep": "microsoft.ai.directml.",
       "licenseFiles": [{ "root": "dep", "dep": "microsoft.ai.directml.", "path": "ThirdPartyNotices.txt", "optional": true }]
+    },
+    {
+      "id": "onnxruntime-macos",
+      "platforms": ["macos"],
+      "name": "ONNX Runtime (macOS arm64 build)",
+      "license": "MIT",
+      "copyright": "Copyright (c) Microsoft Corporation",
+      "url": "https://onnxruntime.ai",
+      "usedIn": "{{ORT_DLL}} (the official prebuilt onnxruntime-osx-arm64 release, unmodified)",
+      "probe": { "kind": "appFile", "pattern": "^libonnxruntime\\.\\d+\\.\\d+\\.\\d+\\.dylib$" },
+      "versionFromDep": "onnxruntime-osx-arm64-",
+      "licenseFiles": [
+        { "root": "dep", "dep": "onnxruntime-osx-arm64-", "path": "LICENSE" },
+        { "root": "dep", "dep": "onnxruntime-osx-arm64-", "path": "ThirdPartyNotices.txt", "optional": true }
+      ]
     },
     {
       "id": "ara-sdk",
@@ -142,6 +159,11 @@
       "sord": { "anyMacro": [{ "name": "JucePlugin_Build_LV2", "default": "0" }, { "name": "JUCE_PLUGINHOST_LV2", "default": "0" }] },
       "sratom": { "anyMacro": [{ "name": "JucePlugin_Build_LV2", "default": "0" }, { "name": "JUCE_PLUGINHOST_LV2", "default": "0" }] },
       "@juce-framework/webview": { "anyMacro": [{ "name": "JUCE_WEB_BROWSER", "default": "1" }] }
+    },
+    "conditionsByPlatform": {
+      "macos": {
+        "AudioUnitSDK": { "anyMacro": [{ "name": "JucePlugin_Build_AU", "default": "0" }, { "name": "JUCE_PLUGINHOST_AU", "default": "0" }] }
+      }
     },
     "extraText": {
       "jpeglib": "This software is based in part on the work of the Independent JPEG Group.",

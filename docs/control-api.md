@@ -25,7 +25,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 | 控制接口 | 开发中，尚无可用构建 |
 | 官方 OpenTune 发布版 | 不含此接口，需要本 fork 的补丁版构建 |
 | Windows x64 | 首先支持（开发中） |
-| macOS | 暂无。不会发布 macOS 测试版；macOS 上计划在 OpenTune 官方发布版包含控制接口后可用（或自行从源码构建） |
+| macOS | 仅 Apple 芯片（arm64）的非官方测试版（计划，随 Windows 测试版一起发布）；不支持 Intel Mac。测试包使用临时签名（ad hoc），没有经过 Apple 公证，第一次启动需要手动放行；需要已安装官方 OpenTune 1.8.0 或更新版本（位于 /Applications）。也可自行从源码构建 |
 | Linux | 不支持（OpenTune 本身没有 Linux 版本） |
 | 非官方测试版 | 尚未发布 |
 | MCP 服务（npm `@synchain/opentune-mcp`） | 尚未发布 |
@@ -120,7 +120,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 上游合入之前，我们计划在本 fork 的 Releases 中发布**非官方测试版**（预发布）：
 
-- 只提供 Windows x64 的 zip，tag 形如 `synchain-test/v<版本>-ctl.<n>`。
+- 提供 Windows x64 的 zip 和 macOS Apple 芯片（arm64）的 zip，tag 形如 `synchain-test/v<版本>-ctl.<n>`。macOS 包里有 `OpenTune-ctl.app`、`OpenTune-AI.command`（以开启控制接口的方式启动应用）和 `opentune-control.json`（OpenTune MCP Server 要求它放在被启动的程序旁边，所以它在包的顶层、紧挨着 `.command`）；包使用临时签名，没有经过 Apple 公证，并且不支持 Intel Mac。
 - **不含任何模型权重**。需要本机已安装官方 OpenTune，由它提供模型。
 - 每个测试版都会注明对应的源码（fork tag 与源码归档）和构建方法，并注明 YuFeng926/OpenTune 是唯一的官方渠道。
 

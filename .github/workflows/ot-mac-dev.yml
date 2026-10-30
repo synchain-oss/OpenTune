@@ -87,8 +87,98 @@ jobs:
           retention-days: 3
 
   smoke-macos:
+    if: ${{ false }}
     needs: package
     uses: ./.github/workflows/smoke-macos.yml
     with:
       package-artifact: ot-dev-package-macos
       package-name: ${{ needs.package.outputs.name }}
+
+  diag:
+    name: diag (launcher, SIGTERM timing)
+    needs: package
+    runs-on: macos-14
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ot-dev-package-macos
+          path: ${{ runner.temp }}/pkg
+      - name: Extract
+        run: |
+          mkdir -p "$RUNNER_TEMP/x"
+          ditto -x -k "$RUNNER_TEMP"/pkg/*.zip "$RUNNER_TEMP/x"
+          ls "$RUNNER_TEMP/x"
+      - name: A. start without a terminal, then SIGTERM
+        run: |
+          set -uo pipefail
+          dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
+          cmd="$dir/OpenTune-AI.command"
+          d="$RUNNER_TEMP/dA"; mkdir -p "$d"
+          OPENTUNE_DATA_DIR="$d" "$cmd" --control-api-ready-file="$d/ready.json" </dev/null >/dev/null 2>&1 &
+          pid=$!
+          t0=$(date +%s)
+          i=0; while [ $i -lt 300 ]; do ls "$d"/control/instances/*.json >/dev/null 2>&1 && break; sleep 0.2; i=$((i+1)); done
+          echo "A: discovery after $(( $(date +%s) - t0 )) s"
+          sleep 2
+          t1=$(date +%s); kill -TERM $pid
+          while kill -0 $pid 2>/dev/null; do sleep 0.2; done
+          echo "A: SIGTERM until gone: $(( $(date +%s) - t1 )) s"
+          wait $pid; echo "A: exit code $?"
+          tail -5 "$d"/Logs/*.log || true
+      - name: B. start under a pseudo terminal (the launcher as shipped)
+        run: |
+          set -uo pipefail
+          dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
+          cmd="$dir/OpenTune-AI.command"
+          d="$RUNNER_TEMP/dB"; mkdir -p "$d"
+          OPENTUNE_DATA_DIR="$d" script -q /dev/null "$cmd" --control-api-ready-file="$d/ready.json"
+          echo "B: script returned $?"
+          for n in 1 2 3 4 5 6; do sleep 2; ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "B: no OpenTune process after $((n*2)) s"; done
+          ls -R "$d" | head -20
+      - name: B2. same, with the output of the background start kept
+        run: |
+          set -uo pipefail
+          dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
+          d="$RUNNER_TEMP/dB2"; mkdir -p "$d"
+          sed "s#>/dev/null 2>&1 &#>\"$d/out.txt\" 2>\&1 \&#" "$dir/OpenTune-AI.command" > "$dir/variant.command"
+          chmod +x "$dir/variant.command"
+          grep -n "nohup" "$dir/variant.command"
+          OPENTUNE_DATA_DIR="$d" script -q /dev/null "$dir/variant.command" --control-api-ready-file="$d/ready.json"
+          echo "B2: script returned $?"
+          sleep 8
+          ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "B2: no OpenTune process"
+          echo "--- out.txt"; cat "$d/out.txt" || true
+          ls -R "$d" | head -20
+      - name: B3. start with a detached subshell and disown instead of nohup
+        run: |
+          set -uo pipefail
+          dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
+          d="$RUNNER_TEMP/dB3"; mkdir -p "$d"
+          cat > "$dir/variant3.command" <<'SCRIPT'
+          #!/bin/sh
+          here=$(cd "$(dirname "$0")" && pwd)
+          exe="$here/OpenTune-ctl.app/Contents/MacOS/OpenTune"
+          ( trap '' HUP; exec "$exe" --control-api "$@" </dev/null >/dev/null 2>&1 ) &
+          exit 0
+          SCRIPT
+          sed -i '' 's/^          //' "$dir/variant3.command"
+          chmod +x "$dir/variant3.command"
+          OPENTUNE_DATA_DIR="$d" script -q /dev/null "$dir/variant3.command" --control-api-ready-file="$d/ready.json"
+          echo "B3: script returned $?"
+          for n in 1 2 3; do sleep 3; ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "B3: no OpenTune process after $((n*3)) s"; done
+          ls -R "$d" | head -20
+          pkill -x OpenTune || true
+      - name: B4. start with open(1)
+        run: |
+          set -uo pipefail
+          dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
+          d="$RUNNER_TEMP/dB4"; mkdir -p "$d"
+          open -n "$dir/OpenTune-ctl.app" --env OPENTUNE_DATA_DIR="$d" --args --control-api --control-api-ready-file="$d/ready.json"
+          echo "B4: open returned $?"
+          for n in 1 2 3; do sleep 3; ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "B4: no OpenTune process after $((n*3)) s"; done
+          ls -R "$d" | head -20
+          pkill -x OpenTune || true

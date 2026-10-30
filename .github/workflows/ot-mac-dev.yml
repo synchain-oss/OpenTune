@@ -114,7 +114,7 @@ jobs:
           ls "$RUNNER_TEMP/x"
       - name: A. start without a terminal, then SIGTERM
         run: |
-          set -uo pipefail
+          set +e; set -u
           dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
           cmd="$dir/OpenTune-AI.command"
           d="$RUNNER_TEMP/dA"; mkdir -p "$d"
@@ -131,7 +131,7 @@ jobs:
           tail -5 "$d"/Logs/*.log || true
       - name: B. start under a pseudo terminal (the launcher as shipped)
         run: |
-          set -uo pipefail
+          set +e; set -u
           dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
           cmd="$dir/OpenTune-AI.command"
           d="$RUNNER_TEMP/dB"; mkdir -p "$d"
@@ -141,7 +141,7 @@ jobs:
           ls -R "$d" | head -20
       - name: B2. same, with the output of the background start kept
         run: |
-          set -uo pipefail
+          set +e; set -u
           dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
           d="$RUNNER_TEMP/dB2"; mkdir -p "$d"
           sed "s#>/dev/null 2>&1 &#>\"$d/out.txt\" 2>\&1 \&#" "$dir/OpenTune-AI.command" > "$dir/variant.command"
@@ -155,7 +155,7 @@ jobs:
           ls -R "$d" | head -20
       - name: B3. start with a detached subshell and disown instead of nohup
         run: |
-          set -uo pipefail
+          set +e; set -u
           dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
           d="$RUNNER_TEMP/dB3"; mkdir -p "$d"
           cat > "$dir/variant3.command" <<'SCRIPT'
@@ -174,7 +174,7 @@ jobs:
           pkill -x OpenTune || true
       - name: B4. start with open(1)
         run: |
-          set -uo pipefail
+          set +e; set -u
           dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
           d="$RUNNER_TEMP/dB4"; mkdir -p "$d"
           open -n "$dir/OpenTune-ctl.app" --env OPENTUNE_DATA_DIR="$d" --args --control-api --control-api-ready-file="$d/ready.json"
@@ -182,3 +182,28 @@ jobs:
           for n in 1 2 3; do sleep 3; ps -ax -o pid,ppid,pgid,stat,command | grep -i "[O]penTune-ctl" || echo "B4: no OpenTune process after $((n*3)) s"; done
           ls -R "$d" | head -20
           pkill -x OpenTune || true
+      - name: Check out the MCP repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: synchain-oss/opentune-mcp-server
+          ref: feature/v1
+          path: ot-mcp
+          fetch-depth: 1
+          lfs: false
+          persist-credentials: false
+      - name: C. contract vectors with per-test durations (stopped after 4 minutes)
+        working-directory: ot-mcp
+        run: |
+          set +e; set -u
+          npm ci --no-audit --no-fund && npm run build
+          dir=$(ls -d "$RUNNER_TEMP"/x/OpenTune-*)
+          mkdir -p "$RUNNER_TEMP/tpl" "$RUNNER_TEMP/keep" "$RUNNER_TEMP/cdata"
+          printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>' '' '<PROPERTIES>' '  <VALUE name="shared.onboardingShown" val="1"/>' '</PROPERTIES>' > "$RUNNER_TEMP/tpl/app-preferences.settings"
+          export OTCP_TARGET_EXE="$dir/OpenTune-AI.command" OPENTUNE_DATA_DIR="$RUNNER_TEMP/cdata" OTCP_TARGET_DATA_DIR="$RUNNER_TEMP/keep" OTCP_TARGET_DATA_TEMPLATE="$RUNNER_TEMP/tpl"
+          npm run test:contract -- --reporter=verbose -t "against the exe" > "$RUNNER_TEMP/contract-verbose.txt" 2>&1 &
+          cpid=$!
+          sleep 240
+          pkill -P $cpid || true; kill $cpid || true; pkill -x OpenTune || true
+          sleep 2
+          grep -E "✓|×|✗|FAIL|passed|failed" "$RUNNER_TEMP/contract-verbose.txt" | head -80
+          echo "--- tail"; tail -30 "$RUNNER_TEMP/contract-verbose.txt"

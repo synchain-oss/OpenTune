@@ -298,7 +298,12 @@ describe('runCommandLaunch and evaluateCommandLaunch (stand-in launcher scripts 
   // `exec-cmd` is the stand-in for the script without a terminal, `bg-cmd` the one under a terminal; `script -q /dev/null <cmd>`
   // (what the tty mode runs) is mapped to the command it wraps, as macOS's script would run it.
   const spawnFn = (cmd, args, opts) => {
-    if (cmd === 'script') return spawnFn(args[2], args.slice(3), opts);
+    if (cmd === 'script') {
+      // macOS's script ends the command it runs when its own standard input ends: the input must be an open pipe.
+      assert.deepEqual(args.slice(0, 2), ['-q', '/dev/null']);
+      assert.equal(opts.stdio[0], 'pipe', 'script is not given a closed or empty standard input');
+      return spawnFn(args[2], args.slice(3), opts);
+    }
     if (cmd === 'exec-cmd') return spawn(process.execPath, [execScript, ...args], opts);
     if (cmd === 'bg-cmd') return spawn(process.execPath, [backgroundScript, ...args], opts);
     return spawn(cmd, args, opts);

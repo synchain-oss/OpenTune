@@ -765,7 +765,11 @@ export async function runCommandLaunch({ command, mcp, dataDir = '', home = '', 
   let pid = 0;
   try {
     const args = readyFile ? [`--control-api-ready-file=${readyFile}`] : [];
-    const sh = tty ? spawnFn('script', ['-q', '/dev/null', command, ...args], { stdio: 'ignore', env }) : spawnFn(command, args, { stdio: 'ignore', env });
+    // `script` copies its standard input to the pseudo terminal and, at the end of that input, ends the command it runs:
+    // a closed or empty input (stdio 'ignore') would kill the launcher before it starts OpenTune. The pipe stays open and
+    // idle, as a Terminal window's input does, until the command returns.
+    const sh = tty ? spawnFn('script', ['-q', '/dev/null', command, ...args], { stdio: ['pipe', 'ignore', 'ignore'], env }) : spawnFn(command, args, { stdio: 'ignore', env });
+    sh.stdin?.on?.('error', () => undefined);
     facts.scriptPid = sh.pid ?? 0;
     facts.scriptExited = false;
     const exited = new Promise((resolve) => {

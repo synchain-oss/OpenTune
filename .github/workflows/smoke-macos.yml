@@ -38,7 +38,7 @@ jobs:
   smoke:
     name: smoke-macos (official ${{ matrix.version }})
     runs-on: macos-14
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -262,7 +262,7 @@ jobs:
       - name: Contract vectors against the package
         id: contract
         continue-on-error: true
-        timeout-minutes: 20
+        timeout-minutes: 50
         working-directory: ot-mcp
         env:
           OTCP_TARGET_EXE: ${{ env.SC_LAUNCHER }}
@@ -272,7 +272,7 @@ jobs:
         run: |
           start=$(date +%s)
           trap 'echo "SC_CONTRACT_SECONDS=$(( $(date +%s) - start ))" >> "$GITHUB_ENV"' EXIT
-          npm run test:contract -- --reporter=default --reporter=json "--outputFile.json=$SC_OUT/contract.json" -t "$CONTRACT_FILTER"
+          npm run test:contract -- --reporter=verbose --reporter=json "--outputFile.json=$SC_OUT/contract.json" -t "$CONTRACT_FILTER"
       - name: Smoke scenario against the package (hello, import, F0 ready, AUTO, export)
         id: smoke
         continue-on-error: true

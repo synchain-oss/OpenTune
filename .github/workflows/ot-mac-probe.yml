@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Temporary probe (removed before the pull request): where the MCP server looks for opentune-control.json
-# and how it starts OpenTune on macOS.
+# Temporary probe (removed before the pull request): how the MCP server starts OpenTune and adopts the instance.
 name: ot-mac-probe
 
 on:
@@ -26,15 +25,11 @@ jobs:
           fetch-depth: 1
           lfs: false
           persist-credentials: false
-      - name: Where the manifest is read
+      - name: Launch sources
         run: |
-          git log -1 --format='%H %s'
-          grep -rn -i "opentune-control" --include=*.ts --include=*.md --include=*.json . 2>/dev/null | grep -v node_modules | head -80
-      - name: The manifest reader
+          ls -la src/launch
+          echo "=== config.ts"
+          sed -n 1,120p src/launch/config.ts
+      - name: Spawn and pid handling
         run: |
-          f=$(grep -rl -i "CONTROL_JSON_MAX\|opentune-control.json" src | head -5)
-          echo "files: $f"
-          for x in $f; do echo "=== $x"; wc -l "$x"; done
-      - name: Darwin handling in launch and doctor
-        run: |
-          grep -rn -i "darwin\|macos\|\.app\b\|Contents/MacOS\|\.command" src | head -80
+          grep -n "spawn\|pid\|detached\|execFile\|workingDirectory\|executable_folder\|official_install\|cwd" src/launch/*.ts | head -150

@@ -25,7 +25,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 | Control API | In development; no usable build yet |
 | Official OpenTune releases | Do not include this API; a patched build from this fork is required |
 | Windows x64 | First target (in development) |
-| macOS | Not yet. No macOS test builds will be published; on macOS the API is planned to be available once it is part of an official OpenTune release, or in a build from source |
+| macOS | An unofficial test build for Apple silicon (arm64) only (planned, published together with the Windows test build); Intel Macs are not supported. The package is ad hoc signed and not notarized by Apple, so the first launch has to be allowed by hand; it requires an installed official OpenTune 1.8.0 or newer (in /Applications). A build from source also works |
 | Linux | Not supported (OpenTune itself has no Linux build) |
 | Unofficial test builds | Not published yet |
 | MCP server (npm `@synchain/opentune-mcp`) | Not published yet |
@@ -120,7 +120,7 @@ Notes:
 
 Until upstream merges the API, we plan to publish **unofficial test builds** as pre-releases on this fork's Releases page:
 
-- They will be Windows x64 zip files only, tagged like `synchain-test/v<version>-ctl.<n>`.
+- They will be a Windows x64 zip and a macOS Apple silicon (arm64) zip, tagged like `synchain-test/v<version>-ctl.<n>`. The macOS package holds `OpenTune-ctl.app`, `OpenTune-AI.command` (starts the app with the control API turned on) and `opentune-control.json` (OpenTune MCP Server requires it next to the program it starts, so it sits at the top level of the package next to the `.command`); the package is ad hoc signed, not notarized by Apple, and does not support Intel Macs.
 - They will contain **no model weights**. They require an installed official OpenTune, which provides the models.
 - Each test build will state its corresponding source (fork tag and source archive) and how it was built. Each will also state that YuFeng926/OpenTune is the only official channel.
 

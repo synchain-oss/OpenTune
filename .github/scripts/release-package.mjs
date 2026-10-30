@@ -5,6 +5,9 @@
 // release-package: validate a test build tag and assemble the unofficial Windows test build
 // (prerelease.yml). Never publishes anything: creating the draft pre-release is a separate workflow
 // step that runs only for a pushed synchain-test/* tag, and publishing it is a manual step.
+// The macOS package is assembled by release-macos.mjs (it needs a Mac: PlistBuddy, codesign, ditto);
+// this file verifies it (verify, with the platform taken from the package name) and puts the release
+// body of both platforms together (compose-body).
 //
 //   validate  --event <github.event_name> [--tag <name>] [--checks <check-runs.json>] [--dev-ref origin/dev]
 //             [--sha <commit>] [--github-output <file>]
@@ -19,7 +22,10 @@
 //             <out>/release-body.md and <out>/manifest.json. A tag build stops on any release blocker.
 //   control-json --inputs <dir> --out <file> --commit <sha> --date <ISO 8601> --repository <owner/name>
 //             [--label <l>] [--tag <t>] [--server-url <u>]  write opentune-control.json the way build does (for the e2e run)
-//   verify    --zip <file> [--name <package>]   allow-list, forbidden content and SHA256SUMS of a zip
+//   verify    --zip <file> [--name <package>] [--platform win-x64|macos-arm64]
+//             allow-list, forbidden content and SHA256SUMS of a zip (platform: from --name, else win-x64)
+//   compose-body --windows <release-body.md> --macos <release-body-macos.md> --windows-zip <name> --macos-zip <name>
+//             --out <file>   the release body of both platforms in one file; attribution-checked
 //
 // exit 0 = ok, 1 = check failed, 2 = usage error
 import fs from 'node:fs';
@@ -28,14 +34,17 @@ import { checkText, formatViolations, loadPatterns } from './check-attribution.m
 import { isAncestor, isMainModule, parseArgs, repoTop } from './fork-lib.mjs';
 import {
   buildControlJson,
+  checkMacosModes,
   checkPackageEntries,
   createZip,
   evaluateForkGate,
   formatSha256Sums,
+  macosContentProblems,
   ORT_DLL_RE,
   PACKAGE_FILES,
   packageName,
   parseTestTag,
+  platformOfPackageName,
   readCmakeProjectVersion,
   readProtocolMajor,
   readZip,
@@ -77,7 +86,15 @@ export function validateBuild({ cmakeVersion, tag, sha, checkRuns, isAncestorOfD
   if (!tag) {
     const label = `rehearsal-${sha.slice(0, 7)}`;
     checks.push({ name: 'mode', ok: true, detail: 'rehearsal: build, package and check; no release' });
-    return { mode: 'rehearsal', version: cmakeVersion, label, tag: '', name: packageName({ version: cmakeVersion, label }), checks };
+    return {
+      mode: 'rehearsal',
+      version: cmakeVersion,
+      label,
+      tag: '',
+      name: packageName({ version: cmakeVersion, label }),
+      nameMacos: packageName({ version: cmakeVersion, label, platform: 'macos-arm64' }),
+      checks,
+    };
   }
   const parsed = parseTestTag(tag);
   checks.push({ name: 'tag name', ok: Boolean(parsed), detail: parsed ? `${tag}` : `${tag} is not synchain-test/v<x.y.z>-ctl.<n>` });
@@ -87,7 +104,15 @@ export function validateBuild({ cmakeVersion, tag, sha, checkRuns, isAncestorOfD
   const fg = evaluateForkGate(checkRuns);
   checks.push({ name: 'fork-gate', ok: fg.ok, detail: fg.detail });
   const label = parsed ? parsed.label : 'ctl.0';
-  return { mode: 'release', version: cmakeVersion, label, tag, name: parsed ? packageName({ version: cmakeVersion, label }) : '', checks };
+  return {
+    mode: 'release',
+    version: cmakeVersion,
+    label,
+    tag,
+    name: parsed ? packageName({ version: cmakeVersion, label }) : '',
+    nameMacos: parsed ? packageName({ version: cmakeVersion, label, platform: 'macos-arm64' }) : '',
+    checks,
+  };
 }
 
 function cmdValidate(o) {
@@ -103,7 +128,7 @@ function cmdValidate(o) {
   for (const c of r.checks) lines.push(`| ${c.name} | ${c.ok ? 'PASS' : 'FAIL'} | ${c.detail} |`);
   summary(lines.join('\n'));
   out(JSON.stringify(r, null, 2));
-  if (o['github-output']) fs.appendFileSync(o['github-output'], `mode=${r.mode}\nversion=${r.version}\nlabel=${r.label}\ntag=${r.tag}\nname=${r.name}\n`);
+  if (o['github-output']) fs.appendFileSync(o['github-output'], `mode=${r.mode}\nversion=${r.version}\nlabel=${r.label}\ntag=${r.tag}\nname=${r.name}\nname_macos=${r.nameMacos}\n`);
   if (r.checks.some((c) => !c.ok)) fail(`validate: ${r.checks.filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail}`).join('; ')}`);
 }
 
@@ -128,9 +153,12 @@ export function modificationVars(nameStatusText) {
 /**
  * Check a zip: one top-level folder, the allow-list inside it, nothing forbidden, no duplicate entry
  * (readZip throws on a repeated name; checkPackageEntries reports names that differ only in case),
- * SHA256SUMS right.
+ * SHA256SUMS right. A macOS package (platform macos-arm64, by default taken from the expected name) is
+ * nested: the allow-list names the files of the app bundle, the executable bits and the absence of
+ * symbolic links are checked, and the program, the Info.plist and opentune-control.json must be right.
  */
-export function verifyZipBuffer(zipBuf, expectedName) {
+export function verifyZipBuffer(zipBuf, expectedName, { platform = platformOfPackageName(expectedName) ?? 'win-x64', bundle } = {}) {
+  const mac = platform === 'macos-arm64';
   const problems = [];
   const entries = readZip(zipBuf);
   const tops = new Set(entries.map((e) => e.name.split('/')[0]));
@@ -139,19 +167,32 @@ export function verifyZipBuffer(zipBuf, expectedName) {
   if (expectedName && top !== expectedName) problems.push(`top-level folder is ${top}, expected ${expectedName}`);
   const inner = [];
   const hashes = new Map();
+  const contents = new Map();
   let sums = null;
   for (const e of entries) {
     const rel = e.name.slice(top.length + 1);
     if (!rel) continue; // the folder entry itself
-    inner.push({ path: rel.replace(/\/$/, ''), isDir: e.isDir, head: e.data.subarray(0, 64) });
+    inner.push({ path: rel.replace(/\/$/, ''), isDir: e.isDir, head: e.data.subarray(0, 64), mode: e.mode });
     if (e.isDir) continue;
+    if (mac) contents.set(rel, e.data);
     if (rel === 'SHA256SUMS') sums = e.data.toString('utf8');
     else hashes.set(rel, sha256Hex(e.data));
   }
-  problems.push(...checkPackageEntries(inner));
+  problems.push(...checkPackageEntries(inner, { platform }));
+  if (mac) {
+    problems.push(...checkMacosModes(inner));
+    problems.push(...macosContentProblems(contents, bundle ?? macosBundleOfRepo()));
+  }
   if (sums === null) problems.push('SHA256SUMS missing');
   else problems.push(...verifySha256Sums(sums, hashes));
   return { problems, files: inner.filter((e) => !e.isDir).map((e) => e.path) };
+}
+
+/** The Info.plist values of the renamed app bundle, from .github/release/release.json (the macos section). */
+export function macosBundleOfRepo() {
+  const cfg = JSON.parse(fs.readFileSync(path.join(repoTop(process.cwd()), '.github', 'release', 'release.json'), 'utf8'));
+  if (!cfg.macos?.bundleIdentifier || !cfg.macos?.bundleName) fail('release.json: the macos section needs bundleName and bundleIdentifier');
+  return { bundleIdentifier: cfg.macos.bundleIdentifier, bundleName: cfg.macos.bundleName };
 }
 
 function readInputs(dir) {
@@ -176,7 +217,41 @@ function readInputs(dir) {
   };
 }
 
-function formatCommands(commands) {
+/**
+ * Template variables that the Windows and the macOS package share: version, label, commit, URLs of the
+ * fork, the official repository and the MCP repository, the upstream base, the run and the changes
+ * relative to the upstream snapshot.
+ */
+export function commonTemplateVars({ cfg, lock, version, name, tag, o }) {
+  const server = (o['server-url'] ?? 'https://github.com').replace(/\/+$/, '');
+  const forkUrl = `${server}/${o.repository}`;
+  const day = new Date(o.date).toISOString().slice(0, 10);
+  const ref = tag || o.commit;
+  const mirror = lock.mirror?.baseUrl ? lock.mirror.baseUrl.replace('/releases/download/', '/releases/tag/') : '(none)';
+  return {
+    APP_VERSION: version,
+    BUILD_LABEL: o.label,
+    PACKAGE_NAME: name,
+    TAG: tag || '(none: rehearsal build)',
+    COMMIT: o.commit,
+    DATE: day,
+    FORK_REPO_URL: forkUrl,
+    SOURCE_URL: `${forkUrl}/tree/${ref}`,
+    SOURCE_ARCHIVE_URL: tag ? `${forkUrl}/archive/refs/tags/${tag}.zip` : `${forkUrl}/archive/${o.commit}.zip`,
+    DEPS_MIRROR_URL: mirror,
+    OFFICIAL_REPO_URL: `${server}/${cfg.officialRepository}`,
+    OFFICIAL_RELEASES_URL: `${server}/${cfg.officialRepository}/releases`,
+    ISSUES_URL: cfg.issuesUrl,
+    MCP_REPO_URL: `${server}/${cfg.mcpRepository}`,
+    UPSTREAM_BASE_TAG: o['upstream-tag'],
+    UPSTREAM_BASE_COMMIT: o['upstream-commit'],
+    RUN_URL: o['run-url'] ?? '(local run)',
+    SMOKE_STATUS: o.smoke ?? 'not run',
+    ...modificationVars(fs.readFileSync(o['name-status'], 'utf8')),
+  };
+}
+
+export function formatCommands(commands) {
   if (!Array.isArray(commands) || !commands.length) return '(not recorded)';
   return commands.map((c) => `# ${c.step}\n${(c.argv ?? []).map(String).map(quoteArg).join(' ')}`).join('\n\n');
 }
@@ -186,7 +261,7 @@ function formatCommands(commands) {
  * workflow: protocol major from ControlProtocol.h, version from CMakeLists.txt, release.json, and the
  * build job's build-info.json. Validated before it is returned; an invalid file throws.
  */
-export function composeControlJson({ top, cfg, info, commit, tag, label, day, server, forkUrl }) {
+export function composeControlJson({ top, cfg, info, commit, tag, label, day, server, forkUrl, platform = 'win-x64' }) {
   const version = readCmakeProjectVersion(fs.readFileSync(path.join(top, 'CMakeLists.txt'), 'utf8'));
   const protocolMajor = readProtocolMajor(fs.readFileSync(path.join(top, 'Source', 'Control', 'ControlProtocol.h'), 'utf8'));
   const control = buildControlJson({
@@ -198,7 +273,8 @@ export function composeControlJson({ top, cfg, info, commit, tag, label, day, se
     date: day,
     sourceUrl: `${forkUrl}/tree/${tag || commit}`,
     officialRepositoryUrl: `${server}/${cfg.officialRepository}`,
-    d3d12: info.d3d12,
+    d3d12: platform === 'macos-arm64' ? undefined : info.d3d12,
+    platform,
   });
   const controlBuf = Buffer.from(`${JSON.stringify(control, null, 2)}\n`, 'utf8');
   const cj = validateControlJson(controlBuf);
@@ -253,33 +329,13 @@ function cmdBuild(o) {
   const date = new Date(o.date);
   if (Number.isNaN(date.getTime())) fail(`build: --date ${o.date} is not a date`);
   const day = date.toISOString().slice(0, 10);
-  const ref = tag || o.commit;
   const d3d12Core = info.d3d12.files.find((f) => f.name === 'D3D12Core.dll');
-  const mirror = lock.mirror?.baseUrl ? lock.mirror.baseUrl.replace('/releases/download/', '/releases/tag/') : '(none)';
   const vars = {
-    APP_VERSION: version,
-    BUILD_LABEL: o.label,
-    PACKAGE_NAME: name,
-    TAG: tag || '(none: rehearsal build)',
-    COMMIT: o.commit,
-    DATE: day,
-    FORK_REPO_URL: forkUrl,
-    SOURCE_URL: `${forkUrl}/tree/${ref}`,
-    SOURCE_ARCHIVE_URL: tag ? `${forkUrl}/archive/refs/tags/${tag}.zip` : `${forkUrl}/archive/${o.commit}.zip`,
-    DEPS_MIRROR_URL: mirror,
-    OFFICIAL_REPO_URL: `${server}/${cfg.officialRepository}`,
-    OFFICIAL_RELEASES_URL: `${server}/${cfg.officialRepository}/releases`,
-    ISSUES_URL: cfg.issuesUrl,
-    MCP_REPO_URL: `${server}/${cfg.mcpRepository}`,
+    ...commonTemplateVars({ cfg, lock, version, name, tag, o }),
     MIN_OFFICIAL_VERSION: cfg.minOfficialVersion,
     D3D12_AGILITY_VERSION: info.d3d12.agilityVersion,
     D3D12CORE_SHA256: d3d12Core?.sha256 ?? fail('build: build-info.json has no D3D12Core.dll hash'),
     ORT_DLL: info.ortDll,
-    UPSTREAM_BASE_TAG: o['upstream-tag'],
-    UPSTREAM_BASE_COMMIT: o['upstream-commit'],
-    RUN_URL: o['run-url'] ?? '(local run)',
-    SMOKE_STATUS: o.smoke ?? 'not run',
-    ...modificationVars(fs.readFileSync(o['name-status'], 'utf8')),
   };
 
   // Assemble the package in memory.
@@ -369,9 +425,37 @@ function cmdBuild(o) {
 }
 
 
+/**
+ * The release body of both platforms in one text: the Windows body unchanged, then the macOS section.
+ * Each must carry its own download line, so a missing or swapped input is caught.
+ */
+export function composeBody({ windowsBody, macosSection, windowsZip, macosZip }) {
+  const problems = [];
+  if (!String(windowsBody).includes(windowsZip)) problems.push(`the Windows release body does not mention ${windowsZip}`);
+  if (!String(macosSection).includes(macosZip)) problems.push(`the macOS release section does not mention ${macosZip}`);
+  if (String(macosSection).includes(windowsZip)) problems.push('the macOS release section mentions the Windows package');
+  return { problems, body: `${String(windowsBody).replace(/\s+$/, '')}\n\n---\n\n${String(macosSection).trim()}\n` };
+}
+
+function cmdComposeBody(o) {
+  for (const k of ['windows', 'macos', 'out', 'windows-zip', 'macos-zip']) if (!o[k]) fail(`compose-body: --${k} is required`);
+  const { problems, body } = composeBody({
+    windowsBody: fs.readFileSync(o.windows, 'utf8'),
+    macosSection: fs.readFileSync(o.macos, 'utf8'),
+    windowsZip: o['windows-zip'],
+    macosZip: o['macos-zip'],
+  });
+  if (problems.length) fail(`compose-body:\n  ${problems.join('\n  ')}`);
+  const check = checkText(body, { patterns: loadPatterns(), source: path.basename(o.out) });
+  if (!check.ok) fail(`compose-body: attribution check failed:\n${formatViolations(check.violations)}`);
+  fs.writeFileSync(o.out, body);
+  out(`compose-body: wrote ${path.basename(o.out)} (${body.length} bytes)`);
+}
+
 function cmdVerify(o) {
   if (!o.zip) fail('verify: --zip is required');
-  const r = verifyZipBuffer(fs.readFileSync(o.zip), o.name);
+  if (o.platform !== undefined && o.platform !== 'win-x64' && o.platform !== 'macos-arm64') fail('verify: --platform must be win-x64 or macos-arm64');
+  const r = verifyZipBuffer(fs.readFileSync(o.zip), o.name, o.platform ? { platform: o.platform } : {});
   if (r.problems.length) fail(`verify: ${o.zip}:\n  ${r.problems.join('\n  ')}`);
   out(`verify: ${path.basename(o.zip)} OK (${r.files.length} files, sha256 ${sha256Hex(fs.readFileSync(o.zip))})`);
 }
@@ -384,7 +468,8 @@ function main(argv) {
       event: 'string', tag: 'string', checks: 'string', 'dev-ref': 'string', sha: 'string', 'github-output': 'string',
       inputs: 'string', out: 'string', label: 'string', commit: 'string', date: 'string', repository: 'string',
       'name-status': 'string', 'upstream-tag': 'string', 'upstream-commit': 'string', 'server-url': 'string',
-      'run-url': 'string', smoke: 'string', zip: 'string', name: 'string',
+      'run-url': 'string', smoke: 'string', zip: 'string', name: 'string', platform: 'string',
+      windows: 'string', macos: 'string', 'windows-zip': 'string', 'macos-zip': 'string',
     }));
   } catch (e) {
     process.stderr.write(`release-package: ${e.message}\n`);
@@ -395,8 +480,9 @@ function main(argv) {
     else if (cmd === 'build') cmdBuild(o);
     else if (cmd === 'verify') cmdVerify(o);
     else if (cmd === 'control-json') cmdControlJson(o);
+    else if (cmd === 'compose-body') cmdComposeBody(o);
     else {
-      process.stderr.write('usage: release-package.mjs validate|build|verify|control-json [options] (see the header of this file)\n');
+      process.stderr.write('usage: release-package.mjs validate|build|verify|control-json|compose-body [options] (see the header of this file)\n');
       return 2;
     }
     return 0;

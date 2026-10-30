@@ -1,0 +1,97 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Temporary probe (removed before the pull request): installs each pinned official macOS package on a
+# throw-away runner and prints where the app, the models and the user data end up.
+name: ot-mac-probe
+
+on:
+  push:
+    branches: ['feat/B-mac-package']
+    paths:
+      - '.github/workflows/ot-mac-probe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    name: probe (${{ matrix.version }})
+    runs-on: macos-14
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { version: 1.8.1, kind: pkg, url: 'https://github.com/YuFeng926/OpenTune/releases/download/OPTV1.8.1/OpenTune-1.8.1-macOS-Universal2.pkg', sha256: 7e2712a1b25d087451748713f8259e3c9623b1541171f4e8b6ca32152a8371fc }
+          - { version: 1.8.0, kind: pkg, url: 'https://github.com/YuFeng926/OpenTune/releases/download/OPTV1.8.0/OpenTune-1.8.0-macOS-Apple-Silicon.pkg', sha256: 88efb646cc303ab042ec172fd2b3b158a09b8f474cbc29ccef1c25c047eb1bfd }
+          - { version: 1.7.9, kind: dmg, url: 'https://github.com/YuFeng926/OpenTune/releases/download/OpenTuneV1.7.9/OpenTune-1.7.9-macOS-Apple-Silicon.dmg', sha256: eab82e8cd6012ebc252dfd9a75c15db0538a620e9c12b8032cee850ccb13d64c }
+    steps:
+      - name: Download and verify
+        env:
+          URL: ${{ matrix.url }}
+          SHA: ${{ matrix.sha256 }}
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/official.${{ matrix.kind }}" "$URL"
+          echo "$SHA  $RUNNER_TEMP/official.${{ matrix.kind }}" | shasum -a 256 -c -
+          ls -l "$RUNNER_TEMP/official.${{ matrix.kind }}"
+      - name: Snapshot before
+        run: |
+          ls -la /Applications | head -50
+          ls -la "$HOME/Library" | head -50
+          ls -la "$HOME/Library/Application Support" || true
+          ls -la /Library/Application\ Support || true
+          ls -la /Users/Shared || true
+          sw_vers
+          uname -m
+      - name: Install pkg
+        if: matrix.kind == 'pkg'
+        run: |
+          set -euo pipefail
+          pkgutil --payload-files "$RUNNER_TEMP/official.pkg" | head -60 || true
+          pkgutil --expand "$RUNNER_TEMP/official.pkg" "$RUNNER_TEMP/expanded" && find "$RUNNER_TEMP/expanded" -maxdepth 2 | head -40
+          sudo installer -verbose -pkg "$RUNNER_TEMP/official.pkg" -target / 2>&1 | tail -40
+          pkgutil --pkgs | grep -i -E 'opentune|daya|yufeng' || true
+      - name: Install dmg
+        if: matrix.kind == 'dmg'
+        run: |
+          set -euo pipefail
+          hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/dmg" "$RUNNER_TEMP/official.dmg"
+          ls -la "$RUNNER_TEMP/dmg"
+          find "$RUNNER_TEMP/dmg" -maxdepth 3 | head -40
+          ditto "$RUNNER_TEMP/dmg/OpenTune.app" /Applications/OpenTune.app
+          hdiutil detach "$RUNNER_TEMP/dmg"
+      - name: Report the layout
+        run: |
+          ls -la /Applications
+          app=/Applications/OpenTune.app
+          cat "$app/Contents/Info.plist"
+          lipo -info "$app/Contents/MacOS/OpenTune" || true
+          vtool -show-build "$app/Contents/MacOS/OpenTune" | head -20 || true
+          find "$app" -maxdepth 4 | sort | head -150
+          echo "--- onnx files anywhere (outside system dirs)"
+          sudo find /Applications /Library /Users /opt /usr/local -iname '*.onnx' -not -path '*/node_modules/*' -exec ls -l {} + 2>/dev/null || true
+          echo "--- dirs named models"
+          sudo find /Applications /Library /Users /opt /usr/local -iname 'models' -type d 2>/dev/null || true
+          echo "--- onnxruntime / dylibs"
+          find "$app" -name '*.dylib' -exec ls -l {} + || true
+          echo "--- user data after install"
+          ls -laR "$HOME/Library/Application Support" 2>/dev/null | head -60 || true
+          ls -la "$HOME/Library" | head -60
+          ls -la /Library/Application\ Support /Users/Shared 2>/dev/null || true
+          pgrep -lf OpenTune || echo "no OpenTune process"
+          codesign -dv --verbose=2 "$app" 2>&1 | head -20 || true
+          spctl -a -vv "$app" 2>&1 | head -5 || true
+          xattr -l "$app" | head || true
+      - name: Launch the official app briefly to see where it writes user data
+        run: |
+          app=/Applications/OpenTune.app
+          ("$app/Contents/MacOS/OpenTune" >"$RUNNER_TEMP/official-run.log" 2>&1 &)
+          sleep 25
+          pgrep -lf OpenTune || echo "not running"
+          cat "$RUNNER_TEMP/official-run.log" | head -40 || true
+          ls -laR "$HOME/Library/OpenTune" 2>/dev/null | head -60 || echo "no ~/Library/OpenTune"
+          ls -laR "$HOME/Library/Application Support/OpenTune" 2>/dev/null | head -60 || echo "no ~/Library/Application Support/OpenTune"
+          find "$HOME/Library" -iname '*opentune*' -maxdepth 4 2>/dev/null | head -30
+          sudo find "$HOME/Library" -newer "$RUNNER_TEMP/official.${{ matrix.kind }}" -type f 2>/dev/null | head -40 || true
+          grep -r -h -i -E 'modelsDir|Loaded F0|models' $HOME/Library/OpenTune/Logs 2>/dev/null | head -20 || true
+          pkill -x OpenTune || true

@@ -422,7 +422,7 @@ function makeFixtureApp(dir, { extra = null, arch = 'arm64' } = {}) {
   writeFile(path.join(app, 'Contents', 'PkgInfo'), 'APPL????');
   writeFile(path.join(app, 'Contents', 'MacOS', 'OpenTune'), makeMacho({ arch, deps: [`@rpath/${ORT_DYLIB}`], rpaths: ['@executable_path/../Frameworks'] }));
   writeFile(path.join(app, 'Contents', 'Frameworks', ORT_DYLIB), makeMacho({ filetype: 6, id: `@rpath/${ORT_DYLIB}` }));
-  writeFile(path.join(app, 'Contents', 'Resources', 'Icon.icns'), 'icns');
+  writeFile(path.join(app, 'Contents', 'Resources', 'AppIcon.icns'), 'icns');
   writeFile(path.join(app, 'Contents', 'Resources', 'models', 'fcpe.onnx'), 'version https://git-lfs.github.com/spec/v1\noid sha256:00\nsize 1\n');
   writeFile(path.join(app, 'Contents', 'Resources', 'models', 'hifigan.onnx'), '');
   writeFile(path.join(app, 'Contents', 'Resources', 'docs', 'UserGuide.html'), '<html></html>');

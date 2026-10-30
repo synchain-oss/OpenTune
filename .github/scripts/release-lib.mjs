@@ -141,7 +141,7 @@ export const MACOS_PACKAGE_FILES = [
 /** Files the macOS app bundle may have besides MACOS_PACKAGE_FILES (JUCE puts them there; a missing one is fine). */
 export const MACOS_OPTIONAL_FILES = [
   `${MACOS_APP_FOLDER}/Contents/PkgInfo`,
-  `${MACOS_APP_FOLDER}/Contents/Resources/Icon.icns`,
+  `${MACOS_APP_FOLDER}/Contents/Resources/AppIcon.icns`,
   `${MACOS_APP_FOLDER}/Contents/Resources/RecentFilesMenuTemplate.nib`,
 ];
 

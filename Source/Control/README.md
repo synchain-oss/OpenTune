@@ -776,15 +776,19 @@ changes the content's `revision`.
   handles (`NOT_READY(grid_not_seeded)`, not retryable: waiting does not seed it), then each handle named once
   (`INVALID_ARGUMENT(duplicate_handle)`) and an inner handle of this grid (`NOT_FOUND(unknown_handle)`; the end
   points, which the API does not report, are no handles of the API).
-- **Moves** follow the time tool's drag (`PianoRollToolHandler::handleTimeToolMouseDrag`), computed by
-  `Edit/TimeGridOps.cpp` without the piano roll, in two passes: a moved handle is limited to its neighbours plus
+- **Moves** are the time tool's drag, computed by `planTimeGridDrag()` (`Source/Utils/TimeGridEdit.h`, the function
+  `PianoRollToolHandler::handleTimeToolMouseDrag` calls for each step), called from `Edit/TimeGridOps.cpp` without the
+  piano roll (so a change of the drag upstream reaches the API without a mirror; only the test for room between the
+  neighbours, which `planTimeGridDrag()` leaves to its caller, is ours). It works in two passes: a moved handle is limited to its neighbours plus
   and minus 30 ms (`TimeGridSnapshot::kMinOutputSpacingSeconds`; the time tool drops the spacing only while Alt
   is held, which the API has no equivalent of); when several handles move, every inner handle is then limited
   from left to right to its limited left neighbour plus the spacing and its right neighbour minus the spacing,
   as the time tool's group drag does. When a handle has no room between its neighbours (a grid the time tool
   made tighter than 30 ms), nothing moves, as the time tool keeps the grid as it was. A limited move is applied
   as far as allowed and reported in `clamped` and with the warning `CLAMPED`; a call that moves nothing is a
-  no-op.
+  no-op. `planTimeGridDrag()` moves a selection by one distance; the moves of several handles to output
+  times of their own (`content.editTimeGrid` `moveHandles`) are planned in `TimeGridOps::planMoves()` with the same
+  limits.
   - `content.shiftTiming` moves every handle whose output time lies in the range (a content range is mapped
     through the current grid with `tauForward`) by `deltaSec`. The range is a closed interval,
     `start <= output time <= end`, as the time tool selects the handles: a handle exactly at the start and one exactly
@@ -824,7 +828,6 @@ when one of them changes). A change of these functions upstream needs the same c
 
 | Upstream function | Followed in | Mirror id |
 |---|---|---|
-| `PianoRollToolHandler::handleTimeToolMouseDrag()` (`Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp`) | `TimeGridOps::planShift()`, `planMoves()`: the limit of the dragged handle, the uniform distance of a group, the second pass | `time-tool-drag` |
 | `PianoRollToolHandler::handleTimeToolMouseUp()` (same file) | the commit of a moved grid and its description (`applyPlan` in `Ops/TimingOps.cpp`) | `time-tool-mouse-up` |
 | the piano roll's `toolCtx.commitTimeGrid` (`Source/Standalone/UI/PianoRollComponent.cpp`) | `TimeGridOps::commit()` and the undo entry of `Ops/TimingOps.cpp` | `time-grid-commit` |
 | `PianoRollComponent::setCurrentTool()` (same file) | the seed job's call of `ensureTimeToolAnchorSeed()` | `time-tool-pick` |

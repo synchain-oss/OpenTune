@@ -4,6 +4,7 @@
 # group: audio-device
 # pinned-at: upstream/20261030-2c01847
 # ported-to: Source/Control/Ops/AudioDeviceOps.cpp
+# ported-to: Source/Standalone/ControlEditorBridgePrefs.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
 Source/Editor/Preferences/StandalonePreferencePages.cpp	refreshTypeSelector	L181-L200	fn-v1	e90f77cf83f2ec1f8bbfc28b8464bca8ae9c331ff6a01b356e4a3e6b9639910c
@@ -18,3 +19,4 @@ Source/Editor/Preferences/StandalonePreferencePages.cpp	outputDeviceChanged	L406
 Source/Editor/Preferences/StandalonePreferencePages.cpp	sampleRateChanged	L450-L463	fn-v1	0426085a9a471db91e273025b5b596d3b491f4bb7435d223ebeb8d41700c3d85
 Source/Editor/Preferences/StandalonePreferencePages.cpp	bufferSizeChanged	L465-L478	fn-v1	674ba10d4615d1341999a7d201bc662153776915ca1b09a5d664d3d81967acf4
 Source/Editor/Preferences/StandalonePreferencePages.cpp	channelPairClicked	L480-L507	fn-v1	002c3b41ed3e1eb608686f869aeb2483a471983e46fda7577f9654751f80e95d
+Source/Standalone/StandaloneAudioDeviceSync.cpp	getSystemDefaultRenderSampleRate	L21-L56	fn-v1	0cfc2cff2fdd704bca5db590baed8cfe65ae53ca93f67e1b348ee0a1452680cb

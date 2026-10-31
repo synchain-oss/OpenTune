@@ -60,7 +60,7 @@ std::uint64_t& commitCopies()
 /**
  * The arrangement's selection before a commit: the active track and the selected clip of the track that the commit
  * inserts into. OpenTuneAudioProcessor::commitPreparedImportAsPlacement() selects every clip it commits and makes its
- * track active (PluginProcessor.cpp:3955, and insertPlacement() selects the first clip of an empty track); that is
+ * track active (PluginProcessor.cpp:3809, and insertPlacement() selects the first clip of an empty track); that is
  * view state the request did not ask for unless it focuses the clip. The editor's heartbeat would then load the
  * selected clip into the piano roll, which in the openDyne scheme generates its notes
  * (PianoRollComponent::ensureOpenDyneNotesIfNeeded()), so an import with focus false would generate notes it does

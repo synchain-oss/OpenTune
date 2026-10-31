@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # group: timeline
-# pinned-at: upstream/20261008-addb4f4
+# pinned-at: upstream/20261030-2c01847
 # ported-to: Source/Control/Ops/OpsSupport.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
-Source/Standalone/PluginEditor.cpp	makePianoRollProjection	L76-L92	fn-v1	808f9ba6ee68e6a696094c49cbfe1a75f62fd59453aa1c63d3570fe936585126
+Source/Standalone/PluginEditor.cpp	makePianoRollProjection	L88-L104	fn-v1	808f9ba6ee68e6a696094c49cbfe1a75f62fd59453aa1c63d3570fe936585126

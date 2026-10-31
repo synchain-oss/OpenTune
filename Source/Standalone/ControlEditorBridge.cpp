@@ -3,6 +3,7 @@
 
 #include "PluginEditor.h"
 
+#include "ControlEditorBridgeColour.h"
 #include "Control/ControlService.h"
 #include "Utils/NoteGeneratorTypes.h"
 
@@ -16,7 +17,9 @@
 
 namespace OpenTune {
 
-ControlEditorBridge::ControlEditorBridge(OpenTuneAudioProcessorEditor& editor) : editor_(editor)
+ControlEditorBridge::ControlEditorBridge(OpenTuneAudioProcessorEditor& editor)
+    : editor_(editor)
+    , colourWatch_(std::make_unique<ControlTrackColourWatch>(editor.trackPanel_))
 {
     // OpenTuneAudioProcessor::getControlService(): the processor's control service reaches the editor only
     // through the bridge it has registered.

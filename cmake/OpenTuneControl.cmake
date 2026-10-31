@@ -172,6 +172,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         Source/Standalone/ControlEditorBridgeTracks.cpp
         # Dialogs and onboarding: the modal windows, closing them as Escape does, the overlay, the scale of the UI.
         Source/Standalone/ControlEditorBridgeModals.cpp
+        Source/Standalone/ControlEditorBridgeColour.h
         # Preferences and audio device (the editor applies the preferences; the ASIO restore of a device switch).
         Source/Standalone/ControlEditorBridgePrefs.cpp
         # Selection: a click and a double click on a clip, through the arrangement view's hook.

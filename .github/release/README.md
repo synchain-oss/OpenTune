@@ -41,7 +41,7 @@ What `release-macos.mjs` does: unpack the app (`app.tar`, to keep file modes), r
 
 The zip contains one folder, `OpenTune-<version>-ctl.<n>-unofficial-macos-arm64/` (rehearsals: `…-rehearsal-<sha7>-…`):
 
-`OpenTune-ctl.app` (`Contents/Info.plist`, `Contents/MacOS/OpenTune`, `Contents/Frameworks/libonnxruntime.<x.y.z>.dylib`, `Contents/_CodeSignature/CodeResources`, and optionally `PkgInfo`, `Resources/AppIcon.icns`, `Resources/RecentFilesMenuTemplate.nib`), `OpenTune-AI.command`, `opentune-control.json`, `LICENSE.txt`, `THIRD-PARTY-NOTICES.txt`, `README-UNOFFICIAL.txt`, `README-UNOFFICIAL.zh-CN.txt`, `MODIFICATIONS.md`, `INSTALL.txt`, `INSTALL.zh-CN.txt`, `SHA256SUMS`.
+`OpenTune-ctl.app` (`Contents/Info.plist`, `Contents/MacOS/OpenTune`, `Contents/Frameworks/libonnxruntime.<x.y.z>.dylib`, `Contents/_CodeSignature/CodeResources`, and optionally `PkgInfo`, `Resources/AppIcon.icns` or `Resources/Icon.icns` (the name depends on the JUCE version), `Resources/RecentFilesMenuTemplate.nib`), `OpenTune-AI.command`, `opentune-control.json`, `LICENSE.txt`, `THIRD-PARTY-NOTICES.txt`, `README-UNOFFICIAL.txt`, `README-UNOFFICIAL.zh-CN.txt`, `MODIFICATIONS.md`, `INSTALL.txt`, `INSTALL.zh-CN.txt`, `SHA256SUMS`.
 
 Same forbidden list as Windows (no models, no `*.onnx`, no LFS pointers, no `D3D12*`); in addition, symbolic links are refused. There is no DirectML and no D3D12 on macOS.
 

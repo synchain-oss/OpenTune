@@ -8,13 +8,14 @@
   Run the registered ctest tests one at a time, each with its own OPENTUNE_DATA_DIR.
 
 .DESCRIPTION
-  Equivalent to `ctest -C <Config> -E ARALifecycleContractTests`, except that every test gets a fresh
+  Equivalent to `ctest -C <Config>` over all registered tests, except that every test gets a fresh
   OPENTUNE_DATA_DIR = <DataRoot>\<test name>, so tests never share (or write to the user's real)
   preferences, logs or discovery files once the data-dir hook is in place. gates.ps1 runs this script
   inside with-build-slot.ps1.
 
-  ARALifecycleContractTests is excluded by default: it assigns ARA_DRAFT's persistentID, which the
-  ARA SDK 2.3.0 pinned by CMake does not have, so it does not compile (an upstream issue).
+  No test is excluded by default: ARALifecycleContractTests, which did not compile under the pinned ARA
+  SDK 2.3.0 up to upstream 20261008-addb4f4, builds and passes since upstream 2c01847. -Exclude and
+  -ExcludePattern leave named tests out when a caller needs that.
 
   -Include '<regex>' keeps only tests whose name matches (the asan workflow runs `-Include Control`:
   every test with 'Control' in its name, so tests added later are picked up by name).
@@ -25,7 +26,7 @@
 param(
     [Parameter(Mandatory)][string]$BuildDir,
     [string]$Config = 'RelWithDebInfo',
-    [string[]]$Exclude = @('ARALifecycleContractTests'),
+    [string[]]$Exclude = @(),
     # Regular expression on the test name (PowerShell -match): matching tests are left out as well.
     # Empty = no pattern exclusion.
     [string]$ExcludePattern = '',

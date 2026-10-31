@@ -22,8 +22,8 @@
        taken over immediately, never deadlocked);
     3. waits until available physical memory is at least -MinFreeMB (the measured peak of one build
        at the chosen --parallel plus headroom), still holding the slot so two waiters cannot both
-       pass the check and then start together. Measured peaks (cl/link/ninja working set, JUCE 9.0.3,
-       MSVC 14.44): Standalone cold j8 3.6 GB, j16 4.2 GB; all targets RelWithDebInfo j8 4.0 GB;
+       pass the check and then start together. Measured peaks (cl/link/ninja working set, measured with
+       JUCE 9.0.3 before the pin moved to 8.0.12, MSVC 14.44): Standalone cold j8 3.6 GB, j16 4.2 GB; all targets RelWithDebInfo j8 4.0 GB;
        all targets Release j8 8.9 GB (eight concurrent LTCG test links). Default 6144 covers a
        RelWithDebInfo lane build; pass ~12000 for a Release build that links the tests;
     4. optionally imports the MSVC developer environment (-VsDevShell, via vswhere +

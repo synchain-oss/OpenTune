@@ -142,6 +142,7 @@ export const MACOS_PACKAGE_FILES = [
 export const MACOS_OPTIONAL_FILES = [
   `${MACOS_APP_FOLDER}/Contents/PkgInfo`,
   `${MACOS_APP_FOLDER}/Contents/Resources/AppIcon.icns`,
+  `${MACOS_APP_FOLDER}/Contents/Resources/Icon.icns`,
   `${MACOS_APP_FOLDER}/Contents/Resources/RecentFilesMenuTemplate.nib`,
 ];
 

@@ -1497,7 +1497,12 @@ existing `ControlUiBridge::onPreferencesChanged()`.
   be put back it is `IO_ERROR(device_open_failed)` with `executed` true. If no device ran before the call, none runs
   after a failed one. The ASIO restore of the
   system sample rate that the page makes before it closes an ASIO device for another type or output device is the
-  bridge's `prepareAudioDeviceSwitch()`; when it cannot be verified the current device stays.
+  bridge's `prepareAudioDeviceSwitch()`. Since upstream 2c01847 the page treats it as best effort
+  (`restoreAsioSampleRateToSystem()` is called with `setAudioDeviceSetupTemporarily()`): a restore that fails shows
+  `kAudioDeviceRestoreWarning` and the switch goes on, and so does the call, whose result carries the warning
+  `ASIO_RATE_NOT_RESTORED` (registered with specification 1.0.0-rc.9; until the locked specification has it, the
+  check that every warning is registered fails). If a later step of the call fails, the call fails as before and the
+  previous setup is put back.
 - Without an editor `audio.set` answers `UNSUPPORTED(no_editor_window)`; with an editor that has no device manager,
   `UNSUPPORTED(capability_missing)`. The revert recipe needs a device that ran before the call (a setup cannot be set
   to "no device"); without one the result says

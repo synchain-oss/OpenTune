@@ -106,9 +106,10 @@ later part use JUCE and the processor. `cmake/OpenTuneControl.cmake` lists all f
   processor. OpenTune's export cannot be interrupted, so a stop during an export waits for the write.
   This is a known exception to the bounded joins: the destructor of the export's writer joins a thread
   that runs OpenTune's own export function, as the editor's export thread is joined. The worst case is
-  the time that the render worker needs to drain the render queue of the whole process (every pending
-  render of every content, `drainRenderWorker`) plus the time to write the file, so it depends on the
-  number and length of the pending renders and on the speed of the disk. Closing the application during
+  the time that the render worker needs to drain the render queue of the render service (every pending
+  render of every content, `drainRenderWorkerForExport`, which also flushes the deferred render retries of the
+  service) plus the time to write the file, so it depends on the number and length of the pending renders and on
+  the speed of the disk. Closing the application during
   an export therefore waits for OpenTune's own export to finish, as it does without the control API.
 - The listener runs one accepting thread and one thread per connection; every network wait is a poll of
   at most 250 ms that also checks the stop flag.
@@ -710,7 +711,14 @@ clip or track and stereo for the master mix.
   with `NOT_READY(export_dry_stretched)`, not retryable (it succeeds again once the grid is the identity), whatever made
   the content dry (unvoiced, nothing to render, or a failed analysis with `allowDry`; `allowDry` cannot help). After 120
   s: `NOT_READY(export_wait_timeout)`. A clip export whose clip is deleted meanwhile fails with
-  `REVISION_CONFLICT(changed_during_export)`.
+  `REVISION_CONFLICT(changed_during_export)`. Every content ready is not enough while the render runtime holds a
+  deferred render retry of the render service (`ProcessRenderRuntime::hasDeferredRetriesForService`: a render block
+  that could not be handed to the worker because the vocoder was being reconfigured or not loaded, kept until it can
+  be): the processor's export functions refuse to read the render then, so the job keeps waiting, up to the same
+  limit, for the runtime to resume the retry (it does so on the message thread; the job never flushes it), and the
+  time-stretch rebuild above counts such a retry as work in progress. A retry that appears after the job found
+  everything ready ends the write with the same `NOT_READY(export_wait_timeout)` (not executed, no file) instead of
+  `IO_ERROR(write_failed)`.
 - In the tick that finds every content ready, the job records a token of the inputs (each clip's track,
   position, length, source window, gain and fades, its track's volume, and per content the revision, time
   grid and pitch shift) and the revisions it reports, and starts the writer on a thread of its own with a
@@ -733,11 +741,12 @@ needed for it; the input token catches a change of the clips while the file is w
 
 Known OpenTune behaviours, reported as they are:
 
-- `exportMasterMixAudio()` sets no error text (`getLastExportError()` keeps the text of an earlier export),
-  and every failure of the processor's export functions is reported as `IO_ERROR(write_failed)` with a
-  fixed detail: the API never forwards OpenTune's texts.
-- The processor's export functions wait for every render work of the process (`drainRenderWorker`), not
-  only for the exported contents.
+- Every failure of the processor's export functions is reported with a fixed detail (the API never forwards
+  OpenTune's texts): as `IO_ERROR(write_failed)`, except that "Render is not ready for export" (the render service
+  still holds a deferred render retry after `drainRenderWorkerForExport`) is `NOT_READY(export_wait_timeout)`. The
+  writer asks for the error text in English (the language it passes) and compares it with that one text.
+- The processor's export functions wait for every render work of the render service (`drainRenderWorkerForExport`),
+  not only for the exported contents, and give up when a deferred render retry of the service cannot be resumed.
 - With hybrid mode on (OpenTune's default), a render block whose corrected F0 stays within 75 cents of the
   original on every voiced frame renders through the AutoTune cycle resampler instead of the vocoder
   (`ProcessRenderRuntime`, `chunkNeedsVocoder()`). On sung vocals that path can leave such a block close to the
@@ -1770,7 +1779,10 @@ second export while one waits, and cancellation; `ExportFailures` `ANALYSIS_FAIL
 `RENDER_FAILED` after the retry, `REVISION_CONFLICT` while OpenTune writes the file (the writer waits for
 the paused render worker while the clip's notes change), `NOT_READY` with a short wait limit
 (`controlSetExportWaitLimitForTesting`), a deleted clip, and the identity and rename functions;
-`ExportVectors` the specification's vectors of `export/` (an explicit list must pass; the vector of a
+`ExportDeferredRetry` a deferred render retry in the render runtime (put there through the test access of
+`ProcessRenderRuntime`, as OpenTune's own deferred-retry test does) with every content ready: OpenTune's export function
+refuses with "Render is not ready for export", the job waits and ends with `NOT_READY(export_wait_timeout)` leaving the
+target as it was, and writes the file once the retry is gone; `ExportVectors` the specification's vectors of `export/` (an explicit list must pass; the vector of a
 directory whose files' identity cannot be read is skipped, because on Windows that identity stays
 readable through the rights of the parent directories).
 
@@ -1923,7 +1935,7 @@ than one step.
 | `job.get` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.JobShutdown`, `.JobVectors` | `methods/job.get.schema.json` |
 | `job.cancel` | `jobs.v1` | `Ops/JobOps.cpp` | `ControlProcessorTests.Jobs`, `.ImportCancel`, `.JobVectors` | `methods/job.cancel.schema.json` |
 | `import.start` | `import.v1` | `Ops/ImportOps.cpp` | `ControlProcessorTests.Import`, `.ImportAfterOpen`, `.ImportCancel`, `.ImportRevert`, `.JobVectors` | `methods/import.start.schema.json` |
-| `export.start` | `export.v1` | `Ops/ExportOps.cpp` (identity and rename in `ControlFileIdentity.cpp`) | `ControlProcessorTests.Export`, `.ExportFailures`, `.ExportVectors`, `.ExportTimeStretch` | `methods/export.start.schema.json` |
+| `export.start` | `export.v1` | `Ops/ExportOps.cpp` (identity and rename in `ControlFileIdentity.cpp`) | `ControlProcessorTests.Export`, `.ExportFailures`, `.ExportDeferredRetry`, `.ExportVectors`, `.ExportTimeStretch` | `methods/export.start.schema.json` |
 | `ui.getState` | `ui.bridge` | `Ops/UiOps.cpp` (editor side in `../Standalone/ControlEditorBridgeModals.cpp`) | `ControlProcessorTests.UiState`, `.UiVectors` | `methods/ui.getState.schema.json` |
 | `ui.dismiss` | `ui.bridge`; closing a showing overlay also `ui.onboardingClose` | `Ops/UiOps.cpp` (editor side in `../Standalone/ControlEditorBridgeModals.cpp`) | `ControlProcessorTests.UiDismiss`, `.UiOnboardingWithheld`, `.UiVectors` | `methods/ui.dismiss.schema.json` |
 | `ui.setSelection` | `ui.bridge` | `Ops/SelectionOps.cpp` (editor side in `../Standalone/ControlEditorBridgeSelection.cpp`, hook in `../Standalone/UI/ArrangementViewComponent.*`) | `ControlProcessorTests.Selection`, `.SelectionMatrix`, `.SelectionVectors` | `methods/ui.setSelection.schema.json` |

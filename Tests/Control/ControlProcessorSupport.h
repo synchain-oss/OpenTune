@@ -657,6 +657,9 @@ void scenarioTimingVectors();
 /** Save as, change, open the saved file again: notes equal, handles of the epoch before stale, flags, lists, the final
     rename and the recent projects on the way. */
 void scenarioProjectRoundTrip();
+/** project.open keeps the track count the file was saved with (the count is project state), leaves the project not
+    dirty and reports the tracks that the open added to the view as sideEffects.tracksRevealed. */
+void scenarioProjectOpenTrackCount();
 /** The checks before a job, busy, the cancellation rules, a target that appears while the job waits, changes made
     while a file is prepared, a project that cannot be read. */
 void scenarioProjectJobs();

@@ -1,0 +1,399 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "JUCE 8.0.12 vendored third-party code",
+  "documentNamespace": "https://github.com/synchain-oss/OpenTune/spdx/juce-8.0.12",
+  "creationInfo": {
+    "created": "2026-10-31T00:00:00Z",
+    "creators": [
+      "Tool: maintained by hand for this fork from JUCE-master/LICENSE.md (section \"The JUCE Framework Dependencies\"), checked against modules/"
+    ],
+    "comment": "JUCE 8.0.12 ships no JUCE.spdx.json. This list stands in for it (release-notices.mjs reads it when the JUCE checkout has none). Versions come from the vendored sources (version macros, directory names, READMEs) and are NOASSERTION where the sources state none. Licences are those named in LICENSE.md, as SPDX identifiers where one exists."
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-JUCE",
+      "name": "JUCE",
+      "versionInfo": "8.0.12",
+      "supplier": "Organization: Raw Material Software Limited",
+      "downloadLocation": "https://github.com/juce-framework/JUCE",
+      "licenseConcluded": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-juce-audio-devices",
+      "name": "juce_audio_devices",
+      "versionInfo": "8.0.12",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-juce-audio-formats",
+      "name": "juce_audio_formats",
+      "versionInfo": "8.0.12",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-juce-audio-plugin-client",
+      "name": "juce_audio_plugin_client",
+      "versionInfo": "8.0.12",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-juce-audio-processors-headless",
+      "name": "juce_audio_processors_headless",
+      "versionInfo": "8.0.12",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-juce-box2d",
+      "name": "juce_box2d",
+      "versionInfo": "8.0.12",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-juce-core",
+      "name": "juce_core",
+      "versionInfo": "8.0.12",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-juce-graphics",
+      "name": "juce_graphics",
+      "versionInfo": "8.0.12",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-juce-javascript",
+      "name": "juce_javascript",
+      "versionInfo": "8.0.12",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-juce-opengl",
+      "name": "juce_opengl",
+      "versionInfo": "8.0.12",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "NOASSERTION"
+    },
+    {
+      "SPDXID": "SPDXRef-AudioUnitSDK",
+      "name": "AudioUnitSDK",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "https://github.com/apple/AudioUnitSDK",
+      "licenseConcluded": "Apache-2.0",
+      "sourceInfo": "Vendored at modules/juce_audio_plugin_client/AU/AudioUnitSDK in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-Oboe",
+      "name": "Oboe",
+      "versionInfo": "1.9.0",
+      "downloadLocation": "https://github.com/google/oboe",
+      "licenseConcluded": "Apache-2.0",
+      "sourceInfo": "Vendored at modules/juce_audio_devices/native/oboe in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-FLAC",
+      "name": "FLAC",
+      "versionInfo": "1.4.3",
+      "downloadLocation": "https://xiph.org/flac/",
+      "licenseConcluded": "BSD-3-Clause",
+      "sourceInfo": "Vendored at modules/juce_audio_formats/codecs/flac in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-GLEW",
+      "name": "GLEW",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "https://glew.sourceforge.net/",
+      "licenseConcluded": "BSD-3-Clause",
+      "sourceInfo": "Vendored at modules/juce_opengl/opengl/juce_gl.h in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-Mesa",
+      "name": "Mesa",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "https://www.mesa3d.org/",
+      "licenseConcluded": "MIT",
+      "sourceInfo": "Vendored at modules/juce_opengl/opengl/juce_gl.h in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-Khronos",
+      "name": "Khronos",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "https://github.com/KhronosGroup/OpenGL-Registry",
+      "licenseConcluded": "MIT",
+      "sourceInfo": "Vendored at modules/juce_opengl/opengl/juce_gl.h in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-Ogg-Vorbis",
+      "name": "Ogg Vorbis",
+      "versionInfo": "libvorbis 1.3.7",
+      "downloadLocation": "https://xiph.org/vorbis/",
+      "licenseConcluded": "BSD-3-Clause",
+      "sourceInfo": "Vendored at modules/juce_audio_formats/codecs/oggvorbis in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-jpeglib",
+      "name": "jpeglib",
+      "versionInfo": "9f",
+      "downloadLocation": "https://www.ijg.org/",
+      "licenseConcluded": "IJG",
+      "sourceInfo": "Vendored at modules/juce_graphics/image_formats/jpglib in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-CHOC",
+      "name": "CHOC",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "https://github.com/Tracktion/choc",
+      "licenseConcluded": "ISC",
+      "sourceInfo": "Vendored at modules/juce_javascript/choc in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-QuickJS",
+      "name": "QuickJS",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "https://bellard.org/quickjs/",
+      "licenseConcluded": "MIT",
+      "sourceInfo": "Vendored at modules/juce_javascript/choc/javascript/choc_javascript_QuickJS.h in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-LV2",
+      "name": "LV2",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "https://lv2plug.in/",
+      "licenseConcluded": "ISC",
+      "sourceInfo": "Vendored at modules/juce_audio_processors_headless/format_types/LV2_SDK in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-pslextensions",
+      "name": "pslextensions",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "NOASSERTION",
+      "licenseConcluded": "Public domain",
+      "sourceInfo": "Vendored at modules/juce_audio_processors_headless/format_types/pslextensions/ipslcontextinfo.h in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-AAX-SDK",
+      "name": "AAX SDK",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "https://developer.avid.com/aax",
+      "licenseConcluded": "Avid AAX SDK License OR GPL-3.0-only",
+      "sourceInfo": "Vendored at modules/juce_audio_plugin_client/AAX/SDK in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-VST3-SDK",
+      "name": "VST3 SDK",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "https://github.com/steinbergmedia/vst3sdk",
+      "licenseConcluded": "MIT",
+      "sourceInfo": "Vendored at modules/juce_audio_processors_headless/format_types/VST3_SDK in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-Box2D",
+      "name": "Box2D",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "https://box2d.org/",
+      "licenseConcluded": "Zlib",
+      "sourceInfo": "Vendored at modules/juce_box2d/box2d in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-pnglib",
+      "name": "pnglib",
+      "versionInfo": "1.6.37",
+      "downloadLocation": "http://www.libpng.org/pub/png/libpng.html",
+      "licenseConcluded": "libpng-2.0",
+      "sourceInfo": "Vendored at modules/juce_graphics/image_formats/pnglib in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-zlib",
+      "name": "zlib",
+      "versionInfo": "1.3.1",
+      "downloadLocation": "https://zlib.net/",
+      "licenseConcluded": "Zlib",
+      "sourceInfo": "Vendored at modules/juce_core/zip/zlib in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-HarfBuzz",
+      "name": "HarfBuzz",
+      "versionInfo": "10.1.0",
+      "downloadLocation": "https://github.com/harfbuzz/harfbuzz",
+      "licenseConcluded": "Old MIT",
+      "sourceInfo": "Vendored at modules/juce_graphics/fonts/harfbuzz in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-SheenBidi",
+      "name": "SheenBidi",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "https://github.com/Tehreer/SheenBidi",
+      "licenseConcluded": "Apache-2.0",
+      "sourceInfo": "Vendored at modules/juce_graphics/unicode/sheenbidi in the JUCE source tree"
+    },
+    {
+      "SPDXID": "SPDXRef-ASIO-SDK",
+      "name": "ASIO SDK",
+      "versionInfo": "NOASSERTION",
+      "downloadLocation": "https://www.steinberg.net/developers/",
+      "licenseConcluded": "Steinberg ASIO License OR GPL-3.0-only",
+      "sourceInfo": "Vendored at modules/juce_audio_devices/native/asio in the JUCE source tree"
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-JUCE"
+    },
+    {
+      "spdxElementId": "SPDXRef-JUCE",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-juce-audio-devices"
+    },
+    {
+      "spdxElementId": "SPDXRef-JUCE",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-juce-audio-formats"
+    },
+    {
+      "spdxElementId": "SPDXRef-JUCE",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-juce-audio-plugin-client"
+    },
+    {
+      "spdxElementId": "SPDXRef-JUCE",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-juce-audio-processors-headless"
+    },
+    {
+      "spdxElementId": "SPDXRef-JUCE",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-juce-box2d"
+    },
+    {
+      "spdxElementId": "SPDXRef-JUCE",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-juce-core"
+    },
+    {
+      "spdxElementId": "SPDXRef-JUCE",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-juce-graphics"
+    },
+    {
+      "spdxElementId": "SPDXRef-JUCE",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-juce-javascript"
+    },
+    {
+      "spdxElementId": "SPDXRef-JUCE",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-juce-opengl"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-audio-plugin-client",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-AudioUnitSDK"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-audio-devices",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Oboe"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-audio-formats",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-FLAC"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-opengl",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-GLEW"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-opengl",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Mesa"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-opengl",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Khronos"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-audio-formats",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Ogg-Vorbis"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-graphics",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-jpeglib"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-javascript",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-CHOC"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-javascript",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-QuickJS"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-audio-processors-headless",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-LV2"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-audio-processors-headless",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-pslextensions"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-audio-plugin-client",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-AAX-SDK"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-audio-processors-headless",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-VST3-SDK"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-box2d",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-Box2D"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-graphics",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-pnglib"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-core",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-zlib"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-graphics",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-HarfBuzz"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-graphics",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-SheenBidi"
+    },
+    {
+      "spdxElementId": "SPDXRef-juce-audio-devices",
+      "relationshipType": "CONTAINS",
+      "relatedSpdxElement": "SPDXRef-ASIO-SDK"
+    }
+  ]
+}

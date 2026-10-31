@@ -40,7 +40,7 @@ std::optional<Scale> controlScaleFromName(std::string_view name);
 /**
  * The readiness gate of PROTOCOL.md section 11 for a content write, from the content's snapshot: NOT_READY
  * with f0_not_ready (retryable) while the analysis was not requested or runs, f0_empty when it found no
- * voiced frame (OpenTune records the failure reason f0_empty, or the analysis is ready without voiced
+ * voiced frame (its failure message says so, controlF0FailureCode(), or the analysis is ready without voiced
  * frames) and f0_failed when it failed otherwise. OpenTune generates the notes of an analysis in the same
  * message-thread step that marks it ready, so notes_generating never applies in this build.
  */

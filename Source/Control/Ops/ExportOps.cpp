@@ -913,10 +913,9 @@ private:
             case OriginalF0State::Extracting:
                 return readiness;
             case OriginalF0State::Failed: {
-                // The reason the processor recorded when the analysis failed: f0_empty for an analysis that
-                // found no voiced frame. A failure without a recorded reason counts as a failure.
-                const auto reason = processor.getContentF0FailureReason(key);
-                if (reason && *reason == "f0_empty") {
+                // The failure message OpenTune keeps with the content: f0_empty for an analysis that found no
+                // voiced frame. A failure without a message counts as a failure.
+                if (std::string_view(controlF0FailureCode(*snapshot)) == "f0_empty") {
                     readiness.state = Readiness::State::Dry;
                     readiness.dryReason = "unvoiced";
                 } else if (params_.allowDry) {

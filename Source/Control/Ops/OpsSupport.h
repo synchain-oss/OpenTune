@@ -158,6 +158,16 @@ Result<ControlPlacementRef> controlResolvePlacement(ControlOpContext& context, c
 /** The live content of a key, or nullptr. */
 std::shared_ptr<const EditableContentSnapshot> controlLiveSnapshot(ControlOpContext& context, const ContentKey& key);
 
+/**
+ * The reason code of a failed pitch analysis (common.schema.json reasonCode), from the failure message that OpenTune
+ * keeps with the content (EditableContentSnapshot::originalF0FailureReason, set by
+ * OpenTuneAudioProcessor::setContentOriginalF0FailureReason when the analysis fails): "f0_empty" when the F0
+ * extraction found no voiced frame (it fails with the message "f0_empty_or_unvoiced"), "f0_failed" for every other
+ * failure, also one without a message, as a failure loaded from a project has. Only meaningful while the analysis
+ * state is Failed (OpenTune clears the message when the state changes).
+ */
+const char* controlF0FailureCode(const EditableContentSnapshot& snapshot);
+
 /** Every live placement, by track and then in the order of the track. */
 std::vector<ControlPlacementRef> controlLivePlacements(ControlOpContext& context);
 /** Every live content key, in the order of the content repository. */

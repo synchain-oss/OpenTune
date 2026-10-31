@@ -509,31 +509,6 @@ std::shared_ptr<const TimeGridSnapshot> buildCopiedRangeTimeGrid(
 // host-plugin targets own the OTST processor state payload (encoded/decoded by
 // Vst3ProcessorStateCodec).
 
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-// OpenTune Control API hook: F0 failure reasons of the current content epoch; opening a project (a new epoch, clip ids restart) forgets them, see Source/Control/README.md#hooks
-void OpenTuneAudioProcessor::recordF0FailureReason(ContentKey key, const char* reason)
-{
-    const uint64_t epoch = standaloneContentRepository_ != nullptr ? standaloneContentRepository_->getContentEpoch() : 0;
-    if (epoch != contentF0FailureEpoch_) {
-        contentF0FailureReasons_.clear();
-        contentF0FailureEpoch_ = epoch;
-    }
-    if (reason != nullptr)
-        contentF0FailureReasons_[key] = reason;
-    else
-        contentF0FailureReasons_.erase(key);
-}
-
-std::optional<std::string> OpenTuneAudioProcessor::getContentF0FailureReason(ContentKey key) const
-{
-    const uint64_t epoch = standaloneContentRepository_ != nullptr ? standaloneContentRepository_->getContentEpoch() : 0;
-    const auto found = contentF0FailureReasons_.find(key);
-    if (epoch != contentF0FailureEpoch_ || found == contentF0FailureReasons_.end())
-        return std::nullopt;
-    return found->second;
-}
-#endif
-
 ReferenceFeatureSet OpenTuneAudioProcessor::buildStandardAutoReferenceFeatureSet(
     const EditableContentSnapshot& snapshot, int analysisRevision)
 {
@@ -4007,9 +3982,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
 #if JucePlugin_Build_Standalone
         case DomainKind::StandaloneClip: {
             auto* clip = standaloneContentRepository_->findClip(request.contentKey);
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-            recordF0FailureReason(request.contentKey, nullptr); // OpenTune Control API hook: F0 failure reason, see Source/Control/README.md#hooks
-#endif
             if (clip) {
                 if (capturedHnsepEnabled)
                     clip->clearHnsepAudio();
@@ -4176,9 +4148,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                 AppLogger::log("ContentRefresh: extraction failed contentKey objectId="
                     + juce::String(static_cast<juce::int64>(capturedRequest.contentKey.objectId))
                     + " reason=" + juce::String(result.errorMessage));
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-                processor->recordF0FailureReason(capturedRequest.contentKey, result.errorMessage == "f0_empty_or_unvoiced" ? "f0_empty" : "f0_failed"); // OpenTune Control API hook: F0 failure reason, see Source/Control/README.md#hooks
-#endif
                 processor->setContentOriginalF0State(capturedRequest.contentKey, OriginalF0State::Failed);
                 processor->setContentOriginalF0FailureReason(
                     capturedRequest.contentKey,
@@ -4256,9 +4225,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                 processor->f0RequestTokens_.erase(capturedRequest.contentKey);
                 AppLogger::log("ContentRefresh: OriginalF0 commit failed contentKey objectId="
                     + juce::String(static_cast<juce::int64>(capturedRequest.contentKey.objectId)));
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-                processor->recordF0FailureReason(capturedRequest.contentKey, "f0_failed"); // OpenTune Control API hook: F0 failure reason, see Source/Control/README.md#hooks
-#endif
                 processor->setContentOriginalF0State(capturedRequest.contentKey, OriginalF0State::Failed);
                 processor->setContentOriginalF0FailureReason(capturedRequest.contentKey,
                     "F0 result could not be committed to the content owner");
@@ -4295,9 +4261,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                 }
             }
 
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-            processor->recordF0FailureReason(capturedRequest.contentKey, nullptr); // OpenTune Control API hook: F0 failure reason, see Source/Control/README.md#hooks
-#endif
             processor->setContentOriginalF0State(capturedRequest.contentKey, OriginalF0State::Ready);
             processor->f0RequestTokens_.erase(capturedRequest.contentKey);
             if (processor->pendingTimeToolSeedKeys_.count(capturedRequest.contentKey) != 0)
@@ -4323,9 +4286,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
                 return;
             }
             processor->f0RequestTokens_.erase(tokenIt);
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-            processor->recordF0FailureReason(capturedRequest.contentKey, "f0_failed"); // OpenTune Control API hook: F0 failure reason, see Source/Control/README.md#hooks
-#endif
             processor->setContentOriginalF0State(
                 capturedRequest.contentKey, OriginalF0State::Failed);
             processor->setContentOriginalF0FailureReason(
@@ -4343,9 +4303,6 @@ bool OpenTuneAudioProcessor::requestContentRefresh(const OpenTuneAudioProcessor:
         if (submitResult == F0ExtractionService::SubmitResult::ShuttingDown)
             return false;
         f0RequestTokens_.erase(request.contentKey);
-#if JucePlugin_Build_Standalone && defined(OPENTUNE_ENABLE_CONTROL_API)
-        recordF0FailureReason(request.contentKey, "f0_failed"); // OpenTune Control API hook: F0 failure reason, see Source/Control/README.md#hooks
-#endif
         setContentOriginalF0State(request.contentKey, OriginalF0State::Failed);
         setContentOriginalF0FailureReason(request.contentKey,
             submitResult == F0ExtractionService::SubmitResult::QueueFull

@@ -1047,9 +1047,6 @@ public:
         return ready;
     }
     ControlService& getControlService() noexcept { return *controlService_; }
-    // OpenTune Control API hook: last F0 failure reason per content of the current content epoch, recorded by requestContentRefresh (a null reason clears it; message thread), see Source/Control/README.md#hooks
-    std::optional<std::string> getContentF0FailureReason(ContentKey key) const;
-    void recordF0FailureReason(ContentKey key, const char* reason);
     // OpenTune Control API hook: the export lock that the editor's export and export.start share (any thread), see Source/Control/README.md#hooks
     bool tryAcquireExportLock() noexcept { return !exportLockHeld_.exchange(true); }
     void releaseExportLock() noexcept { exportLockHeld_.store(false); }
@@ -1057,8 +1054,6 @@ public:
 
 private:
     std::unique_ptr<ControlService> controlService_;
-    std::map<ContentKey, std::string> contentF0FailureReasons_;
-    uint64_t contentF0FailureEpoch_ = 0;
     std::atomic<bool> exportLockHeld_{false};
 #endif
 

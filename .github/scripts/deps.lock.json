@@ -7,31 +7,17 @@
   },
   "deps": [
     {
-      "name": "JUCE-9.0.3",
+      "name": "JUCE-8.0.12",
       "kind": "git",
       "url": "https://github.com/juce-framework/JUCE.git",
-      "ref": "9.0.3",
-      "commit": "be29c81492b6151c8ea8d14c840e1311963b3a83",
+      "ref": "8.0.12",
+      "commit": "29396c22c93392d6738e021b83196283d6e4d850",
       "recursive": false,
       "junction": "JUCE-master",
       "verify": [
         "extras/Build/CMake/JUCEUtils.cmake",
         "modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp",
         "modules/juce_audio_devices/native/asio/iasiodrv.h"
-      ]
-    },
-    {
-      "name": "JUCE-8.0.15",
-      "kind": "git",
-      "optional": "fallback",
-      "url": "https://github.com/juce-framework/JUCE.git",
-      "ref": "8.0.15",
-      "commit": "91ad83ae34a81e0833b1a2b0866f54846370ae53",
-      "recursive": false,
-      "junction": "JUCE-master",
-      "verify": [
-        "extras/Build/CMake/JUCEUtils.cmake",
-        "modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.cpp"
       ]
     },
     {
@@ -49,19 +35,19 @@
       ]
     },
     {
-      "name": "soundtouch-2.3.3",
+      "name": "soundtouch-2.3.2",
       "kind": "archive",
       "format": "tar.gz",
-      "file": "soundtouch-2.3.3.tar.gz",
+      "file": "soundtouch-2.3.2.tar.gz",
       "urls": [
-        "https://www.surina.net/soundtouch/soundtouch-2.3.3.tar.gz"
+        "https://codeberg.org/soundtouch/soundtouch/archive/2.3.2.tar.gz"
       ],
-      "sha256": "43b23dfac2f64a3aff55d64be096ffc7b73842c3f5665caff44975633a975a99",
+      "sha256": "ed714f84a3e748de87b24f385ec69d3bdc51ca47b7f4710d2048b84b2761e7ff",
       "exclude": [
         "soundtouch/source/SoundTouchDLL/LazarusTest/libSoundTouchDll.so"
       ],
       "stripSingleRoot": true,
-      "junction": "ThirdParty/soundtouch-2.3.3",
+      "junction": "ThirdParty/soundtouch-2.3.2",
       "verify": [
         "source/SoundTouch/SoundTouch.cpp",
         "include/SoundTouch.h"
@@ -69,7 +55,9 @@
     },
     {
       "name": "onnxruntime-osx-arm64-1.20.0",
-      "platforms": ["macos"],
+      "platforms": [
+        "macos"
+      ],
       "kind": "archive",
       "format": "tar.gz",
       "file": "onnxruntime-osx-arm64-1.20.0.tgz",
@@ -87,7 +75,9 @@
     },
     {
       "name": "onnxruntime-win-x64-1.24.4",
-      "platforms": ["windows"],
+      "platforms": [
+        "windows"
+      ],
       "kind": "archive",
       "format": "zip",
       "file": "onnxruntime-win-x64-1.24.4.zip",
@@ -106,7 +96,9 @@
     },
     {
       "name": "onnxruntime-dml-1.24.4",
-      "platforms": ["windows"],
+      "platforms": [
+        "windows"
+      ],
       "kind": "archive",
       "format": "nupkg",
       "file": "microsoft.ml.onnxruntime.directml.1.24.4.nupkg",
@@ -125,7 +117,9 @@
     },
     {
       "name": "microsoft.ai.directml.1.15.4",
-      "platforms": ["windows"],
+      "platforms": [
+        "windows"
+      ],
       "kind": "archive",
       "format": "nupkg",
       "file": "microsoft.ai.directml.1.15.4.nupkg",
@@ -145,7 +139,9 @@
     },
     {
       "name": "microsoft.direct3d.d3d12.1.619.5",
-      "platforms": ["windows"],
+      "platforms": [
+        "windows"
+      ],
       "kind": "archive",
       "format": "nupkg",
       "file": "microsoft.direct3d.d3d12.1.619.5.nupkg",

@@ -30,8 +30,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 | Unofficial test builds | Published as pre-releases on the [Releases page](https://github.com/synchain-oss/OpenTune/releases) |
 | MCP server (npm `@synchain/opentune-mcp`) | [Published](https://www.npmjs.com/package/@synchain/opentune-mcp) |
 
-**Known limitation (reference track).** OpenTune's own experimental reference track is still present in this test build (it appears once "Experimental features" is turned on in the preferences). The control API neither reads nor writes it, with one exception: `autoModes.uiButtonRuns` of `content.getDetails` truthfully reports what the AUTO button would run right now (`reference` when the clip has a usable reference binding), while `autoModes.available` never contains `reference` and `content.autoTune` has no such mode. After the rebase onto the latest upstream the reference track disappears together with upstream.
-
 ## Pinned upstream base
 
 During development, this fork is pinned to a single upstream commit and does not follow upstream:

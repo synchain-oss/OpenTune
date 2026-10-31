@@ -2,19 +2,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # group: ui
-# pinned-at: upstream/20261008-addb4f4
+# pinned-at: upstream/20261030-2c01847
 # ported-to: Source/Standalone/ControlEditorBridgeModals.cpp
 # ported-to: Source/Control/Ops/UiOps.cpp
 # ported-to: Source/Standalone/ControlEditorBridgeWorkspace.cpp
 # ported-to: Source/Control/Ops/WorkspaceOps.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
-Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::trackColorChangeRequested	L3200-L3285	fn-v1	d94e32c47a816cde0f730ba063675e288f29e15344d7d16b1ec22fd8ccd5313b
-Source/Editor/ConfirmDialogContent.h	showDiagnostic	L143-L156	fn-v1	7609e9f6a7966d92096c234b96b3bdf8fc74b41eaa121e1b7880753c43b74b10
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::trackColorChangeRequested	L3341-L3405	fn-v1	fb0944bed69c177009381f79597d93d0c68e8ee2a7ffc4063689721cae60c7e7
+Source/Editor/ConfirmDialogContent.h	showDiagnostic	L141-L154	fn-v1	7609e9f6a7966d92096c234b96b3bdf8fc74b41eaa121e1b7880753c43b74b10
 Source/Editor/OnboardingOverlayComponent.cpp	OnboardingOverlayComponent::keyPressed	L346-L360	fn-v1	992c67c954dd62ef1e9ed9bd6401f23810ab6e7ffc46ff324002959388d60d60
 Source/Editor/OnboardingOverlayComponent.cpp	OnboardingOverlayComponent::showWorkflowChoice	L91-L105	fn-v1	8166989dc823bdcdabff1fe16b50f2ab7e14aa49285c211d3fa89ea77707ab04
-Source/Standalone/PluginEditor.cpp	!appPreferences_.getState().shared.onboardingShown	L1529-L1535	stmt-v1	f3e8e0b7262fa465ea03cf171426507552904a567147628977a8b2a9b7dabfec
-Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::applyResolvedScaleForPlacementContent	L469-L490	fn-v1	1a44cea413389d578bb28e542e65913ae31a870d22e628a08b59fae4f1da0822
-Source/Standalone/UI/TransportBarComponent.cpp	TransportBarComponent::onTrackViewClicked	L1670-L1680	fn-v1	d4e1f1d9ba880e538909bb031116ab8766ea21ed0d734a0990cf44afa66dccb5
-Source/Standalone/UI/TransportBarComponent.cpp	TransportBarComponent::onPianoViewClicked	L1682-L1692	fn-v1	1b7b68ac0379f505acd0b1279f9ec66a8e300266cc42507d78cba88af4dfcacc
-Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::viewToggled	L3089-L3129	fn-v1	8b4b38da1bcef0091eab876c4d76f111356c9546eb609829338258a9201ebbac
+Source/Standalone/PluginEditor.cpp	!appPreferences_.getState().shared.onboardingShown	L1586-L1592	stmt-v1	aa372e4e3b474aec2bd953e43763d5913c600367ca33a3c994b0b83bab486d57
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::applyResolvedScaleForPlacementContent	L481-L502	fn-v1	1a44cea413389d578bb28e542e65913ae31a870d22e628a08b59fae4f1da0822
+Source/Standalone/UI/TransportBarComponent.cpp	TransportBarComponent::onTrackViewClicked	L1780-L1790	fn-v1	d4e1f1d9ba880e538909bb031116ab8766ea21ed0d734a0990cf44afa66dccb5
+Source/Standalone/UI/TransportBarComponent.cpp	TransportBarComponent::onPianoViewClicked	L1792-L1802	fn-v1	1b7b68ac0379f505acd0b1279f9ec66a8e300266cc42507d78cba88af4dfcacc
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::viewToggled	L3222-L3264	fn-v1	0d1a0ccd12186da1ad5fefa16a1e44ea9782bc70fb00b108233bc538a5ac6fe5

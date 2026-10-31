@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # group: audio-device
-# pinned-at: upstream/20261008-addb4f4
+# pinned-at: upstream/20261030-2c01847
 # ported-to: Source/Control/Ops/AudioDeviceOps.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
@@ -13,8 +13,8 @@ Source/Editor/Preferences/StandalonePreferencePages.cpp	refreshBufferSizeSelecto
 Source/Editor/Preferences/StandalonePreferencePages.cpp	refreshChannelToggles	L277-L327	fn-v1	47efbf0baf66c797357648d785f392ba826a1ad51bcf2eeda835e36f90346682
 Source/Editor/Preferences/StandalonePreferencePages.cpp	refresh	L164-L179	fn-v1	787f1bd415041c85b9ddd859669b79318f48f60269c9ddd37b0aedb298c4f57b
 Source/Editor/Preferences/StandalonePreferencePages.cpp	applySetup	L329-L355	fn-v1	6a3fb2f78606b37cfb1697d43b41b5ecf178fd597261d340310f9fa256513434
-Source/Editor/Preferences/StandalonePreferencePages.cpp	typeChanged	L357-L404	fn-v1	bd515cc391a1e93926308e68c50f90e7acb9a32c5f5778d1c450c802275a5fe0
-Source/Editor/Preferences/StandalonePreferencePages.cpp	outputDeviceChanged	L406-L448	fn-v1	661b2e040ff89412baee2c066a42141169fea5636981ebcd4b47829749437b53
+Source/Editor/Preferences/StandalonePreferencePages.cpp	typeChanged	L357-L404	fn-v1	07727630669953cd58da42d43f499b3d14e1b61b9f4d1823ad0a0a1c9a984ec0
+Source/Editor/Preferences/StandalonePreferencePages.cpp	outputDeviceChanged	L406-L448	fn-v1	5370ebf4eba4ae55bf9fb7966c882e5ae4204dbb0213e5f53ace7ff630477d91
 Source/Editor/Preferences/StandalonePreferencePages.cpp	sampleRateChanged	L450-L463	fn-v1	0426085a9a471db91e273025b5b596d3b491f4bb7435d223ebeb8d41700c3d85
 Source/Editor/Preferences/StandalonePreferencePages.cpp	bufferSizeChanged	L465-L478	fn-v1	674ba10d4615d1341999a7d201bc662153776915ca1b09a5d664d3d81967acf4
 Source/Editor/Preferences/StandalonePreferencePages.cpp	channelPairClicked	L480-L507	fn-v1	002c3b41ed3e1eb608686f869aeb2483a471983e46fda7577f9654751f80e95d

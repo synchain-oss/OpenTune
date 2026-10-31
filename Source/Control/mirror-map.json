@@ -66,7 +66,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::startPendingImport",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "00601c6aa02eaecbe2ab7237ac5fa70b8051f1c2031857a8a4cb2cc85c82de85"
+        "sha256": "ae02087ecae1c23d41a5394f3333d5a342a51adca1e5e5105f1fac7c3ef17e6d"
       },
       "control": [
         {
@@ -83,8 +83,8 @@
         "ControlProcessorTests.ImportAfterOpen",
         "ControlProcessorTests.ImportCancel"
       ],
-      "note": "The editor steps of one import: commit at the start position, hidden tracks, focus, analysis request.",
-      "noteZh": "编辑器导入一个文件的步骤：在起点提交、显示隐藏轨道、聚焦、请求分析。"
+      "note": "The editor steps of one import: commit at the start position, hidden tracks, focus, analysis request. The editor's external-edit branch (externalEditActive_, a start mode of OpenTune) is not mirrored.",
+      "noteZh": "编辑器导入一个文件的步骤：在起点提交、显示隐藏轨道、聚焦、请求分析。编辑器的外部编辑分支（externalEditActive_，OpenTune 的一种启动模式）没有镜像。"
     },
     {
       "id": "import-next-in-queue",
@@ -183,7 +183,7 @@
         "symbol": "OpenTuneAudioProcessor::exportPlacementAudio",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "7c7908f928fc73ae82fe50abdb285a55b971dc4ca6d05b8366382d5642901e86"
+        "sha256": "4ce84a3afdfed2959d2f6621a90af64157d44944648c5a7538910102c2570681"
       },
       "control": [
         {
@@ -210,7 +210,7 @@
         "symbol": "OpenTuneAudioProcessor::exportTrackAudio",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "b9345f926645385c5eaf9d82653a81b9e6c8466c84e15d80f57a98b9dd529cf5"
+        "sha256": "83e6804e725d242d1b729436b49e9a6a65d4fb102008946205e3766630c74911"
       },
       "control": [
         {
@@ -237,7 +237,7 @@
         "symbol": "OpenTuneAudioProcessor::exportMasterMixAudio",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "b0a39a60a1331ceb7d77dfac623193e9358c9f22fc973057896854c6ca8b38bb"
+        "sha256": "50d3d484904682b2b45346e0795c3e6cc5d1afe8299c44257497ae66a8921f4a"
       },
       "control": [
         {
@@ -264,7 +264,7 @@
         "symbol": "OpenTuneAudioProcessor::setContentTimeGrid",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "09a6c402060b6db3769552513f0dccfc042523aee23182098ac0cb7cec2bc343"
+        "sha256": "d5a091615e9c238e86fc3e5977d7322cf0deda59b96a29a77a07f49111e808b1"
       },
       "control": [
         {
@@ -314,7 +314,7 @@
         "symbol": "PianoRollComponent::recordUndoAction",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "b6c8b0e08bdf49e683a803673ef1bc9e99a4c0eda1b5155f1d849d61f9ffb8a5"
+        "sha256": "5c8df7c81f19c3919c76bdaa3ec96e13a7ecfbea80612899c7f4f726a2039fab"
       },
       "control": [
         {
@@ -342,7 +342,7 @@
         "symbol": "PianoRollComponent::applyAutoTuneToSelection",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "d03fe6acc149df0d617c70f46310af6020a22dc8d5830a83133d63396edbd8fd"
+        "sha256": "f8884f028aeba305cd16ed65885a44cb0df68c7d61fba41e7393348a8b745f56"
       },
       "control": [
         {
@@ -393,7 +393,7 @@
         "symbol": "OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "3d65b2b11862fae75ad24942e76b15d4bab56431b8e07e53dbeb622df686ff6e"
+        "sha256": "f1d15057d62041ce4dd09c5171e67510e9c4c3f07e46f7578c5ba517f7ca71d3"
       },
       "control": [
         {
@@ -492,30 +492,6 @@
       "noteZh": "手动设置调式：手动调式、无变化的情形与脏标记。"
     },
     {
-      "id": "auto-button-mode",
-      "group": "auto",
-      "upstream": {
-        "file": "Source/Standalone/PluginEditor.cpp",
-        "symbol": "OpenTuneAudioProcessorEditor::evaluateAutoRefUiState",
-        "kind": "function",
-        "normalization": "fn-v1",
-        "sha256": "06401d8eda665637d5a6c654bddea208dd80eaed53ae5249cd54545e8367ca6b"
-      },
-      "control": [
-        {
-          "file": "Source/Control/Ops/ContentDetailsOps.cpp",
-          "symbols": [
-            "runGetDetails"
-          ]
-        }
-      ],
-      "tests": [
-        "ControlProcessorTests.Details"
-      ],
-      "note": "Which mode the AUTO button runs (autoModes.uiButtonRuns): snapping in the openDyne scheme, else the reference alignment while the clip's binding can run it (the click takes that path through shouldRunReferenceAuto(), whatever the experimental setting), else regeneration. A read of upstream state that ends with the reference alignment when this fork is rebased.",
-      "noteZh": "AUTO 按钮运行哪种模式（autoModes.uiButtonRuns）：openDyne 方案下为吸附；否则，只要该片段的绑定能运行参考对齐就是参考对齐（点击经 shouldRunReferenceAuto() 走这条路，与实验功能开关无关）；再否则为重新生成。这是对上游状态的读取，本 fork 重新 rebase 到去掉参考对齐的上游后随之消失。"
-    },
-    {
       "id": "undo-add-action",
       "group": "undo",
       "upstream": {
@@ -596,7 +572,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::saveProject",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "4ea61b6bab0047adba000438b8d8ddc033a8994a014809bb1db2d32af7a9ae23"
+        "sha256": "7b1b24d878527c27f1485e3038a618431c99f3c9f334eeede3d706b334d51dfc"
       },
       "control": [
         {
@@ -625,7 +601,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::startOpenProject",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "c7b6e4598b1f6e64bd706f7677641ac91b5403e06f3be8c2a54b156fc15b4b48"
+        "sha256": "46265de57414ec5f139cabea8959c17d7cf3bdbb942610da0d735c02a83ff7d8"
       },
       "control": [
         {
@@ -677,7 +653,7 @@
         "symbol": "commitNoteBasedCorrection",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "e48f2d28b94f54fc6c1e6c428fe17d329ff7bfe0e18735dcd50dd645d89a56ca"
+        "sha256": "873c030df78e46fb972b5a6e36060ae0d9f2556c7717d98af0047de34e967904"
       },
       "control": [
         {
@@ -752,7 +728,7 @@
         "symbol": "PianoRollToolHandler::endNotePitchDrag",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "b95c1478a2d72ffd4920fa5b86b80e84a45e07195ebf939763459000810a1189"
+        "sha256": "ae5ff27b590ce0aad9663411013ff8dcc48b71d2ed3aeb08fb33e0c7424852e2"
       },
       "control": [
         {
@@ -777,7 +753,7 @@
         "symbol": "PianoRollToolHandler::handlePitchToolDoubleClick",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "e92dab4e48bf3aa59d2e28dd485d25924c2abecb24d9342350d51809fb529b01"
+        "sha256": "19ee7fb85a391c7523d7d0bb37dd385d956330a0d2a1b0a3492aa6b72b0bba96"
       },
       "control": [
         {
@@ -801,7 +777,7 @@
         "symbol": "PianoRollComponent::editParameter",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "5d6ce786448ba93a5d6964a97f022f863b0a4033f693b4765bb58f68fdb5732b"
+        "sha256": "9f90063dd4d283cdfe031243e475041bceb8775918b38594db8032025637494c"
       },
       "control": [
         {
@@ -816,8 +792,8 @@
         "ControlProcessorTests.EditNotes",
         "ControlProcessorTests.EditVectors"
       ],
-      "note": "The parameter knobs on selected notes: the note fields they set and the undo description Edit note.",
-      "noteZh": "选中音符上的参数旋钮：设置哪些音符字段，以及撤销描述 Edit note。"
+      "note": "The parameter knobs on selected notes: the note fields they set and the undo description Edit note. OpenTune moved the selected-notes target into planSelectedNoteParameterEdit() and editSelectedNoteParameter(), which set one parameter per call and push their own undo entry; the API sets several parameters (and the pitch drift scale) in one op, derives the range from the notes that changed and keeps the undo entry inside its ControlOriginAction, so it keeps its own plan. The fields and the description are the same.",
+      "noteZh": "选中音符上的参数旋钮：设置哪些音符字段，以及撤销描述 Edit note。OpenTune 把选中音符的分支移进了 planSelectedNoteParameterEdit() 与 editSelectedNoteParameter()，它们一次只设一个参数并自己压撤销条目；接口一个操作里设多个参数（含音高漂移比例），范围按实际变化的音符算，撤销条目放进 ControlOriginAction，所以保留自己的计划。设置的字段与描述一致。"
     },
     {
       "id": "notes-commit-range",
@@ -827,7 +803,7 @@
         "symbol": "PianoRollComponent::commitEditedContentNotesAndSegments(const EditableContentSnapshot&, const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&, F0FrameRange)",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "d36905e2ce2a215252e967053a84a82f57d9ce22adbc753f030f27af85fb9eaf"
+        "sha256": "30e1ede4ebb6d5cddef9693659f29f9168dba0c25d694303ec0a5693f90177f5"
       },
       "control": [
         {
@@ -852,7 +828,7 @@
         "symbol": "PianoRollComponent::applyAutoSnapToAllNotes",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "b68a587562a6b975739fdda01ecf1020dab2309a204ae60c522e301c2aca4b17"
+        "sha256": "f4d0c4cbe4be786f5aa6ca6a66b056e1fc9fe28e3af148c98610b9718848e02c"
       },
       "control": [
         {
@@ -907,7 +883,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::pitchShiftRequested",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "45978577677ef625442d9158614d1766864696fc6a7987efde859ef616915d3d"
+        "sha256": "885ede8f5164bb960c8f7bceab0b952d111a7d7ac030ce4cc74c55acd1417c89"
       },
       "control": [
         {
@@ -993,7 +969,7 @@
         "symbol": "PianoRollToolHandler::handleTimeToolMouseUp",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "86eb0526c37cf75f2e231ad0486b198a6162600d736501832141de49a0ee27a4"
+        "sha256": "287795ca9ec5d7cb66dec6765a954bab15711f688c46daa921a401d1a106832a"
       },
       "control": [
         {
@@ -1023,7 +999,7 @@
         "symbol": "toolCtx.commitTimeGrid",
         "kind": "statement",
         "normalization": "stmt-v1",
-        "sha256": "b6a2b19747de4b0620767daed0488f7ae9814b8ad1b3bb2cc9182fc33290e44a"
+        "sha256": "ab8510e37a8727bba284a1653eb544d3e16843356cb43c255cd4352117afabd1"
       },
       "control": [
         {
@@ -1042,8 +1018,8 @@
       "tests": [
         "ControlProcessorTests.Timing"
       ],
-      "note": "How the piano roll commits a time-grid edit: a TimeGridEditAction with the grid before and after, setTimeGrid(), then one undo entry.",
-      "noteZh": "钢琴卷帘如何提交时间网格编辑：先构造带前后网格的 TimeGridEditAction，再 setTimeGrid()，最后加一条撤销条目。"
+      "note": "How the piano roll commits a time-grid edit: a TimeGridEditAction with the grid before and after, setTimeGrid(), then one undo entry. OpenTune now does this in applyTimeGridEdit(), which also falls back to the description Edit time grid; the API always passes its own description and keeps the undo entry inside its ControlOriginAction, so it does not call it.",
+      "noteZh": "钢琴卷帘如何提交时间网格编辑：先构造带前后网格的 TimeGridEditAction，再 setTimeGrid()，最后加一条撤销条目。OpenTune 现在在 applyTimeGridEdit() 里做这件事，并在描述为空时用 Edit time grid；接口总是给出自己的描述，并把撤销条目放进 ControlOriginAction，所以不调用它。"
     },
     {
       "id": "time-tool-pick",
@@ -1053,7 +1029,7 @@
         "symbol": "PianoRollComponent::setCurrentTool",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "5dea5c9a87b45ffac8a47828b080f3de98de9f7001a9884f839d180a81616f45"
+        "sha256": "e33e3b4f41aae1a5c82edf8d10f0aa7491fe52d0216a9067ba7ccf685e301ce3"
       },
       "control": [
         {
@@ -1077,7 +1053,7 @@
         "symbol": "OpenTuneAudioProcessor::ensureTimeToolAnchorSeed",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "f5b0de0f5f5e478beacfc4a2b5f2b7dc6a11489861fb191d93afbb2547421c98"
+        "sha256": "81a882a0362a043bb277d539e0ab5b4bce5627deb98d7a6076f4648f921dff35"
       },
       "control": [
         {
@@ -1091,18 +1067,18 @@
       "tests": [
         "ControlProcessorTests.TimeGridSeed"
       ],
-      "note": "When the seed places handles at once: a grid without handles and a timing analysis ready for the current producer and audio, with anchors (featuresReady); otherwise it registers a deferred seed, which the job never lets happen.",
-      "noteZh": "种子何时立即放置手柄：网格没有手柄，且计时分析已就绪、producer 与音频指纹匹配并有锚点（featuresReady）；否则会登记延迟种子，job 从不让这种情况发生。"
+      "note": "When the seed places handles at once: a grid without handles and a timing analysis ready for OpenTune's one producer (StandardAuto) and the current audio, with anchors (featuresReady); otherwise it registers a deferred seed, which the job never lets happen.",
+      "noteZh": "种子何时立即放置手柄：网格没有手柄，且计时分析已就绪、producer 为 OpenTune 仅有的 StandardAuto、音频指纹匹配并有锚点（featuresReady）；否则会登记延迟种子，job 从不让这种情况发生。"
     },
     {
       "id": "time-seed-preheat",
       "group": "timing",
       "upstream": {
         "file": "Source/PluginProcessor.cpp",
-        "symbol": "OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures",
+        "symbol": "OpenTuneAudioProcessor::preheatReferenceFeatures",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "aad66fcc5ba8434bcb6b52865f0820145b8fb259a62e6b6b4d81902ddb908b92"
+        "sha256": "8ce715f8ecf821553c0e45a8755e0882e28f57ef04e5b009b6503b6d1dd5364b"
       },
       "control": [
         {
@@ -1115,8 +1091,8 @@
       "tests": [
         "ControlProcessorTests.TimeGridSeed"
       ],
-      "note": "AlreadyReady means a ready timing analysis of the current producer and audio; with hasTimingAnchors() it is the seed's featuresReady, so the job calls ensureTimeToolAnchorSeed() only when that seeds at once.",
-      "noteZh": "AlreadyReady 表示计时分析已就绪且 producer 与音频匹配；加上 hasTimingAnchors() 即种子的 featuresReady，因此 job 只在能立即种子时调用 ensureTimeToolAnchorSeed()。"
+      "note": "AlreadyReady means a ready timing analysis (producer StandardAuto, the only one OpenTune has) of the current audio; with hasTimingAnchors() it is the seed's featuresReady, so the job calls ensureTimeToolAnchorSeed() only when that seeds at once.",
+      "noteZh": "AlreadyReady 表示计时分析已就绪（producer 为 OpenTune 仅有的 StandardAuto）且音频指纹匹配；加上 hasTimingAnchors() 即种子的 featuresReady，因此 job 只在能立即种子时调用 ensureTimeToolAnchorSeed()。"
     },
     {
       "id": "ui-track-colour-dialog",
@@ -1126,14 +1102,14 @@
         "symbol": "OpenTuneAudioProcessorEditor::trackColorChangeRequested",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "d94e32c47a816cde0f730ba063675e288f29e15344d7d16b1ec22fd8ccd5313b"
+        "sha256": "fb0944bed69c177009381f79597d93d0c68e8ee2a7ffc4063689721cae60c7e7"
       },
       "control": [
         {
           "file": "Source/Standalone/ControlEditorBridgeModals.cpp",
           "symbols": [
-            "trackOfColourTitle",
-            "classify"
+            "classify",
+            "ControlEditorBridge::closeTopDialog"
           ]
         },
         {
@@ -1147,8 +1123,8 @@
         "ControlProcessorTests.UiDismiss",
         "ControlProcessorTests.UiVectors"
       ],
-      "note": "The track colour dialog is a DialogWindow titled \"Track <n> Color\" (n = trackId + 1) whose content holds a ColourSelector; the content's destructor sets the track's colour, the track panel's colour, redraws the arrangement and marks the project dirty however the window closes, so the bridge classifies it as trackColour with closeCommits and ui.dismiss reports the commit.",
-      "noteZh": "轨道颜色对话框是标题为 \"Track <n> Color\"（n = trackId + 1）、内容含 ColourSelector 的 DialogWindow；无论窗口怎样关闭，内容的析构都会设置轨道颜色与轨道面板颜色、重绘编排视图并把工程标为已修改，因此 bridge 把它归为 closeCommits 为真的 trackColour，ui.dismiss 报告这次提交。"
+      "note": "The track colour picker is a juce::CallOutBox around a ColourSelector (it has no title and names no track); the content's destructor sets the track's colour, the track panel's colour, redraws the arrangement and marks the project dirty however the call-out closes, when the modal manager deletes it. The bridge learns the track from the track panel's colour request (ControlTrackColourWatch, a listener), classifies the call-out as trackColour with closeCommits, and on ui.dismiss runs the same four steps at once so that the result reports the commit.",
+      "noteZh": "轨道颜色选择器是包着 ColourSelector 的 juce::CallOutBox（没有标题，也不带轨道号）；无论怎样关闭，内容的析构（在 modal manager 删除它时运行）都会设置轨道颜色与轨道面板颜色、重绘编排视图并把工程标为已修改。bridge 从轨道面板的颜色请求（监听器 ControlTrackColourWatch）得知轨道，把它归为 closeCommits 为真的 trackColour，ui.dismiss 时立即做同样的四步，让结果报告这次提交。"
     },
     {
       "id": "ui-confirm-dialog-buttons",
@@ -1239,7 +1215,7 @@
         "symbol": "!appPreferences_.getState().shared.onboardingShown",
         "kind": "statement",
         "normalization": "stmt-v1",
-        "sha256": "f3e8e0b7262fa465ea03cf171426507552904a567147628977a8b2a9b7dabfec"
+        "sha256": "aa372e4e3b474aec2bd953e43763d5913c600367ca33a3c994b0b83bab486d57"
       },
       "control": [
         {
@@ -1359,7 +1335,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::viewToggled",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "8b4b38da1bcef0091eab876c4d76f111356c9546eb609829338258a9201ebbac"
+        "sha256": "0d1a0ccd12186da1ad5fefa16a1e44ea9782bc70fb00b108233bc538a5ac6fe5"
       },
       "control": [
         {
@@ -1385,7 +1361,7 @@
         "symbol": "ArrangementViewComponent::mouseDown",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "6be27ec917759871b5d36e72ffe645dad10b38c59369244c22b50bdc9605fbb7"
+        "sha256": "d2eef263cd82ec08d9b8d1cd54269c7b194864ddbeb16f1f07aa0487679e6ff5"
       },
       "control": [
         {
@@ -1783,7 +1759,7 @@
         "symbol": "auto onF0ModelChanged",
         "kind": "statement",
         "normalization": "stmt-v1",
-        "sha256": "84fde8935140179daad231230128738a88745ed5441a8a24026281cb29c043d5"
+        "sha256": "7febb1246490bb9e4eacc78aa96e3825d54ccc98e189ba7265fb55f259334b64"
       },
       "control": [
         {
@@ -1802,8 +1778,8 @@
       "tests": [
         "ControlProcessorTests.PrefsOptions"
       ],
-      "note": "The processor callback of the pitch-model selector is setF0ModelType, whose result says whether the model was switched; prefs.set f0Model calls it and treats false as a refusal.",
-      "noteZh": "音高模型下拉框的 processor 回调是 setF0ModelType，其返回值表示模型是否已切换；prefs.set 的 f0Model 调用它，并把 false 当作拒绝。"
+      "note": "The processor callback of the pitch-model selector is setF0ModelType, whose result says whether the model was switched; prefs.set f0Model calls it and treats false as a refusal. The window also shows the failure reason (the second argument) in a diagnostic dialog; the API refuses with MODEL_UNAVAILABLE and shows no dialog.",
+      "noteZh": "音高模型下拉框的 processor 回调是 setF0ModelType，其返回值表示模型是否已切换；prefs.set 的 f0Model 调用它，并把 false 当作拒绝。窗口还会把失败原因（第二个参数）放进诊断对话框；接口以 MODEL_UNAVAILABLE 拒绝，不弹对话框。"
     },
     {
       "id": "audio-list-types",
@@ -1993,7 +1969,7 @@
         "symbol": "typeChanged",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "bd515cc391a1e93926308e68c50f90e7acb9a32c5f5778d1c450c802275a5fe0"
+        "sha256": "07727630669953cd58da42d43f499b3d14e1b61b9f4d1823ad0a0a1c9a984ec0"
       },
       "control": [
         {
@@ -2019,7 +1995,7 @@
         "symbol": "outputDeviceChanged",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "661b2e040ff89412baee2c066a42141169fea5636981ebcd4b47829749437b53"
+        "sha256": "5370ebf4eba4ae55bf9fb7966c882e5ae4204dbb0213e5f53ace7ff630477d91"
       },
       "control": [
         {
@@ -2329,7 +2305,7 @@
         "symbol": "OpenTuneAudioProcessor::splitPlacementAtSeconds",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "7c01f5e8a1bb7fb159ea602495a246c1c960ac8bf1dd0fec29f2da25b1c9692e"
+        "sha256": "a7c26d679bc8a643adb157416f6dc4a2c3fc8ec5bcaa38a9a03af50f18a80b4c"
       },
       "control": [
         {

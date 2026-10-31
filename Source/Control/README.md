@@ -891,9 +891,8 @@ title and `refreshAllUIFromProject()`), `onRecentProjectsChanged()` and `setProj
   project's own file included (also when it was deleted from disk meanwhile; identity by section 20.3, decided again
   right before the rename), ends the call with `ALREADY_EXISTS(target_exists)`, and a file that appears while the job
   waits ends the job with the same error and is not touched. A write that fails, the media copy included, ends the job
-  with `IO_ERROR(write_failed)` and deletes the temporary file; the target does not appear (media copied to the
-  `Project_Media` directory before the failure stay: OpenTune copies a media file only when the one there is missing or
-  older). The call returns the write envelope that hands the work to the job, as `export.start` does; the job result is
+  with `IO_ERROR(write_failed)` and deletes the temporary file; the target does not appear (the target's media
+  directory, made before the media are copied, and the media copied before the failure stay). The call returns the write envelope that hands the work to the job, as `export.start` does; the job result is
   no write envelope, because the project did not change: `{path, sizeBytes, projectPath, projectDirty, warnings}`,
   where `projectPath` is the project's file (null with `nullReasons.projectPath` `no_project_path` for a project that was
   never saved) and `projectDirty` its flag, both as the job did not touch them, and `warnings` holds
@@ -902,13 +901,18 @@ title and `refreshAllUIFromProject()`), `onRecentProjectsChanged()` and `setProj
   save does, so a bridge without them answers `UNSUPPORTED(capability_missing)` and an instance without an editor
   `UNSUPPORTED(no_editor_window)`. Two things the copy shares with OpenTune's own save (upstream behaviour, not changed
   here):
-  - The media go into the `Project_Media` directory beside the target, copied from the file each source was loaded from
-    (the imported audio, or the project's own media after an open) as `<sourceId><extension>` when the file there is
-    missing or older. Every project in a directory shares that `Project_Media`, and source ids start at 1 in every
-    project, so a copy (like `project.save` and `project.saveAs`) into a directory that holds another OpenTune project
-    can replace that project's media with this project's audio, and nothing reports it. A copy into the project's own
-    directory updates the main project's older media of the same name. Clients write copies into a directory of their
-    own (for example one named `<name>.autosave` beside the project).
+  - The media go into a directory named after the target, `<target file name without extension>_Media`, beside the
+    target (`ProjectSession::prepareSave()`), copied from the file each source was loaded from (the imported audio, or
+    the project's own media after an open) as `<sourceId><extension>`. OpenTune writes every media file afresh, through
+    a temporary file in that directory that replaces the file of the same name (a source that already is that file is
+    left alone), and the project records the path as `<name>_Media/<sourceId><extension>`. The directory follows the
+    target, so `project.save`, `project.saveAs` and `project.saveCopy` each use the directory of their own target, and a
+    copy has a media directory of its own, also beside the project: the media of the project's file are not touched.
+    Source ids start at 1 in every project, so two projects of the same file name (in the same directory the second can
+    only be written with `confirm`), or a copy whose `<name>_Media` directory is left over from a project file that was
+    deleted outside OpenTune, share a directory, and the later write replaces the files of the same name there, with
+    nothing to report it. Clients can write copies under names of their own (for example `<name>-autosave-0001.otproj`
+    in a directory named `<name>.autosave` beside the project).
     Opening a project looks for `<project directory>/<relativeMediaPath>` first and falls back to the path the source
     was loaded from when the project was saved, and source ids are kept when a project is opened again.
   - `prepareSave()` takes the snapshot with `ProjectSession::captureSnapshot()`, which fixes the session's `projectId`

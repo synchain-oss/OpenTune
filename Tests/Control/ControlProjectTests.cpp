@@ -30,6 +30,7 @@
 #include <cmath>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
@@ -58,6 +59,17 @@ juce::File juceFileOf(const std::string& utf8Path)
 std::string mediaDirectoryNameOf(const juce::File& projectFile)
 {
     return (projectFile.getFileNameWithoutExtension() + "_Media").toStdString();
+}
+
+/** The files of a media directory: name to bytes and modification time. Empty when there is no such directory. */
+std::map<std::string, std::pair<std::string, std::filesystem::file_time_type>>
+mediaFilesOf(const std::filesystem::path& directory)
+{
+    std::map<std::string, std::pair<std::string, std::filesystem::file_time_type>> files;
+    std::error_code ignored;
+    for (const auto& entry : std::filesystem::directory_iterator(directory, ignored))
+        files[entry.path().filename().u8string()] = {readFile(entry.path()), entry.last_write_time()};
+    return files;
 }
 
 JsonValue json(const std::string& text)
@@ -440,6 +452,17 @@ void scenarioProjectRoundTrip()
         CONTROL_CHECK(changes.size() == 1);
         CONTROL_CHECK(memberOf(memberOf(memberOf(changes.at(0), "fields"), "path"), "before").text() == fileA);
         CONTROL_CHECK(editor.session.getCurrentProjectFile().getFullPathName().toStdString() == fileB);
+        // The media directory follows the target: the second file has one of its own, named after it, and the first
+        // file keeps its own.
+        std::vector<std::string> names;
+        for (const auto& entry : std::filesystem::directory_iterator(directory))
+            names.push_back(entry.path().filename().u8string());
+        std::sort(names.begin(), names.end());
+        CONTROL_CHECK(
+            (names == std::vector<std::string>{"first.otproj", "first_Media", "second.otproj", "second_Media"}));
+        CONTROL_CHECK(!mediaFilesOf(directory / "first_Media").empty()
+                      && mediaFilesOf(directory / "first_Media").size()
+                             == mediaFilesOf(directory / "second_Media").size());
         const auto sizeA = juceFileOf(fileA).getSize();
         CONTROL_CHECK(api.fails("project.saveAs", pathParams(fileA), "INVALID_ARGUMENT", "confirm_required"));
         CONTROL_CHECK(juceFileOf(fileA).getSize() == sizeA);
@@ -931,6 +954,25 @@ void scenarioProjectSaveCopy()
         CONTROL_CHECK(bytesOf(main) == mainBytes);
     }
 
+    // A copy in the project's own directory has a media directory of its own, named after the copy: the media of the
+    // project's file are not written again (OpenTune's save names the directory after the target, not after the
+    // directory the target is in).
+    {
+        const auto beside = (directory / "song-copy.otproj").u8string();
+        const auto mainMedia = mediaFilesOf(directory / "song_Media");
+        CONTROL_CHECK(!mainMedia.empty());
+        const auto job = runAsJob(api, "project.saveCopy", pathParams(beside), "projectCopy");
+        CONTROL_CHECK(succeeded(job));
+        CONTROL_CHECK(std::filesystem::is_directory(directory / "song-copy_Media"));
+        CONTROL_CHECK(mediaFilesOf(directory / "song_Media") == mainMedia);
+        const auto copyMedia = mediaFilesOf(directory / "song-copy_Media");
+        CONTROL_CHECK(copyMedia.size() == mainMedia.size());
+        for (const auto& [name, file] : mainMedia)
+            CONTROL_CHECK(copyMedia.count(name) == 1 && copyMedia.at(name).first == file.first);
+        CONTROL_CHECK(bytesOf(main) == mainBytes && !holdsTemporaryFile(directory)
+                      && !holdsTemporaryFile(directory / "song-copy_Media"));
+    }
+
     // The copy opens as a project: one clip, one content, the one note the project had when it was written. The open
     // is a different method and does what it always does: the opened file becomes the project's file.
     {
@@ -1097,6 +1139,9 @@ void scenarioProjectSaveCopyChecks()
         const auto job = runAsJob(api, "project.saveCopy", pathParams(target), "projectCopy");
         CONTROL_CHECK(failedWith(job, "IO_ERROR", "write_failed"));
         CONTROL_CHECK(!juceFileOf(target).exists() && !holdsTemporaryFile(directory));
+        // The media directory of the target was made before the media were copied and stays (upstream behaviour).
+        CONTROL_CHECK(std::filesystem::is_directory(directory / "no-media_Media")
+                      && !holdsTemporaryFile(directory / "no-media_Media"));
         CONTROL_CHECK(editor.session.isDirty() == dirtyBefore && !editor.bridge.busy.operationRunning);
         CONTROL_CHECK(editor.session.getCurrentProjectFile().getFullPathName().toStdString() == main);
         CONTROL_CHECK(bytesOf(main) == mainBytes);

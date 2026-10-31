@@ -114,7 +114,7 @@
                   "code": "NOT_SAVED_IN_PROJECT",
                   "subject": null,
                   "data": {
-                    "items": ["visibleTrackCount", "undoHistory", "preferences"]
+                    "items": ["undoHistory", "preferences"]
                   }
                 }
               ],

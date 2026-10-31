@@ -830,9 +830,9 @@ void scenarioAutoTuneImpl()
     const auto& undo = memberOf(applied, "undo");
     CONTROL_CHECK(memberOf(undo, "undoable").asBoolean()
                   && toJsonString(memberOf(undo, "innerActions")) == R"(["PianoRollEditAction"])");
-    // The piano roll's text for its AUTO entry, from UTF-8 (its TRANS() literal reads the bytes as Latin-1), in
-    // the result and in edit.getHistory.
-    const std::string autoText = juce::String::fromUTF8(u8"自动调音").toStdString();
+    // The piano roll's text for its AUTO entry (LOC_RAW("AUTO correction"), in the language of the window), in the
+    // result and in edit.getHistory.
+    const std::string autoText = Loc::get(testLanguageState()->language, "AUTO correction").toStdString();
     CONTROL_CHECK(isUndoDescription(undo, autoText));
     CONTROL_CHECK(isUndoDescription(memberOf(f.history(), "undoTop"), autoText));
     CONTROL_CHECK(toJsonString(memberOf(applied, "paramsUsed"))
@@ -1045,10 +1045,11 @@ struct NoteEditCase
 
 std::vector<NoteEditCase> noteEditCases()
 {
-    const std::string move = juce::String::fromUTF8(u8"移动音符").toStdString();
-    const std::string snap = juce::String::fromUTF8(u8"音高吸附").toStdString();
-    const std::string knob = TRANS("Edit note parameter").toStdString();
-    const std::string drift = juce::String::fromUTF8(u8"漂移修正").toStdString();
+    const auto language = testLanguageState()->language;
+    const std::string move = Loc::get(language, "Move note").toStdString();
+    const std::string snap = Loc::get(language, "Pitch snap").toStdString();
+    const std::string knob = Loc::get(language, "Edit note").toStdString();
+    const std::string drift = Loc::get(language, "Drift correction").toStdString();
     // The four notes target 64, 69, 69.3 and 66.2 with no cent offset; the key is A minor.
     return {
         {"setTargetPitch",
@@ -1187,6 +1188,32 @@ void checkNoteEditCase(EditFixture& f, const NoteEditCase& c)
     CONTROL_CHECK(f.bridge.dirtyMarks > marks && memberOf(memberOf(applied, "dirty"), "after").asBoolean());
     checkNotesAfter(notesBefore, notesNow(f), c.expected);
     checkUndoSymmetry(f, memberOf(undo, "undoId").text(), before, stateOf(*f.processor, f.clip.key));
+}
+
+/** The description of an entry is the text of the window's language at the time of the edit, as LOC_RAW gives it the
+    UI: with the language changed, the next entry carries that language's text (note moves, SNAP, AUTO). */
+void checkDescriptionFollowsLanguage(EditFixture& f)
+{
+    const auto state = testLanguageState();
+    const auto original = state->language;
+    const auto before = stateOf(*f.processor, f.clip.key);
+    for (const auto language : {Language::Japanese, Language::Spanish}) {
+        state->language = language;
+        const std::string cMajor = R"({"root":0,"scale":"major"})";
+        const auto moved = f.editNotes(R"([{"op":"shiftCents","select":{"indices":[0]},"deltaCents":10}])");
+        CONTROL_CHECK(isUndoDescription(memberOf(moved, "undo"), Loc::get(language, "Move note").toStdString()));
+        const auto snapped = f.snapNotes(cMajor);
+        CONTROL_CHECK(isUndoDescription(memberOf(snapped, "undo"), Loc::get(language, "Pitch snap").toStdString()));
+        const auto tuned = f.regenerate("");
+        CONTROL_CHECK(isUndoDescription(memberOf(tuned, "undo"), Loc::get(language, "AUTO correction").toStdString()));
+        // The text differs from the one of the language before, so the check above is not met by a fixed text.
+        CONTROL_CHECK(Loc::get(language, "Move note") != Loc::get(original, "Move note"));
+        f.undo(memberOf(memberOf(tuned, "undo"), "undoId").text());
+        f.undo(memberOf(memberOf(snapped, "undo"), "undoId").text());
+        f.undo(memberOf(memberOf(moved, "undo"), "undoId").text());
+    }
+    state->language = original;
+    CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), before));
 }
 
 /** The checks before the change and the calls that change nothing. */
@@ -1877,6 +1904,7 @@ void scenarioEditNotesImpl()
     for (const auto& c : noteEditCases())
         checkNoteEditCase(f, c);
     CONTROL_CHECK(sameState(stateOf(*f.processor, f.clip.key), initial));
+    checkDescriptionFollowsLanguage(f);
     checkNoteEditErrors(f);
     checkEditRoundingMatchesReadback(f);
     checkAfterIsTheCommittedNote(f);
@@ -2268,8 +2296,8 @@ void scenarioSnapNotesImpl()
     const auto before = stateOf(*f.processor, f.clip.key);
     const auto notesBefore = notesNow(f);
     const std::string cMajor = R"({"root":0,"scale":"major"})";
-    // The text of the button's SNAP, from UTF-8 (the piano roll's TRANS() literal reads the bytes as Latin-1).
-    const std::string snap = juce::String::fromUTF8(u8"音高吸附").toStdString();
+    // The text of the button's SNAP (LOC_RAW("Pitch snap"), in the language of the window).
+    const std::string snap = Loc::get(testLanguageState()->language, "Pitch snap").toStdString();
 
     // Every note to C major, hand-computed from the base pitches: 64 and 69 are in the scale; 69.3 goes to 69
     // and 66.2 to 67, through the cent offset (SNAP keeps the base pitch).

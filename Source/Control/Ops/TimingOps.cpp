@@ -374,7 +374,7 @@ ControlJobError jobErrorOf(const Error& error)
  *
  * - every step checks that the content still exists (NOT_FOUND(unknown_handle)) and that its pitch analysis is
  *   still ready (the readiness gate); a grid that has handles by now is not seeded again (a no-op);
- * - it asks for OpenTune's timing analysis of the content (preheatReferenceAlignmentFeatures(), which does
+ * - it asks for OpenTune's timing analysis of the content (preheatReferenceFeatures(), which does
  *   nothing while that analysis runs or is ready) and waits for it; an analysis that failed or found no onset
  *   ends the job with INTERNAL, as the time tool then places no handle;
  * - once the analysis is ready it checks the busy state and seeds with ensureTimeToolAnchorSeed(), which places
@@ -430,9 +430,9 @@ public:
             finish(step, envelope.committed(context));
             return;
         }
-        // OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(): the timing analysis that
+        // OpenTuneAudioProcessor::preheatReferenceFeatures(): the timing analysis that
         // ensureTimeToolAnchorSeed() needs, requested once and reported while it runs.
-        switch (processor.preheatReferenceAlignmentFeatures(key_)) {
+        switch (processor.preheatReferenceFeatures(key_)) {
             case OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus::AlreadyReady:
                 break;
             case OpenTuneAudioProcessor::ReferenceAnalysisPreheatStatus::Queued:

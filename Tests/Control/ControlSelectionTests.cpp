@@ -4,11 +4,9 @@
 // selects as the editor does when the user clicks a clip (Source/Standalone/ControlEditorBridgeSelection.cpp, through
 // the arrangement view's hook): it commits the selection to the arrangement; shows the clip in its piano roll, which in
 // the openDyne scheme generates the notes of a clip whose notes were never generated, through the processor's own
-// OpenTuneAudioProcessor::generateNotesOnlyByContentKey (PianoRollComponent::ensureOpenDyneNotesIfNeeded); refreshes
-// the reference context outside openDyne, through the processor's own preheatReferenceAlignmentFeatures of the clip
-// and of the clip it is bound to (OpenTuneAudioProcessorEditor::refreshReferenceContext), which the control API
-// neither predicts nor reports; shows the clip's key as the scale of the UI; and switches to the piano roll for
-// openEditor. Contents get synthetic F0 (ControlContentFixtures.h).
+// OpenTuneAudioProcessor::generateNotesOnlyByContentKey (PianoRollComponent::ensureOpenDyneNotesIfNeeded); shows the
+// clip's key as the scale of the UI; and switches to the piano roll for openEditor. Contents get synthetic F0
+// (ControlContentFixtures.h).
 // Registered with the other processor scenarios in ControlProcessorTests.cpp.
 //
 // What SelectionMatrix proves: the test bridge and the prediction in SelectionOps.cpp follow the same rules, so a
@@ -98,7 +96,6 @@ public:
             return false;
         showInPianoRoll(placementId, placement.contentKey);
         scale = scaleOf(placement.contentKey);
-        refreshReferenceContext(placementId);
         // placementDoubleClicked(): the piano roll replaces the arrangement only when the arrangement is shown, and
         // only that switch moves the keyboard focus.
         if (openEditor && view.workspace != "pianoRoll") {
@@ -198,29 +195,6 @@ private:
             || snapshot->pitchCurve->getOriginalF0().empty())
             return false;
         return processor_.generateNotesOnlyByContentKey(key, generatorParams);
-    }
-
-    /** OpenTuneAudioProcessorEditor::refreshReferenceContext() after evaluateAutoRefUiState(). */
-    void refreshReferenceContext(std::uint64_t placementId)
-    {
-        if (openDyne() || !processor_.getAppPreferences().getState().shared.experimentalFeaturesEnabled)
-            return;
-        const auto availability = processor_.queryAutoRefAvailability(placementId);
-        if (!availability.hasReferenceBinding())
-            return;
-        StandaloneArrangement::Placement target;
-        StandaloneArrangement::Placement reference;
-        bool foundTarget = false;
-        bool foundReference = false;
-        for (int trackId = 0; trackId < OpenTuneAudioProcessor::MAX_TRACKS; ++trackId) {
-            foundTarget = foundTarget || processor_.getPlacementById(trackId, placementId, target);
-            foundReference =
-                foundReference || processor_.getPlacementById(trackId, availability.referencePlacementId, reference);
-        }
-        if (!foundTarget || !foundReference)
-            return;
-        processor_.preheatReferenceAlignmentFeatures(target.contentKey);
-        processor_.preheatReferenceAlignmentFeatures(reference.contentKey);
     }
 
     /** OpenTuneAudioProcessorEditor::resolveScaleForPlacementContent(): the content's key, or C major. */
@@ -671,21 +645,15 @@ void scenarioSelectionImpl()
 
 // ---- Scenario: prediction against the commit -------------------------------------------------------
 
-void runMatrixCase(bool openDyne, bool withNotes, bool withReference)
+void runMatrixCase(bool openDyne, bool withNotes)
 {
-    const std::string name = std::string(openDyne ? "openDyne" : "openTune") + (withNotes ? ", notes" : ", no notes")
-                             + (withReference ? ", reference binding" : ", no binding");
+    const std::string name = std::string(openDyne ? "openDyne" : "openTune") + (withNotes ? ", notes" : ", no notes");
     SelectionFixture f;
     if (!CONTROL_CHECK(f.ready))
         return;
     f.setPreferences(openDyne, true);
     const auto clip = fixtureAddClip(*f.processor, clipSpec("clip", 0, withNotes));
-    std::vector<ContentKey> contents{clip.key};
-    if (withReference) {
-        const auto reference = fixtureAddClip(*f.processor, clipSpec("ref", 1, false));
-        CONTROL_CHECK(f.arrangement().setPlacementReferencePlacement(0, clip.placementId, reference.placementId));
-        contents.push_back(reference.key);
-    }
+    const std::vector<ContentKey> contents{clip.key};
     CONTROL_CHECK(settleBackgroundWork(*f.processor));
     f.clearSelection();
     const auto snapshot = f.processor->getContentSnapshot(clip.key);
@@ -702,12 +670,11 @@ void runMatrixCase(bool openDyne, bool withNotes, bool withReference)
     for (const char* member : {"changes", "sideEffects", "warnings"})
         checkEqual(memberOf(predicted, member), memberOf(committed, member), name + ": " + member);
 
-    // What the case brings about: notes in openDyne for a clip without notes. A reference binding, which the editor
-    // reacts to outside openDyne with the experimental features on, brings about nothing the result reports.
+    // What the case brings about: notes in openDyne for a clip without notes.
     const bool notesExpected = openDyne && !withNotes;
     const auto& sideEffects = memberOf(committed, "sideEffects");
     CONTROL_CHECK((sideEffects.find("notesGenerated") != nullptr) == notesExpected);
-    // Notes bring the two warnings of generated notes; nothing else is reported, a binding included.
+    // Notes bring the two warnings of generated notes; nothing else is reported.
     CONTROL_CHECK(sideEffects.find("referenceAnalysisQueued") == nullptr
                   && memberOf(committed, "warnings").size() == (notesExpected ? 2u : 0u));
     for (std::size_t i = 0; i < memberOf(committed, "warnings").size(); ++i)
@@ -886,8 +853,7 @@ void scenarioSelectionMatrix()
 {
     for (const bool openDyne : {false, true})
         for (const bool withNotes : {false, true})
-            for (const bool withReference : {false, true})
-                runMatrixCase(openDyne, withNotes, withReference);
+            runMatrixCase(openDyne, withNotes);
 }
 
 void scenarioSelectionVectors()

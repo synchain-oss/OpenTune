@@ -263,7 +263,7 @@ bool saveAndReopen(OpenTuneAudioProcessor& processor, std::uint64_t renumberFrom
     auto task = session.prepareSave(file);
     if (!CONTROL_CHECK(ProjectSession::executeSaveToFile(task).ok()))
         return false;
-    auto prepared = session.prepareOpen(file);
+    auto prepared = session.prepareOpen(file, Language::English);
     if (!CONTROL_CHECK(prepared.ok()))
         return false;
     if (renumberFrom == 0)
@@ -880,18 +880,17 @@ void checkDetailsOfSung(ApiSession& api, OpenTuneAudioProcessor& processor, cons
     // The reference section is retired: the result has no such member.
     CONTROL_CHECK(details.find("reference") == nullptr);
 
-    // The scheme is openTune and the fixture bound the clip to the reference clip, so the button runs the reference
-    // alignment, which is no mode of content.autoTune and is not listed in available (checkAutoModes has the rest).
+    // The scheme is openTune, so the button regenerates (checkAutoModes has the rest).
     const auto& modes = memberOf(details, "autoModes");
     CONTROL_CHECK(memberOf(modes, "editingScheme").text() == "openTune"
-                  && memberOf(modes, "uiButtonRuns").text() == "reference");
+                  && memberOf(modes, "uiButtonRuns").text() == "regenerate");
     CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == R"(["regenerate","snapNotes","notesOnly"])");
 
     // By placement: the same content, through that placement; every member besides the placement the same.
     const auto byPlacement =
         api.result("content.getDetails", json("{\"placementId\":" + quoted(handles.placementId) + "}"));
     CONTROL_CHECK(toJsonString(byPlacement) == toJsonString(details));
-    // The reference clip is a content of its own, with no binding of its own (its button regenerates) and no time grid.
+    // The second clip is a content of its own (its button regenerates too) and has no time grid.
     const auto refDetails =
         api.result("content.getDetails", json("{\"contentId\":" + quoted(refHandles.contentId) + "}"));
     CONTROL_CHECK(memberOf(memberOf(refDetails, "autoModes"), "uiButtonRuns").text() == "regenerate");
@@ -913,59 +912,43 @@ void checkDetailsOfSung(ApiSession& api, OpenTuneAudioProcessor& processor, cons
 
 /**
  * The AUTO button (autoModes.uiButtonRuns): the mode the editor's button runs now. In the openDyne scheme it snaps
- * notes. In the openTune scheme it runs OpenTune's reference alignment while the clip has a reference binding that
- * resolves, which no mode of content.autoTune names, so it is reported as it is and never listed in available; without
- * a binding it regenerates. The control API neither reads nor writes a binding: the fixture sets one with the
- * arrangement's setter, as the window's menu does, and the details only read the state upstream keeps.
+ * notes; in the openTune scheme it regenerates. OpenTune no longer has the reference alignment, so the button never
+ * runs it, whatever the experimental features say, and "reference" is never reported.
  */
-void checkAutoModes(ApiSession& api, OpenTuneAudioProcessor& processor, const DetailsClips& clips,
-                    const ClipHandles& handles)
+void checkAutoModes(ApiSession& api, OpenTuneAudioProcessor& processor, const ClipHandles& handles)
 {
     const auto byContent = json("{\"contentId\":" + quoted(handles.contentId) + "}");
     const auto modesOf = [&] { return memberOf(api.result("content.getDetails", byContent), "autoModes"); };
     const std::string offered = R"(["regenerate","snapNotes","notesOnly"])";
     auto& preferences = processor.getAppPreferences();
-    auto& arrangement = *processor.getStandaloneArrangement();
 
-    // Bound, openTune scheme: reference, whatever the experimental features say (the click takes the binding only).
+    // openTune scheme: regenerate, with the experimental features off and on.
     auto modes = modesOf();
     CONTROL_CHECK(memberOf(modes, "editingScheme").text() == "openTune"
-                  && memberOf(modes, "uiButtonRuns").text() == "reference");
+                  && memberOf(modes, "uiButtonRuns").text() == "regenerate");
     CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == offered);
     preferences.setExperimentalFeaturesEnabled(true);
     modes = modesOf();
-    CONTROL_CHECK(memberOf(modes, "uiButtonRuns").text() == "reference");
+    CONTROL_CHECK(memberOf(modes, "uiButtonRuns").text() == "regenerate");
     CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == offered);
     preferences.setExperimentalFeaturesEnabled(false);
 
-    // Through the placement of the bound clip it is the same; the reference clip itself has no binding.
+    // Through the placement of the clip it is the same.
     CONTROL_CHECK(memberOf(memberOf(api.result("content.getDetails",
                                                json("{\"placementId\":" + quoted(handles.placementId) + "}")),
                                     "autoModes"),
                            "uiButtonRuns")
                       .text()
-                  == "reference");
+                  == "regenerate");
 
-    // The openDyne scheme snaps notes, whatever the binding says.
+    // The openDyne scheme snaps notes.
     preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::NotesPrimary);
     modes = modesOf();
     CONTROL_CHECK(memberOf(modes, "editingScheme").text() == "openDyne"
                   && memberOf(modes, "uiButtonRuns").text() == "snapNotes");
     CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == offered);
     preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::CorrectedF0Primary);
-
-    // Unbound: the button regenerates, and nothing else is offered.
-    CONTROL_CHECK(arrangement.setPlacementReferencePlacement(0, clips.sung.placementId, 0));
-    modes = modesOf();
-    CONTROL_CHECK(memberOf(modes, "uiButtonRuns").text() == "regenerate");
-    CONTROL_CHECK(toJsonString(memberOf(modes, "available")) == offered);
-    preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::NotesPrimary);
-    CONTROL_CHECK(memberOf(modesOf(), "uiButtonRuns").text() == "snapNotes");
-    preferences.setAudioEditingScheme(AudioEditingScheme::Scheme::CorrectedF0Primary);
-
-    // The binding is read live: bound again, the button runs the reference alignment again.
-    CONTROL_CHECK(arrangement.setPlacementReferencePlacement(0, clips.sung.placementId, clips.ref.placementId));
-    CONTROL_CHECK(memberOf(modesOf(), "uiButtonRuns").text() == "reference");
+    CONTROL_CHECK(memberOf(modesOf(), "uiButtonRuns").text() == "regenerate");
 }
 
 /** Analysis states: the failure reason the processor recorded, and what a content without analysis offers. */
@@ -1764,8 +1747,6 @@ void scenarioDetails()
     clips.pending = addClip(*processor, unanalysedSpec("pending", 4, 0.0, Analysis::NotRequested));
     // What the analysis callbacks record when they fail it (OpenTuneAudioProcessor::recordF0FailureReason).
     processor->recordF0FailureReason(clips.failedEmpty.key, "f0_empty");
-    CONTROL_CHECK(processor->getStandaloneArrangement()->setPlacementReferencePlacement(0, clips.sung.placementId,
-                                                                                        clips.ref.placementId));
     // The render that importing the sung clip requested, and what it posts when it fails without the models (an
     // upstream diagnostic dialog built on this thread), are over before the first timed request.
     CONTROL_CHECK(settleBackgroundWork(*processor));
@@ -1780,7 +1761,7 @@ void scenarioDetails()
         return;
 
     checkDetailsOfSung(api, *processor, clips, *sungHandles, *refHandles);
-    checkAutoModes(api, *processor, clips, *sungHandles);
+    checkAutoModes(api, *processor, *sungHandles);
     checkDetailsOfUnanalysed(api, *processor, clips, project);
     checkDetailsErrors(api, *sungHandles);
     checkTransport(api, service, project);

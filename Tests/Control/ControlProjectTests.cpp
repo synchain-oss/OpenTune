@@ -53,6 +53,13 @@ juce::File juceFileOf(const std::string& utf8Path)
     return juce::File(juce::String::fromUTF8(utf8Path.c_str()));
 }
 
+/** The name of the media directory that OpenTune's save writes beside a project file: the file name without its
+    extension and "_Media" (ProjectSession::prepareSave). */
+std::string mediaDirectoryNameOf(const juce::File& projectFile)
+{
+    return (projectFile.getFileNameWithoutExtension() + "_Media").toStdString();
+}
+
 JsonValue json(const std::string& text)
 {
     auto parsed = parseJson(text);
@@ -199,7 +206,7 @@ bool writeProjectFile(OpenTuneAudioProcessor& processor, const std::string& path
         return false;
     if (missingMedia) {
         juceFileOf(clip.sourcePath).deleteFile();
-        juceFileOf(path).getParentDirectory().getChildFile(ProjectSession::kMediaDirectoryName).deleteRecursively();
+        juceFileOf(path).getParentDirectory().getChildFile(mediaDirectoryNameOf(juceFileOf(path))).deleteRecursively();
     }
     return true;
 }
@@ -347,8 +354,10 @@ void scenarioProjectRoundTrip()
         CONTROL_CHECK(hasWarning(result, "IRREVERSIBLE") && hasWarning(result, "NOT_SAVED_IN_PROJECT")
                       && !hasWarning(result, "OVERWROTE_OTHER_PROJECT"));
         CONTROL_CHECK(juceFileOf(fileA).existsAsFile());
-        CONTROL_CHECK(
-            juceFileOf(fileA).getParentDirectory().getChildFile(ProjectSession::kMediaDirectoryName).isDirectory());
+        CONTROL_CHECK(juceFileOf(fileA)
+                          .getParentDirectory()
+                          .getChildFile(mediaDirectoryNameOf(juceFileOf(fileA)))
+                          .isDirectory());
         CONTROL_CHECK(editor.session.hasProjectPath() && !editor.session.isDirty());
         CONTROL_CHECK(editor.session.getCurrentProjectFile().getFullPathName().toStdString() == fileA);
         CONTROL_CHECK(editor.bridge.projectSaves == 1);
@@ -357,7 +366,7 @@ void scenarioProjectRoundTrip()
         for (const auto& entry : std::filesystem::directory_iterator(directory))
             names.push_back(entry.path().filename().u8string());
         std::sort(names.begin(), names.end());
-        CONTROL_CHECK((names == std::vector<std::string>{ProjectSession::kMediaDirectoryName, "first.otproj"}));
+        CONTROL_CHECK((names == std::vector<std::string>{"first.otproj", "first_Media"}));
         // The flag of the running operation was set for the job and cleared at its end.
         CONTROL_CHECK((editor.bridge.operationFlagChanges == std::vector<bool>{true, false}));
         CONTROL_CHECK(!editor.bridge.busy.operationRunning);
@@ -805,7 +814,7 @@ void scenarioProjectSaveCopy()
         CONTROL_CHECK(!editor.bridge.busy.operationRunning);
         // The copy and its media are in the copy's directory; no temporary file is left anywhere.
         CONTROL_CHECK((namesIn(copyDirectory)
-                       == std::vector<std::string>{ProjectSession::kMediaDirectoryName, "song-autosave-0001.otproj"}));
+                       == std::vector<std::string>{"song-autosave-0001.otproj", "song-autosave-0001_Media"}));
         CONTROL_CHECK(!holdsTemporaryFile(copyDirectory) && !holdsTemporaryFile(directory));
     }
 

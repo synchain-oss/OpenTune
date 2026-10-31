@@ -186,19 +186,11 @@ Result<JsonValue> runGetDetails(ControlOpContext& context, const DetailsParams& 
     if (key.isNull())
         nullReasons.appendMember("key", JsonValue::string("not_analyzed"));
 
-    // The mode the AUTO button in the window runs now, as the editor decides it
-    // (OpenTuneAudioProcessorEditor::autoTuneRequested): snapping in the openDyne scheme (evaluateAutoRefUiState
-    // returns before it asks for a binding); in the openTune scheme the reference alignment (AUTO Ref) when
-    // OpenTuneAudioProcessor::queryAutoRefAvailability() says the clip's binding can run it (shouldRunReferenceAuto
-    // is that call's canRunAutoRef(), also for a binding left over from an earlier session and with the
-    // experimental features off), else regeneration. Reference is reported as is; it is no mode of
-    // content.autoTune, so it is never listed in autoModes.available (the specification of
-    // autoModes.uiButtonRuns).
-    // This is a read of upstream state that goes away with the reference alignment when this fork is rebased onto
-    // an upstream that removed it; from then on the button runs regenerate or snapNotes only.
+    // The mode the AUTO button in the window runs now: snapping in the openDyne scheme, regeneration in the
+    // openTune scheme. OpenTune no longer has the reference alignment (AUTO Ref), so the button never runs it
+    // and uiButtonRuns is never "reference" (that value stays in the specification for builds whose window
+    // still offers it). It is no mode of content.autoTune either, so autoModes.available never lists it.
     const bool notesPrimary = AudioEditingScheme::usesNotesPrimaryScheme(preferences.audioEditingScheme);
-    const bool referenceRuns =
-        !notesPrimary && processor.queryAutoRefAvailability(via.placement.placementId).canRunAutoRef();
     auto available = JsonValue::array();
     if (snapshot.originalF0State == OriginalF0State::Ready && snapshot.hasUsableOriginalF0())
         for (const char* mode : {"regenerate", "snapNotes", "notesOnly"})
@@ -206,9 +198,7 @@ Result<JsonValue> runGetDetails(ControlOpContext& context, const DetailsParams& 
     auto autoModes = JsonValue::object();
     autoModes.appendMember("editingScheme",
                            JsonValue::string(controlEditingSchemeName(preferences.audioEditingScheme)));
-    autoModes.appendMember("uiButtonRuns", JsonValue::string(notesPrimary    ? "snapNotes"
-                                                             : referenceRuns ? "reference"
-                                                                             : "regenerate"));
+    autoModes.appendMember("uiButtonRuns", JsonValue::string(notesPrimary ? "snapNotes" : "regenerate"));
     autoModes.appendMember("available", std::move(available));
 
     auto analysis = analysisJson(processor, content.key, snapshot, derived);

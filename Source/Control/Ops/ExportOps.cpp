@@ -517,14 +517,14 @@ private:
                     const auto* arrangement = processor.getStandaloneArrangement();
                     const int index =
                         arrangement != nullptr ? arrangement->findPlacementIndexById(trackId_, placementId_) : -1;
-                    ok = index >= 0 && processor.exportPlacementAudio(trackId_, index, file_);
+                    ok = index >= 0 && processor.exportPlacementAudio(trackId_, index, file_, kErrorTextLanguage);
                     break;
                 }
                 case ExportKind::Track:
-                    ok = processor.exportTrackAudio(trackId_, file_);
+                    ok = processor.exportTrackAudio(trackId_, file_, kErrorTextLanguage);
                     break;
                 case ExportKind::Master:
-                    ok = processor.exportMasterMixAudio(file_);
+                    ok = processor.exportMasterMixAudio(file_, kErrorTextLanguage);
                     break;
             }
             if (ok)
@@ -547,6 +547,12 @@ private:
         sampleFormat = (reader->usesFloatingPointData ? "float" : "int") + std::to_string(reader->bitsPerSample);
         written = channelCount > 0 && sampleRateHz > 0.0 && frameCount >= 0;
     }
+
+    // The export functions take the language of the error text they leave in getLastExportError(). The
+    // editor passes the language of its window; this writer never reads that text (a failed export is
+    // reported with a fixed detail), and a headless process has no window whose language could be asked
+    // (LocalizationManager::resolveLanguage() needs a bound language), so a fixed language is passed.
+    static constexpr Language kErrorTextLanguage = Language::English;
 
     ExportKind kind_;
     int trackId_;

@@ -381,6 +381,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         list(APPEND _opentune_control_scenarios
             "Export|--control-api"
             "ExportFailures|--control-api"
+            "ExportDeferredRetry|--control-api"
             "ExportVectors|--control-api"
             "ExportTimeStretch|--control-api"
             "ExportAfterEdit|--control-api"

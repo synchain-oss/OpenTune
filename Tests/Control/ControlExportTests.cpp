@@ -10,6 +10,7 @@
 #include "ControlProcessorSupport.h"
 #include "TestUiBridge.h"
 
+#include "Content/EditableContentSnapshot.h"
 #include "Content/StandaloneClipContent.h"
 #include "Content/StandaloneContentRepository.h"
 #include "Control/ControlDispatcher.h"
@@ -20,6 +21,8 @@
 #include "Control/Ops/ImportOps.h"
 #include "Inference/RenderCache.h"
 #include "Render/ContentRenderService.h"
+#include "Render/PlaybackReadSource.h"
+#include "Runtime/ProcessRenderRuntime.h"
 #include "Utils/AppPreferences.h"
 #include "Utils/Note.h"
 #include "Utils/PitchCurve.h"
@@ -42,6 +45,25 @@
 #include "ControlWinAcl.h" // after the JUCE headers: needs windows.h
 
 namespace OpenTune {
+
+/** The friend of ProcessRenderRuntime that lets a test put a deferred render retry into the runtime without a
+    vocoder, as OpenTune's own RenderRuntimeDeferredRetryTests does (the same member names are used there). */
+struct ProcessRenderRuntimeTestAccess
+{
+    static void setReconfiguring(ProcessRenderRuntime& runtime, bool value)
+    {
+        std::lock_guard<std::mutex> lock(runtime.vocoderMutex_);
+        runtime.vocoderReconfiguring_ = value;
+    }
+
+    static void defer(ProcessRenderRuntime& runtime, std::shared_ptr<ContentRenderService> service, RenderJob job,
+                      ProcessRenderRuntime::CompletionContext completion)
+    {
+        runtime.deferOrRequeue(std::move(service), std::move(job), std::move(completion), "test retry",
+                               ProcessRenderRuntime::kDeferredSnapshotBudgetBytes);
+    }
+};
+
 namespace ControlTest {
 
 namespace {
@@ -963,6 +985,177 @@ void scenarioExportFailures()
         CONTROL_CHECK(controlRenameAfterLink(0, 0) == ControlRenameResult::Done);
         CONTROL_CHECK(controlRenameAfterLink(-1, ENOENT) == ControlRenameResult::Done);
         CONTROL_CHECK(controlRenameAfterLink(-1, 13) == ControlRenameResult::DoneSourceRemains);
+    }
+}
+
+namespace {
+
+/**
+ * A deferred render retry in the process's render runtime for the render service of a processor: one running render
+ * block of a content that is not part of any export, which the runtime was told to retry later because the vocoder
+ * is being reconfigured (ProcessRenderRuntime::deferOrRequeue). While it exists,
+ * ProcessRenderRuntime::hasDeferredRetriesForService is true for the service and nothing resumes it. release()
+ * removes it (pruneDeferredJobsForService) and ends the reconfiguration; the destructor does the same.
+ */
+class DeferredRenderRetry
+{
+public:
+    explicit DeferredRenderRetry(ContentRenderService& service) : service_(service)
+    {
+        auto& runtime = ProcessRenderRuntime::getInstance();
+        const ContentKey key{DomainKind::StandaloneClip, 9000u, 0};
+        auto cache = service.getOrCreateRenderCache(key);
+        cache->reconcileFullPlanAndRequest({{0, 256}}, 0, 256, 1);
+        RenderCache::RunningChunkSnapshot running;
+        const auto pending = cache->getPendingJobs();
+        if (pending.size() != 1 || !cache->claimPendingJob(pending.front()) || !cache->getRunningChunk(0, running))
+            return;
+
+        auto snapshot = std::make_shared<EditableContentSnapshot>();
+        snapshot->contentRevision = 1;
+        snapshot->audioRevision = 7;
+        snapshot->timeGrid = TimeGridSnapshot::makeIdentity(1.0);
+        snapshot->pitchCurve =
+            std::make_shared<const PitchCurveSnapshot>(std::vector<float>(512, 220.0f), std::vector<float>(512, 1.0f),
+                                                       std::vector<PitchCorrectionSegment>{}, 512, 16000.0);
+        auto audio = std::make_shared<juce::AudioBuffer<float>>(1, 44100);
+        audio->clear();
+        service.publishPlaybackSource(
+            key, makePlaybackReadSource(key, snapshot, audio, 44100.0, cache, service.getTimeStretchCache()));
+
+        RenderJob job;
+        job.kind = RenderJob::Kind::Stage1Render;
+        job.contentKey = key;
+        job.contentSnapshot = snapshot;
+        job.renderCache = cache;
+        job.audioBuffer = audio;
+        job.audioSampleRate = 44100.0;
+        job.startSample = running.startSample;
+        job.endSampleExclusive = running.endSampleExclusive;
+        job.queuedChunkStartSample = running.startSample;
+        job.contentRevision = snapshot->contentRevision;
+        job.targetRevision = running.runningRevision;
+        ProcessRenderRuntime::CompletionContext completion;
+        completion.gate = std::make_shared<ProcessRenderRuntime::CompletionGate>();
+        completion.contentRevision = job.contentRevision;
+        completion.renderCache = cache;
+
+        wasReconfiguring_ = runtime.isVocoderReconfiguring();
+        ProcessRenderRuntimeTestAccess::setReconfiguring(runtime, true);
+        reconfiguringSet_ = true;
+        // The runtime keeps only a weak reference to the service; a non-owning handle is enough for the test, which
+        // looks the retry up by the service's identity, as hasDeferredRetriesForService does.
+        ProcessRenderRuntimeTestAccess::defer(runtime,
+                                              std::shared_ptr<ContentRenderService>(std::shared_ptr<void>(), &service),
+                                              std::move(job), std::move(completion));
+    }
+
+    ~DeferredRenderRetry() { release(); }
+
+    DeferredRenderRetry(const DeferredRenderRetry&) = delete;
+    DeferredRenderRetry& operator=(const DeferredRenderRetry&) = delete;
+
+    bool active() const { return ProcessRenderRuntime::getInstance().hasDeferredRetriesForService(&service_); }
+
+    void release()
+    {
+        auto& runtime = ProcessRenderRuntime::getInstance();
+        runtime.pruneDeferredJobsForService(&service_);
+        if (reconfiguringSet_) {
+            ProcessRenderRuntimeTestAccess::setReconfiguring(runtime, wasReconfiguring_);
+            reconfiguringSet_ = false;
+        }
+    }
+
+private:
+    ContentRenderService& service_;
+    bool wasReconfiguring_ = false;
+    bool reconfiguringSet_ = false;
+};
+
+juce::MemoryBlock bytesOf(const std::string& path)
+{
+    juce::MemoryBlock bytes;
+    juceFileOf(path).loadFileAsData(bytes);
+    return bytes;
+}
+
+} // namespace
+
+void scenarioExportDeferredRetry()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    ApiSession api;
+    if (!api.open(service))
+        return;
+    auto* renderService = processor->getContentRenderService();
+    if (!CONTROL_CHECK(renderService != nullptr))
+        return;
+    const auto media = exportDirectory("deferred-media");
+    const auto out = exportDirectory("deferred-out");
+    const auto outPath = [&out](const std::string& name) { return (out / name).u8string(); };
+    const auto clip = addClip(*processor, media, "settled", 0, 0.0, 1.0, Analysis::Ready);
+    CONTROL_CHECK(settleRender(*processor, clip.key));
+    const auto handles = handlesOf(api, *processor);
+    const auto placement = handles.placement(clip.placementId);
+    const auto overwrite = R"(,"ifExists":"overwrite")";
+
+    // A file that the export would replace: another tone, so that a write would be seen in its bytes.
+    const auto target = writeWav(out, "target", 0.2);
+    const auto original = bytesOf(target);
+    CONTROL_CHECK(original.getSize() > 0);
+
+    DeferredRenderRetry retry(*renderService);
+    if (!CONTROL_CHECK(retry.active()))
+        return;
+
+    // OpenTune's export functions refuse to read the render while a retry is deferred, and say so in their error
+    // text, which is what the job's writer compares (getLastExportError, the same text for every kind of export).
+    {
+        const auto direct = juceFileOf(outPath("direct.wav"));
+        CONTROL_CHECK(!processor->exportMasterMixAudio(direct, Language::English));
+        CONTROL_CHECK(processor->getLastExportError() == "Render is not ready for export");
+        CONTROL_CHECK(!direct.exists());
+    }
+
+    // 1. Every content is ready, but the retry stays: the job waits for it and ends at the wait limit with
+    //    NOT_READY(export_wait_timeout), retryable, without a file and with the target as it was.
+    {
+        const ScopedWaitLimit limit(kShortWaitLimitMs * 3);
+        const auto jobId = startExport(api, clipParams(placement, target, overwrite));
+        pumpMessagesFor(kQuietPumpMs / 2);
+        const auto waiting = jobOf(service, jobId);
+        CONTROL_CHECK(memberOf(waiting, "state").text() == "running"
+                      && memberOf(memberOf(waiting, "progress"), "phase").text() == "waiting");
+        const auto job = waitJob(api, jobId);
+        CONTROL_CHECK(failedWith(job, "NOT_READY", "export_wait_timeout"));
+        CONTROL_CHECK(memberOf(memberOf(memberOf(job, "error"), "data"), "retryable").asBoolean());
+        CONTROL_CHECK(memberOf(job, "result").isNull());
+        CONTROL_CHECK(bytesOf(target) == original);
+        CONTROL_CHECK(filesIn(out) == std::vector<std::string>{"target.wav"});
+        CONTROL_CHECK(!processor->isExportLockHeld());
+    }
+
+    // 2. The retry goes away while the job waits (the runtime resumed it): the job writes the file.
+    {
+        const ScopedWaitLimit limit(kDriveTimeoutMs);
+        const auto jobId = startExport(api, clipParams(placement, target, overwrite));
+        pumpMessagesFor(kQuietPumpMs);
+        const auto waiting = jobOf(service, jobId);
+        CONTROL_CHECK(memberOf(waiting, "state").text() == "running"
+                      && memberOf(memberOf(waiting, "progress"), "phase").text() == "waiting");
+        CONTROL_CHECK(bytesOf(target) == original);
+        retry.release();
+        CONTROL_CHECK(!retry.active());
+        const auto job = waitJob(api, jobId);
+        CONTROL_CHECK(memberOf(job, "state").text() == "succeeded");
+        checkFormat(resultOf(job), 1, 1.0, 0.0);
+        CONTROL_CHECK(!(bytesOf(target) == original));
+        CONTROL_CHECK(filesIn(out) == std::vector<std::string>{"target.wav"});
+        CONTROL_CHECK(!processor->isExportLockHeld());
     }
 }
 

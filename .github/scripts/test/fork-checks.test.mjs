@@ -10,8 +10,8 @@ import { after, afterEach, before, describe, test } from 'node:test';
 import { parseLayerFromBody, runChecks, workflowTriggerBlock, actionRefProblem } from '../fork-checks.mjs';
 import { filePatchId, makeTempDir, overallStatus, removeDir } from '../fork-lib.mjs';
 import {
-  FORK, GITHUB, PINNED_WORKFLOW, SCRIPTS, STRANGER, TestRepo, UPSTREAM, WEB,
-  aiGeneratedLine, aiTrailer, byId, fakeClangFormat, msg, realTool,
+  FORK, GITHUB, PINNED_WORKFLOW, SCRIPTS, STRANGER, TestRepo, UPSTREAM, UPSTREAM_FILES, WEB,
+  aiGeneratedLine, aiTrailer, byId, fakeClangFormat, forkBaseFiles, msg, realTool,
 } from './helpers.mjs';
 
 let repo;
@@ -910,6 +910,58 @@ describe('actions-pinned', () => {
       assert.match(actionRefProblem(`Synchain-oss/ci-workflows@${SHA}`, 'uses: x # v1.1.0'), /reusable workflow/);
       assert.match(actionRefProblem(`Synchain-oss/other-repo/.github/workflows/x.yml@${SHA}`, 'uses: x # v1.1.0'), /不在组织允许的 action 清单内/);
     });
+  });
+});
+
+describe('workflows that came with the upstream snapshot', () => {
+  // Upstream's own workflows pin by tag and may check out with LFS; they never run in the fork and are not our increment.
+  const upstreamWorkflow = [
+    'name: upstream-release', 'on:', '  push:', "    tags: ['v*']", 'jobs:', '  a:', '    runs-on: ubuntu-latest', '    steps:',
+    '      - uses: actions/checkout@v4', '        with:', '          lfs: true', '',
+  ].join('\n');
+  const WF = '.github/workflows/up.yml';
+  let up;
+  before(() => {
+    up = TestRepo.create('fc-upstream-wf');
+    up.upstream = up.commit({ files: { ...UPSTREAM_FILES, [WF]: upstreamWorkflow }, message: 'upstream snapshot\n', author: UPSTREAM });
+    up.ref('refs/tags/upstream/20260101-0000000', up.upstream);
+    up.ref('refs/remotes/origin/upstream-mirror', up.upstream);
+    up.forkBase = up.commit({ parent: up.upstream, files: forkBaseFiles(), message: msg('chore(fork): base') });
+    up.ref('refs/remotes/origin/feature/control-api', up.forkBase);
+  });
+  after(() => up?.dispose());
+
+  async function run(id, head) {
+    const out = await runChecks({ cwd: up.dir, head, base: 'origin/feature/control-api', headBranch: BRANCH, layer: 'L0', only: [id] });
+    return byId(out.results, id);
+  }
+
+  test('left alone, the upstream workflow is not scanned (tag-pinned action, lfs: true)', async () => {
+    const head = up.change({ 'Tests/ControlFork/a.txt': 'x\n' }, { parent: up.forkBase });
+    for (const id of ['actions-pinned', 'path-guard', 'workflow-triggers']) {
+      const r = await run(id, head);
+      assert.equal(r.result, 'PASS', `${id}: ${r.detail}\n${r.problems.join('\n')}`);
+    }
+    assert.match((await run('actions-pinned', head)).detail, /上游原样的 1 个 workflow（up\.yml）不是我们的增量/);
+  });
+
+  test('a change to it is ours: scanned again', async () => {
+    const head = up.change({ [WF]: `${upstreamWorkflow}# touched by the fork\n` }, { parent: up.forkBase });
+    assert.equal((await run('actions-pinned', head)).result, 'FAIL');
+    assert.equal((await run('path-guard', head)).result, 'FAIL');
+  });
+
+  test('a workflow of ours next to it is scanned', async () => {
+    const bad = up.change({ '.github/workflows/mine.yml': upstreamWorkflow.replace('lfs: true', 'lfs: false') }, { parent: up.forkBase });
+    const r = await run('actions-pinned', bad);
+    assert.equal(r.result, 'FAIL');
+    assert.match(r.problems.join('\n'), /mine\.yml/);
+    assert.doesNotMatch(r.problems.join('\n'), /up\.yml/);
+  });
+
+  test('without a usable delta every workflow is scanned', async () => {
+    const out = await runChecks({ cwd: up.dir, head: up.forkBase, base: 'origin/feature/control-api', headBranch: BRANCH, layer: 'L0', only: ['actions-pinned'], mirror: 'origin/no-such-mirror' });
+    assert.equal(byId(out.results, 'actions-pinned').result, 'FAIL');
   });
 });
 

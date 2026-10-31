@@ -2041,8 +2041,8 @@
         "ControlProcessorTests.AudioDevice",
         "ControlProcessorTests.AudioVectors"
       ],
-      "note": "Switching the device type: an ASIO device is first restored to the system sample rate; a type that does not take over, or a device that does not open, switches the type back and restores the previous setup.",
-      "noteZh": "切换设备类型：ASIO 设备先恢复到系统采样率；类型未切换成功或设备打不开时，切回原类型并恢复之前的配置。"
+      "note": "Switching the device type: an ASIO device is first restored to the system sample rate, as best effort (a failed restore is reported with the warning ASIO_RATE_NOT_RESTORED and the switch goes on); a type that does not take over, or a device that does not open, switches the type back and restores the previous setup.",
+      "noteZh": "切换设备类型：ASIO 设备先尽力恢复到系统采样率（恢复失败只带告警 ASIO_RATE_NOT_RESTORED，切换照常进行）；类型未切换成功或设备打不开时，切回原类型并恢复之前的配置。"
     },
     {
       "id": "audio-output-switch",
@@ -2066,8 +2066,8 @@
         "ControlProcessorTests.AudioDevice",
         "ControlProcessorTests.AudioVectors"
       ],
-      "note": "Switching the output device: the new device opens with its default channels, a type without separate inputs and outputs takes the output as its input, and ASIO is restored to the system sample rate first.",
-      "noteZh": "切换输出设备：新设备用默认声道打开，没有独立输入输出的类型把输出设备同时作为输入设备，ASIO 先恢复到系统采样率。"
+      "note": "Switching the output device: the new device opens with its default channels, a type without separate inputs and outputs takes the output as its input, and ASIO is restored to the system sample rate first, as best effort (a failed restore is reported with the warning ASIO_RATE_NOT_RESTORED and the switch goes on).",
+      "noteZh": "切换输出设备：新设备用默认声道打开，没有独立输入输出的类型把输出设备同时作为输入设备，ASIO 先尽力恢复到系统采样率（恢复失败只带告警 ASIO_RATE_NOT_RESTORED，切换照常进行）。"
     },
     {
       "id": "audio-sample-rate",

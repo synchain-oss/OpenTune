@@ -37,7 +37,8 @@ bool ControlEditorBridge::prepareAudioDeviceSwitch(juce::AudioDeviceManager& man
 {
     // restoreAsioSampleRateToSystem(): the audio settings page calls it before it
     // closes an ASIO device for another type or output device. It acts on the
-    // manager the call works on (audioDevice()).
+    // manager the call works on (audioDevice()). The page goes on when it fails
+    // (it shows kAudioDeviceRestoreWarning), so the caller reports the result.
     return restoreAsioSampleRateToSystem(manager, juce::String(reason));
 }
 

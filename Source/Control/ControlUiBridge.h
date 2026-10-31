@@ -287,8 +287,9 @@ public:
     virtual std::optional<bool> editingSchemeApplied(bool /*notesPrimary*/) const { return std::nullopt; }
 
     /** What the audio settings page does before it closes an ASIO device for another device type or output
-        device (restoreAsioSampleRateToSystem): returns false when a required restore could not be verified, in
-        which case the change must not go on and the current device stays. manager is the one the call works on
+        device (restoreAsioSampleRateToSystem), as best effort: returns false when the restore failed or could not be
+        verified. The change goes on all the same, as on the page, which shows kAudioDeviceRestoreWarning and continues;
+        the control API reports the warning ASIO_RATE_NOT_RESTORED. manager is the one the call works on
         (audioDevice()), so that the restore acts on the device the call is about to close. Default: true (nothing to
         restore). */
     virtual bool prepareAudioDeviceSwitch(juce::AudioDeviceManager& /*manager*/, const std::string& /*reason*/)

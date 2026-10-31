@@ -2426,26 +2426,53 @@ void checkUnavailableAfterChange(ApiSession& api, FakeAudioRig& rig)
     rig.behaviour.failDeviceName = {};
 }
 
-/** The ASIO transitions: the editor restores the system sample rate first; a
-   restore that cannot be verified keeps the current device. */
-void checkAsioSwitch(ApiSession& api, FakeAudioRig& rig, PrefsBridge& bridge)
+/** The ASIO transitions: the editor restores the system sample rate first, as best effort: a restore that fails does
+   not stop the switch (the page continues and shows kAudioDeviceRestoreWarning); the result carries the warning
+   ASIO_RATE_NOT_RESTORED. */
+void checkAsioSwitch(ApiSession& api, PrefsBridge& bridge)
 {
-    const auto setupBefore = setupText(rig.manager);
-    bridge.asioRestoreSucceeds = false;
-    CONTROL_CHECK(failsWith(api, R"({"deviceType":"Fake B"})", "IO_ERROR", "device_open_failed"));
-    CONTROL_CHECK(failsWith(api, R"({"outputDevice":"Fake Output B"})", "IO_ERROR", "device_open_failed"));
-    CONTROL_CHECK((bridge.switchReasons == std::vector<std::string>{"audio type switch", "audio output switch"}));
-    CONTROL_CHECK(setupText(rig.manager) == setupBefore);
-    // Other changes of an ASIO device do not close it for another one: no
-    // restore.
-    bridge.switchReasons.clear();
+    // Other changes of an ASIO device do not close it for another one: no restore.
+    bridge.asioRestoreSucceeds = true;
     const auto buffer = api.result("audio.set", json(R"({"bufferSizeFrame":256})"));
     CONTROL_CHECK(memberOf(buffer, "applied").asBoolean() && bridge.switchReasons.empty());
+    CONTROL_CHECK(!hasWarning(buffer, "ASIO_RATE_NOT_RESTORED"));
     replayRevert(api, buffer);
+
+    // A restore that fails does not stop the switch: the page shows its warning and goes on. The result carries the
+    // warning ASIO_RATE_NOT_RESTORED, and the device is the new one.
+    bridge.asioRestoreSucceeds = false;
+    const auto output = api.result("audio.set", json(R"({"outputDevice":"Fake Output B"})"));
+    CONTROL_CHECK(memberOf(output, "applied").asBoolean() && hasWarning(output, "ASIO_RATE_NOT_RESTORED")
+                  && hasWarning(output, "GLOBAL_PREFERENCE"));
+    CONTROL_CHECK(deviceIs(deviceOf(output), "ASIO", "Fake Output B", 44100.0, 512.0));
+    CONTROL_CHECK((bridge.switchReasons == std::vector<std::string>{"audio output switch"}));
+    // The revert recipe sets the previous output device back; this time the restore succeeds and there is no warning.
     bridge.asioRestoreSucceeds = true;
+    bridge.switchReasons.clear();
+    const auto back = replayRevert(api, output);
+    CONTROL_CHECK(memberOf(back, "applied").asBoolean() && !hasWarning(back, "ASIO_RATE_NOT_RESTORED"));
+    CONTROL_CHECK((bridge.switchReasons == std::vector<std::string>{"audio output switch"}));
+    CONTROL_CHECK(deviceIs(deviceOf(back), "ASIO", "Fake Output A", 44100.0, 512.0));
+
+    // The type switch with a restore that succeeds: no warning.
+    bridge.switchReasons.clear();
     const auto result = api.result("audio.set", json(R"({"deviceType":"Fake B"})"));
     CONTROL_CHECK(memberOf(result, "applied").asBoolean() && bridge.switchReasons.size() == 1);
+    CONTROL_CHECK(!hasWarning(result, "ASIO_RATE_NOT_RESTORED"));
     CONTROL_CHECK(deviceIs(deviceOf(result), "Fake B", "Fake B Output", 44100.0, 512.0));
+    // Leaving a device type other than ASIO restores nothing.
+    bridge.switchReasons.clear();
+    const auto toAsio = replayRevert(api, result);
+    CONTROL_CHECK(memberOf(toAsio, "applied").asBoolean() && bridge.switchReasons.empty());
+    CONTROL_CHECK(deviceIs(deviceOf(toAsio), "ASIO", "Fake Output A", 44100.0, 512.0));
+
+    // The type switch with a restore that fails: the switch goes on, with the warning.
+    bridge.asioRestoreSucceeds = false;
+    const auto type = api.result("audio.set", json(R"({"deviceType":"Fake B"})"));
+    CONTROL_CHECK(memberOf(type, "applied").asBoolean() && hasWarning(type, "ASIO_RATE_NOT_RESTORED"));
+    CONTROL_CHECK((bridge.switchReasons == std::vector<std::string>{"audio type switch"}));
+    CONTROL_CHECK(deviceIs(deviceOf(type), "Fake B", "Fake B Output", 44100.0, 512.0));
+    bridge.asioRestoreSucceeds = true;
 }
 
 } // namespace
@@ -2489,7 +2516,7 @@ void scenarioAudioDevice()
     {
         FakeAudioRig rig(true, "ASIO");
         bridge.manager = &rig.manager;
-        checkAsioSwitch(api, rig, bridge);
+        checkAsioSwitch(api, bridge);
         bridge.manager = nullptr;
     }
     const auto dispatcher = service.dispatcher();

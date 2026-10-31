@@ -410,7 +410,11 @@ Result<JsonValue> runAdd(ControlOpContext& context, const AddParams& params)
     describeTracks(before, after, envelope);
     for (int trackId = visible.value(); trackId < target; ++trackId)
         envelope.addWarning("NOT_PERSISTED", controlTrackRef(trackId));
-    // View state: no undo entry, nothing to revert, and the project is not marked as changed, as with the + button.
+    // No undo entry and nothing to revert. Since upstream 2c01847 the track count is saved with the project: the
+    // editor's panel writes it to the arrangement and marks the project when it changes (visibleTrackCountChanged),
+    // as the + button does, so in the real editor the result's dirty flag turns true. The warning NOT_PERSISTED and
+    // the undo reason follow the locked specification (vectors/track/add-ok.json), which still calls the count view
+    // state; the next specification sync should change both.
     envelope.setNotUndoable("not_persisted_state");
     auto result = envelope.committed(context);
     auto counts = JsonValue::object();

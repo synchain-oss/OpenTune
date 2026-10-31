@@ -920,8 +920,13 @@ title and `refreshAllUIFromProject()`), `onRecentProjectsChanged()` and `setProj
   (`ProjectSession::commitPreparedOpen()`), which clears the content repository (a new content epoch: the handles of the
   project before are stale), OpenTune's undo history and the render state. The request refuses with
   `UNSAVED_CHANGES(project_dirty)` unless `discardUnsaved` is true; the job checks the flag once more right before the
-  commit (changes made while the file was prepared are not discarded unasked) and never saves. Tracks that hold clips
-  are shown. The result lists the previous clips and contents as removed and the new ones as created (at most 200
+  commit (changes made while the file was prepared are not discarded unasked) and never saves. The number of shown
+  tracks is project state (`StandaloneArrangement::getVisibleTrackCount()`, saved in the file): the commit restores it,
+  at least as many as the clips, the mix settings and the selected track need (`resolveLoadedVisibleTrackCount()`),
+  and `onProjectReloaded()` makes the track panel show it, with the editor's `applyingLoadedProjectUi_` set. The job
+  reveals no track itself (writing a smaller count through the panel would replace the saved count and mark the
+  project as changed, so that the next open would answer `UNSAVED_CHANGES`); `sideEffects.tracksRevealed` lists the
+  tracks between the count before the open and the count after it. The result lists the previous clips and contents as removed and the new ones as created (at most 200
   entries each, `omittedCount` counts the rest), what was restored and skipped (media files that do not exist or
   cannot be read, with `MEDIA_MISSING` for the missing ones), and how many undo and redo entries were cleared. The
   revert recipe opens the previous file again when the previous project had one and no unsaved changes.
@@ -931,7 +936,11 @@ title and `refreshAllUIFromProject()`), `onRecentProjectsChanged()` and `setProj
   command (`ProjectSession::clearRecentProjects()`) does on the same preferences.
 
 Tests: `Tests/Control/ControlProjectTests.cpp` (`ProjectRoundTrip`, `ProjectJobs`, `ProjectWithoutEditor`,
-`ProjectSaveCopy`, `ProjectSaveCopyChecks`, `ProjectSaveCopyCapability`, `ProjectReopenKeepsTuning`, `ProjectVectors`).
+`ProjectOpenTrackCount`, `ProjectSaveCopy`, `ProjectSaveCopyChecks`, `ProjectSaveCopyCapability`,
+`ProjectReopenKeepsTuning`, `ProjectVectors`). `ProjectOpenTrackCount` opens projects that were saved with more, as many
+and fewer tracks than their clips need, with a bridge that models the editor's track count (`TestUiBridge::
+trackCountArrangement`): the saved count is in the arrangement afterwards, the project is not marked, the next open needs
+no `discardUnsaved`, and `tracksRevealed` holds the tracks added to the view.
 `ProjectSaveCopy` writes copies of a project that was never saved and of one with a file and unsaved changes, and checks
 that the file, the flag and its generation, the recent projects, the undo history, what the editor was told, `project.get`
 and the bytes of the main file are as before, that the copy holds the project as it is in memory and opens as a
@@ -981,9 +990,14 @@ without one); `track.set` works on the arrangement alone.
   directly, without the colour dialog. `changes` lists every track whose members changed, `audible` too, which follows
   the solo flags of the other tracks. The revert recipe sets the previous values of the members that changed (the
   volume in dB, or linearly when it was silent).
-- `track.add` follows the panel's + button (`TrackPanelComponent::showMoreTracks`): it shows more slots, which is view
-  state (`NOT_PERSISTED`, the project is not marked as changed). The panel's context menu entry (`trackAddRequested`)
-  also marks the project as changed; the schema follows the button.
+- `track.add` follows the panel's + button (`TrackPanelComponent::showMoreTracks`): it shows more slots. Since upstream
+  2c01847 the number of shown tracks is project state: the panel's change reaches
+  `OpenTuneAudioProcessorEditor::visibleTrackCountChanged()`, which saves the count in the arrangement and marks the
+  project (unless a loaded project is being applied), so with the editor the `dirty` flag of the result turns true, as
+  with the context menu entry (`trackAddRequested`). The locked specification still calls the count view state
+  (`NOT_PERSISTED`, the project is not marked as changed, `vectors/track/add-ok.json`); the warning and the undo reason
+  stay as it has them until the specification is synchronised. The same panel change is behind the tracks that an
+  import, a clip moved to a hidden track and `project.open` show.
 - `track.duplicate` follows `trackDuplicateRequested`: mix state and a copy of every clip go to the first hidden slot.
   Mode `share` is what the UI does (the copies show the same contents, `SHARED_CONTENT`); mode `clone` first gives every
   clip a content of its own with `OpenTuneAudioProcessor::cloneContent()`, after `controlSkipUsedClipIds()` has moved the
@@ -1916,7 +1930,7 @@ than one step.
 | `content.editTimeGrid` (ops `seed`, `moveHandles`) | `timing.v1` | `Ops/TimingOps.cpp` (moves in `Edit/TimeGridOps.cpp`) | `ControlProcessorTests.Timing`, `.TimeGridSeed`, `.TimingVectors` | `methods/content.editTimeGrid.schema.json` |
 | `project.save` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.save.schema.json` |
 | `project.saveAs` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors` | `methods/project.saveAs.schema.json` |
-| `project.open` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectReopenKeepsTuning`, `.ProjectVectors` | `methods/project.open.schema.json` |
+| `project.open` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectOpenTrackCount`, `.ProjectJobs`, `.ProjectReopenKeepsTuning`, `.ProjectVectors` | `methods/project.open.schema.json` |
 | `project.clearRecent` | `project.io` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectRoundTrip`, `.ProjectJobs`, `.ProjectVectors`, `.ProjectWithoutEditor` | `methods/project.clearRecent.schema.json` |
 | `project.saveCopy` | `project.copy` | `Ops/ProjectOps.cpp` | `ControlProcessorTests.ProjectSaveCopy`, `.ProjectSaveCopyChecks`, `.ProjectSaveCopyCapability`, `.ProjectWithoutEditor`, `.ProjectVectors` | `methods/project.saveCopy.schema.json` |
 | `prefs.set` | `prefs.write` | `Ops/PrefsOps.cpp` (a job of kind `prefsApply` for a change of the editing scheme, the vocoder weight or the rendering priority; `Ops/PrefsModels.cpp` for the options and the runtime calls) | `ControlProcessorTests.PrefsRoundTrip`, `.PrefsSchemeJob`, `.PrefsOptions`, `.PrefsVocoderJob`, `.PrefsVocoderOverlap`, `.PrefsVectors` | `methods/prefs.set.schema.json` |

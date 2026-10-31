@@ -1019,7 +1019,8 @@ export function selectJuceVendored(sbom, closure, conditions = {}) {
     }
     const verdict = evaluateWhen(conditions[child.name], objects);
     const location = /Vendored at (\S+)/.exec(child.sourceInfo ?? '')?.[1] ?? null;
-    const entry = { name: child.name, version: child.versionInfo, license: child.licenseConcluded ?? child.licenseDeclared, supplier: child.supplier, module: parent.name, location, url: child.downloadLocation, why: verdict.why };
+    const version = child.versionInfo && child.versionInfo !== 'NOASSERTION' ? child.versionInfo : undefined;
+    const entry = { name: child.name, version, license: child.licenseConcluded ?? child.licenseDeclared, supplier: child.supplier, module: parent.name, location, url: child.downloadLocation, why: verdict.why };
     if (verdict.ok) included.push(entry);
     else excluded.push({ name: child.name, why: verdict.why });
   }

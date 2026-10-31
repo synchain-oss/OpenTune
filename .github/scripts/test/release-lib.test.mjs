@@ -37,7 +37,7 @@ import {
   validateControlJson,
   verifySha256Sums,
 } from '../release-lib.mjs';
-import { collectComponents, mustNotDropSilently, renderNotices } from '../release-notices.mjs';
+import { collectComponents, juceVersionOf, mustNotDropSilently, readJuceSbom, renderNotices } from '../release-notices.mjs';
 import { validateBuild, verifyZipBuffer } from '../release-package.mjs';
 import { REPO_ROOT, SCRIPTS } from './helpers.mjs';
 
@@ -320,6 +320,88 @@ describe('Ninja build graph and ARA link check', () => {
     assert.equal(sel.included.find((p) => p.name === 'zlib').location, 'modules/juce_core/zip/zlib');
     assert.deepEqual(sel.excluded.map((p) => p.name), ['FLAC', 'libpng']);
     assert.equal(evaluateWhen({ never: 'Android only' }, []).ok, false);
+  });
+});
+
+describe('the list of packages vendored in JUCE', () => {
+  const forkList = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, '.github', 'release', 'juce-8.0.12.spdx.json'), 'utf8'));
+  const catalogue = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, '.github', 'release', 'notices.json'), 'utf8'));
+
+  it("is JUCE 8.0.12's list: unique ids, every package under a juce_ module, JUCE first", () => {
+    assert.equal(forkList.packages[0].name, 'JUCE');
+    assert.equal(forkList.packages[0].versionInfo, '8.0.12');
+    const ids = forkList.packages.map((p) => p.SPDXID);
+    assert.equal(new Set(ids).size, ids.length);
+    const byId = new Map(forkList.packages.map((p) => [p.SPDXID, p]));
+    const contained = forkList.relationships.filter((r) => r.relationshipType === 'CONTAINS' && /^juce_/.test(byId.get(r.spdxElementId)?.name ?? ''));
+    assert.ok(contained.length >= 15);
+    for (const r of contained) {
+      const child = byId.get(r.relatedSpdxElement);
+      assert.ok(child, `${r.relatedSpdxElement} is not a package`);
+      assert.match(child.sourceInfo, /^Vendored at modules\/juce_[a-z0-9_]+\/\S+ in the JUCE source tree$/, child.name);
+      assert.ok(child.licenseConcluded, child.name);
+      assert.ok(child.versionInfo, `${child.name} states no version (NOASSERTION is the way to say so)`);
+      assert.ok(child.sourceInfo.includes(`modules/${byId.get(r.spdxElementId).name}/`), `${child.name} sits outside ${byId.get(r.spdxElementId).name}`);
+    }
+    // The packages of LICENSE.md's list, by the names the catalogue's conditions use.
+    for (const name of ['FLAC', 'Ogg Vorbis', 'zlib', 'pnglib', 'jpeglib', 'HarfBuzz', 'SheenBidi', 'Oboe', 'AudioUnitSDK', 'ASIO SDK', 'AAX SDK', 'VST3 SDK', 'LV2', 'pslextensions', 'GLEW', 'CHOC', 'QuickJS', 'Box2D']) {
+      assert.ok(forkList.packages.some((p) => p.name === name), name);
+    }
+  });
+
+  it('is what the catalogue names: no condition, extra text or GPL flag for a package the list lacks', () => {
+    const names = new Set(forkList.packages.map((p) => p.name));
+    const vendored = catalogue.juceVendored;
+    const keys = [...Object.keys(vendored.conditions), ...Object.values(vendored.conditionsByPlatform ?? {}).flatMap((o) => Object.keys(o)), ...Object.keys(vendored.extraText ?? {}), ...(vendored.needsGpl3 ?? [])];
+    for (const key of keys) assert.ok(names.has(key), `notices.json names ${key}, which JUCE 8.0.12's list does not have`);
+  });
+
+  it('selects by linked module and switch: the Standalone of this fork gets FLAC, Ogg Vorbis, zlib, pnglib, jpeglib, HarfBuzz and SheenBidi', () => {
+    const objects = ['juce_core/juce_core.cpp', 'juce_graphics/juce_graphics.cpp', 'juce_audio_formats/juce_audio_formats.cpp', 'juce_audio_devices/juce_audio_devices.cpp', 'juce_audio_processors_headless/juce_audio_processors_headless.cpp', 'juce_audio_plugin_client/juce_audio_plugin_client_Standalone.cpp'].map((s) => ({ output: 'x.obj', source: `C:/deps/JUCE/modules/${s}`, defines: {}, includes: [] }));
+    const conditions = { ...catalogue.juceVendored.conditions };
+    const sel = selectJuceVendored(forkList, { objects }, conditions);
+    assert.deepEqual(sel.included.map((p) => p.name), ['FLAC', 'HarfBuzz', 'jpeglib', 'Ogg Vorbis', 'pnglib', 'SheenBidi', 'zlib']);
+    assert.equal(sel.included.find((p) => p.name === 'Ogg Vorbis').version, 'libvorbis 1.3.7');
+    assert.equal(sel.included.find((p) => p.name === 'pslextensions'), undefined);
+    // A version the list does not state is left out of the section name.
+    assert.equal(sel.included.every((p) => p.version === undefined || p.version !== 'NOASSERTION'), true);
+    const excluded = Object.fromEntries(sel.excluded.map((p) => [p.name, p.why]));
+    assert.match(excluded['VST3 SDK'], /off in the linked objects/);
+    assert.match(excluded.Oboe, /Android only/);
+    assert.match(excluded['ASIO SDK'], /JUCE_ASIO/);
+    assert.match(excluded.GLEW, /juce_opengl is not linked/);
+  });
+
+  it("reads the checkout's own JUCE.spdx.json first, else the fork's list of that version, else fails", () => {
+    const dir = makeTempDir('ot-juce-sbom-');
+    try {
+      const juce = path.join(dir, 'JUCE');
+      const header = (v) => `/*\n BEGIN_JUCE_MODULE_DECLARATION\n\n  ID:                 juce_core\n  vendor:             juce\n  version:            ${v}\n  name:               JUCE core classes\n\n END_JUCE_MODULE_DECLARATION\n*/\n`;
+      fs.mkdirSync(path.join(juce, 'modules', 'juce_core'), { recursive: true });
+      fs.writeFileSync(path.join(juce, 'modules', 'juce_core', 'juce_core.h'), header('8.0.12'));
+      assert.equal(juceVersionOf(juce), '8.0.12');
+      assert.equal(juceVersionOf(path.join(dir, 'nothing')), null);
+      // The fork's list for 8.0.12 ...
+      assert.deepEqual(readJuceSbom({ juceDir: juce, repoDir: REPO_ROOT }), forkList);
+      // ... a checkout of another version has none ...
+      fs.writeFileSync(path.join(juce, 'modules', 'juce_core', 'juce_core.h'), header('8.0.13'));
+      assert.throws(() => readJuceSbom({ juceDir: juce, repoDir: REPO_ROOT }), /no list for JUCE 8\.0\.13 \(expected \.github\/release\/juce-8\.0\.13\.spdx\.json\)/);
+      // ... a list of another version is refused ...
+      const repo = path.join(dir, 'repo');
+      fs.mkdirSync(path.join(repo, '.github', 'release'), { recursive: true });
+      fs.writeFileSync(path.join(repo, '.github', 'release', 'juce-8.0.13.spdx.json'), JSON.stringify({ packages: [{ name: 'JUCE', versionInfo: '8.0.12' }] }));
+      assert.throws(() => readJuceSbom({ juceDir: juce, repoDir: repo }), /lists JUCE 8\.0\.12, not 8\.0\.13/);
+      // ... and JUCE's own file wins over the fork's.
+      const own = { packages: [{ SPDXID: 'x', name: 'JUCE', versionInfo: '8.0.13' }], relationships: [] };
+      fs.writeFileSync(path.join(juce, 'JUCE.spdx.json'), JSON.stringify(own));
+      assert.deepEqual(readJuceSbom({ juceDir: juce, repoDir: repo }), own);
+      // No version to read, no file: an error that says so.
+      fs.rmSync(path.join(juce, 'JUCE.spdx.json'));
+      fs.writeFileSync(path.join(juce, 'modules', 'juce_core', 'juce_core.h'), '// no declaration');
+      assert.throws(() => readJuceSbom({ juceDir: juce, repoDir: repo }), /version cannot be read/);
+    } finally {
+      removeDir(dir);
+    }
   });
 });
 

@@ -70,12 +70,12 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.OT_DEPS }}
-          key: ot-deps-macos-${{ hashFiles('.github/scripts/deps.lock.json', '.github/scripts/bootstrap-deps.ps1') }}
-      - name: Bootstrap dependencies (sha256 verified) and link them into the tree
+          key: ot-deps-macos-${{ hashFiles('.github/scripts/deps.lock.json', '.github/scripts/bootstrap-deps.ps1', 'scripts/github_actions/patch-juce-ara.py') }}
+      - name: Bootstrap dependencies (sha256 verified), link them into the tree and patch JUCE
         shell: pwsh
         run: |
           pwsh -NoProfile -File .github/scripts/bootstrap-deps.ps1 -DepsRoot $env:OT_DEPS `
-            -DownloadsDir "$env:RUNNER_TEMP/ot-deps-downloads" -LinkInto $env:GITHUB_WORKSPACE -Platform macos
+            -DownloadsDir "$env:RUNNER_TEMP/ot-deps-downloads" -LinkInto $env:GITHUB_WORKSPACE -Platform macos -PatchJuce
           if ($LASTEXITCODE -ne 0) { throw "bootstrap-deps failed ($LASTEXITCODE)" }
       - name: Save dependency cache
         if: steps.deps-cache.outputs.cache-hit != 'true'
@@ -84,12 +84,15 @@ jobs:
           path: ${{ env.OT_DEPS }}
           key: ${{ steps.deps-cache.outputs.cache-primary-key }}
 
-      - name: Vocoder placeholder (0 bytes)
+      # 上游 POST_BUILD 无条件复制声码器与 FCPE 两个模型文件：各放一个 0 字节占位，不下载任何模型（两条路径都在上游
+      # gitignore 里，上游已不再跟踪 models/）。
+      - name: Model placeholders (0 bytes)
         run: |
-          voc='pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx'
-          if [ -e "$voc" ]; then echo "unexpected file at the vocoder path: $voc"; exit 1; fi
-          mkdir -p "$(dirname "$voc")"
-          : > "$voc"
+          for model in 'pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx' 'models/fcpe.onnx'; do
+            if [ -e "$model" ]; then echo "unexpected file at the model path: $model"; exit 1; fi
+            mkdir -p "$(dirname "$model")"
+            : > "$model"
+          done
 
       # 编译与链接共用同一组 sanitizer 标志（CMAKE_{C,CXX}_FLAGS 与链接标志）。
       - name: Configure (${{ matrix.variant }})

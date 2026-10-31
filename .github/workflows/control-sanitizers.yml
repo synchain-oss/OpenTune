@@ -5,7 +5,7 @@
 name: Control Sanitizers
 
 # 纯控制层（不含 JUCE 编辑器与界面）在 macOS 上的 ThreadSanitizer 与 AddressSanitizer+UBSan 两个变体：
-# macos-14（arm64），Ninja，RelWithDebInfo。只编名字里含 Control 的已注册测试的可执行文件
+# macos-15（arm64），Ninja，RelWithDebInfo。只编名字里含 Control 的已注册测试的可执行文件
 # （现在是 OpenTuneControlUnitTests；目标由 .github/scripts/list-test-targets.ps1 读自 CTestTestfile.cmake），
 # 并用 run-ctest.ps1 -Include Control 运行。依赖与 build-macos 相同（bootstrap-deps.ps1 -Platform macos）。
 # 注意：测试按名字（含 Control）纳入；以后若有链接 JUCE 的测试被纳入，TSan 下可能出现 JUCE 内部的误报，
@@ -33,8 +33,8 @@ concurrency:
 
 jobs:
   sanitize:
-    name: ${{ matrix.variant }} (macos-14)
-    runs-on: macos-14
+    name: ${{ matrix.variant }} (macos-15)
+    runs-on: macos-15
     timeout-minutes: 90
     strategy:
       fail-fast: false

@@ -1156,7 +1156,7 @@ void scenarioImportAfterOpen()
         const auto file = juceFileOf(directory / "reopen.otproj");
         auto task = session.prepareSave(file);
         CONTROL_CHECK(ProjectSession::executeSaveToFile(task).ok());
-        auto prepared = session.prepareOpen(file);
+        auto prepared = session.prepareOpen(file, Language::English);
         if (!CONTROL_CHECK(prepared.ok()))
             return;
         CONTROL_CHECK(session.commitPreparedOpen(std::move(prepared).value()).ok());

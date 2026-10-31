@@ -1044,10 +1044,12 @@ Result<JsonValue> runOpen(ControlOpContext& context, const PathParams& params)
         return startRefusal(started.refusal);
     parts.value().bridge->setProjectOperationRunning(true);
     // ProjectSession::prepareOpen(): reads the project file and the media it references on the editor's worker, as
-    // startOpenProject does; the session pointer stays valid while the editor, which owns the pool, exists.
+    // startOpenProject does; the session pointer stays valid while the editor, which owns the pool, exists. The
+    // language of its error texts is resolved here, on the message thread, as startOpenProject resolves it.
     auto* session = parts.value().session;
-    parts.value().pool->addJob([shared, session, file] {
-        shared->prepared.emplace(session->prepareOpen(file));
+    const auto openLanguage = LocalizationManager::getInstance().resolveLanguage();
+    parts.value().pool->addJob([shared, session, file, openLanguage] {
+        shared->prepared.emplace(session->prepareOpen(file, openLanguage));
         shared->done = true;
     });
     ControlWriteEnvelope envelope(context);

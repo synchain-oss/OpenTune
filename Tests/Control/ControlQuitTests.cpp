@@ -470,7 +470,7 @@ void exitStepNotQueued()
  * not stopped; the dispatcher answers SHUTTING_DOWN; and the log says that the queue refused the step and that the
  * listener and the discovery file stay until the application closes itself.
  *
- * Why the observer waits: when the flag is set depends on the platform (JUCE 9.0.3, the vendored JUCE).
+ * Why the observer waits: when the flag is set depends on the platform (JUCE 8.0.12, the vendored JUCE).
  *  - Windows and Linux use the generic MessageManager::stopDispatchLoop() in
  *    juce_events/messages/juce_MessageManager.cpp (juce_events/native/juce_Messaging_linux.cpp defines no
  *    stopDispatchLoop() of its own, and the generic one is compiled for everything but macOS, iOS and Android). It

@@ -98,7 +98,7 @@
                   "$ref": "#/$defs/optionList"
                 },
                 "renderingPriority": {
-                  "description": "gpuFirst and cpuFirst.",
+                  "description": "gpuFirst and cpuFirst. gpuFirst makes OpenTune try the GPU for inference and use the CPU when the GPU cannot be used; cpuFirst makes it use the CPU only. A new priority takes effect when OpenTune has reconfigured its vocoder, an asynchronous step that the job of prefs.set waits for when the vocoder was ready before. session.info reports the backend that runs in processing.backend, which after a fall back to the CPU differs from the priority.",
                   "$ref": "#/$defs/optionList"
                 }
               }

@@ -2,7 +2,7 @@
   "$schema": "../../schemas/vector.schema.json",
   "id": "track/add-ok",
   "type": "request",
-  "description": "track.add shows the next hidden track slot, as the + button does. The number of visible tracks is view state and is not saved with the project (warning NOT_PERSISTED): no IRREVERSIBLE warning, and the project is not marked as changed.",
+  "description": "track.add shows the next hidden track slot, as the + button does. OpenTune saves the number of visible tracks with the project, so the project is marked as changed. The + button has no undo and no request restores the previous number: undo reason no_upstream_undo, revert null, and the warning IRREVERSIBLE.",
   "capability": "tracks.v1",
   "since": "1.0",
   "method": "track.add",
@@ -44,14 +44,14 @@
       },
       "undo": {
         "undoable": false,
-        "reason": "not_persisted_state",
+        "reason": "no_upstream_undo",
         "revert": null
       },
-      "dirty": { "before": false, "after": false },
+      "dirty": { "before": false, "after": true },
       "ui": { "$any": true },
       "sideEffects": {},
       "warnings": [
-        { "code": "NOT_PERSISTED", "subject": { "trackId": 2 }, "data": null }
+        { "code": "IRREVERSIBLE", "subject": { "trackId": 2 }, "data": null }
       ],
       "job": null,
       "visibleTrackCount": { "before": 2, "after": 3 }

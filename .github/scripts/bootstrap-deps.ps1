@@ -52,6 +52,14 @@
   (JUCE-master, ThirdParty\<dep>) pointing into DepsRoot. Existing junctions are re-pointed; a real
   directory at a junction path is never touched (the script fails instead).
 
+.PARAMETER PatchJuce
+  After the junctions exist (needs -LinkInto), apply the JUCE patches that the upstream build needs:
+  `python scripts/github_actions/patch-juce-ara.py` of the source tree (the ARA 2.3.0 include rename and
+  AudioDeviceManager::setAudioDeviceSetupTemporarily). The patch script refuses a JUCE checkout that has any
+  file besides its three patched ones, ignored and untracked files included, and the stamp (.ot-dep.json)
+  of the dependency is one; so the stamp is moved out of the tree for the call and put back afterwards.
+  Running it again on an already patched tree changes nothing.
+
 .PARAMETER Platform
   windows, macos or all. Defaults to the host. Selects which "platforms"-tagged entries are fetched.
 
@@ -59,7 +67,7 @@
   Restrict to these dependency names.
 
 .PARAMETER IncludeOptional
-  Also fetch dependencies marked "optional" (the JUCE 8.0.15 fallback). Alias: -IncludeFallback.
+  Also fetch dependencies marked "optional" in the lock (none at present). Alias: -IncludeFallback.
 
 .PARAMETER RecordMissingHashes
   For archive deps whose sha256 pin is empty: compute it, require that any publisher hash in the
@@ -81,7 +89,8 @@ param(
     [string[]]$Only,
     [ValidateSet('windows', 'macos', 'all')][string]$Platform,
     [Alias('IncludeFallback')][switch]$IncludeOptional,
-    [switch]$RecordMissingHashes
+    [switch]$RecordMissingHashes,
+    [switch]$PatchJuce
 )
 
 Set-StrictMode -Version 3.0
@@ -363,9 +372,42 @@ function Set-Junction([string]$Tree, [string]$Rel, [string]$Target) {
     Write-Step "junction: $Rel -> $Target"
 }
 
+# Applies the upstream JUCE patches to <Tree>\JUCE-master (see -PatchJuce). The stamp sits in the JUCE checkout,
+# where the patch script would count it as a stray file, so it waits outside the tree (in $Aside) meanwhile.
+function Invoke-JucePatch([string]$Tree, [string]$Aside) {
+    $script = Join-Path $Tree 'scripts/github_actions/patch-juce-ara.py'
+    if (-not (Test-Path -LiteralPath $script)) { throw "-PatchJuce: $script not found" }
+    $juce = Join-Path $Tree 'JUCE-master'
+    if (-not (Test-Path -LiteralPath $juce)) { throw "-PatchJuce: $juce not found (the JUCE junction is made by -LinkInto)" }
+    # The first of python3 / python that really runs (a Windows Store stub of that name only prints a hint).
+    $python = $null
+    foreach ($name in 'python3', 'python') {
+        $cmd = Get-Command $name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $cmd) { continue }
+        & $cmd.Source --version *> $null
+        if ($LASTEXITCODE -eq 0) { $python = $cmd; break }
+    }
+    if (-not $python) { throw '-PatchJuce: neither python3 nor python runs' }
+    $stamp = Join-Path $juce $StampName
+    $moved = $false
+    try {
+        if (Test-Path -LiteralPath $stamp) {
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $Aside) | Out-Null
+            Move-Item -LiteralPath $stamp -Destination $Aside -Force
+            $moved = $true
+        }
+        Write-Step "patching JUCE: $($python.Name) scripts/github_actions/patch-juce-ara.py"
+        & $python.Source $script
+        if ($LASTEXITCODE -ne 0) { throw "patch-juce-ara.py failed with exit code $LASTEXITCODE" }
+    } finally {
+        if ($moved) { Move-Item -LiteralPath $Aside -Destination $stamp -Force }
+    }
+}
+
 # ---------------------------------------------------------------------------------------------
 
 if (-not (Test-Path -LiteralPath $LockFile)) { throw "Lock file not found: $LockFile" }
+if ($PatchJuce -and -not $LinkInto) { throw '-PatchJuce needs -LinkInto (the patch script works on the JUCE junction of the source tree)' }
 $lock = Get-Content -LiteralPath $LockFile -Raw | ConvertFrom-Json
 if ($lock.schema -ne 1) { throw "Unsupported lock schema $($lock.schema)" }
 
@@ -439,7 +481,7 @@ try {
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
 
     if ($LinkInto) {
-        # Deps installed by this run, required ones first, so an optional fallback (JUCE 8.0.15)
+        # Deps installed by this run, required ones first, so an optional fallback
         # never replaces the default it shares a junction with.
         $linked = @{}
         foreach ($r in @($results | Sort-Object -Stable { $_.optional })) {
@@ -447,6 +489,7 @@ try {
             Set-Junction $LinkInto $r.junction $r.path
             $linked[$r.junction] = $r.name
         }
+        if ($PatchJuce) { Invoke-JucePatch $LinkInto (Join-Path ([System.IO.Path]::GetTempPath()) "ot-juce-stamp-aside-$PID.json") }
     }
 
     $results | Format-Table name, action, seconds, @{ n = 'pin'; e = { if ($_.kind -eq 'git') { $_.commit.Substring(0, 12) } else { $_.sha256.Substring(0, 12) } } } -AutoSize | Out-Host

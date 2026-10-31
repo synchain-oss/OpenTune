@@ -112,12 +112,12 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.OT_DEPS }}
-          key: ot-deps-macos-${{ hashFiles('.github/scripts/deps.lock.json', '.github/scripts/bootstrap-deps.ps1') }}
-      - name: Bootstrap dependencies (sha256 verified) and link them into the tree
+          key: ot-deps-macos-${{ hashFiles('.github/scripts/deps.lock.json', '.github/scripts/bootstrap-deps.ps1', 'scripts/github_actions/patch-juce-ara.py') }}
+      - name: Bootstrap dependencies (sha256 verified), link them into the tree and patch JUCE
         shell: pwsh
         run: |
           pwsh -NoProfile -File .github/scripts/bootstrap-deps.ps1 -DepsRoot $env:OT_DEPS `
-            -DownloadsDir "$env:RUNNER_TEMP/ot-deps-downloads" -LinkInto $env:GITHUB_WORKSPACE -Platform macos
+            -DownloadsDir "$env:RUNNER_TEMP/ot-deps-downloads" -LinkInto $env:GITHUB_WORKSPACE -Platform macos -PatchJuce
           if ($LASTEXITCODE -ne 0) { throw "bootstrap-deps failed ($LASTEXITCODE)" }
       - name: Save dependency cache
         if: steps.deps-cache.outputs.cache-hit != 'true'
@@ -126,13 +126,15 @@ jobs:
           path: ${{ env.OT_DEPS }}
           key: ${{ steps.deps-cache.outputs.cache-primary-key }}
 
-      # 上游 POST_BUILD 无条件复制声码器文件：放一个 0 字节占位，不下载任何模型（路径在上游 gitignore 里）。
-      - name: Vocoder placeholder (0 bytes)
+      # 上游 POST_BUILD 无条件复制声码器与 FCPE 两个模型文件：各放一个 0 字节占位，不下载任何模型（两条路径都在上游
+      # gitignore 里，上游已不再跟踪 models/）。
+      - name: Model placeholders (0 bytes)
         run: |
-          voc='pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx'
-          if [ -e "$voc" ]; then echo "unexpected file at the vocoder path: $voc"; exit 1; fi
-          mkdir -p "$(dirname "$voc")"
-          : > "$voc"
+          for model in 'pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx' 'models/fcpe.onnx'; do
+            if [ -e "$model" ]; then echo "unexpected file at the model path: $model"; exit 1; fi
+            mkdir -p "$(dirname "$model")"
+            : > "$model"
+          done
 
       - name: Configure (Ninja, RelWithDebInfo, arm64)
         if: env.OT_PACKAGE != 'true'
@@ -161,14 +163,15 @@ jobs:
 
       # ControlProcessorTests 也在 macOS 上构建并运行（无界面的 POSIX 消息泵用 CFRunLoopRunInMode，测试目标在 APPLE 下链接
       # CoreFoundation）。
-      # 目标：Standalone 与所有已注册测试的可执行文件，不含 ARALifecycleContractTests（在锁定的 ARA SDK 2.3.0 下
-      # 编不过，上游问题）。测试与目标的对应关系读自生成的 CTestTestfile.cmake。
+      # 目标：Standalone 与所有已注册测试的可执行文件。ARALifecycleContractTests 以前在锁定的 ARA SDK 2.3.0 下编不过
+      # 而被排除，上游 2c01847 起可以编译并通过（Windows 本地已验证，macOS 待本任务的 CI 复核）。测试与目标的对应关系读自
+      # 生成的 CTestTestfile.cmake。
       - name: Build (--parallel = runner cores)
         id: build
         if: env.OT_PACKAGE != 'true'
         shell: pwsh
         run: |
-          $targets = @('OpenTuneStandalone_Standalone') + @(pwsh -NoProfile -File .github/scripts/list-test-targets.ps1 -BuildDir $env:OT_BUILD -Exclude 'ARALifecycleContractTests')
+          $targets = @('OpenTuneStandalone_Standalone') + @(pwsh -NoProfile -File .github/scripts/list-test-targets.ps1 -BuildDir $env:OT_BUILD)
           if ($LASTEXITCODE -ne 0) { throw 'no registered tests (OPENTUNE_BUILD_TESTS=ON?)' }
           $jobs = [Environment]::ProcessorCount
           Write-Host "targets ($($targets.Count)): $($targets -join ', '); --parallel $jobs"
@@ -178,18 +181,19 @@ jobs:
           "- 编译耗时：$([math]::Round($sw.Elapsed.TotalMinutes, 1)) 分钟（$jobs 个并行任务，$($targets.Count) 个目标）" >> $env:GITHUB_STEP_SUMMARY
           if ($code -ne 0) { throw "build failed ($code)" }
 
-      # 与 `ctest -E 'ARALifecycleContractTests|RenderRuntimeLifecycleTests' --output-on-failure` 等价，但每个测试有
-      # 独立的 OPENTUNE_DATA_DIR。仅 macOS 额外排除上游测试 RenderRuntimeLifecycleTests：它在 macOS 上稳定失败
+      # 与 `ctest -E RenderRuntimeLifecycleTests --output-on-failure` 等价，但每个测试有
+      # 独立的 OPENTUNE_DATA_DIR。仅 macOS 排除上游测试 RenderRuntimeLifecycleTests：它在 macOS 上稳定失败
       # （输出 lifecycle_boundary / failure）。该测试没有构造 PluginProcessor，失败与控制接口的钩子无关；原因是测试的
-      # 两段都调用了 runDispatchLoop() / stopDispatchLoop()，与 JUCE 9.0.3 的锁存有关。已知上游行为，见上游 PR 附带的
-      # 发现清单。不改测试本身；仍然编译它，只是不在 ctest 中运行。
-      - name: ctest (-E ARALifecycleContractTests,RenderRuntimeLifecycleTests, per-test OPENTUNE_DATA_DIR)
+      # 两段都调用了 runDispatchLoop() / stopDispatchLoop()，与 JUCE 的锁存有关（stopDispatchLoop() 置位后不再复位，
+      # JUCE 8.0.12 的源码里同样如此）。已知上游行为，见上游 PR 附带的发现清单。不改测试本身；仍然编译它，只是不在
+      # ctest 中运行。上游 2c01847 改写了这个测试，macOS 上是否仍然失败尚待 CI 复核；复核前保持排除。
+      - name: ctest (-E RenderRuntimeLifecycleTests, per-test OPENTUNE_DATA_DIR)
         if: env.OT_PACKAGE != 'true'
         shell: pwsh
         run: |
           $summary = "$env:RUNNER_TEMP/ot-ctest-summary.json"
           pwsh -NoProfile -File .github/scripts/run-ctest.ps1 -BuildDir $env:OT_BUILD -Config $env:OT_CONFIG `
-            -Exclude 'ARALifecycleContractTests,RenderRuntimeLifecycleTests' -DataRoot $env:OT_TEST_DATA -SummaryPath $summary
+            -Exclude 'RenderRuntimeLifecycleTests' -DataRoot $env:OT_TEST_DATA -SummaryPath $summary
           $code = $LASTEXITCODE
           if (Test-Path -LiteralPath $summary) {
             $s = Get-Content -LiteralPath $summary -Raw | ConvertFrom-Json
@@ -255,9 +259,11 @@ jobs:
           $out = "$env:RUNNER_TEMP/ot-release"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           $voc = 'pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx'
+          $fcpe = 'models/fcpe.onnx'
           $commands = @(
-            @{ step = 'Fetch the pinned dependencies (sha256 verified; never any model weights)'; argv = @('pwsh', '-NoProfile', '-File', '.github/scripts/bootstrap-deps.ps1', '-DepsRoot', '<deps>', '-LinkInto', '<src>', '-Platform', 'macos') },
+            @{ step = 'Fetch the pinned dependencies (sha256 verified; never any model weights) and apply the JUCE patches of scripts/github_actions/patch-juce-ara.py'; argv = @('pwsh', '-NoProfile', '-File', '.github/scripts/bootstrap-deps.ps1', '-DepsRoot', '<deps>', '-LinkInto', '<src>', '-Platform', 'macos', '-PatchJuce') },
             @{ step = 'Empty placeholder for the vocoder file that the POST_BUILD step copies (no model is downloaded)'; argv = @('sh', '-c', "mkdir -p <src>/$(Split-Path -Parent $voc) && : > <src>/$voc") },
+            @{ step = 'Empty placeholder for the FCPE file that the POST_BUILD step copies (no model is downloaded)'; argv = @('sh', '-c', "mkdir -p <src>/$(Split-Path -Parent $fcpe) && : > <src>/$fcpe") },
             @{ step = 'Configure (Xcode command line tools, CMake and Ninja on an Apple silicon Mac)'; argv = @(Get-Content -Raw -LiteralPath "$env:RUNNER_TEMP/ot-cmd-configure.json" | ConvertFrom-Json) },
             @{ step = 'Build'; argv = @(Get-Content -Raw -LiteralPath "$env:RUNNER_TEMP/ot-cmd-build.json" | ConvertFrom-Json) },
             @{ step = 'Delete the models folder that the POST_BUILD step copied into the app bundle (placeholders that would hide the official models)'; argv = @('find', '<build>', '-type', 'd', '-iname', 'models', '-exec', 'rm', '-rf', '{}', '+') },

@@ -312,6 +312,10 @@
           "description": "Where the keyboard focus of the OpenTune window is: tempoField, the tempo field of the transport bar, as in a window that has just started in the foreground (vectors/README.md, Preconditions).",
           "enum": ["tempoField"]
         },
+        "gpu": {
+          "description": "Whether OpenTune can create its inference session on the GPU: available, or unavailable, in which case OpenTune runs on the CPU whatever the rendering priority is and session.info reports processing.backend cpu (vectors/README.md, Preconditions).",
+          "enum": ["available", "unavailable"]
+        },
         "preferences": {
           "type": "object",
           "minProperties": 1,
@@ -359,6 +363,10 @@
           "properties": {
             "running": { "type": "boolean" },
             "failsToOpen": { "type": "boolean" },
+            "asioRateRestoreFails": {
+              "description": "With running true: OpenTune cannot restore the sample rate of an ASIO device before a switch of the device type or the output device (vectors/README.md, Preconditions).",
+              "type": "boolean"
+            },
             "alternatives": {
               "description": "With running true: the machine also offers another device type and another output device of the current type (vectors/README.md, Preconditions).",
               "type": "boolean"

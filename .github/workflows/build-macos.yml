@@ -182,7 +182,7 @@ jobs:
           if ($code -ne 0) { throw "build failed ($code)" }
 
       # 与 `ctest -E RenderRuntimeLifecycleTests --output-on-failure` 等价，但每个测试有
-      # 独立的 OPENTUNE_DATA_DIR。仅 macOS 排除上游测试 RenderRuntimeLifecycleTests：它在 macOS 上稳定失败
+      # 独立的 OPENTUNE_DATA_DIR。macOS 排除上游测试 RenderRuntimeLifecycleTests（Windows 也排除，原因另见 build-windows.yml 与 gates.ps1）：它在 macOS 上稳定失败
       # （输出 lifecycle_boundary / failure）。该测试没有构造 PluginProcessor，失败与控制接口的钩子无关；原因是测试的
       # 两段都调用了 runDispatchLoop() / stopDispatchLoop()，与 JUCE 的锁存有关（stopDispatchLoop() 置位后不再复位，
       # JUCE 8.0.12 的源码里同样如此）。已知上游行为，见上游 PR 附带的发现清单。不改测试本身；仍然编译它，只是不在

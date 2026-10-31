@@ -354,10 +354,8 @@ void scenarioProjectRoundTrip()
         CONTROL_CHECK(hasWarning(result, "IRREVERSIBLE") && hasWarning(result, "NOT_SAVED_IN_PROJECT")
                       && !hasWarning(result, "OVERWROTE_OTHER_PROJECT"));
         CONTROL_CHECK(juceFileOf(fileA).existsAsFile());
-        CONTROL_CHECK(juceFileOf(fileA)
-                          .getParentDirectory()
-                          .getChildFile(mediaDirectoryNameOf(juceFileOf(fileA)))
-                          .isDirectory());
+        CONTROL_CHECK(
+            juceFileOf(fileA).getParentDirectory().getChildFile(mediaDirectoryNameOf(juceFileOf(fileA))).isDirectory());
         CONTROL_CHECK(editor.session.hasProjectPath() && !editor.session.isDirty());
         CONTROL_CHECK(editor.session.getCurrentProjectFile().getFullPathName().toStdString() == fileA);
         CONTROL_CHECK(editor.bridge.projectSaves == 1);

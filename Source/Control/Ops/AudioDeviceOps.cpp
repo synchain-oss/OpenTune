@@ -390,7 +390,8 @@ Outcome applyRequest(juce::AudioDeviceManager& manager, ControlUiBridge& bridge,
             if (type == nullptr || !type->hasSeparateInputsAndOutputs())
                 setup.inputDeviceName = setup.outputDeviceName;
             // As the type switch: a restore that fails is reported and the change goes on.
-            if (manager.getCurrentAudioDeviceType() == "ASIO" && setup.outputDeviceName != currentSetup.outputDeviceName)
+            if (manager.getCurrentAudioDeviceType() == "ASIO"
+                && setup.outputDeviceName != currentSetup.outputDeviceName)
                 restoreAsioRate("audio output switch");
             changed = true;
             if (applySetup(manager, setup).isNotEmpty())

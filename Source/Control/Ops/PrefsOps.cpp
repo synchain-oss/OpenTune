@@ -385,7 +385,8 @@ std::optional<JsonValue> wireWeight(const std::string& weight)
 
 /**
  * Records what a delta changed in the envelope: the changes, the warning GLOBAL_PREFERENCE (NOT_RETROACTIVE for the
- * tuning), reRenderQueued for the hybrid switch and for every change of the vocoder weight, and the undo descriptor
+ * tuning, BACKEND_FALLBACK for a change to gpuFirst that ends on the CPU backend), reRenderQueued for the hybrid
+ * switch and for every change of the vocoder weight, and the undo descriptor
  * (no undo entry, as in OpenTune; the revert recipe is the same call with the previous values, or null when none of
  * them can be sent). The members come in the order of the schema: the original four, then vocoderWeight,
  * renderingPriority and f0Model. Nothing is recorded for a delta that changes nothing.
@@ -450,6 +451,20 @@ void recordDelta(ControlOpContext& context, ControlWriteEnvelope& envelope, cons
     envelope.addWarning("GLOBAL_PREFERENCE", JsonValue(), std::move(data));
     if (delta.tuning)
         envelope.addWarning("NOT_RETROACTIVE", preferenceRef("tuningHz"));
+    if (delta.priority && !*request.cpuFirst) {
+        // BACKEND_FALLBACK (PROTOCOL.md section 12.7 rule 7): this call changed the priority to gpuFirst, and the
+        // backend that OpenTune reports now, when the job ends, is the CPU, so the GPU is not in use. The backend is
+        // read once, here, and the job does not wait for it: a job that did not wait for the vocoder (it was not
+        // ready before the change) can still read the backend from before the change, which the rule allows. A change
+        // to cpuFirst, or no change of the priority, never carries the warning.
+        const std::string actual = controlInferenceBackendName();
+        if (actual == "cpu") {
+            auto fallback = JsonValue::object();
+            fallback.appendMember("requested", JsonValue::string("gpuFirst"));
+            fallback.appendMember("actual", JsonValue::string(actual));
+            envelope.addWarning("BACKEND_FALLBACK", JsonValue(), std::move(fallback));
+        }
+    }
     if (delta.hybrid || delta.vocoder) {
         // The processor queued a new render of every content: invalidateAllContentCaches() for the hybrid switch; for
         // the vocoder weight the completion of setVocoderModelWeight() clears every render cache and requests a full

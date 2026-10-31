@@ -16,10 +16,11 @@ namespace OpenTune {
  *   changed. The project is marked as changed. Soloing changes which other tracks are audible, which the result
  *   lists for every track.
  * - track.add (methods/track.add.schema.json): shows count more track slots, as the + button does
- *   (TrackPanelComponent::showMoreTracks). The number of shown tracks is view state: not saved with the project
- *   (NOT_PERSISTED), no undo entry (not_persisted_state), the project is not marked as changed. The context menu's
- *   "Add Track" of the same panel (trackAddRequested) does mark the project as changed; the + button is the one the
- *   schema follows.
+ *   (TrackPanelComponent::showMoreTracks). No undo entry (not_persisted_state). The locked specification calls the
+ *   number of shown tracks view state (NOT_PERSISTED, the project is not marked as changed), which was true of OpenTune
+ *   until upstream 2c01847: since then the count is saved with the project and the panel's change marks it
+ *   (OpenTuneAudioProcessorEditor::visibleTrackCountChanged), so with the editor the result's dirty flag turns true.
+ *   The warning and the reason stay as the specification has them until it is synchronised.
  * - track.duplicate (methods/track.duplicate.schema.json): the steps of the track menu's Duplicate Track
  *   (trackDuplicateRequested): mute, solo, volume and colour and a copy of every clip go to the first hidden slot,
  *   which is then shown. Mode share inserts the clips with the same contents, as OpenTune does (SHARED_CONTENT);

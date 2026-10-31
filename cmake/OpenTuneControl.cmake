@@ -413,6 +413,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         # Project files (Tests/Control/ControlProjectTests.cpp).
         list(APPEND _opentune_control_scenarios
             "ProjectRoundTrip|--control-api"
+            "ProjectOpenTrackCount|--control-api"
             "ProjectJobs|--control-api"
             "ProjectWithoutEditor|--control-api"
             "ProjectSaveCopy|--control-api"

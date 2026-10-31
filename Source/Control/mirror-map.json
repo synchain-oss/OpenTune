@@ -638,10 +638,11 @@
       ],
       "tests": [
         "ControlProcessorTests.ProjectRoundTrip",
+        "ControlProcessorTests.ProjectOpenTrackCount",
         "ControlProcessorTests.ProjectVectors"
       ],
-      "note": "What the editor does to open a project: the worker reads and prepares the file, the message thread commits it in one step and refreshes every part of the UI. The API reports a failure instead of showing a dialog, and the editor's step that clears the recent projects after a failed open is not repeated.",
-      "noteZh": "编辑器打开工程的步骤：worker 读取并预处理文件，消息线程一次提交并刷新界面各处。接口把失败作为错误报告而不弹对话框，打开失败后清空最近工程的那一步不照做。"
+      "note": "What the editor does to open a project: the worker reads and prepares the file, the message thread commits it in one step and refreshes every part of the UI (the shown track count is project state: the arrangement's count, restored by the commit, is what the panel shows afterwards, and nothing reveals tracks before that). The API reports a failure instead of showing a dialog, and the editor's step that clears the recent projects after a failed open is not repeated.",
+      "noteZh": "编辑器打开工程的步骤：worker 读取并预处理文件，消息线程一次提交并刷新界面各处（显示的轨道数是工程状态：提交时恢复进编排的轨道数就是之后轨道面板显示的数，此前不显示任何轨道）。接口把失败作为错误报告而不弹对话框，打开失败后清空最近工程的那一步不照做。"
     },
     {
       "id": "notes-correction-state",

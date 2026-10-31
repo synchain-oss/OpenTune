@@ -572,6 +572,7 @@ const Scenario kScenarios[] = {
     {"TimingTokenAspects", scenarioTimingTokenAspects, false},
     {"TimingVectors", scenarioTimingVectors, false},
     {"ProjectRoundTrip", scenarioProjectRoundTrip, false},
+    {"ProjectOpenTrackCount", scenarioProjectOpenTrackCount, false},
     {"ProjectJobs", scenarioProjectJobs, false},
     {"ProjectWithoutEditor", scenarioProjectWithoutEditor, false},
     {"ProjectSaveCopy", scenarioProjectSaveCopy, false},

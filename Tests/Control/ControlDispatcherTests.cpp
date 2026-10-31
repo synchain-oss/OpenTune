@@ -961,7 +961,8 @@ void checkDetailsOfUnanalysed(ApiSession& api, OpenTuneAudioProcessor& processor
             return JsonValue();
         return api.result("content.getDetails", json("{\"contentId\":" + quoted(handles->contentId) + "}"));
     };
-    // A failure that was recorded says why; one that was not (loaded from a project) is f0_failed.
+    // A failure with the message of an analysis without voiced frames says so; one without a message (loaded from a
+    // project) or with another one is f0_failed.
     const auto empty = detailsOf(2);
     CONTROL_CHECK(memberOf(memberOf(empty, "analysis"), "f0State").text() == "failed");
     CONTROL_CHECK(memberOf(memberOf(empty, "analysis"), "failure").text() == "f0_empty");
@@ -980,18 +981,23 @@ void checkDetailsOfUnanalysed(ApiSession& api, OpenTuneAudioProcessor& processor
     CONTROL_CHECK(memberOf(memberOf(pending, "analysis"), "failure").isNull());
     CONTROL_CHECK(memberOf(memberOf(pending, "autoModes"), "available").size() == 0);
 
-    // The processor keeps the reason per content, clears it when an analysis starts or succeeds, and a
-    // recorded reason is reported only while the analysis is failed.
-    CONTROL_CHECK(processor.getContentF0FailureReason(clips.failedEmpty.key) == std::optional<std::string>("f0_empty"));
-    CONTROL_CHECK(!processor.getContentF0FailureReason(clips.failedPlain.key).has_value());
-    processor.recordF0FailureReason(clips.failedEmpty.key, nullptr);
-    CONTROL_CHECK(!processor.getContentF0FailureReason(clips.failedEmpty.key).has_value());
+    // OpenTune keeps the failure message with the content, clears it when the analysis state changes (an analysis
+    // starts or succeeds), and the reason code is reported only while the analysis is failed.
+    const auto messageOf = [&processor](const ContentKey& key) {
+        const auto snapshot = processor.getContentSnapshot(key);
+        return snapshot != nullptr ? snapshot->originalF0FailureReason : std::string("<no content>");
+    };
+    CONTROL_CHECK(messageOf(clips.failedEmpty.key) == kUnvoicedF0FailureMessage);
+    CONTROL_CHECK(messageOf(clips.failedPlain.key).empty());
+    CONTROL_CHECK(processor.setContentOriginalF0FailureReason(clips.failedEmpty.key, kOtherF0FailureMessage));
     CONTROL_CHECK(memberOf(memberOf(detailsOf(2), "analysis"), "failure").text() == "f0_failed");
-    processor.recordF0FailureReason(clips.failedEmpty.key, "f0_empty");
+    CONTROL_CHECK(processor.setContentOriginalF0FailureReason(clips.failedEmpty.key, kUnvoicedF0FailureMessage));
+    CONTROL_CHECK(memberOf(memberOf(detailsOf(2), "analysis"), "failure").text() == "f0_empty");
     CONTROL_CHECK(processor.setContentOriginalF0State(clips.failedEmpty.key, OriginalF0State::Extracting));
     CONTROL_CHECK(memberOf(memberOf(detailsOf(2), "analysis"), "failure").isNull());
     CONTROL_CHECK(memberOf(memberOf(detailsOf(2), "analysis"), "f0State").text() == "extracting");
-    processor.recordF0FailureReason(clips.failedEmpty.key, "f0_empty");
+    CONTROL_CHECK(messageOf(clips.failedEmpty.key).empty());
+    CONTROL_CHECK(failAnalysis(processor, clips.failedEmpty.key, true));
 }
 
 void checkDetailsErrors(ApiSession& api, const ClipHandles& handles)
@@ -1745,8 +1751,9 @@ void scenarioDetails()
     clips.failedEmpty = addClip(*processor, unanalysedSpec("failedEmpty", 2, 0.0, Analysis::Failed));
     clips.failedPlain = addClip(*processor, unanalysedSpec("failedPlain", 3, 0.0, Analysis::Failed));
     clips.pending = addClip(*processor, unanalysedSpec("pending", 4, 0.0, Analysis::NotRequested));
-    // What the analysis callbacks record when they fail it (OpenTuneAudioProcessor::recordF0FailureReason).
-    processor->recordF0FailureReason(clips.failedEmpty.key, "f0_empty");
+    // What the analysis callbacks store when they fail it: the message of the extraction for audio without a voiced
+    // frame (the other failed clip has none, as a failure loaded from a project).
+    CONTROL_CHECK(failAnalysis(*processor, clips.failedEmpty.key, true));
     // The render that importing the sung clip requested, and what it posts when it fails without the models (an
     // upstream diagnostic dialog built on this thread), are over before the first timed request.
     CONTROL_CHECK(settleBackgroundWork(*processor));
@@ -1769,14 +1776,14 @@ void scenarioDetails()
     checkAppLog(api);
     CONTROL_CHECK(dispatcher->threadProbe().otherThreadAccesses.load() == 0);
 
-    // Opening a project starts a new content epoch and clip ids restart at 1: a reason recorded for the
-    // old project is never reported for a content of the new one with the same key.
+    // Opening a project starts a new content epoch and clip ids restart at 1: the message of a failure in the old
+    // project is not found with a content of the new one that has the same key (it lives in the content).
     const auto failedKey = clips.failedEmpty.key;
-    CONTROL_CHECK(processor->getContentF0FailureReason(failedKey) == std::optional<std::string>("f0_empty"));
+    const auto failedBefore = processor->getContentSnapshot(failedKey);
+    CONTROL_CHECK(failedBefore != nullptr && failedBefore->originalF0FailureReason == kUnvoicedF0FailureMessage);
     if (saveAndReopen(*processor)) {
-        CONTROL_CHECK(processor->getContentF0FailureReason(failedKey) != std::optional<std::string>("f0_empty"));
-        processor->recordF0FailureReason(failedKey, "f0_empty");
-        CONTROL_CHECK(processor->getContentF0FailureReason(failedKey) == std::optional<std::string>("f0_empty"));
+        const auto failedAfter = processor->getContentSnapshot(failedKey);
+        CONTROL_CHECK(failedAfter == nullptr || failedAfter->originalF0FailureReason.empty());
     }
 }
 

@@ -18,8 +18,6 @@ namespace {
 /** Frame length of the pitch analysis before one exists: the F0 extractor's hop of 160 samples at
     16 kHz. Reported as derived. */
 constexpr double kAnalysisHopSec = 160.0 / 16000.0;
-/** Reason code of an analysis failure that has no recorded cause (common.schema.json reasonCode). */
-constexpr const char* kUnknownF0Failure = "f0_failed";
 /** publishedRevision of a render that is not current: no published render matches desiredRevision. */
 constexpr const char* kUnsettledRenderToken = "unsettled";
 
@@ -67,15 +65,14 @@ std::string renderInputToken(const ControlContentVersions& versions)
     return hasher.token();
 }
 
-JsonValue analysisJson(OpenTuneAudioProcessor& processor, const ContentKey& key,
-                       const EditableContentSnapshot& snapshot, std::vector<std::string>& derived)
+JsonValue analysisJson(const EditableContentSnapshot& snapshot, std::vector<std::string>& derived)
 {
     auto json = JsonValue::object();
     json.appendMember("f0State", JsonValue::string(controlF0StateName(snapshot.originalF0State)));
-    // The failure reason recorded when the analysis failed; a failure loaded from a project has none.
+    // The reason code of the failure message that OpenTune keeps with the content; a failure loaded from a project has
+    // no message and reads f0_failed.
     if (snapshot.originalF0State == OriginalF0State::Failed)
-        json.appendMember("failure",
-                          JsonValue::string(processor.getContentF0FailureReason(key).value_or(kUnknownF0Failure)));
+        json.appendMember("failure", JsonValue::string(controlF0FailureCode(snapshot)));
     else
         json.appendMember("failure", JsonValue());
     const bool usable = snapshot.hasUsableOriginalF0();
@@ -201,7 +198,7 @@ Result<JsonValue> runGetDetails(ControlOpContext& context, const DetailsParams& 
     autoModes.appendMember("uiButtonRuns", JsonValue::string(notesPrimary ? "snapNotes" : "regenerate"));
     autoModes.appendMember("available", std::move(available));
 
-    auto analysis = analysisJson(processor, content.key, snapshot, derived);
+    auto analysis = analysisJson(snapshot, derived);
 
     auto derivedJson = JsonValue::array();
     for (const auto& path : derived)

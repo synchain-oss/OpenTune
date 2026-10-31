@@ -191,8 +191,7 @@ public:
                         if (!alive->load())
                             return;
                         if (fails) {
-                            target->recordF0FailureReason(request.contentKey, "f0_failed");
-                            target->setContentOriginalF0State(request.contentKey, OriginalF0State::Failed);
+                            failAnalysis(*target, request.contentKey, false);
                         } else {
                             commitSyntheticAnalysis(*target, request);
                         }

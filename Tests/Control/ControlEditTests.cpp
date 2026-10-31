@@ -754,7 +754,7 @@ void scenarioSetKeyImpl()
         spec.analysis = analysis;
         const auto clip = fixtureAddClip(*f.processor, spec);
         if (std::string(reason) == "f0_empty")
-            f.processor->recordF0FailureReason(clip.key, "f0_empty");
+            CONTROL_CHECK(failAnalysis(*f.processor, clip.key, true));
         const auto handles = fixtureHandlesOf(f.api.result("project.get"), spec.trackId, 0.0);
         if (!CONTROL_CHECK(handles.has_value()))
             continue;
@@ -2620,9 +2620,9 @@ std::string runEditVector(const JsonValue& vector)
             spec.key = detected;
         }
         const auto clip = fixtureAddClip(*f.processor, spec);
-        // An unvoiced analysis is a failed one with the reason OpenTune records for it (its F0 hook).
+        // An unvoiced analysis is a failed one with the message OpenTune stores for it.
         if (analysis == "unvoiced")
-            f.processor->recordF0FailureReason(clip.key, "f0_empty");
+            CONTROL_CHECK(failAnalysis(*f.processor, clip.key, true));
         clips[spec.name] = clip;
         specs.emplace_back(spec.name, spec);
     }

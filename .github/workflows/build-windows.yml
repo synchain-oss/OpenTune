@@ -124,11 +124,11 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.OT_DEPS }}
-          key: ot-deps-windows-${{ hashFiles('.github/scripts/deps.lock.json', '.github/scripts/bootstrap-deps.ps1') }}
-      - name: Bootstrap dependencies (sha256 verified) and link them into the tree
+          key: ot-deps-windows-${{ hashFiles('.github/scripts/deps.lock.json', '.github/scripts/bootstrap-deps.ps1', 'scripts/github_actions/patch-juce-ara.py') }}
+      - name: Bootstrap dependencies (sha256 verified), link them into the tree and patch JUCE
         run: |
           pwsh -NoProfile -File .github/scripts/bootstrap-deps.ps1 -DepsRoot $env:OT_DEPS `
-            -DownloadsDir "$env:RUNNER_TEMP\ot-deps-downloads" -LinkInto $env:GITHUB_WORKSPACE
+            -DownloadsDir "$env:RUNNER_TEMP\ot-deps-downloads" -LinkInto $env:GITHUB_WORKSPACE -PatchJuce
           if ($LASTEXITCODE -ne 0) { throw "bootstrap-deps failed ($LASTEXITCODE)" }
       - name: Save dependency cache
         if: steps.deps-cache.outputs.cache-hit != 'true'
@@ -137,13 +137,16 @@ jobs:
           path: ${{ env.OT_DEPS }}
           key: ${{ steps.deps-cache.outputs.cache-primary-key }}
 
-      # 上游 POST_BUILD 无条件复制声码器文件：放一个 0 字节占位，不下载任何模型（路径在上游 gitignore 里）。
-      - name: Vocoder placeholder (0 bytes)
+      # 上游 POST_BUILD 无条件复制声码器与 FCPE 两个模型文件：各放一个 0 字节占位，不下载任何模型（两条路径都在上游
+      # gitignore 里，上游已不再跟踪 models\）。
+      - name: Model placeholders (0 bytes)
         run: |
-          $voc = Join-Path $env:GITHUB_WORKSPACE 'pc_nsf_hifigan_44.1k_ONNX\pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx'
-          if (Test-Path -LiteralPath $voc) { throw "unexpected file at the vocoder path: $voc" }
-          New-Item -ItemType Directory -Force -Path (Split-Path -Parent $voc) | Out-Null
-          New-Item -ItemType File -Path $voc | Out-Null
+          foreach ($rel in 'pc_nsf_hifigan_44.1k_ONNX\pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx', 'models\fcpe.onnx') {
+            $placeholder = Join-Path $env:GITHUB_WORKSPACE $rel
+            if (Test-Path -LiteralPath $placeholder) { throw "unexpected file at the model path: $placeholder" }
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $placeholder) | Out-Null
+            New-Item -ItemType File -Path $placeholder | Out-Null
+          }
 
       # sccache 的版本与 sha256 锁在 .github/scripts/tools.lock.json，由 fetch-tool.mjs 下载并校验。
       # 出包模式不用 sccache：发布用的二进制从头编译。
@@ -204,13 +207,12 @@ jobs:
           pwsh -NoProfile -File .github/scripts/with-build-slot.ps1 -VsDevShell -MinFreeMB 2048 -WaitMinutes 10 -- @configure
           if ($LASTEXITCODE -ne 0) { throw "configure failed ($LASTEXITCODE)" }
 
-      # 目标：Standalone、VST3 与所有已注册测试的可执行文件，不含 ARALifecycleContractTests（它给 ARA_DRAFT 的
-      # persistentID 赋值，在锁定的 ARA SDK 2.3.0 下编不过，属上游问题）。测试与目标的对应关系读自生成的
+      # 目标：Standalone、VST3 与所有已注册测试的可执行文件。ARALifecycleContractTests 以前在锁定的 ARA SDK 2.3.0 下
+      # 编不过而被排除，上游 2c01847 起可以编译并通过。测试与目标的对应关系读自生成的
       # CTestTestfile.cmake，解析方式与 gates.ps1 的 Get-TestTargets 相同。
       - name: Build (RelWithDebInfo, --parallel = runner cores)
         id: build
         run: |
-          $excluded = @('ARALifecycleContractTests')
           function Get-TestTargets([string]$Dir, $Map) {
             $file = Join-Path $Dir 'CTestTestfile.cmake'
             if (-not (Test-Path -LiteralPath $file)) { return }
@@ -234,7 +236,6 @@ jobs:
             if ($tests.Count -eq 0) { throw 'no tests registered in CTestTestfile.cmake (OPENTUNE_BUILD_TESTS=ON?)' }
             foreach ($t in @('OpenTuneStandalone_Standalone', 'OpenTune_VST3')) { $targets.Add($t) }
             foreach ($name in @($tests.Keys)) {
-              if ($excluded -contains [string]$name) { continue }
               $exe = [string]$tests[$name]
               if ($exe -and -not $targets.Contains($exe)) { $targets.Add($exe) }
             }
@@ -247,9 +248,9 @@ jobs:
           pwsh -NoProfile -File .github/scripts/with-build-slot.ps1 -VsDevShell -MinFreeMB 2048 -WaitMinutes 10 -- @build
           if ($LASTEXITCODE -ne 0) { throw "build failed ($LASTEXITCODE)" }
 
-      # 与 `ctest -C RelWithDebInfo -E ARALifecycleContractTests --output-on-failure` 等价，但每个测试有独立的
+      # 与 `ctest -C RelWithDebInfo --output-on-failure` 等价，但每个测试有独立的
       # OPENTUNE_DATA_DIR（run-ctest.ps1，与本地 gates 同一份脚本）。失败测试的输出打印到日志。
-      - name: ctest (-E ARALifecycleContractTests, per-test OPENTUNE_DATA_DIR)
+      - name: ctest (all tests, per-test OPENTUNE_DATA_DIR)
         id: ctest
         if: env.OT_PACKAGE != 'true'
         run: |
@@ -298,9 +299,11 @@ jobs:
           $out = "$env:RUNNER_TEMP\ot-release"
           New-Item -ItemType Directory -Force -Path $out | Out-Null
           $voc = 'pc_nsf_hifigan_44.1k_ONNX\pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx'
+          $fcpe = 'models\fcpe.onnx'
           $commands = @(
-            @{ step = 'Fetch the pinned dependencies (sha256 verified; never any model weights)'; argv = @('pwsh', '-NoProfile', '-File', '.github/scripts/bootstrap-deps.ps1', '-DepsRoot', '<deps>', '-LinkInto', '<src>') },
+            @{ step = 'Fetch the pinned dependencies (sha256 verified; never any model weights) and apply the JUCE patches of scripts/github_actions/patch-juce-ara.py'; argv = @('pwsh', '-NoProfile', '-File', '.github/scripts/bootstrap-deps.ps1', '-DepsRoot', '<deps>', '-LinkInto', '<src>', '-PatchJuce') },
             @{ step = 'Empty placeholder for the vocoder file that the POST_BUILD step copies (no model is downloaded)'; argv = @('New-Item', '-ItemType', 'File', '-Force', "<src>\$voc") },
+            @{ step = 'Empty placeholder for the FCPE file that the POST_BUILD step copies (no model is downloaded)'; argv = @('New-Item', '-ItemType', 'File', '-Force', "<src>\$fcpe") },
             @{ step = 'Configure (Visual Studio 2022 x64 developer PowerShell)'; argv = @(Get-Content -Raw -LiteralPath "$env:RUNNER_TEMP\ot-cmd-configure.json" | ConvertFrom-Json) },
             @{ step = 'Build'; argv = @(Get-Content -Raw -LiteralPath "$env:RUNNER_TEMP\ot-cmd-build.json" | ConvertFrom-Json) },
             @{ step = 'Delete the models folder created by the POST_BUILD step (placeholders that would hide the official models)'; argv = @('Remove-Item', '-Recurse', '-Force', "<build>\OpenTuneStandalone_artefacts\$env:OT_CONFIG\Standalone\models") },

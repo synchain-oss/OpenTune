@@ -9,14 +9,17 @@
 
 .DESCRIPTION
   The steps follow CLAUDE.md section 8, plus the models\ assertion and gitleaks:
-  1. LFS settings: lfs.fetchexclude=* and every tracked *.onnx is still an un-smudged LFS pointer.
+  1. LFS settings: lfs.fetchexclude=* and every tracked *.onnx (none since upstream 2c01847, which stopped
+     tracking models) is still an un-smudged LFS pointer; models/ has no changes.
   2. Unless -SkipBuild: configure (Ninja Multi-Config), build (RelWithDebInfo, --parallel N) and ctest
-     (all registered tests except ARALifecycleContractTests), each through with-build-slot.ps1 (machine-wide
+     (all registered tests), each through with-build-slot.ps1 (machine-wide
      build slots: 2 by default, -BuildSlots or OPENTUNE_BUILD_SLOTS to change; free-memory check). Every test runs with its own OPENTUNE_DATA_DIR under
-     <build>\ot-test-data.
+     <build>\ot-test-data. Before configuring, the 0-byte model placeholders that the upstream POST_BUILD step
+     copies (models\fcpe.onnx, the vocoder file) are created when missing: upstream stopped tracking models
+     with 2c01847, and both paths are ignored by git.
      From -Layer L2 up, a second build in <build>\control-on (-DOPENTUNE_ENABLE_CONTROL_API=ON) is made as the
-     CI job with the option ON makes it: the Standalone app, the VST3 plug-in and every registered test except
-     ARALifecycleContractTests are built, and every test but that one runs, each with its own OPENTUNE_DATA_DIR
+     CI job with the option ON makes it: the Standalone app, the VST3 plug-in and every registered test are
+     built, and every test runs, each with its own OPENTUNE_DATA_DIR
      (two passes: the Control tests, then the rest). One row; zero Control tests there is FAIL. SKIP for L0 and -SkipBuild.
   3. Test data isolation: %APPDATA%\OpenTune is snapshotted (files, sizes, write times) around the
      Control pass of each build. A change to anything but the Logs folder during that pass is FAIL (those
@@ -27,8 +30,8 @@
      Nothing in the user directory is deleted.
      Builds get a private MSVC PDB server (_MSPDBSRV_ENDPOINT_ = ot-<lane>-build) unless the variable is set,
      so another project's mspdbsrv on the machine cannot make the build fail with C1041. No process is stopped.
-  4. The models\ directories that the upstream POST_BUILD step copies next to the binaries (LFS pointers
-     plus a 0-byte vocoder placeholder) would shadow the officially installed models: they are deleted
+  4. The models\ directories that the upstream POST_BUILD step copies next to the binaries (the 0-byte
+     placeholders) would shadow the officially installed models: they are deleted
      and their absence is asserted.
   5. Real Standalone launch, and the real Standalone contract and scenario tests: SKIP until the
      control API exists.
@@ -59,6 +62,10 @@ param(
     [switch]$SkipBuild,
     [string]$BuildDir,
     [string]$Base,
+    # Upstream mirror ref for the delta ("our increment" = commits not in upstream/* tags or this ref). Unset:
+    # fork-checks.mjs picks origin/upstream-mirror, then upstream-mirror. A sync branch based on a newer upstream
+    # snapshot than origin/upstream-mirror passes that snapshot's tag here.
+    [string]$Mirror,
     [ValidateRange(1, 64)][int]$Parallel = 8,
     [int]$MinFreeMB = 6144,
     # Machine-wide build slots passed to with-build-slot.ps1 -Slots. Unset: the script's own default
@@ -74,7 +81,13 @@ $ErrorActionPreference = 'Stop'
 $OutputEncoding = [System.Text.Encoding]::UTF8
 
 $Config = 'RelWithDebInfo'
-$ExcludedTests = @('ARALifecycleContractTests')
+# Tests left out of build and ctest. None: ARALifecycleContractTests, which did not compile under the pinned ARA
+# SDK 2.3.0 until upstream 20261008-addb4f4, builds and passes since upstream 2c01847.
+$ExcludedTests = @()
+# The git-ignored files the upstream POST_BUILD step copies next to the binaries. Upstream stopped tracking models
+# with 2c01847, so a clean checkout lacks them and the build would fail at the copy; 0-byte placeholders stand in
+# (never committed, never a real model).
+$ModelPlaceholders = @('pc_nsf_hifigan_44.1k_ONNX/pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx', 'models/fcpe.onnx')
 $scripts = $PSScriptRoot
 $laneRoot = [System.IO.Path]::GetFullPath((& git -C $scripts rev-parse --show-toplevel).Trim())
 $laneName = Split-Path -Leaf $laneRoot
@@ -195,6 +208,27 @@ function Invoke-InSlot([string]$Label, [string[]]$Command, [switch]$VsDevShell) 
     $own = $null
     if ($text -match 'exit -?\d+ after ([\d.,]+)s') { $own = [double]($Matches[1] -replace ',', '') }
     return [pscustomobject]@{ Code = $code; Wall = $sw.Elapsed.TotalSeconds; Own = $own; Log = $log; Text = $text }
+}
+
+# The run-ctest.ps1 arguments that leave the named tests out; none when the list is empty (an empty argument would
+# be dropped by the command line and swallow the next parameter name).
+function Get-ExcludeArgs([string[]]$Names) {
+    $list = @($Names | Where-Object { $_ })
+    if ($list.Count -eq 0) { return @() }
+    return @('-Exclude', ($list -join ','))
+}
+
+# Creates the missing model placeholders (see $ModelPlaceholders); returns the relative paths it created.
+function New-ModelPlaceholders {
+    $created = [System.Collections.Generic.List[string]]::new()
+    foreach ($rel in $ModelPlaceholders) {
+        $path = Join-Path $laneRoot $rel
+        if (Test-Path -LiteralPath $path) { continue }
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $path) | Out-Null
+        New-Item -ItemType File -Path $path | Out-Null
+        $created.Add($rel)
+    }
+    return , $created.ToArray()
 }
 
 function Format-Timing($Run) {
@@ -386,6 +420,7 @@ $script:ctestControlDiff = $null
 $script:ctestNotRunReason = $null
 function Invoke-BuildSteps {
     New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
+    New-ModelPlaceholders | Out-Null
     $cmakeArgs = @(Get-LaneCmakeArgs)
     if (-not ($cmakeArgs -contains '-G')) { $cmakeArgs += @('-G', 'Ninja Multi-Config', "-DCMAKE_MAKE_PROGRAM=$((Find-Ninja) -replace '\\', '/')") }
     if (-not ($cmakeArgs | Where-Object { $_ -like '-DCMAKE_CONFIGURATION_TYPES=*' })) { $cmakeArgs += "-DCMAKE_CONFIGURATION_TYPES=$Config;Release" }
@@ -415,7 +450,7 @@ function Invoke-BuildSteps {
             Add-Row 'ctest' 'SKIP' 'build 失败'
             $script:ctestNotRunReason = 'build 失败，ctest 未运行'
         } else {
-            Add-Row 'build' 'PASS' "$Config，--parallel $Parallel，$($targets.Count) 个目标（Standalone、VST3 与测试，不含 $($ExcludedTests -join '、')）；$(Format-Timing $build)"
+            Add-Row 'build' 'PASS' "$Config，--parallel $Parallel，$($targets.Count) 个目标（Standalone、VST3 与全部已注册测试）；$(Format-Timing $build)"
             $summaryPath = Join-Path $logDir 'ctest-summary.json'
             Remove-Item -LiteralPath $summaryPath -ErrorAction SilentlyContinue
             # Two passes so the real data directory can be attributed: the control-layer tests (names containing
@@ -430,13 +465,13 @@ function Invoke-BuildSteps {
             $script:ctestControlDiff = $null
             if ($controlNames.Count) {
                 $dataBefore = Get-DirSnapshot $realDataDir
-                $ctestControl = Invoke-InSlot 'ctest-control' @('pwsh', '-NoProfile', '-File', (Join-Path $scripts 'run-ctest.ps1'), '-BuildDir', $BuildDir, '-Config', $Config,
-                    '-Include', 'Control', '-Exclude', ($ExcludedTests -join ','), '-DataRoot', (Join-Path $BuildDir 'ot-test-data-control'), '-SummaryPath', $summaryControlPath)
+                $ctestControl = Invoke-InSlot 'ctest-control' (@('pwsh', '-NoProfile', '-File', (Join-Path $scripts 'run-ctest.ps1'), '-BuildDir', $BuildDir, '-Config', $Config,
+                    '-Include', 'Control') + (Get-ExcludeArgs $ExcludedTests) + @('-DataRoot', (Join-Path $BuildDir 'ot-test-data-control'), '-SummaryPath', $summaryControlPath))
                 $script:ctestControlDiff = Compare-DirSnapshot $dataBefore (Get-DirSnapshot $realDataDir)
             }
             $dataBefore = Get-DirSnapshot $realDataDir
-            $ctest = Invoke-InSlot 'ctest' @('pwsh', '-NoProfile', '-File', (Join-Path $scripts 'run-ctest.ps1'), '-BuildDir', $BuildDir, '-Config', $Config,
-                '-Exclude', ($otherExclude -join ','), '-DataRoot', (Join-Path $BuildDir 'ot-test-data'), '-SummaryPath', $summaryPath)
+            $ctest = Invoke-InSlot 'ctest' (@('pwsh', '-NoProfile', '-File', (Join-Path $scripts 'run-ctest.ps1'), '-BuildDir', $BuildDir, '-Config', $Config) +
+                (Get-ExcludeArgs $otherExclude) + @('-DataRoot', (Join-Path $BuildDir 'ot-test-data'), '-SummaryPath', $summaryPath))
             $script:ctestDataDiff = Compare-DirSnapshot $dataBefore (Get-DirSnapshot $realDataDir)
             $summary = $null
             if (Test-Path -LiteralPath $summaryPath) { $summary = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json }
@@ -459,7 +494,8 @@ function Invoke-BuildSteps {
             }
             $dataNote = '每个测试设置了独立的 OPENTUNE_DATA_DIR=<build>\ot-test-data\<测试名>（是否生效见「测试数据隔离」一行）'
             if ($ctest.Code -eq 0 -and $summary) {
-                Add-Row 'ctest' 'PASS' "$(Get-SummaryCount $summary 'passed')/$(Get-SummaryCount $summary 'total') 通过（排除 $((Get-SummaryNames $summary 'excluded') -join '、')：在锁定的 ARA SDK 2.3.0 下编不过，属上游问题）；$dataNote；$(Format-Timing $ctest)"
+                $excludedNote = if ($ExcludedTests.Count) { "（排除 $((Get-SummaryNames $summary 'excluded') -join '、')）" } else { '（未排除任何测试）' }
+                Add-Row 'ctest' 'PASS' "$(Get-SummaryCount $summary 'passed')/$(Get-SummaryCount $summary 'total') 通过$excludedNote；$dataNote；$(Format-Timing $ctest)"
             } elseif ($summary) {
                 Add-Row 'ctest' 'FAIL' "失败：$((Get-SummaryNames $summary 'failed') -join '、')（$(Get-SummaryCount $summary 'passed')/$(Get-SummaryCount $summary 'total') 通过）；日志在 <build>\ot-test-data；$(Format-Timing $ctest)"
             } else {
@@ -478,6 +514,7 @@ $ControlOnStep = 'control-on（OPENTUNE_ENABLE_CONTROL_API=ON：configure / buil
 function Invoke-ControlOnSteps {
     $dir = Join-Path $BuildDir 'control-on'
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    New-ModelPlaceholders | Out-Null
     $cmakeArgs = @(Get-LaneCmakeArgs @('-DOPENTUNE_ENABLE_CONTROL_API=*', '-DOPENTUNE_BUILD_TESTS=*'))
     if (-not ($cmakeArgs -contains '-G')) { $cmakeArgs += @('-G', 'Ninja Multi-Config', "-DCMAKE_MAKE_PROGRAM=$((Find-Ninja) -replace '\\', '/')") }
     if (-not ($cmakeArgs | Where-Object { $_ -like '-DCMAKE_CONFIGURATION_TYPES=*' })) { $cmakeArgs += "-DCMAKE_CONFIGURATION_TYPES=$Config;Release" }
@@ -495,7 +532,7 @@ function Invoke-ControlOnSteps {
         return
     }
     # The targets of the CI job with the option ON: the Standalone app, the VST3 plug-in and every registered test
-    # except the excluded ones.
+    # (except $ExcludedTests, empty at present).
     $targets = [System.Collections.Generic.List[string]]::new()
     foreach ($t in @('OpenTuneStandalone_Standalone', 'OpenTune_VST3')) { $targets.Add($t) }
     foreach ($name in @($testTargets.Keys)) {
@@ -514,15 +551,15 @@ function Invoke-ControlOnSteps {
     $summaryOtherPath = Join-Path $logDir 'ctest-summary-control-on.json'
     Remove-Item -LiteralPath $summaryControlPath, $summaryOtherPath -ErrorAction SilentlyContinue
     $dataBefore = Get-DirSnapshot $realDataDir
-    $ctestControl = Invoke-InSlot 'control-on-ctest-control' @('pwsh', '-NoProfile', '-File', (Join-Path $scripts 'run-ctest.ps1'), '-BuildDir', $dir, '-Config', $Config,
-        '-Include', 'Control', '-Exclude', ($ExcludedTests -join ','), '-DataRoot', (Join-Path $dir 'ot-test-data-control'), '-SummaryPath', $summaryControlPath)
+    $ctestControl = Invoke-InSlot 'control-on-ctest-control' (@('pwsh', '-NoProfile', '-File', (Join-Path $scripts 'run-ctest.ps1'), '-BuildDir', $dir, '-Config', $Config,
+        '-Include', 'Control') + (Get-ExcludeArgs $ExcludedTests) + @('-DataRoot', (Join-Path $dir 'ot-test-data-control'), '-SummaryPath', $summaryControlPath))
     $script:controlOnDiff = Compare-DirSnapshot $dataBefore (Get-DirSnapshot $realDataDir)
     $otherNames = @($testTargets.Keys | ForEach-Object { [string]$_ } | Where-Object { $_ -notmatch 'Control' -and $ExcludedTests -notcontains $_ })
     $ctestOther = $null
     if ($otherNames.Count) {
         $dataBefore = Get-DirSnapshot $realDataDir
-        $ctestOther = Invoke-InSlot 'control-on-ctest' @('pwsh', '-NoProfile', '-File', (Join-Path $scripts 'run-ctest.ps1'), '-BuildDir', $dir, '-Config', $Config,
-            '-Exclude', ((@($ExcludedTests) + $controlNames) -join ','), '-DataRoot', (Join-Path $dir 'ot-test-data'), '-SummaryPath', $summaryOtherPath)
+        $ctestOther = Invoke-InSlot 'control-on-ctest' (@('pwsh', '-NoProfile', '-File', (Join-Path $scripts 'run-ctest.ps1'), '-BuildDir', $dir, '-Config', $Config) +
+            (Get-ExcludeArgs (@($ExcludedTests) + $controlNames)) + @('-DataRoot', (Join-Path $dir 'ot-test-data'), '-SummaryPath', $summaryOtherPath))
         $script:controlOnOtherDiff = Compare-DirSnapshot $dataBefore (Get-DirSnapshot $realDataDir)
     }
     $sc = $null
@@ -543,7 +580,7 @@ function Invoke-ControlOnSteps {
         if ($failed.Count -gt 0) {
             Add-Row $ControlOnStep 'FAIL' "失败：$($failed -join '、')（$passed/$total 通过）；日志在 <build>\control-on\ot-test-data*；$timing"
         } else {
-            Add-Row $ControlOnStep 'PASS' "$passed/$total 个测试通过（Control $(Get-SummaryCount $sc 'total') 个，其余 $(Get-SummaryCount $so 'total') 个；排除 $($ExcludedTests -join '、')）；构建 $($targets.Count) 个目标（Standalone、VST3 与测试，同 CI）；每个测试独立的 OPENTUNE_DATA_DIR；$timing"
+            Add-Row $ControlOnStep 'PASS' "$passed/$total 个测试通过（Control $(Get-SummaryCount $sc 'total') 个，其余 $(Get-SummaryCount $so 'total') 个；未排除任何测试）；构建 $($targets.Count) 个目标（Standalone、VST3 与测试，同 CI）；每个测试独立的 OPENTUNE_DATA_DIR；$timing"
         }
     }
 }
@@ -578,6 +615,7 @@ try {
     $modelChanges = @(& git status --porcelain -- models)
     if ($modelChanges.Count) { $problems += "models/ 有改动：$($modelChanges -join '；')" }
     if ($problems.Count) { Add-Row 'LFS 设置' 'FAIL' ($problems -join '；') }
+    elseif ($onnx.Count -eq 0) { Add-Row 'LFS 设置' 'PASS' "lfs.fetchexclude=*；仓库不跟踪任何 *.onnx（上游自 2c01847 起不再跟踪模型）；models/ 无改动" }
     else { Add-Row 'LFS 设置' 'PASS' "lfs.fetchexclude=*；$($onnx.Count) 个 *.onnx 均为未 smudge 的 LFS 指针；models/ 无改动" }
 
     # 2. configure / build / ctest
@@ -646,6 +684,7 @@ try {
     # 6. fork-checks (identity, attribution and the other delta checks)
     $clangFormat = Get-PinnedTool 'clang-format'
     $fcArgs = @((Join-Path $scripts 'fork-checks.mjs'), '--json', '--layer', $Layer, '--base', $Base, '--head-branch', $branch)
+    if ($Mirror) { $fcArgs += @('--mirror', $Mirror) }
     if ($clangFormat) { $fcArgs += @('--clang-format', $clangFormat) }
     else { $fcArgs += @('--clang-format', (Join-Path $ToolsDir 'clang-format-unavailable')) }
     $fc = Invoke-NodeJson $fcArgs

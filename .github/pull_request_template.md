@@ -42,7 +42,7 @@ gates 脚本、check-ignored-delta.ps1 与署名规则都在 .github/scripts/；
 - [ ] LFS 设置检查通过（`lfs.fetchexclude=*`，模型为未 smudge 的指针）
 - [ ] configure + build（RelWithDebInfo，经 `.github/scripts/with-build-slot.ps1`）成功
 - [ ] `ctest -R Control` 全绿
-- [ ] 上游已有测试全绿（不排除任何测试；macOS 另排除 RenderRuntimeLifecycleTests，原因见 build-macos.yml）
+- [ ] 上游已有测试全绿（只排除 RenderRuntimeLifecycleTests：断言有竞态，原因见 gates.ps1、build-windows.yml 与 build-macos.yml）
 - [ ] 所有测试使用临时 `OPENTUNE_DATA_DIR`，没有写真实用户目录
 - [ ] 改到 Dispatcher / Jobs / Ops / Edit / bridge 或 `spec.lock`：已跑真 Standalone 契约与场景（真 Standalone 测试环境就绪后必填；不涉及请写「不涉及」）
 - [ ] 新文件 clang-format 18.1.8 无差异，且都有 SPDX 头

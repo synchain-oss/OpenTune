@@ -13,7 +13,7 @@ name: Prerelease
 # 提交是 dev 的祖先、该提交上由 GitHub Actions 创建的 fork-gate 为绿（其他 App 建的同名 check run 不算）。
 # 构建经 workflow_call 调 build-windows.yml 的出包模式：Standalone、Release（LTCG）、控制接口 ON，
 # 删除 POST_BUILD 生成的 models\ 并断言不存在，按产物实际内容生成 THIRD-PARTY-NOTICES.txt。macOS 经 workflow_call 调
-# build-macos.yml 的出包模式（macos-14，arm64，Release，Ninja），同样删除 .app 里的 models 并生成 THIRD-PARTY-NOTICES.txt；
+# build-macos.yml 的出包模式（macos-15，arm64，Release，Ninja），同样删除 .app 里的 models 并生成 THIRD-PARTY-NOTICES.txt；
 # package-macos（release-macos.mjs）改名为 OpenTune-ctl.app、改 Info.plist、ad hoc 签名、用 ditto 打 zip。
 # 打包（release-package.mjs）：严格白名单，多一个文件、或出现 *.onnx、models/、LFS 指针、D3D12*、d3dconfig.exe、
 # STATEMENTS.txt（递归、大小写不敏感）即失败；生成 SHA256SUMS 并在 zip 里复核；发布正文过署名检查。
@@ -174,7 +174,7 @@ jobs:
           if-no-files-found: error
           retention-days: ${{ needs.validate.outputs.mode == 'release' && 14 || 3 }}
 
-  # macOS：构建（build-macos.yml 的出包模式，macos-14）与打包（release-macos.mjs，需要 PlistBuddy、codesign、ditto，所以在 macOS 上）。
+  # macOS：构建（build-macos.yml 的出包模式，macos-15）与打包（release-macos.mjs，需要 PlistBuddy、codesign、ditto，所以在 macOS 上）。
   build-macos:
     name: build-macos
     needs: validate
@@ -185,7 +185,7 @@ jobs:
   package-macos:
     name: package-macos
     needs: [validate, build-macos]
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -563,7 +563,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # macOS 的 side-car 冒烟（smoke-macos.yml）：每个受支持的官方 macOS 版本一台 macos-14 runner，步骤见该文件的开头。
+  # macOS 的 side-car 冒烟（smoke-macos.yml）：每个受支持的官方 macOS 版本一台 macos-15 runner，步骤见该文件的开头。
   smoke-macos:
     name: smoke-macos
     needs: [validate, package-macos]

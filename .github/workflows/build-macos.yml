@@ -4,7 +4,7 @@
 # fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
 name: Build macOS
 
-# macOS 编译与测试骨架：macos-14（Apple Silicon，arm64），Ninja，RelWithDebInfo，控制接口选项 ON。
+# macOS 编译与测试骨架：macos-15（Apple Silicon，arm64），Ninja，RelWithDebInfo，控制接口选项 ON。
 # 依赖由 .github/scripts/bootstrap-deps.ps1 按 deps.lock.json 拉取并逐个校验（JUCE、ARA SDK、SoundTouch 与
 # ONNX Runtime 1.20.0 官方预编译 arm64 包，版本与 sha256 锁在同一份锁文件里；绝不下载模型）。
 # 注意：官方预编译包的最低系统版本比上游 CMake 里的部署目标（12.0）高（上游说明官方包需要 13.3+），链接时
@@ -73,10 +73,10 @@ jobs:
           echo "run=$run" >> "$GITHUB_OUTPUT"
 
   compile-test:
-    name: compile-test (macos-14 arm64)
+    name: compile-test (macos-15 arm64)
     needs: gate
     if: needs.gate.outputs.run == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 150
     env:
       GIT_LFS_SKIP_SMUDGE: '1'

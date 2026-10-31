@@ -452,6 +452,112 @@ void scenarioProjectRoundTrip()
     CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
 }
 
+namespace {
+
+/** Saves a project with one clip on clipTrack that showed shownTracks tracks, with OpenTune's own save, and leaves the
+    processor with an empty project (the arrangement shows the default number of tracks again). */
+bool writeTrackCountProject(OpenTuneAudioProcessor& processor, const std::string& path, int clipTrack, int shownTracks)
+{
+    ClipSpec spec;
+    spec.name = uniqueName("tracks");
+    spec.trackId = clipTrack;
+    spec.durationSec = 3.0;
+    if (!fixtureAddClip(processor, spec).key.isValid())
+        return false;
+    processor.getStandaloneArrangement()->setVisibleTrackCount(shownTracks);
+    ProjectSession scratch(processor, processor.getAppPreferences());
+    auto task = scratch.prepareSave(juceFileOf(path));
+    const bool saved = ProjectSession::executeSaveToFile(task).ok();
+    clearProject(processor);
+    return saved;
+}
+
+/** The ids of sideEffects.tracksRevealed.trackIds of a write result as "[a,b]"; "none" when the effect is absent. */
+std::string revealedTracksOf(const JsonValue& result)
+{
+    const auto* effect = memberOf(result, "sideEffects").find("tracksRevealed");
+    return effect != nullptr ? toJsonString(memberOf(*effect, "trackIds")) : std::string("none");
+}
+
+} // namespace
+
+/** A project is opened with the track count it was saved with. The count is part of the project: the editor takes the
+    arrangement's count after an open (refreshAllUIFromProject) and does not mark the project for it. project.open
+    must leave the same state: not dirty (the next open asks for no discardUnsaved), the saved count in the arrangement
+    (not the count the clips need), and tracksRevealed for the tracks that the open added to the view. */
+void scenarioProjectOpenTrackCount()
+{
+    auto processor = startedProcessor();
+    auto& service = processor->getControlService();
+    if (!service.isRunning())
+        return;
+    EditorParts editor(*processor);
+    auto* arrangement = processor->getStandaloneArrangement();
+    editor.bridge.trackCountArrangement = arrangement;
+    const auto directory = projectDirectory("open-track-count");
+    // The project showed five tracks and has its only clip on the third; one that shows what the clip needs; one with
+    // its clip on the first track that showed four.
+    const auto wide = (directory / "wide.otproj").u8string();
+    const auto exact = (directory / "exact.otproj").u8string();
+    const auto narrow = (directory / "narrow.otproj").u8string();
+    if (!CONTROL_CHECK(writeTrackCountProject(*processor, wide, 2, 5) && writeTrackCountProject(*processor, exact, 2, 3)
+                       && writeTrackCountProject(*processor, narrow, 0, 4)))
+        return;
+    ApiSession api;
+    if (!api.open(service))
+        return;
+
+    // The editor shows the two default tracks; the clip of the file is on the third and the file shows five.
+    editor.bridge.visibleTracks = 2;
+    CONTROL_CHECK(arrangement->getVisibleTrackCount() == 2 && !editor.session.isDirty());
+    {
+        const auto job = runAsJob(api, "project.open", pathParams(wide), "projectOpen");
+        CONTROL_CHECK(succeeded(job));
+        const auto& result = memberOf(job, "result");
+        CONTROL_CHECK(arrangement->getVisibleTrackCount() == 5);
+        CONTROL_CHECK(editor.bridge.visibleTracks == 5);
+        CONTROL_CHECK(!editor.session.isDirty() && editor.bridge.dirtyMarks == 0);
+        CONTROL_CHECK(memberOf(memberOf(result, "restored"), "visibleTrackCount").asDouble() == 5.0);
+        CONTROL_CHECK(revealedTracksOf(result) == "[2,3,4]");
+        CONTROL_CHECK(memberOf(api.result("project.get"), "visibleTrackCount").asDouble() == 5.0);
+    }
+
+    // Another open needs no discardUnsaved: the first one left the project as it was saved. The file shows what its
+    // clip needs.
+    {
+        const auto job = runAsJob(api, "project.open", pathParams(exact), "projectOpen");
+        CONTROL_CHECK(succeeded(job));
+        CONTROL_CHECK(arrangement->getVisibleTrackCount() == 3 && editor.bridge.visibleTracks == 3);
+        CONTROL_CHECK(!editor.session.isDirty() && editor.bridge.dirtyMarks == 0);
+        // The editor showed five tracks; three are shown now: nothing was added to the view.
+        CONTROL_CHECK(revealedTracksOf(memberOf(job, "result")) == "none");
+    }
+
+    // The editor shows eight tracks and the file four: the file's count wins (the editor sets the panel to it), and
+    // nothing is revealed.
+    {
+        arrangement->setVisibleTrackCount(8);
+        editor.bridge.visibleTracks = 8;
+        const auto job = runAsJob(api, "project.open", pathParams(narrow), "projectOpen");
+        CONTROL_CHECK(succeeded(job));
+        CONTROL_CHECK(arrangement->getVisibleTrackCount() == 4 && editor.bridge.visibleTracks == 4);
+        CONTROL_CHECK(!editor.session.isDirty() && editor.bridge.dirtyMarks == 0);
+        CONTROL_CHECK(revealedTracksOf(memberOf(job, "result")) == "none");
+    }
+
+    // The same file once more, over a project that shows fewer tracks: the added ones are reported.
+    {
+        arrangement->setVisibleTrackCount(2);
+        editor.bridge.visibleTracks = 2;
+        const auto job = runAsJob(api, "project.open", pathParams(narrow), "projectOpen");
+        CONTROL_CHECK(succeeded(job));
+        CONTROL_CHECK(arrangement->getVisibleTrackCount() == 4 && editor.bridge.visibleTracks == 4);
+        CONTROL_CHECK(!editor.session.isDirty() && revealedTracksOf(memberOf(job, "result")) == "[2,3]");
+    }
+    const auto dispatcher = service.dispatcher();
+    CONTROL_CHECK(dispatcher != nullptr && dispatcher->threadProbe().otherThreadAccesses.load() == 0);
+}
+
 /** The checks before a job, the busy state, the cancellation rules and the races of the jobs. */
 void scenarioProjectJobs()
 {

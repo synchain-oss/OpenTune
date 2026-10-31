@@ -97,7 +97,8 @@ bool ControlEditorBridge::focusPlacement(int trackId, std::uint64_t placementId)
 bool ControlEditorBridge::revealTracks(int count)
 {
     // The editor's steps when an import into separate tracks needs more tracks than it shows
-    // (importAudioRequested): the track panel and the arrangement show the same count.
+    // (importAudioRequested): the track panel and the arrangement show the same count. The panel's change also reaches
+    // visibleTrackCountChanged(), which saves the count in the arrangement (project state) and marks the project.
     count = std::clamp(count, 1, OpenTuneAudioProcessor::MAX_TRACKS);
     if (editor_.trackPanel_.getVisibleTrackCount() >= count)
         return true;

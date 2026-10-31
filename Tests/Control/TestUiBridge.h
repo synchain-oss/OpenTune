@@ -49,7 +49,17 @@ public:
 
     void onStructureChanged() override { ++structureChanges; }
     void onUndoRedoApplied() override { ++undoRedoNotifications; }
-    void onProjectReloaded() override { ++projectReloads; }
+    void onProjectReloaded() override
+    {
+        ++projectReloads;
+        if (trackCountArrangement == nullptr)
+            return;
+        // refreshAllUIFromProject(): the panel takes the count of the restored arrangement while
+        // applyingLoadedProjectUi_ is set, so that the change does not mark the project.
+        applyingLoadedProjectUi = true;
+        panelShowsTracks(trackCountArrangement->getVisibleTrackCount());
+        applyingLoadedProjectUi = false;
+    }
     void onProjectSaved() override { ++projectSaves; }
     void onRecentProjectsChanged() override { ++recentProjectChanges; }
     void setProjectOperationRunning(bool running) override
@@ -73,7 +83,13 @@ public:
     bool revealTracks(int count) override
     {
         ++revealCalls;
-        visibleTracks = std::max(visibleTracks, count);
+        if (trackCountArrangement == nullptr) {
+            visibleTracks = std::max(visibleTracks, count);
+            return true;
+        }
+        count = std::clamp(count, 1, OpenTuneAudioProcessor::MAX_TRACKS);
+        if (visibleTracks < count)
+            panelShowsTracks(count);
         return true;
     }
 
@@ -87,6 +103,12 @@ public:
     ViewState view;
     std::vector<std::uint64_t> selection;
     int visibleTracks = 1;
+    /** When set, the bridge models what the editor does with the track count: the track panel's count is saved in the
+        arrangement (a StandaloneArrangement::setVisibleTrackCount() on every change of the panel, which marks the
+        project unless the editor is applying a loaded project: OpenTuneAudioProcessorEditor::visibleTrackCountChanged),
+        and a reloaded project sets the panel to the arrangement's count (refreshAllUIFromProject). Left null, the
+        count is only a number the test sets. */
+    StandaloneArrangement* trackCountArrangement = nullptr;
     /** The project session and its worker pool, as the editor owns them; null for a test without a project. */
     ProjectSession* session = nullptr;
     juce::ThreadPool* pool = nullptr;
@@ -102,6 +124,8 @@ public:
     std::vector<bool> operationFlagChanges;
     int timeGridNotifications = 0;
     int revealCalls = 0;
+    /** applyingLoadedProjectUi_ of the editor; see trackCountArrangement. */
+    bool applyingLoadedProjectUi = false;
     /** The placements focusPlacement() was called with, in order. */
     std::vector<std::pair<int, std::uint64_t>> focused;
 
@@ -262,6 +286,21 @@ public:
     /** The kinds closeTopDialog() closed, in order, and the number of closeOnboarding() calls that closed it. */
     std::vector<std::string> closedDialogs;
     int onboardingCloses = 0;
+
+private:
+    /** TrackPanelComponent::setVisibleTrackCount() with the editor's listener, visibleTrackCountChanged(): nothing
+        happens when the count does not change; otherwise the arrangement takes the count, and a changed count of the
+        arrangement marks the project unless a loaded project is being applied. Only with trackCountArrangement. */
+    void panelShowsTracks(int count)
+    {
+        if (count == visibleTracks)
+            return;
+        visibleTracks = count;
+        const int previous = trackCountArrangement->getVisibleTrackCount();
+        trackCountArrangement->setVisibleTrackCount(count);
+        if (!applyingLoadedProjectUi && previous != trackCountArrangement->getVisibleTrackCount())
+            markDirty();
+    }
 };
 
 } // namespace ControlTest

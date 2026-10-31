@@ -852,6 +852,9 @@ private:
         const auto& undoManager = processor.getUndoManager();
         const int undoCount = undoManager.cursor();
         const int redoCount = undoManager.size() - undoManager.cursor();
+        // The tracks shown now, to tell what the open adds to the view.
+        const auto* shownArrangement = processor.getStandaloneArrangement();
+        const int shownBefore = shownArrangement != nullptr ? shownArrangement->getVisibleTrackCount() : 0;
         // What is removed: every clip and content of the project, with the handles of the epoch that ends now.
         const auto removed = listWorld(context);
 
@@ -869,17 +872,18 @@ private:
             return;
         }
 
-        // The tracks that hold clips are shown, then the editor refreshes everything from the new project.
+        // The track count is project state: commitPreparedOpen() restored it into the arrangement (the saved count,
+        // or more when clips, mix settings or the selected track need more: resolveLoadedVisibleTrackCount()), and
+        // the editor then takes it from there (refreshAllUIFromProject() with applyingLoadedProjectUi_ set, so that
+        // the change of the panel is not marked). Nothing shows tracks before that: revealing the tracks of the clips
+        // through the track panel would write that smaller count back to the arrangement and mark the project
+        // (OpenTuneAudioProcessorEditor::visibleTrackCountChanged()). The tracks that the open adds to the view are
+        // the ones between the count before and the count after.
         const auto created = listWorld(context);
-        int lastTrackWithClip = -1;
-        for (const auto& placement : controlLivePlacements(context))
-            lastTrackWithClip = std::max(lastTrackWithClip, placement.trackId);
         std::vector<int> revealed;
-        if (lastTrackWithClip >= 0)
-            if (const auto visible = bridge.visibleTrackCount();
-                visible && lastTrackWithClip >= *visible && bridge.revealTracks(lastTrackWithClip + 1))
-                for (int track = *visible; track <= lastTrackWithClip; ++track)
-                    revealed.push_back(track);
+        if (const auto* arrangement = processor.getStandaloneArrangement())
+            for (int track = shownBefore; track < arrangement->getVisibleTrackCount(); ++track)
+                revealed.push_back(track);
         bridge.onProjectReloaded();
 
         envelope.addChange("project", projectRef(), JsonValue::string("Project file"),
@@ -889,7 +893,8 @@ private:
         const auto omittedRemoved = removed.size() > kMaxListedEntries ? removed.size() - kMaxListedEntries : 0;
         envelope.limitDiffToTouchedContents();
         if (!revealed.empty()) {
-            // View state: no revert recipe and no IRREVERSIBLE for it (section 15.2 rule 6).
+            // The tracks the opened project adds to the view: no revert recipe of its own and no IRREVERSIBLE for it
+            // (section 15.2 rule 6); the open as a whole carries its revert recipe or IRREVERSIBLE below.
             auto trackIds = JsonValue::array();
             for (const int track : revealed)
                 trackIds.append(JsonValue::integer(track));

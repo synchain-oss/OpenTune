@@ -30,8 +30,6 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 | 非官方测试版 | 以预发布形式放在 [Releases 页面](https://github.com/synchain-oss/OpenTune/releases) |
 | MCP 服务（npm `@synchain/opentune-mcp`） | [已发布](https://www.npmjs.com/package/@synchain/opentune-mcp) |
 
-**已知限制（参考轨道）**：本测试版里 OpenTune 自带的实验性参考轨道仍然存在（在首选项「实验功能」打开后出现）。控制接口既不读取也不修改它，唯一的例外是 `content.getDetails` 的 `autoModes.uiButtonRuns`：它如实报告 AUTO 按钮此刻会运行什么（片段有可用的参考绑定时是 `reference`），而 `autoModes.available` 永远不含 `reference`，`content.autoTune` 也没有这个模式。rebase 到最新上游之后，参考轨道会随上游一起消失。
-
 ## 锁定的上游基点
 
 开发期间，本 fork 固定在一个上游提交上，不随上游同步：

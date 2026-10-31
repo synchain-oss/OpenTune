@@ -65,7 +65,7 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `Ops/TransportOps.*`, `Ops/TrackOps.*`, `Ops/TrackSupport.*` | `transport.control`, `transport.setTempo`, `transport.setLoop`; `track.set`, `track.add`, `track.duplicate`, `track.delete`; and what the track methods share (slot checks, the state of a track, the shown-track count; reusable by the clip methods). See "Transport and tracks". |
 | `Ops/ArrangementOps.*` | `arrangement.edit` (move, trim, gain, fades, split, merge, delete) and `arrangement.copy`, through the arrangement's setters and the processor's split, merge, delete and copy functions with the arrangement view's undo actions. See "Arrangement". |
 | `../Standalone/ControlEditorBridgeTracks.cpp` | The steps of the bridge for the track panel, the arrangement and the transport bar (shown tracks, mix, play state, tempo). |
-| `../Standalone/ControlEditorBridge.*`, `../Standalone/ControlEditorBridgeProject.cpp`, `../Standalone/ControlEditorBridgeModals.cpp`, `../Standalone/ControlEditorBridgePrefs.cpp` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor (the project flows in the second file, the dialogs and the onboarding in the third, the preferences and the audio device in the fourth); compiled into the application wrapper only. |
+| `../Standalone/ControlEditorBridge.*`, `../Standalone/ControlEditorBridgeProject.cpp`, `../Standalone/ControlEditorBridgeModals.cpp`, `../Standalone/ControlEditorBridgeColour.h`, `../Standalone/ControlEditorBridgePrefs.cpp` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor (the project flows in the second file, the dialogs and the onboarding in the third, the track panel listener that tells which track a colour picker is for in the fourth, the preferences and the audio device in the fifth); compiled into the application wrapper only. |
 
 The channel files (options to server) use only the standard library and the operating system; the
 unit tests (`Tests/Control/ControlUnitTests.cpp`) compile them on their own. The service files and every
@@ -508,14 +508,14 @@ fails when one changes:
 
 | Upstream function | Followed in |
 |---|---|
-| `buildNoteBasedCorrectionState()` and `commitNoteBasedCorrection()` (`Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp:189-240`) | `controlNoteBasedCorrection()` (`Edit/NoteCorrection.cpp`) |
-| `PianoRollToolHandler::noteDragEditRange()`, `dragNotePitch()`, `endNotePitchDrag()` (`PianoRollToolHandler.cpp:1912-2217`) | `controlNotesFrameRange()`; ops `setTargetPitch` and `shiftCents` (`Ops/ContentEditOps.cpp`), description |
-| `PianoRollToolHandler::handlePitchToolDoubleClick()` (`PianoRollToolHandler.cpp:2269-2359`) | op `snapToScale` (description), the drift and modulation descriptions of `setParams` |
-| `PianoRollComponent::editParameter()`, the selected-notes target (`Source/Standalone/UI/PianoRollComponent.cpp:2645-2903`) | op `setParams` (`Edit note`) |
-| `PianoRollComponent::commitEditedContentNotesAndSegments()` (`PianoRollComponent.cpp:1007-1116`) | `controlCommitCorrection()` |
-| `PianoRollComponent::applyAutoSnapToAllNotes()` and `isFullyCorrectedInRange()` (`PianoRollComponent.cpp:5344-5524`, `:49-61`) | `controlPlanAutoSnap()`; `content.autoTune` mode `snapNotes` |
-| `OpenTuneAudioProcessorEditor::pitchShiftRequested()` (`Source/Standalone/PluginEditor.cpp:3532-3581`) | `content.setPitchShift`: the no-op, the undo entry, the dirty flag |
-| `OpenTuneAudioProcessor::commitPitchShiftEdit()` and `StandaloneClipContent::applyPitchShiftState()` (`Source/PluginProcessor.cpp:5328-5368`, `Source/Content/StandaloneClipContent.cpp:127-139`) | `ControlPitchShiftLedger`: the counters a pitch-shift step advances |
+| `buildNoteBasedCorrectionState()` and `commitNoteBasedCorrection()` (`Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp:57-113`) | `controlNoteBasedCorrection()` (`Edit/NoteCorrection.cpp`) |
+| `PianoRollToolHandler::noteDragEditRange()`, `dragNotePitch()`, `endNotePitchDrag()` (`PianoRollToolHandler.cpp:1770-2075`) | `controlNotesFrameRange()`; ops `setTargetPitch` and `shiftCents` (`Ops/ContentEditOps.cpp`), description |
+| `PianoRollToolHandler::handlePitchToolDoubleClick()` (`PianoRollToolHandler.cpp:2127-2217`) | op `snapToScale` (description), the drift and modulation descriptions of `setParams` |
+| `PianoRollComponent::editParameter()`, the selected-notes target (`Source/Standalone/UI/PianoRollComponent.cpp:3047-3277`) | op `setParams` (`Edit note`) |
+| `PianoRollComponent::commitEditedContentNotesAndSegments()` (`PianoRollComponent.cpp:1353-1462`) | `controlCommitCorrection()` |
+| `PianoRollComponent::applyAutoSnapToAllNotes()` and `isFullyCorrectedInRange()` (`PianoRollComponent.cpp:5997-6177`, `:53-65`) | `controlPlanAutoSnap()`; `content.autoTune` mode `snapNotes` |
+| `OpenTuneAudioProcessorEditor::pitchShiftRequested()` (`Source/Standalone/PluginEditor.cpp:3681-3730`) | `content.setPitchShift`: the no-op, the undo entry, the dirty flag |
+| `OpenTuneAudioProcessor::commitPitchShiftEdit()` and `StandaloneClipContent::applyPitchShiftState()` (`Source/PluginProcessor.cpp:5741-5781`, `Source/Content/StandaloneClipContent.cpp:142-154`) | `ControlPitchShiftLedger`: the counters a pitch-shift step advances |
 
 Known OpenTune behaviours, reported as they are:
 
@@ -808,7 +808,7 @@ changes the content's `revision`.
   (`PianoRollComponent::setCurrentTool` calls `OpenTuneAudioProcessor::ensureTimeToolAnchorSeed()`). That function seeds
   from the content's timing analysis (the reference feature analysis) and, while that analysis is not ready, starts it
   and registers the content for a seeding of its own once it finishes. The API runs the seed as a job of kind
-  `timeGridSeed` instead: the job asks for the analysis with `preheatReferenceAlignmentFeatures()` (which does nothing
+  `timeGridSeed` instead: the job asks for the analysis with `preheatReferenceFeatures()` (which does nothing
   while it runs or is ready), waits, and calls `ensureTimeToolAnchorSeed()` only once the analysis is ready, which then
   seeds at once. So a cancelled job leaves no deferred seeding behind. Every step checks that the content still exists
   (`NOT_FOUND (unknown_handle)`) and that its pitch analysis is still ready; the first step and the seeding step check
@@ -832,7 +832,7 @@ when one of them changes). A change of these functions upstream needs the same c
 | the piano roll's `toolCtx.commitTimeGrid` (`Source/Standalone/UI/PianoRollComponent.cpp`) | `TimeGridOps::commit()` and the undo entry of `Ops/TimingOps.cpp` | `time-grid-commit` |
 | `PianoRollComponent::setCurrentTool()` (same file) | the seed job's call of `ensureTimeToolAnchorSeed()` | `time-tool-pick` |
 | `OpenTuneAudioProcessor::ensureTimeToolAnchorSeed()` (`Source/PluginProcessor.cpp`) | the seed job's condition for seeding at once (a grid without handles, `featuresReady`) | `time-seed-anchors` |
-| `OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures()` (same file) | the seed job's reading of `AlreadyReady` as the producer and fingerprint part of `featuresReady` | `time-seed-preheat` |
+| `OpenTuneAudioProcessor::preheatReferenceFeatures()` (same file) | the seed job's reading of `AlreadyReady` as the producer and fingerprint part of `featuresReady` | `time-seed-preheat` |
 | `OpenTuneAudioProcessor::setContentTimeGrid()` (same file) | the export's request of the time-stretch rebuild (`ExportJob::stretchState` in `Ops/ExportOps.cpp`) | `time-grid-publish` |
 
 Known OpenTune behaviours, reported as they are:
@@ -841,27 +841,16 @@ Known OpenTune behaviours, reported as they are:
 - The UI does not mark the project as changed after a time-grid edit or a seed; the API does (section 15.5).
 - `ensureTimeToolAnchorSeed()` replaces a grid whose handles are all of kind `UserAdded` and that is the identity;
   the API never calls it for a grid that has handles.
-- The reference analysis service runs only one synchronous analysis (the standard producer, which the time tool's
-  seeding uses by default) per session: `ReferenceAnalysisService::workerLoop` moves its finished job out of `activeJob`
-  with `std::move`, which leaves the optional engaged, so the worker never takes the next job. A later seed of another
-  content, from the UI or the API, waits for an analysis that never finishes; the seed job ends with
-  `NOT_READY(timing_analysis_timeout)` after its wait limit, or when it is cancelled, and never seeds without the
-  analysis. `TimeGridSeed` shows it.
 
 ## What the AUTO button runs
 
 `content.getDetails` reports `autoModes` (`Ops/ContentDetailsOps.cpp`). `available` lists the `content.autoTune` modes the
-content can run now (`regenerate`, `snapNotes` and `notesOnly` once its pitch analysis is ready and usable) and never
-holds `reference`. `uiButtonRuns` names what the window's AUTO button would run right now, as its click handler decides
-it: `snapNotes` in the openDyne scheme; `reference` when the clip has a live reference binding that
-`OpenTuneAudioProcessor::queryAutoRefAvailability()` reports ready (the button then runs OpenTune's AUTO Ref, whose
-experimental track this test build still has; the interface neither reads nor writes that binding); `regenerate`
-otherwise. The click handler does not look at the experimental-features switch when it decides, so a stale binding that
-is still ready makes the button run AUTO Ref even with the switch off, and `uiButtonRuns` says so. This is a read of
-upstream state (mirror `auto-button-mode`) that goes away with the reference track when this fork is rebased onto the
-latest upstream. A client that needs to know whether the service can run what the button would run asks whether
-`uiButtonRuns` is a mode of `content.autoTune`. `Details` covers a bound clip, an unbound one, the openDyne scheme and
-a binding that is made later.
+content can run now (`regenerate`, `snapNotes` and `notesOnly` once its pitch analysis is ready and usable).
+`uiButtonRuns` names what the window's AUTO button runs: `snapNotes` in the openDyne scheme, `regenerate` otherwise.
+OpenTune no longer has the reference alignment (AUTO Ref) or the query that decided between the two, so neither member
+ever holds `reference` (the specification still lists the value for builds whose window offers it), and `uiButtonRuns`
+is always a mode of `content.autoTune`. It follows the editing scheme of the preferences only, so it needs no mirror.
+`Details` covers both schemes and clips that have never been analysed.
 
 ## Project files
 
@@ -1121,7 +1110,7 @@ what the dialogs and the overlay offer publicly, so it needs no hook in their cl
 
 | Modal window | Recognised by | kind | closeCommits | What closing it as Escape does |
 |---|---|---|---|---|
-| Track colour (`OpenTuneAudioProcessorEditor::trackColorChangeRequested`) | a `DialogWindow` named `Track <n> Color` whose content holds a `juce::ColourSelector`; `trackId` is n - 1 | `trackColour` | true | The content's destructor sets the track's colour to the one shown, refreshes the track panel and the arrangement, and marks the project as changed. |
+| Track colour (`OpenTuneAudioProcessorEditor::trackColorChangeRequested`) | a `juce::CallOutBox` whose content holds a `juce::ColourSelector`; it has no title and names no track, so `trackId` is the track of the last `trackColorChangeRequested` call, which `ControlTrackColourWatch` (`ControlEditorBridgeColour.h`) hears as a listener of the track panel; a picker that was not asked for through the track panel has no track and stays `unknown` | `trackColour` | true | The content's destructor, which the modal manager runs when it deletes the call-out box, sets the track's colour to the one shown, refreshes the track panel and the arrangement, and marks the project as changed. The bridge runs these steps at once, so that the result reports the commit. |
 | `ConfirmDialogContent::showMessage`, `showDiagnostic` (also the OriginalF0 and render-failure diagnostics) | a `ConfirmDialogContent` with one button, or with Copy then OK | `message` | false | Its dismiss path: the window closes, no button action runs. |
 | Any other `ConfirmDialogContent` (unsaved changes, overwrite, the onboarding's workflow choice, ...) | a `ConfirmDialogContent` | `confirm` | false | Its dismiss callback, which cancels the action it asked about; the onboarding's choice dialog finishes the overlay. |
 | Pitch shift (`pitchShiftRequested`) | `PitchShiftDialogContent` | `pitchShift` | false | The window hides; only its confirm and reset buttons commit. |
@@ -1131,14 +1120,18 @@ what the dialogs and the overlay offer publicly, so it needs no hook in their cl
 | File chooser | `juce::FileChooser`'s modal component (`FileChooser::Native`, told apart only by its type name) or a `FileChooserDialogBox` | not listed | - | Not closed: only the user can close it. |
 
 Titles are the window's name (`DialogWindow::getName()`). `ConfirmDialogContent` and the shortcut dialog draw their
-title themselves and keep it private, so their title is empty.
+title themselves and keep it private, so their title is empty, and the colour picker, a call-out box, has none.
 
 **Closing** (`closeTopDialog()`). Escape goes to the content first and then to the window (`Component::keyPressed`,
 public there), as when the dialog has the keyboard focus. A dialog that ignores Escape closes with its window's close
 button, any other modal component with `exitModalState`. Then the window's content is deleted at once
 (`ResizableWindow::clearContentComponent()`), while the modal manager deletes the empty window later as always: what the
 dialog does when it closes has happened when the call returns (the colour is committed before the result is built), and
-the content stops listening to its window before the window goes.
+the content stops listening to its window before the window goes. The colour picker is not a window with a content the
+bridge could delete: its content belongs to the call-out box's owner, which the modal manager deletes later. So before
+it leaves the modal state the bridge sets the track's colour from the `ColourSelector`, refreshes the track panel and the
+arrangement and marks the project as changed, the steps of the content's destructor, which then sets the same colour
+once more.
 
 `ui.dismiss` with target `dialogs` checks before it closes anything. A file chooser above a listed dialog refuses the
 call with `BUSY(modal_open)`; a dialog whose `closeCommits` is true refuses it without `confirm`
@@ -1338,7 +1331,7 @@ does what the arrangement view does when the user clicks:
   others for a drag).
 - a track: `applyPlacementSelectionContext(trackId, 0)` (the active track, no clip selected on it, the piano roll
   empty), then the hook with no clip, which runs `commitEmptyPlacementSelection()` as a click on an empty area does (the
-  view drops its selection; the editor refreshes its reference context for no clip). The scale of the transport bar
+  view drops its selection). The scale of the transport bar
   stays. The track panel's own click (`trackSelected`) would select the track's remembered clip instead; the schema
   asks for no clip.
 
@@ -1363,13 +1356,11 @@ without one), the handle (`NOT_FOUND`), busy (also for dryRun).
 
 **Vectors.** Since spec rc.4 the vectors state what OpenTune does, and the runner expects their responses unchanged.
 OpenTune always has an active track (track 0 in a new project), so a selection that leaves it lists no `activeTrackId`
-and the revert recipe selects the previous track (`{trackId: 0}` when no clip was selected). What the editor's reference context does after a selection (outside the
-openDyne scheme, with the experimental features on) is not predicted and not reported: the interface has no reference
-alignment since spec rc.7, so a selection lists no `reference` component and no reference side effect or warning.
+and the revert recipe selects the previous track (`{trackId: 0}` when no clip was selected). OpenTune has no reference context after a selection any more, and the interface has no
+reference alignment since spec rc.7, so a selection lists no `reference` component and no reference side effect or warning.
 
 Tests: `Tests/Control/ControlSelectionTests.cpp` with a test bridge that selects as the editor does on the real
-processor (`generateNotesOnlyByContentKey` for the piano roll's notes, `preheatReferenceAlignmentFeatures` for the
-reference context, whose effect the result does not report; and the same note generation when `prefs.set` makes the
+processor (`generateNotesOnlyByContentKey` for the piano roll's notes; and the same note generation when `prefs.set` makes the
 scheme openDyne while the piano roll shows a clip, see "Workspace"). `Selection` checks the capability, the params, `NOT_FOUND`, `UNSUPPORTED`, busy, dryRun leaving the
 state as it was, a clip, `openEditor`, the scale with `ui.getState`, the no-op, the revert recipe sent back and a track.
 `SelectionMatrix` runs both schemes with a clip with and without notes and with and without a reference binding: the

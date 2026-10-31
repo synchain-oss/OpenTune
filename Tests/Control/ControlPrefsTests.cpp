@@ -295,10 +295,19 @@ public:
         return state;
     }
 
-    bool prepareAudioDeviceSwitch(juce::AudioDeviceManager&, const std::string& reason) override
+    /** The editor's restore of the ASIO sample rate: it succeeds, or fails as asioRestoreSucceeds says. A failure names
+        the device the manager runs and asioSystemRateHz, the rate the restore tried to set (not the rate of the
+        device), as the real bridge does. */
+    std::optional<AsioRateRestoreFailure> prepareAudioDeviceSwitch(juce::AudioDeviceManager& deviceManager,
+                                                                   const std::string& reason) override
     {
         switchReasons.push_back(reason);
-        return asioRestoreSucceeds;
+        if (asioRestoreSucceeds)
+            return std::nullopt;
+        AsioRateRestoreFailure failure;
+        failure.deviceName = deviceManager.getAudioDeviceSetup().outputDeviceName.toStdString();
+        failure.sampleRateHz = asioSystemRateHz;
+        return failure;
     }
 
     juce::AudioDeviceManager* manager = nullptr;
@@ -309,6 +318,8 @@ public:
     bool generateNotes = false;
     ContentKey pianoRollKey;
     bool asioRestoreSucceeds = true;
+    /** The rate that a restore of the ASIO sample rate aims at in these tests (the rate of the fake devices is 44100). */
+    double asioSystemRateHz = 48000.0;
     std::shared_ptr<ControlJobs> modalOnceJobStarted;
 
     int preferenceNotifications = 0;
@@ -420,6 +431,16 @@ bool hasWarning(const JsonValue& result, const std::string& code)
         if (memberOf(warnings.at(i), "code").text() == code)
             return true;
     return false;
+}
+
+/** The first warning with this code, or null. */
+const JsonValue* findWarning(const JsonValue& result, const std::string& code)
+{
+    const auto& warnings = memberOf(result, "warnings");
+    for (std::size_t i = 0; i < warnings.size(); ++i)
+        if (memberOf(warnings.at(i), "code").text() == code)
+            return &warnings.at(i);
+    return nullptr;
 }
 
 std::vector<std::string> warningCodes(const JsonValue& result)
@@ -968,8 +989,15 @@ constexpr const char* kWeightZ = "zz-custom.onnx";
  * reload end without a vocoder (not ready, not reconfiguring, idle worker). present false is a runtime without a
  * vocoder. calls lists the processor calls in order.
  *
- * Installing it replaces the models directory (the real scan then runs on a directory of the test), the vocoder state
- * and the three processor calls; with fakePitchModels also the list of pitch models, to have more than one.
+ * The inference backend it reports (session.info processing.backend) follows the rendering priority the way the
+ * runtime's detector does: a command for the priority reaches the detector when the control worker starts it (the
+ * moment the vocoder goes away to reconfigure), and the backend is then cpu when the priority is cpuFirst or the GPU
+ * cannot be used (gpuAvailable false), and directml otherwise. A job that does not wait for the vocoder (the vocoder
+ * was not ready before the change) can therefore still read the backend of before the change.
+ *
+ * Installing it replaces the models directory (the real scan then runs on a directory of the test), the vocoder state,
+ * the inference backend and the three processor calls; with fakePitchModels also the list of pitch models, to have
+ * more than one.
  */
 class FakeRuntime
 {
@@ -995,8 +1023,10 @@ public:
         };
         backend.resetInferenceBackend = [this](OpenTuneAudioProcessor&, bool forceCpu) {
             command();
+            pendingBackend_ = backendFor(forceCpu);
             calls.push_back(forceCpu ? "priority:cpuFirst" : "priority:gpuFirst");
         };
+        backend.inferenceBackend = [this] { return inferenceBackend(); };
         backend.setF0Model = [this](OpenTuneAudioProcessor&, F0ModelType type) {
             calls.push_back("f0:" + std::to_string(static_cast<int>(type)));
             return f0Accepts;
@@ -1027,9 +1057,31 @@ public:
         return {true, false, true};
     }
 
+    /** The backend the detector has chosen now: the one that a priority command chose, once the worker has started
+        that command. */
+    const char* inferenceBackend() const
+    {
+        ++backendReads;
+        if (pendingBackend_ != nullptr && commandAtMs && juce::Time::getMillisecondCounter() - *commandAtMs >= queuedMs) {
+            backend_ = pendingBackend_;
+            pendingBackend_ = nullptr;
+        }
+        return backend_;
+    }
+
+    /** The backend that runs at the start, before any command, under this rendering priority. */
+    void startWith(bool cpuFirst)
+    {
+        backend_ = backendFor(cpuFirst);
+        pendingBackend_ = nullptr;
+    }
+
     /** The runtime has finished everything it was asked: a ready vocoder and an idle worker. */
     void settle()
     {
+        if (pendingBackend_ != nullptr)
+            backend_ = pendingBackend_;
+        pendingBackend_ = nullptr;
         commandAtMs.reset();
         commandFails_ = false;
         failNextLoad = false;
@@ -1049,6 +1101,9 @@ public:
 
     bool present = true;
     bool neverReady = false;
+    /** OpenTune can create its inference session on the GPU: a request for gpuFirst ends on directml, otherwise on
+        cpu (the GPU could not be used). */
+    bool gpuAvailable = true;
     /** The load of the next command fails (a damaged weight): after the reload there is no vocoder. A command after it,
         such as the one that puts the previous weight back, loads. */
     bool failNextLoad = false;
@@ -1056,6 +1111,8 @@ public:
     std::uint32_t loadingMs = 300;
     bool f0Accepts = true;
     std::vector<std::string> calls;
+    /** How often the backend was asked for (session.info and a prefsApply job that changed the priority to gpuFirst). */
+    mutable int backendReads = 0;
 
 private:
     void command()
@@ -1065,8 +1122,12 @@ private:
         failNextLoad = false;
     }
 
+    const char* backendFor(bool cpuFirst) const { return cpuFirst || !gpuAvailable ? "cpu" : "directml"; }
+
     std::optional<std::uint32_t> commandAtMs;
     bool commandFails_ = false;
+    mutable const char* backend_ = "directml";
+    mutable const char* pendingBackend_ = nullptr;
 };
 
 std::vector<std::string> optionList(const JsonValue& array)
@@ -1410,6 +1471,128 @@ void checkRenderingPriority(ApiSession& api, OpenTuneAudioProcessor& processor, 
     runtime.settle();
 }
 
+/**
+ * BACKEND_FALLBACK (PROTOCOL.md section 12.7 rule 7): the result of the prefsApply job carries it when this call changed
+ * the rendering priority to gpuFirst and the backend that is reported when the job ends is cpu, with a null subject and
+ * the data {requested: gpuFirst, actual: cpu}, after GLOBAL_PREFERENCE. It does not when the GPU runs, when the priority
+ * becomes cpuFirst or does not change, and the backend is read once (and not at all by a call that does not change the
+ * priority to gpuFirst). A job that does not wait for the vocoder reads the backend of before the change.
+ */
+void checkBackendFallback(ApiSession& api, OpenTuneAudioProcessor& processor, FakeRuntime& runtime)
+{
+    auto& preferences = processor.getAppPreferences();
+    runtime.queuedMs = 150;
+    runtime.loadingMs = 150;
+    const auto processing = [&api] { return memberOf(api.result("session.info"), "processing"); };
+    // A start under this priority, on a machine whose GPU can or cannot be used.
+    const auto startUnder = [&](bool cpuFirst, bool gpu) {
+        runtime.settle();
+        runtime.gpuAvailable = gpu;
+        runtime.startWith(cpuFirst);
+        runtime.calls.clear();
+        preferences.setRenderingPriority(cpuFirst ? RenderingPriority::CpuFirst : RenderingPriority::GpuFirst);
+    };
+    const auto fallbackIs = [](const JsonValue& result) {
+        const JsonValue* fallback = findWarning(result, "BACKEND_FALLBACK");
+        const bool ok = fallback != nullptr && memberOf(*fallback, "subject").isNull()
+                        && toJsonString(memberOf(*fallback, "data")) == R"({"requested":"gpuFirst","actual":"cpu"})";
+        if (!ok)
+            note("BACKEND_FALLBACK is not as expected: " + toJsonString(memberOf(result, "warnings")));
+        return ok;
+    };
+
+    // The GPU cannot be used: the change to gpuFirst ends on the CPU. The call succeeded and the preference is set; the
+    // warning is the only sign, besides session.info, that the backend is not the one requested.
+    startUnder(true, false);
+    runtime.backendReads = 0;
+    {
+        const auto job = runAsJob(api, "prefs.set", json(R"({"renderingPriority":"gpuFirst"})"), "prefsApply");
+        CONTROL_CHECK(jobSucceeded(job));
+        const auto& result = memberOf(job, "result");
+        CONTROL_CHECK((warningCodes(result) == std::vector<std::string>{"GLOBAL_PREFERENCE", "BACKEND_FALLBACK"}));
+        CONTROL_CHECK(fallbackIs(result));
+        CONTROL_CHECK((globalPreferences(result) == std::vector<std::string>{"renderingPriority"}));
+        CONTROL_CHECK(undoIsUiParity(result) && memberOf(result, "sideEffects").size() == 0);
+        CONTROL_CHECK(runtime.backendReads == 1);
+        CONTROL_CHECK(preferences.getState().shared.renderingPriority == RenderingPriority::GpuFirst);
+        const auto after = processing();
+        CONTROL_CHECK(memberOf(after, "renderingPriority").text() == "gpuFirst"
+                      && memberOf(after, "backend").text() == "cpu");
+    }
+
+    // The GPU runs: no warning.
+    startUnder(true, true);
+    runtime.backendReads = 0;
+    {
+        const auto job = runAsJob(api, "prefs.set", json(R"({"renderingPriority":"gpuFirst"})"), "prefsApply");
+        CONTROL_CHECK(jobSucceeded(job));
+        const auto& result = memberOf(job, "result");
+        CONTROL_CHECK((warningCodes(result) == std::vector<std::string>{"GLOBAL_PREFERENCE"}));
+        CONTROL_CHECK(runtime.backendReads == 1);
+        const auto after = processing();
+        CONTROL_CHECK(memberOf(after, "renderingPriority").text() == "gpuFirst"
+                      && memberOf(after, "backend").text() == "directml");
+    }
+
+    // The change to cpuFirst on a machine without a GPU: the backend is cpu, as asked, so there is no warning and the
+    // backend is not even read.
+    startUnder(false, false);
+    runtime.backendReads = 0;
+    {
+        const auto job = runAsJob(api, "prefs.set", json(R"({"renderingPriority":"cpuFirst"})"), "prefsApply");
+        CONTROL_CHECK(jobSucceeded(job));
+        CONTROL_CHECK((warningCodes(memberOf(job, "result")) == std::vector<std::string>{"GLOBAL_PREFERENCE"}));
+        CONTROL_CHECK(runtime.backendReads == 0);
+    }
+
+    // A call that does not change the priority carries no warning, whatever the backend is: the priority is gpuFirst
+    // already (a no-op, which starts no job), and another preference changes on its own.
+    startUnder(false, false);
+    runtime.backendReads = 0;
+    {
+        const auto same = api.result("prefs.set", json(R"({"renderingPriority":"gpuFirst"})"));
+        CONTROL_CHECK(memberOf(same, "noOp").asBoolean() && memberOf(same, "warnings").size() == 0);
+        const auto other = api.result("prefs.set", json(R"({"experimentalFeatures":true})"));
+        CONTROL_CHECK((warningCodes(other) == std::vector<std::string>{"GLOBAL_PREFERENCE"}));
+        CONTROL_CHECK(runtime.backendReads == 0);
+    }
+
+    // One call that changes the tuning and the priority: the warning comes last, after those of the other preferences.
+    startUnder(true, false);
+    {
+        const auto job = runAsJob(api, "prefs.set", json(R"({"tuningHz":432,"renderingPriority":"gpuFirst"})"), "prefsApply");
+        CONTROL_CHECK(jobSucceeded(job));
+        const auto& result = memberOf(job, "result");
+        CONTROL_CHECK((warningCodes(result)
+                       == std::vector<std::string>{"GLOBAL_PREFERENCE", "NOT_RETROACTIVE", "BACKEND_FALLBACK"}));
+        CONTROL_CHECK(fallbackIs(result));
+    }
+
+    // A job that does not wait for the vocoder (it was not ready before the change) reads the backend once, when it
+    // ends, and that can be the backend from before the change: the worker has not started the command yet (the rule
+    // says the warning is then decided from the earlier backend).
+    startUnder(true, true);
+    runtime.queuedMs = 60000;
+    runtime.present = false;
+    runtime.backendReads = 0;
+    {
+        const auto job = runAsJob(api, "prefs.set", json(R"({"renderingPriority":"gpuFirst"})"), "prefsApply");
+        CONTROL_CHECK(jobSucceeded(job));
+        CONTROL_CHECK(fallbackIs(memberOf(job, "result")));
+        CONTROL_CHECK(runtime.backendReads == 1);
+        runtime.settle();
+        CONTROL_CHECK(memberOf(processing(), "backend").text() == "directml");
+    }
+
+    runtime.settle();
+    runtime.gpuAvailable = true;
+    runtime.startWith(false);
+    runtime.calls.clear();
+    runtime.queuedMs = 300;
+    runtime.loadingMs = 300;
+    resetPreferences(processor);
+}
+
 /** f0Model: not on offer, no-op, the change, a processor that refuses (also inside a job), the order, the revert. */
 void checkPitchModel(ApiSession& api, OpenTuneAudioProcessor& processor, PrefsBridge& bridge, FakeRuntime& runtime)
 {
@@ -1565,6 +1748,7 @@ void scenarioPrefsOptions()
     checkOptionLists(api, models);
     checkVocoderWeight(api, *processor, bridge, runtime, *handles);
     checkRenderingPriority(api, *processor, bridge, runtime);
+    checkBackendFallback(api, *processor, runtime);
     // From here the pitch models are a fake list of three: fcpe, other and gone (not available).
     runtime.install(models, true);
     checkPitchModel(api, *processor, bridge, runtime);
@@ -2426,9 +2610,29 @@ void checkUnavailableAfterChange(ApiSession& api, FakeAudioRig& rig)
     rig.behaviour.failDeviceName = {};
 }
 
+/** The warning ASIO_RATE_NOT_RESTORED of registry/warnings.json: it comes after GLOBAL_PREFERENCE, its subject is the
+    singleton audioDevice and its data names the ASIO device whose rate was to be restored and the rate in Hz that the
+    restore tried to set. */
+bool asioWarningIs(const JsonValue& result, const char* deviceName, double sampleRateHz)
+{
+    const JsonValue* warning = findWarning(result, "ASIO_RATE_NOT_RESTORED");
+    const auto& warnings = memberOf(result, "warnings");
+    bool ok = warning != nullptr && warnings.size() == 2 && memberOf(warnings.at(0), "code").text() == "GLOBAL_PREFERENCE"
+              && warning == &warnings.at(1)
+              && toJsonString(memberOf(*warning, "subject")) == R"({"singleton":"audioDevice"})";
+    if (ok) {
+        const auto& data = memberOf(*warning, "data");
+        ok = data.isObject() && data.size() == 2 && memberOf(data, "deviceName").text() == deviceName
+             && numberIs(memberOf(data, "sampleRateHz"), sampleRateHz);
+    }
+    if (!ok)
+        note("ASIO_RATE_NOT_RESTORED is not as expected: " + toJsonString(warnings));
+    return ok;
+}
+
 /** The ASIO transitions: the editor restores the system sample rate first, as best effort: a restore that fails does
    not stop the switch (the page continues and shows kAudioDeviceRestoreWarning); the result carries the warning
-   ASIO_RATE_NOT_RESTORED. */
+   ASIO_RATE_NOT_RESTORED, with the singleton audioDevice as its subject and the device and the rate in its data. */
 void checkAsioSwitch(ApiSession& api, PrefsBridge& bridge)
 {
     // Other changes of an ASIO device do not close it for another one: no restore.
@@ -2444,6 +2648,8 @@ void checkAsioSwitch(ApiSession& api, PrefsBridge& bridge)
     const auto output = api.result("audio.set", json(R"({"outputDevice":"Fake Output B"})"));
     CONTROL_CHECK(memberOf(output, "applied").asBoolean() && hasWarning(output, "ASIO_RATE_NOT_RESTORED")
                   && hasWarning(output, "GLOBAL_PREFERENCE"));
+    // The device that was left (the one the restore acted on) and the rate it tried to set, not the rate of the device.
+    CONTROL_CHECK(asioWarningIs(output, "Fake Output A", 48000.0));
     CONTROL_CHECK(deviceIs(deviceOf(output), "ASIO", "Fake Output B", 44100.0, 512.0));
     CONTROL_CHECK((bridge.switchReasons == std::vector<std::string>{"audio output switch"}));
     // The revert recipe sets the previous output device back; this time the restore succeeds and there is no warning.
@@ -2470,6 +2676,7 @@ void checkAsioSwitch(ApiSession& api, PrefsBridge& bridge)
     bridge.asioRestoreSucceeds = false;
     const auto type = api.result("audio.set", json(R"({"deviceType":"Fake B"})"));
     CONTROL_CHECK(memberOf(type, "applied").asBoolean() && hasWarning(type, "ASIO_RATE_NOT_RESTORED"));
+    CONTROL_CHECK(asioWarningIs(type, "Fake Output A", 48000.0));
     CONTROL_CHECK((bridge.switchReasons == std::vector<std::string>{"audio type switch"}));
     CONTROL_CHECK(deviceIs(deviceOf(type), "Fake B", "Fake B Output", 44100.0, 512.0));
     bridge.asioRestoreSucceeds = true;
@@ -2608,8 +2815,15 @@ std::string vectorSkipReason(const JsonValue& vector, const std::set<std::string
                 return reason;
             continue;
         }
+        // given.gpu (available or unavailable) is the fake runtime's gpuAvailable; given.audio, with asioRateRestoreFails,
+        // is a rig whose device type is ASIO and a bridge whose restore of the ASIO sample rate fails.
         if (name == "dirty" || name == "editingScheme" || name == "audio")
             continue;
+        if (name == "gpu") {
+            if (given.at(i).text() != "available" && given.at(i).text() != "unavailable")
+                return "precondition given.gpu " + given.at(i).text() + " is not established by this runner";
+            continue;
+        }
         if (name == "jobs") {
             for (std::size_t j = 0; j < given.at(i).size(); ++j)
                 if (memberOf(given.at(i).at(j), "state").text() != "failed")
@@ -2678,16 +2892,27 @@ std::string runVector(const JsonValue& vector, bool withClips)
     FakeRuntime runtime;
     runtime.queuedMs = 100;
     runtime.loadingMs = 100;
+    // given.gpu: whether OpenTune can create its inference session on the GPU. Without the member the vector assumes
+    // nothing about the GPU, and the runtime's default (it can) stands. The backend at the start is the one that the
+    // rendering priority of the vector gives.
+    if (const JsonValue* gpu = given.find("gpu"))
+        runtime.gpuAvailable = gpu->text() == "available";
+    runtime.startWith(preferences.getState().shared.renderingPriority == RenderingPriority::CpuFirst);
     runtime.install(models);
     const auto& audioGiven = memberOf(given, "audio");
     const bool audioRunning = audioGiven.find("running") == nullptr || memberOf(audioGiven, "running").asBoolean();
-    FakeAudioRig rig(audioRunning);
+    // given.audio.asioRateRestoreFails: the device type that runs is ASIO (the editor restores the sample rate of an
+    // ASIO device only), and the restore fails.
+    const bool asioRestoreFails =
+        audioGiven.find("asioRateRestoreFails") != nullptr && memberOf(audioGiven, "asioRateRestoreFails").asBoolean();
+    FakeAudioRig rig(audioRunning, asioRestoreFails ? "ASIO" : "Fake");
     if (audioGiven.find("failsToOpen") != nullptr && memberOf(audioGiven, "failsToOpen").asBoolean())
         rig.behaviour.failRateHz = 48000.0;
     PrefsBridge bridge;
     bridge.processor = processor.get();
     bridge.preferences = &processor->getAppPreferences();
     bridge.manager = &rig.manager;
+    bridge.asioRestoreSucceeds = !asioRestoreFails;
     bridge.generateNotes = true;
     bridge.project.dirty = memberOf(given, "dirty").isBoolean() && memberOf(given, "dirty").asBoolean();
     ScopedBridge registered(service, bridge);
@@ -2840,7 +3065,8 @@ void scenarioPrefsVectors()
                  {"prefs/get-options", "prefs/set-experimental-features", "prefs/set-f0-model-noop", "prefs/set-hybrid",
                   "prefs/set-job-failures", "prefs/set-no-op", "prefs/set-option-unavailable",
                   "prefs/set-option-unavailable-unchanged", "prefs/set-out-of-range", "prefs/set-rendering-priority",
-                  "prefs/set-scheme", "prefs/set-scheme-job", "prefs/set-tuning", "prefs/set-tuning-revert",
+                  "prefs/set-rendering-priority-fallback", "prefs/set-rendering-priority-gpu", "prefs/set-scheme",
+                  "prefs/set-scheme-job", "prefs/set-tuning", "prefs/set-tuning-revert",
                   "prefs/set-vocoder-load-failed", "prefs/set-vocoder-not-ready", "prefs/set-vocoder-weight"},
                  true);
 }
@@ -2848,7 +3074,8 @@ void scenarioPrefsVectors()
 void scenarioAudioVectors()
 {
     runVectorsOf("ControlProcessorTests.AudioVectors", "audio", kAudioVectorCapabilities, kAudioVectorMethods,
-                 {"audio/get-no-device", "audio/get-ok", "audio/set-device-type", "audio/set-ok",
+                 {"audio/get-no-device", "audio/get-ok", "audio/set-asio-rate-not-needed",
+                  "audio/set-asio-rate-not-restored", "audio/set-device-type", "audio/set-ok",
                   "audio/set-output-channel-pair", "audio/set-output-device", "audio/set-rollback",
                   "audio/set-unavailable"},
                  false);

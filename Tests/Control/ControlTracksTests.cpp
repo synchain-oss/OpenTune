@@ -170,10 +170,22 @@ class TracksBridge : public TestUiBridge
 {
 public:
     juce::AudioDeviceManager* audioDevice() override { return audio; }
+    /** TrackPanelComponent::setVisibleTrackCount() with the editor's listener: a changed count reaches
+        OpenTuneAudioProcessorEditor::visibleTrackCountChanged(), which saves the count in the arrangement and marks the
+        project (the number of visible tracks is project state). The mark is the panel's: dirtyMarks counts only the
+        marks the control API makes itself, so that a test can tell an operation that marks the project from one that
+        leaves it to the panel (panelDirtyMarks counts these). */
     bool setVisibleTrackCount(int count) override
     {
-        visibleTracks = std::clamp(count, 1, kSlots);
-        shownCounts.push_back(visibleTracks);
+        count = std::clamp(count, 1, kSlots);
+        shownCounts.push_back(count);
+        if (count != visibleTracks) {
+            visibleTracks = count;
+            ++panelDirtyMarks;
+            project.dirty = true;
+            if (session != nullptr)
+                session->markDirty();
+        }
         return true;
     }
     void onTrackMixChanged() override { ++mixChanges; }
@@ -182,6 +194,7 @@ public:
 
     juce::AudioDeviceManager* audio = nullptr;
     std::vector<int> shownCounts;
+    int panelDirtyMarks = 0;
     int mixChanges = 0;
     int transportChanges = 0;
     int tempoChanges = 0;
@@ -674,24 +687,62 @@ void checkTrackSet(Fixture& f)
     CONTROL_CHECK(f.arrangementRevision() == revision && !arrangement.isTrackMuted(0));
 }
 
+/** The first warning with this code, or null. */
+const JsonValue* findWarning(const JsonValue& result, const char* code)
+{
+    const auto& warnings = memberOf(result, "warnings");
+    for (std::size_t i = 0; i < warnings.size(); ++i)
+        if (memberOf(warnings.at(i), "code").text() == code)
+            return &warnings.at(i);
+    return nullptr;
+}
+
+/** The warning IRREVERSIBLE of a call of track.add: the only warning, with the first track shown as its subject
+    (trackId) and null data. */
+bool irreversibleOnTrack(const JsonValue& result, int trackId)
+{
+    const JsonValue* warning = findWarning(result, "IRREVERSIBLE");
+    const bool ok = warning != nullptr && memberOf(result, "warnings").size() == 1
+                    && toJsonString(memberOf(*warning, "subject")) == "{\"trackId\":" + std::to_string(trackId) + "}"
+                    && memberOf(*warning, "data").isNull();
+    if (!ok)
+        note("IRREVERSIBLE is not as expected: " + toJsonString(memberOf(result, "warnings")));
+    return ok;
+}
+
 void checkTrackAdd(Fixture& f)
 {
+    // The number of visible tracks is project state: the project file stores it, and the + button writes it back to the
+    // project through the panel (visibleTrackCountChanged), which marks the project. The call does not mark the project
+    // itself (dirtyMarks stays) and leaves it to the panel (panelDirtyMarks), as the real editor does. A project that
+    // was not changed before the call is changed after it. The + button has no undo and no request restores the number
+    // (track.delete is no revert recipe), so the call is irreversible: no_upstream_undo, revert null, and the warning
+    // IRREVERSIBLE on the first track shown.
+    f.bridge.project.dirty = false;
     const int marks = f.bridge.dirtyMarks;
+    const int panelMarks = f.bridge.panelDirtyMarks;
     const auto added = f.api.result("track.add", json("{}"));
     CONTROL_CHECK(f.bridge.visibleTracks == 3);
     CONTROL_CHECK(near(memberOf(memberOf(added, "visibleTrackCount"), "before"), 2.0)
                   && near(memberOf(memberOf(added, "visibleTrackCount"), "after"), 3.0));
     CONTROL_CHECK(memberOf(memberOf(trackChange(added, 2), "fields"), "visible").size() == 3);
-    CONTROL_CHECK(warningCodes(added) == "NOT_PERSISTED");
-    CONTROL_CHECK(memberOf(memberOf(added, "undo"), "reason").text() == "not_persisted_state"
-                  && memberOf(memberOf(added, "undo"), "revert").isNull() && !hasWarning(added, "IRREVERSIBLE"));
-    CONTROL_CHECK(f.bridge.dirtyMarks == marks);
+    CONTROL_CHECK(warningCodes(added) == "IRREVERSIBLE" && irreversibleOnTrack(added, 2));
+    CONTROL_CHECK(!hasWarning(added, "NOT_PERSISTED"));
+    const auto& undo = memberOf(added, "undo");
+    CONTROL_CHECK(memberOf(undo, "undoable").isBoolean() && !memberOf(undo, "undoable").asBoolean()
+                  && memberOf(undo, "reason").text() == "no_upstream_undo" && memberOf(undo, "revert").isNull());
+    CONTROL_CHECK(!memberOf(memberOf(added, "dirty"), "before").asBoolean()
+                  && memberOf(memberOf(added, "dirty"), "after").asBoolean());
+    CONTROL_CHECK(f.bridge.dirtyMarks == marks && f.bridge.panelDirtyMarks == panelMarks + 1);
     // A shown track keeps the clips it holds: the project lists the track as visible.
     CONTROL_CHECK(memberOf(trackOf(f.project(), 2), "visible").asBoolean());
 
+    // Several tracks at once: one warning, on the first track shown.
     const auto several = f.api.result("track.add", json(R"({"count":4})"));
     CONTROL_CHECK(f.bridge.visibleTracks == 7 && near(memberOf(memberOf(several, "visibleTrackCount"), "after"), 7.0));
-    CONTROL_CHECK(hasWarning(several, "NOT_PERSISTED"));
+    CONTROL_CHECK(warningCodes(several) == "IRREVERSIBLE" && irreversibleOnTrack(several, 3));
+    CONTROL_CHECK(memberOf(memberOf(several, "undo"), "reason").text() == "no_upstream_undo");
+    CONTROL_CHECK(f.bridge.dirtyMarks == marks);
     // More than the hidden slots: none is shown.
     const auto revision = f.arrangementRevision();
     CONTROL_CHECK(f.api.fails("track.add", json(R"({"count":6})"), "INVALID_ARGUMENT", "track_limit"));

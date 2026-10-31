@@ -36,8 +36,9 @@ constexpr std::size_t kMaxListedEntries = 200;
 /** The extension that saving and opening projects accept (PROTOCOL.md section 20.1), compared without regard to case.
  */
 constexpr std::string_view kProjectExtension = ".otproj";
-/** The state that a project file does not hold (warning NOT_SAVED_IN_PROJECT, data.items). */
-constexpr const char* kNotSavedItems[] = {"visibleTrackCount", "undoHistory", "preferences"};
+/** The state that a project file does not hold (warning NOT_SAVED_IN_PROJECT, data.items). The number of visible tracks
+    is not in the list: the project file stores it. */
+constexpr const char* kNotSavedItems[] = {"undoHistory", "preferences"};
 constexpr const char* kJobKindSave = "projectSave";
 constexpr const char* kJobKindCopy = "projectCopy";
 constexpr const char* kJobKindOpen = "projectOpen";

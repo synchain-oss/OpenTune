@@ -337,6 +337,19 @@ function addedLinesOf(top, base, headSpec, file) {
   return added;
 }
 
+/**
+ * The workflow files that are ours. A workflow that came with the upstream snapshot and that the delta leaves
+ * alone is upstream's file, not part of our increment (the upstream iPadOS and release workflows pin their actions
+ * by tag and never run in this fork), so the workflow scans leave it out. Everything the delta adds or changes is
+ * ours and stays in scope. Without a usable delta every file stays in scope.
+ * @returns {{ own: string[], upstream: string[] }}
+ */
+export function splitWorkflowFiles(files, delta) {
+  if (!delta?.ok) return { own: files, upstream: [] };
+  const changed = new Set(delta.files.map((f) => f.path));
+  return { own: files.filter((f) => changed.has(f)), upstream: files.filter((f) => !changed.has(f)) };
+}
+
 function resolveClangFormat(opts) {
   const fromOpt = opts.clangFormat ?? (process.env.CLANG_FORMAT ? [process.env.CLANG_FORMAT] : null);
   const cmd = Array.isArray(fromOpt) ? fromOpt : fromOpt ? [fromOpt] : ['clang-format'];
@@ -505,8 +518,8 @@ export async function runChecks(opts = {}) {
       };
       for (const f of delta.files) guard(f.path, `${statusWord(f.status)}（相对上游基点）`);
       for (const [sha, files] of delta.historyPaths) for (const f of files) guard(f.path, `提交 ${short(sha)} ${statusWord(f.status)}`);
-      // lfs: true anywhere in a workflow
-      const wfFiles = listTreeFiles(top, opts.index ? null : delta.head, '.github/workflows').filter((f) => /\.ya?ml$/i.test(f));
+      // lfs: true anywhere in one of our workflows (upstream's own, unchanged workflows are not scanned)
+      const wfFiles = splitWorkflowFiles(listTreeFiles(top, opts.index ? null : delta.head, '.github/workflows').filter((f) => /\.ya?ml$/i.test(f)), delta).own;
       const wfBlobs = readBlobs(top, wfFiles.map((f) => blobAt(headSpec, f)));
       for (const f of wfFiles) {
         const buf = wfBlobs.get(blobAt(headSpec, f));
@@ -665,7 +678,9 @@ export async function runChecks(opts = {}) {
   if (want('workflow-triggers') || want('actions-pinned')) {
     const headRev = opts.index ? null : delta.head ?? tryResolveCommit(top, opts.head ?? 'HEAD');
     const spec = opts.index ? '' : headRev;
-    const wfFiles = listTreeFiles(top, headRev, '.github/workflows').filter((f) => /\.ya?ml$/i.test(f));
+    const wfSplit = splitWorkflowFiles(listTreeFiles(top, headRev, '.github/workflows').filter((f) => /\.ya?ml$/i.test(f)), delta);
+    const wfFiles = wfSplit.own;
+    const upstreamNote = wfSplit.upstream.length ? `；上游原样的 ${wfSplit.upstream.length} 个 workflow（${wfSplit.upstream.map((f) => path.posix.basename(f)).join('、')}）不是我们的增量，不检查` : '';
     const actionFiles = listTreeFiles(top, headRev, '.github/actions').filter((f) => /(^|\/)action\.ya?ml$/i.test(f));
     const blobs = readBlobs(top, [...wfFiles, ...actionFiles].map((f) => `${spec}:${f}`));
     const triggerProblems = [];
@@ -687,10 +702,10 @@ export async function runChecks(opts = {}) {
     }
     add(triggerProblems.length
       ? result('workflow-triggers', titleOf('workflow-triggers'), 'FAIL', '有 workflow 使用 pull_request_target', triggerProblems)
-      : result('workflow-triggers', titleOf('workflow-triggers'), 'PASS', `${wfFiles.length} 个 workflow 的触发器均不含 pull_request_target`));
+      : result('workflow-triggers', titleOf('workflow-triggers'), 'PASS', `${wfFiles.length} 个 workflow 的触发器均不含 pull_request_target${upstreamNote}`));
     add(pinProblems.length
       ? result('actions-pinned', titleOf('actions-pinned'), 'FAIL', 'action 引用未固定到 40 位 SHA 或不在允许清单内', pinProblems)
-      : result('actions-pinned', titleOf('actions-pinned'), 'PASS', `${uses} 处 uses: 均固定到 40 位 SHA 并注明版本`));
+      : result('actions-pinned', titleOf('actions-pinned'), 'PASS', `${uses} 处 uses: 均固定到 40 位 SHA 并注明版本${upstreamNote}`));
   }
 
   // --- documentation <=> code: README method table, hook list, mirrors, test names (whole tree at head).

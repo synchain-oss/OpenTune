@@ -1,6 +1,6 @@
 {
   "schema": 1,
-  "comment": "Catalogue for .github/scripts/release-notices.mjs, which writes THIRD-PARTY-NOTICES.txt of the unofficial Windows and macOS test builds. A component is written only when its probe finds it in the build (compiled sources, include paths, data embedded in the executable, files next to it, the ARA link check). \"platforms\": [\"windows\"] or [\"macos\"] limits a component to one platform (without it the component is considered on both). juceVendored.conditionsByPlatform overrides juceVendored.conditions per platform. Packages vendored inside JUCE come from JUCE.spdx.json; juceVendored.conditions excludes the ones whose code is switched off for the Standalone. redistribution 'unverified' keeps a component out of the notices and blocks a tagged release until its terms are confirmed (no component carries it at present). \"mustAppear\": true puts a component in the fail-closed class below although its terms ask for no license text. Fail closed: when the repository has a component (embedded files, or probe.repoFiles of a source / include probe) whose terms ask for something (unverified terms, license text, the GPL-3.0 appendix, \"mustAppear\": true) but its probe finds nothing in the build, the component is a release blocker too, unless the entry says \"absentOk\": \"<reason>\". See .github/release/README.md.",
+  "comment": "Catalogue for .github/scripts/release-notices.mjs, which writes THIRD-PARTY-NOTICES.txt of the unofficial Windows and macOS test builds. A component is written only when its probe finds it in the build (compiled sources, include paths, data embedded in the executable, files next to it, the ARA link check). \"platforms\": [\"windows\"] or [\"macos\"] limits a component to one platform (without it the component is considered on both). juceVendored.conditionsByPlatform overrides juceVendored.conditions per platform. Packages vendored inside JUCE come from JUCE.spdx.json of the JUCE checkout, or from .github/release/juce-<version>.spdx.json when the checkout has none (JUCE 8.0.12 has none); juceVendored.conditions excludes the ones whose code is switched off for the Standalone. redistribution 'unverified' keeps a component out of the notices and blocks a tagged release until its terms are confirmed (no component carries it at present). \"mustAppear\": true puts a component in the fail-closed class below although its terms ask for no license text. Fail closed: when the repository has a component (embedded files, or probe.repoFiles of a source / include probe) whose terms ask for something (unverified terms, license text, the GPL-3.0 appendix, \"mustAppear\": true) but its probe finds nothing in the build, the component is a release blocker too, unless the entry says \"absentOk\": \"<reason>\". See .github/release/README.md.",
   "components": [
     {
       "id": "opentune",
@@ -142,23 +142,14 @@
   "juceVendored": {
     "conditions": {
       "FLAC": { "anyMacro": [{ "name": "JUCE_USE_FLAC", "default": "1" }] },
-      "libogg": { "anyMacro": [{ "name": "JUCE_USE_OGGVORBIS", "default": "1" }, { "name": "JUCE_USE_OPUS", "default": "1" }] },
-      "libvorbis": { "anyMacro": [{ "name": "JUCE_USE_OGGVORBIS", "default": "1" }] },
-      "Opus": { "anyMacro": [{ "name": "JUCE_USE_OPUS", "default": "1" }] },
-      "opusfile": { "anyMacro": [{ "name": "JUCE_USE_OPUS", "default": "1" }] },
-      "libopusenc": { "anyMacro": [{ "name": "JUCE_USE_OPUS", "default": "1" }] },
+      "Ogg Vorbis": { "anyMacro": [{ "name": "JUCE_USE_OGGVORBIS", "default": "1" }] },
       "ASIO SDK": { "anyMacro": [{ "name": "JUCE_ASIO", "default": "0" }] },
       "Oboe": { "never": "Android only" },
       "AudioUnitSDK": { "never": "macOS / iOS only" },
       "AAX SDK": { "anyMacro": [{ "name": "JucePlugin_Build_AAX", "default": "0" }] },
       "VST3 SDK": { "anyMacro": [{ "name": "JucePlugin_Build_VST3", "default": "0" }, { "name": "JUCE_PLUGINHOST_VST3", "default": "0" }] },
       "pslextensions": { "anyMacro": [{ "name": "JucePlugin_Build_VST3", "default": "0" }, { "name": "JUCE_PLUGINHOST_VST3", "default": "0" }] },
-      "LV2": { "anyMacro": [{ "name": "JucePlugin_Build_LV2", "default": "0" }, { "name": "JUCE_PLUGINHOST_LV2", "default": "0" }] },
-      "lilv": { "anyMacro": [{ "name": "JucePlugin_Build_LV2", "default": "0" }, { "name": "JUCE_PLUGINHOST_LV2", "default": "0" }] },
-      "serd": { "anyMacro": [{ "name": "JucePlugin_Build_LV2", "default": "0" }, { "name": "JUCE_PLUGINHOST_LV2", "default": "0" }] },
-      "sord": { "anyMacro": [{ "name": "JucePlugin_Build_LV2", "default": "0" }, { "name": "JUCE_PLUGINHOST_LV2", "default": "0" }] },
-      "sratom": { "anyMacro": [{ "name": "JucePlugin_Build_LV2", "default": "0" }, { "name": "JUCE_PLUGINHOST_LV2", "default": "0" }] },
-      "@juce-framework/webview": { "anyMacro": [{ "name": "JUCE_WEB_BROWSER", "default": "1" }] }
+      "LV2": { "anyMacro": [{ "name": "JucePlugin_Build_LV2", "default": "0" }, { "name": "JUCE_PLUGINHOST_LV2", "default": "0" }] }
     },
     "conditionsByPlatform": {
       "macos": {

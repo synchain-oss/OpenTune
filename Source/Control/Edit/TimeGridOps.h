@@ -21,21 +21,24 @@ class OpenTuneAudioProcessor;
  * (PianoRollToolHandler and PianoRollComponent stay untouched): moving handles to new output times, and moving the
  * handles of a section by the same distance.
  *
- * A handle moves between its neighbours as the time tool lets it (PianoRollToolHandler::handleTimeToolMouseDrag),
- * in two passes:
+ * A handle moves between its neighbours as the time tool lets it, by the function that the time tool calls for
+ * each step of a drag (planTimeGridDrag(), Source/Utils/TimeGridEdit.h), in two passes:
  * 1. the moved handle is limited to its neighbours plus and minus the minimum spacing (kMinSpacingSec, the
  *    TimeGridSnapshot::kMinOutputSpacingSeconds the time tool keeps unless Alt is held, which the API has no
  *    equivalent of);
  * 2. when several handles move together, every inner handle is limited, from left to right, to its already
  *    limited left neighbour plus the spacing and its right neighbour minus the spacing (the time tool's group
  *    drag). When a handle has no room between its neighbours, nothing moves, as the time tool keeps the grid as it
- *    was.
+ *    was. The test for that room before the first limit is ours (planTimeGridDrag() limits with juce::jlimit(),
+ *    which asserts on a lower bound above the upper); the moves of several handles to times of their own
+ *    (content.editTimeGrid moveHandles with several moves) are planned here, with the same limits, because
+ *    planTimeGridDrag() moves a selection by one distance only.
  *
  * A move that was limited is applied as far as it was allowed. The new grid is validated by
  * TimeGridSnapshot::makeFromHandles(), like every grid the time tool makes; a grid it rejects is not applied.
  *
- * The mirrored upstream functions are registered in Source/Control/mirror-map.json (see MIRRORS.md) and listed in
- * Source/Control/README.md (Time grid).
+ * The upstream functions that are still mirrored (the commit and its description) are registered in
+ * Source/Control/mirror-map.json (see MIRRORS.md) and listed in Source/Control/README.md (Time grid).
  *
  * Threading: the planning functions are pure; commit() runs on the message thread.
  */

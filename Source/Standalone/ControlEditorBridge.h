@@ -85,7 +85,8 @@ public:
     // ---- Preferences and audio device (ControlEditorBridgePrefs.cpp) ----
     void onPreferencesChanged() override;
     std::optional<bool> editingSchemeApplied(bool notesPrimary) const override;
-    bool prepareAudioDeviceSwitch(juce::AudioDeviceManager& manager, const std::string& reason) override;
+    std::optional<AsioRateRestoreFailure> prepareAudioDeviceSwitch(juce::AudioDeviceManager& manager,
+                                                                   const std::string& reason) override;
 
 private:
     /** What a view switch must leave as it was: the project's changed mark and how often it was set, the tempo and time

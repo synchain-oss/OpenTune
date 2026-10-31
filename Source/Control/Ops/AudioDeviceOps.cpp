@@ -269,8 +269,8 @@ struct Outcome
     std::string detail;
     /** Kind::Ok only: an ASIO device was left for another type or output device and its sample rate could not be
         restored to the system's. The change went on (the page treats the restore as best effort); the result says so
-        with the warning ASIO_RATE_NOT_RESTORED. */
-    bool asioRateNotRestored = false;
+        with the warning ASIO_RATE_NOT_RESTORED, whose data is this device and rate. */
+    std::optional<ControlUiBridge::AsioRateRestoreFailure> asioRateNotRestored;
 };
 
 /**
@@ -341,7 +341,14 @@ Outcome applyRequest(juce::AudioDeviceManager& manager, ControlUiBridge& bridge,
         return Outcome{kind, reason + "; the previous setup was restored"};
     };
     const std::string kOpenFailed = "the audio device could not be opened with the new setup";
-    bool asioRateNotRestored = false;
+    // The first failed restore of the call (at most one can happen: the restore leaves an ASIO device, and the
+    // second step runs on the type the first one switched to).
+    std::optional<ControlUiBridge::AsioRateRestoreFailure> asioRateNotRestored;
+    const auto restoreAsioRate = [&](const char* reason) {
+        auto failure = bridge.prepareAudioDeviceSwitch(manager, reason);
+        if (failure && !asioRateNotRestored)
+            asioRateNotRestored = std::move(failure);
+    };
 
     // typeChanged(): ASIO is restored to the system sample rate before it is closed for another type, as best effort:
     // a restore that fails is reported to the user (kAudioDeviceRestoreWarning) and does not stop the switch. The
@@ -352,8 +359,8 @@ Outcome applyRequest(juce::AudioDeviceManager& manager, ControlUiBridge& bridge,
         const auto currentType = manager.getCurrentAudioDeviceType();
         if (requestedType != currentType) {
             const bool hadDevice = manager.getCurrentAudioDevice() != nullptr;
-            if (currentType == "ASIO" && !bridge.prepareAudioDeviceSwitch(manager, "audio type switch"))
-                asioRateNotRestored = true;
+            if (currentType == "ASIO")
+                restoreAsioRate("audio type switch");
             manager.setCurrentAudioDeviceType(requestedType, true);
             changed = true;
             const bool typeMismatch = manager.getCurrentAudioDeviceType() != requestedType;
@@ -383,9 +390,8 @@ Outcome applyRequest(juce::AudioDeviceManager& manager, ControlUiBridge& bridge,
             if (type == nullptr || !type->hasSeparateInputsAndOutputs())
                 setup.inputDeviceName = setup.outputDeviceName;
             // As the type switch: a restore that fails is reported and the change goes on.
-            if (manager.getCurrentAudioDeviceType() == "ASIO" && setup.outputDeviceName != currentSetup.outputDeviceName
-                && !bridge.prepareAudioDeviceSwitch(manager, "audio output switch"))
-                asioRateNotRestored = true;
+            if (manager.getCurrentAudioDeviceType() == "ASIO" && setup.outputDeviceName != currentSetup.outputDeviceName)
+                restoreAsioRate("audio output switch");
             changed = true;
             if (applySetup(manager, setup).isNotEmpty())
                 return fail(Outcome::Kind::OpenFailed, kOpenFailed);
@@ -442,7 +448,7 @@ Outcome applyRequest(juce::AudioDeviceManager& manager, ControlUiBridge& bridge,
         }
     }
     Outcome done;
-    done.asioRateNotRestored = asioRateNotRestored;
+    done.asioRateNotRestored = std::move(asioRateNotRestored);
     return done;
 }
 
@@ -580,7 +586,7 @@ Result<JsonValue> runAudioSet(ControlOpContext& context, const AudioSetRequest& 
         && (!request.sampleRateHz || std::abs(*request.sampleRateHz - prior.view.sampleRateHz) < kSameRateHz)
         && (!request.bufferSizeFrame || *request.bufferSizeFrame == prior.view.bufferSizeFrame)
         && (!request.outputChannelPair || prior.view.outputChannelPair == request.outputChannelPair);
-    bool asioRateNotRestored = false;
+    std::optional<ControlUiBridge::AsioRateRestoreFailure> asioRateNotRestored;
     if (!sameAsCurrent) {
         const auto outcome = applyRequest(*manager, *bridge, request, prior);
         switch (outcome.kind) {
@@ -598,8 +604,15 @@ Result<JsonValue> runAudioSet(ControlOpContext& context, const AudioSetRequest& 
     const auto after = readDevice(*manager);
     recordChange(context, envelope, prior.view, after);
     // The sample rate of the ASIO device that was left stays where the device had put it; the switch itself went on.
-    if (asioRateNotRestored)
-        envelope.addWarning("ASIO_RATE_NOT_RESTORED");
+    // registry/warnings.json: subject {singleton: audioDevice}, data {deviceName, sampleRateHz}.
+    if (asioRateNotRestored) {
+        auto subject = JsonValue::object();
+        subject.appendMember("singleton", JsonValue::string("audioDevice"));
+        auto data = JsonValue::object();
+        data.appendMember("deviceName", controlJsonText(asioRateNotRestored->deviceName, kMaxDeviceCodePoints));
+        data.appendMember("sampleRateHz", controlJsonNumber(asioRateNotRestored->sampleRateHz, 3));
+        envelope.addWarning("ASIO_RATE_NOT_RESTORED", std::move(subject), std::move(data));
+    }
     auto result = envelope.committed(context);
     result.appendMember("device", deviceJson(after, "no_audio_device"));
     return result;

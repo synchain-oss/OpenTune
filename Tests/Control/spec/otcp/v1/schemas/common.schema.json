@@ -319,7 +319,11 @@
         "undoId": {
           "anyOf": [{ "$ref": "#/$defs/undoId" }, { "type": "null" }]
         },
-        "description": { "type": "string", "maxLength": 200 },
+        "description": {
+          "description": "The text that the undo menu of the OpenTune window shows for the entry. It follows the language of the OpenTune interface; clients show it and do not parse it.",
+          "type": "string",
+          "maxLength": 200
+        },
         "origin": { "$ref": "#/$defs/camelName" },
         "possiblyStale": { "type": "boolean" },
         "unsafe": { "type": "boolean" }
@@ -568,7 +572,11 @@
       "properties": {
         "undoable": { "const": true },
         "undoId": { "$ref": "#/$defs/undoId" },
-        "description": { "type": "string", "maxLength": 200 },
+        "description": {
+          "description": "The text that the undo menu of the OpenTune window shows for the entry. It follows the language of the OpenTune interface; clients show it and do not parse it.",
+          "type": "string",
+          "maxLength": 200
+        },
         "innerActions": {
           "description": "Implementation-defined names of the inner undo actions. Opaque to clients.",
           "type": "array",

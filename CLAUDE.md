@@ -144,15 +144,15 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 > 脚本都在 `.github/scripts/`，`gates.ps1` 按下列顺序执行。真机启动与真 Standalone 契约测试随后续 PR 加入，加入之前 gates 对它们报 SKIP。下列之外还有两步：构建之后删除 POST_BUILD 生成的 `models\` 并断言它已不存在（原因见 §11）；署名与身份检查之后，用 gitleaks 扫描增量的提交与文件。`OPENTUNE_DATA_DIR` 钩子合入之前第 4 项无法生效，gates 用「测试数据隔离」一行如实报告 ctest 是否写入了真实用户目录。
 
 - 一键运行 `pwsh .github/scripts/gates.ps1 -Layer <层>`（在 lane 内；只改文档或脚本时加 `-SkipBuild`）。它输出带 SHA 的 PASS/FAIL/SKIP 汇总表，原样贴进 PR。依次执行：
-  1. LFS 设置检查：`lfs.fetchexclude=*`，模型文件仍是未 smudge 的指针。
-  2. configure / build / ctest / 真机启动，全部经 `.github/scripts/with-build-slot.ps1`：全机默认 2 个构建槽（环境变量 `OPENTUNE_BUILD_SLOTS` 或 `gates.ps1 -BuildSlots` 可调，范围 1–8），命名互斥锁，每个槽拿到后检查空闲内存，每个槽显式 `--parallel 8`。
-  3. `ctest -R Control`，再加上游已有测试，用 `-E ARALifecycleContractTests` 排除一项。该测试依赖 ARA_DRAFT 的 `persistentID`，在锁定的 ARA SDK 2.3.0 下编不过，属于上游问题。`-Layer` 为 L2 及以上时，gates 还会在 `<构建目录>\control-on` 用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` 再 configure / build / ctest 一遍（单独一行，Control 测试数为 0 即 FAIL），因为 lane 默认构建目录的控制接口是关闭的。这一轮与 CI 的 control-api ON 任务一致：构建 Standalone、VST3 与全部已注册测试，跑全部测试（仅排除 ARALifecycleContractTests），每个测试各有独立的 `OPENTUNE_DATA_DIR`（先跑 Control 测试，再跑其余）。Control 一轮前后会对真实 `%APPDATA%OpenTune` 各做一次快照：设置文件有新建、修改或删除即 FAIL；只有 `Logs` 目录有变化记 WARN（多条 lane 并发时别的进程的测试也会写真实日志）。其余上游测试会写真实目录而 gates 隔离不了（JUCE 向系统取 AppData 目录，改 `APPDATA` 变量重定向不了），gates 在该行里标明「上游测试不隔离」（「测试数据隔离（control-on 一轮）」一行）；L0 与 `-SkipBuild` 时这两行 SKIP。构建时 gates 与 `with-build-slot.ps1` 为 MSVC 设私有的 `_MSPDBSRV_ENDPOINT_`（`ot-<lane>-build`，已设置则沿用），避免与机器上别的项目共用 mspdbsrv 而 C1041；不结束任何进程。
+  1. LFS 设置检查：`lfs.fetchexclude=*`，仓库跟踪的 `*.onnx`（上游自 2c01847 起为 0 个）仍是未 smudge 的指针，`models/` 无改动。
+  2. configure / build / ctest / 真机启动（configure 之前 gates 会补建缺失的 0 字节模型占位），全部经 `.github/scripts/with-build-slot.ps1`：全机默认 2 个构建槽（环境变量 `OPENTUNE_BUILD_SLOTS` 或 `gates.ps1 -BuildSlots` 可调，范围 1–8），命名互斥锁，每个槽拿到后检查空闲内存，每个槽显式 `--parallel 8`。
+  3. `ctest -R Control`，再加上游已有测试，不排除任何一项。（`ARALifecycleContractTests` 以前依赖 ARA_DRAFT 的 `persistentID`，在锁定的 ARA SDK 2.3.0 下编不过而被排除；上游 2c01847 起可以编译并通过，排除已取消。）`-Layer` 为 L2 及以上时，gates 还会在 `<构建目录>\control-on` 用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` 再 configure / build / ctest 一遍（单独一行，Control 测试数为 0 即 FAIL），因为 lane 默认构建目录的控制接口是关闭的。这一轮与 CI 的 control-api ON 任务一致：构建 Standalone、VST3 与全部已注册测试，跑全部测试（不排除任何一项），每个测试各有独立的 `OPENTUNE_DATA_DIR`（先跑 Control 测试，再跑其余）。Control 一轮前后会对真实 `%APPDATA%OpenTune` 各做一次快照：设置文件有新建、修改或删除即 FAIL；只有 `Logs` 目录有变化记 WARN（多条 lane 并发时别的进程的测试也会写真实日志）。其余上游测试会写真实目录而 gates 隔离不了（JUCE 向系统取 AppData 目录，改 `APPDATA` 变量重定向不了），gates 在该行里标明「上游测试不隔离」（「测试数据隔离（control-on 一轮）」一行）；L0 与 `-SkipBuild` 时这两行 SKIP。构建时 gates 与 `with-build-slot.ps1` 为 MSVC 设私有的 `_MSPDBSRV_ENDPOINT_`（`ot-<lane>-build`，已设置则沿用），避免与机器上别的项目共用 mspdbsrv 而 C1041；不结束任何进程。
   4. 所有测试都使用临时 `OPENTUNE_DATA_DIR`，因为上游 ctest 会写真实的 `%APPDATA%\OpenTune`。
   5. 真 Standalone 测试环境就绪后：改到 Dispatcher / Jobs / Ops / Edit / bridge 或 `spec.lock` 的 PR，还要跑真 Standalone 的契约与场景测试。这一步持 E2E 互斥锁，并先快照、再恢复 `OpenTune.settings` 与 AppPreferences。
-  6. 署名与身份检查（`.github/scripts/fork-checks.mjs`，与 fork-gate 同一份实现）。
+  6. 署名与身份检查（`.github/scripts/fork-checks.mjs`，与 fork-gate 同一份实现）。分支基于比 `origin/upstream-mirror` 更新的上游快照时（sync 候选），用 `gates.ps1 -Mirror <快照 tag>` 指定增量的起点。
   7. `.github/scripts/check-ignored-delta.ps1`。
   8. 镜像锁清单（`drift-pins.mjs --check`，三处一致，不需要构建）：判定与 fork-gate 相同（`drift-pins.mjs` 的 `decideEnforcement`，改动文件取 `git diff --name-only <base>...HEAD`，不看 `-Layer`）：本分支改到清单或脚本时不一致为 FAIL，否则为 WARN，因为可上游的 PR 改了镜像也不能改 `.github/**`，由 manager 的 L0 跟进用 `node .github/scripts/drift-pins.mjs --write` 补齐。fork-gate 里同一检查：push 到 `dev` / `feature/control-api`、base 为 `dev` / `review-base/**` / `sync/**` 的 PR、以及改到 `.github/drift-pins/**` 或 `drift-pins.mjs` 的 PR 阻塞；base 为 `feature/**` 且没改这些路径的子 PR 只报告（job summary 与 `::warning::`），不阻塞。细则见 `.github/drift-pins/README.md`。
-- **构建**：JUCE 9.0.3（8.0.15 为已验证的备选），Ninja Multi-Config。lane、gates 与 CI 测试一律用 RelWithDebInfo。Release（LTCG）只用于出包与 E2E，不在 Release 下构建测试。依赖由 `bootstrap-deps.ps1` 按 `deps.lock.json` 拉取并逐个校验 sha256，绝不下载模型。
+- **构建**：JUCE 8.0.12（上游锁定；拉完依赖后要打上游补丁：`bootstrap-deps.ps1 -LinkInto <源码目录> -PatchJuce`，或手工运行上游 `scripts/github_actions/patch-juce-ara.py`。补丁脚本拒绝 JUCE 目录里有任何多余文件，bootstrap 写的 `.ot-dep.json` 戳记也算，`-PatchJuce` 会先挪走再放回），SoundTouch 2.3.2。上游不再跟踪模型，而构建后步骤仍会复制 `models/fcpe.onnx` 与声码器文件：本地与 CI 各放一个 0 字节占位（两条路径都被上游 `.gitignore` 忽略，不入库）。Ninja Multi-Config。lane、gates 与 CI 测试一律用 RelWithDebInfo。Release（LTCG）只用于出包与 E2E，不在 Release 下构建测试。依赖由 `bootstrap-deps.ps1` 按 `deps.lock.json` 拉取并逐个校验 sha256，绝不下载模型。
 - **CI 分档**：子 PR（base=`feature/**`）只跑轻量门禁，即 fork-gate；改到原生代码时才跑 build-windows。所以本地 gates 是第一道编译门，不要指望 CI 替你发现编译错误。PR→`dev` 跑完整套件。
 
 ## 9. Review 规则
@@ -191,9 +191,9 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 ## 11. 模型权重与 Git LFS
 
-- 上游用 LFS 跟踪 `models/fcpe.onnx` 与 `models/GAME/*.onnx`；声码器 `pc_nsf_hifigan_*` 不在仓库内。
+- 上游（2c01847 起）不再在仓库里跟踪任何模型：`models/fcpe.onnx` 与 `models/GAME/*.onnx` 已从树中删除（此前是 LFS 指针），声码器 `pc_nsf_hifigan_*` 本来就不在仓库内；上游的 CI 用 `scripts/github_actions/fetch-models.py` 下载，我们从不下载。
 - **`models/` 永不提交、永不分发。** 我们的增量不得新增、修改或删除以下任何内容（fork-gate 路径守卫会拒绝）：`models/**`、任何 `*.onnx`、`pc_nsf_hifigan*/**`、`ThirdParty/**`、D3D12 运行库。LFS 指针文件保持原样，不要去「修复」它们。
-- 构建产物里由 POST_BUILD 生成的 `models\`（LFS 指针 + 0 字节声码器占位）会遮住官方安装的模型。要用官方模型运行我们构建的 exe，或者打包测试版，都必须先删除它，并断言它已不存在。
+- 构建产物里由 POST_BUILD 生成的 `models\`（`fcpe.onnx` 与声码器的 0 字节占位）会遮住官方安装的模型。要用官方模型运行我们构建的 exe，或者打包测试版，都必须先删除它，并断言它已不存在。
 - 测试版 zip 不含任何模型权重：按白名单打包，出现 `*.onnx` 或 `models/` 即失败。模型由用户已安装的官方 OpenTune 提供。许可方面：OpenVPI 声码器权重与 GAME 预训练权重为 CC BY-NC-SA 4.0，FCPE 为 MIT。使用非商用权重的 E2E 仅限非商业测试。
 - **LFS 一律跳过 smudge**：
   - 克隆前设置 `GIT_LFS_SKIP_SMUDGE=1`；

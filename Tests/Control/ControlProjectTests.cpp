@@ -843,8 +843,7 @@ void checkCopyWarnings(const JsonValue& result)
         return;
     const auto& warning = warnings.at(0);
     CONTROL_CHECK(memberOf(warning, "code").text() == "NOT_SAVED_IN_PROJECT" && memberOf(warning, "subject").isNull());
-    CONTROL_CHECK(toJsonString(memberOf(memberOf(warning, "data"), "items"))
-                  == R"(["undoHistory","preferences"])");
+    CONTROL_CHECK(toJsonString(memberOf(memberOf(warning, "data"), "items")) == R"(["undoHistory","preferences"])");
 }
 
 } // namespace

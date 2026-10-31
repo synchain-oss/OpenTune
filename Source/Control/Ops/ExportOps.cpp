@@ -14,6 +14,7 @@
 #include "PluginProcessor.h"
 #include "Render/ContentRenderService.h"
 #include "Render/PlaybackReadSource.h"
+#include "Runtime/ProcessRenderRuntime.h"
 #include "SourceStore.h"
 #include "Utils/AppLogger.h"
 #include "Utils/AppPreferences.h"
@@ -54,6 +55,21 @@ int& waitLimitOverrideMs()
 {
     static int milliseconds = 0;
     return milliseconds;
+}
+
+/**
+ * Whether OpenTune's render runtime holds a deferred render retry of the processor's render service: a render
+ * block that could not be handed to the render worker (the vocoder is being reconfigured or not loaded) and is
+ * kept until it can. ProcessRenderRuntime::hasDeferredRetriesForService, the test that
+ * ContentRenderService::drainRenderWorkerForExport makes before it lets an export read the render: while one
+ * exists, that drain gives up and the export functions report "Render is not ready for export". The runtime
+ * resumes such retries on its own on the message thread (postDeferredRetryEvent), so the job only waits for
+ * them; it never flushes them itself. Message thread.
+ */
+bool renderRetriesDeferred(OpenTuneAudioProcessor& processor)
+{
+    const auto* service = processor.getContentRenderService();
+    return service != nullptr && ProcessRenderRuntime::getInstance().hasDeferredRetriesForService(service);
 }
 
 enum class ExportKind {
@@ -500,6 +516,9 @@ public:
 
     // Valid once done() is true.
     bool written = false;
+    /** The export function refused because the render was not ready (a deferred render retry stayed, see
+        renderRetriesDeferred): nothing was written, and a later attempt may succeed. */
+    bool renderNotReady = false;
     int channelCount = 0;
     double sampleRateHz = 0.0;
     std::int64_t frameCount = 0;
@@ -510,6 +529,7 @@ private:
     {
         try {
             bool ok = false;
+            bool called = true;
             switch (kind_) {
                 case ExportKind::Clip: {
                     // exportPlacementAudio() takes the clip's index on its track, which
@@ -517,7 +537,8 @@ private:
                     const auto* arrangement = processor.getStandaloneArrangement();
                     const int index =
                         arrangement != nullptr ? arrangement->findPlacementIndexById(trackId_, placementId_) : -1;
-                    ok = index >= 0 && processor.exportPlacementAudio(trackId_, index, file_, kErrorTextLanguage);
+                    called = index >= 0;
+                    ok = called && processor.exportPlacementAudio(trackId_, index, file_, kErrorTextLanguage);
                     break;
                 }
                 case ExportKind::Track:
@@ -529,6 +550,11 @@ private:
             }
             if (ok)
                 readBack();
+            else if (called)
+                // The one failure of the export functions that the job reports differently: their only text for it
+                // (OpenTuneAudioProcessor::getLastExportError, cleared at the start of every export) is the key itself
+                // in every language, so it is compared in the language that was passed.
+                renderNotReady = processor.getLastExportError() == Loc::get(kErrorTextLanguage, kRenderNotReadyText);
         } catch (...) {
             written = false;
         }
@@ -553,6 +579,9 @@ private:
     // reported with a fixed detail), and a headless process has no window whose language could be asked
     // (LocalizationManager::resolveLanguage() needs a bound language), so a fixed language is passed.
     static constexpr Language kErrorTextLanguage = Language::English;
+    /** What OpenTuneAudioProcessor::exportPlacementAudio / exportTrackAudio / exportMasterMixAudio leave in
+        getLastExportError() when ContentRenderService::drainRenderWorkerForExport() fails. */
+    static constexpr const char* kRenderNotReadyText = "Render is not ready for export";
 
     ExportKind kind_;
     int trackId_;
@@ -594,8 +623,12 @@ struct Readiness
  *   active note EQ) and an identity time grid; otherwise it gets one render request. A content whose time
  *   grid is not the identity is exported from its time-stretch output, so it is ready (or exported dry) only
  *   once that output was rebuilt at its current revisions (stretchState); a content to export dry without a
- *   render to stretch fails at once.
- *   NOT_READY(export_wait_timeout) after the wait limit.
+ *   render to stretch fails at once. Even when every content is ready the job keeps waiting while the render
+ *   runtime holds a deferred render retry of the render service (renderRetriesDeferred): the export functions
+ *   of OpenTune refuse to read the render then ("Render is not ready for export"). If they refuse anyway
+ *   (a retry deferred after the check), the job ends the same way.
+ *   NOT_READY(export_wait_timeout) after the wait limit, or when the writer found the render not ready; no
+ *   file is written then.
  * - In the tick that finds every content ready it records the inputs and the revisions and starts the
  *   writer on a temporary file in the target directory.
  * - Once the file is written: the inputs are compared with the recorded ones (REVISION_CONFLICT
@@ -761,7 +794,8 @@ private:
             const bool renderPending = cache != nullptr && cache->getChunkStats().hasActiveWork();
             return renderPending ? Stretch::Pending : Stretch::NoRender;
         }
-        if (service->renderQueueDepth() != 0 || service->renderInFlight() != 0) {
+        if (service->renderQueueDepth() != 0 || service->renderInFlight() != 0
+            || renderRetriesDeferred(context.processor())) {
             progress.stretchIdleSince.reset();
             return Stretch::Pending;
         }
@@ -1022,7 +1056,10 @@ private:
             }
         }
         const int total = static_cast<int>(plan.contents.size());
-        if (ready == total) {
+        // Every content is ready, but the export functions refuse to read the render while a render retry of the
+        // service is deferred (renderRetriesDeferred): the file would not be written. Keep waiting, up to the
+        // wait limit, for the runtime to resume it.
+        if (ready == total && !renderRetriesDeferred(context.processor())) {
             startWriting(context, plan, std::move(dry));
             if (writer_ != nullptr)
                 setProgress(step, std::nullopt, "writing", std::nullopt, std::nullopt);
@@ -1074,12 +1111,21 @@ private:
         if (!writer_->done())
             return;
         const bool written = writer_->written;
+        const bool renderNotReady = writer_->renderNotReady;
         const int channelCount = writer_->channelCount;
         const double sampleRateHz = writer_->sampleRateHz;
         const std::int64_t frameCount = writer_->frameCount;
         const std::string sampleFormat = writer_->sampleFormat;
         if (step.cancelRequested()) {
             finishCancelled(step);
+            return;
+        }
+        if (!written && renderNotReady) {
+            // A deferred render retry appeared after the job found every content ready, and the export function
+            // could not get the render worker to settle (drainRenderWorkerForExport). Not a write failure: nothing
+            // was written, and the export succeeds once the render is ready.
+            fail(step, {"NOT_READY", "export_wait_timeout",
+                        "the render of the export was not ready when OpenTune wrote the file", false});
             return;
         }
         if (!written) {

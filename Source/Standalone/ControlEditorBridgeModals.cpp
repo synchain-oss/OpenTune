@@ -7,6 +7,9 @@
 
 #include "PluginEditor.h"
 
+#include "ControlEditorBridgeColour.h"
+#include "StandaloneArrangementHelpers.h"
+
 #include "Editor/ConfirmDialogContent.h"
 #include "Editor/OnboardingOverlayComponent.h"
 #include "Editor/PitchShiftDialogContent.h"
@@ -40,26 +43,29 @@ bool isFileChooser(const juce::Component& component)
     return type.find("FileChooser") != std::string::npos;
 }
 
-bool containsColourSelector(const juce::Component& component)
+/** The ColourSelector inside a component, or nullptr. */
+juce::ColourSelector* findColourSelector(juce::Component& component)
 {
-    for (const auto* child : component.getChildren())
-        if (dynamic_cast<const juce::ColourSelector*>(child) != nullptr || containsColourSelector(*child))
-            return true;
-    return false;
+    for (auto* child : component.getChildren()) {
+        if (auto* selector = dynamic_cast<juce::ColourSelector*>(child))
+            return selector;
+        if (auto* nested = findColourSelector(*child))
+            return nested;
+    }
+    return nullptr;
 }
 
-/** The track of a track-colour dialog from its title, "Track <n> Color" with n = trackId + 1
-    (OpenTuneAudioProcessorEditor::trackColorChangeRequested), or -1 for another title. */
-int trackOfColourTitle(const juce::String& title)
+bool isTrackId(int trackId)
 {
-    if (!title.startsWith("Track ") || !title.endsWith(" Color"))
-        return -1;
-    const auto number =
-        title.fromFirstOccurrenceOf("Track ", false, false).upToLastOccurrenceOf(" Color", false, false);
-    if (number.isEmpty() || !number.containsOnly("0123456789") || number.length() > 3)
-        return -1;
-    const int trackId = number.getIntValue() - 1;
-    return trackId >= 0 && trackId < OpenTuneAudioProcessor::MAX_TRACKS ? trackId : -1;
+    return trackId >= 0 && trackId < OpenTuneAudioProcessor::MAX_TRACKS;
+}
+
+/** The colour picker of a track (OpenTuneAudioProcessorEditor::trackColorChangeRequested): a call-out box around a
+    ColourSelector, which carries no title and no track. */
+juce::CallOutBox* colourPickerOf(juce::Component* modal)
+{
+    auto* callOut = dynamic_cast<juce::CallOutBox*>(modal);
+    return callOut != nullptr && findColourSelector(*callOut) != nullptr ? callOut : nullptr;
 }
 
 /** The kind of a ConfirmDialogContent from its buttons: message for ConfirmDialogContent::showMessage (one button) and
@@ -79,12 +85,22 @@ const char* confirmDialogKind(const juce::Component& content)
  * What a modal window is (Source/Control/README.md, "Dialogs and onboarding"). A window the classification does not
  * know stays unknown with closeCommits true, as the protocol asks for a dialog whose behaviour the server cannot tell.
  */
-DialogInfo classify(juce::Component& modal)
+DialogInfo classify(juce::Component& modal, int colourTrack)
 {
     DialogInfo info;
     if (isFileChooser(modal)) {
         info.kind = "fileChooser";
         info.systemFileChooser = true;
+        return info;
+    }
+    if (colourPickerOf(&modal) != nullptr) {
+        // The content of the call-out commits the colour of its ColourSelector to the track in its destructor, however
+        // the call-out closes. The track is the one of the last request for the picker (ControlTrackColourWatch); a
+        // picker that was not asked for through the track panel stays unknown, with closeCommits true.
+        if (isTrackId(colourTrack)) {
+            info.kind = "trackColour";
+            info.trackId = colourTrack;
+        }
         return info;
     }
     auto* window = dynamic_cast<juce::DialogWindow*>(&modal);
@@ -106,12 +122,6 @@ DialogInfo classify(juce::Component& modal)
         // The pages apply each setting when it changes; closing applies nothing.
         info.kind = "preferences";
         info.closeCommits = false;
-    } else if (const int trackId = trackOfColourTitle(window->getName());
-               trackId >= 0 && containsColourSelector(*content)) {
-        // The content of OpenTuneAudioProcessorEditor::trackColorChangeRequested commits the colour of its
-        // ColourSelector to the track in its destructor, however the window closes.
-        info.kind = "trackColour";
-        info.trackId = trackId;
     }
     return info;
 }
@@ -137,7 +147,7 @@ std::optional<std::vector<ControlUiBridge::DialogInfo>> ControlEditorBridge::ope
     const int count = manager != nullptr ? manager->getNumModalComponents() : 0;
     for (int index = count - 1; index >= 0; --index)
         if (auto* component = manager->getModalComponent(index))
-            dialogs.push_back(classify(*component));
+            dialogs.push_back(classify(*component, colourWatch_ != nullptr ? colourWatch_->lastRequestedTrack() : -1));
     return dialogs;
 }
 
@@ -149,6 +159,20 @@ bool ControlEditorBridge::closeTopDialog()
     juce::Component::SafePointer<juce::Component> top(manager->getModalComponent(0));
     if (top == nullptr || isFileChooser(*top))
         return false;
+    // The colour picker commits the colour it shows when it closes, with the destructor of its content, which the modal
+    // manager runs later when it deletes the call-out box. The result of ui.dismiss reports that commit, so the same
+    // steps run now (UiOps.cpp closeDialogs reads the track's colour after this returns); the destructor then sets the
+    // colour it shows once more, which is the same.
+    if (auto* picker = colourPickerOf(top.getComponent()); picker != nullptr && colourWatch_ != nullptr) {
+        const int trackId = colourWatch_->lastRequestedTrack();
+        if (auto* selector = findColourSelector(*picker); selector != nullptr && isTrackId(trackId)) {
+            const auto selected = selector->getCurrentColour();
+            setStandaloneTrackColour(editor_.processorRef_, trackId, selected);
+            editor_.trackPanel_.setTrackColour(trackId, selected);
+            editor_.arrangementView_.requestContentRedraw();
+            editor_.projectSession_.markDirty();
+        }
+    }
     const juce::KeyPress escape(juce::KeyPress::escapeKey);
     auto* window = dynamic_cast<juce::DialogWindow*>(top.getComponent());
     juce::Component::SafePointer<juce::Component> content(window != nullptr ? window->getContentComponent() : nullptr);

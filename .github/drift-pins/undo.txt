@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # group: undo
-# pinned-at: upstream/20261008-addb4f4
+# pinned-at: upstream/20261030-2c01847
 # ported-to: Source/Control/Edit/ContentEditTransaction.cpp
 # ported-to: Source/Control/Edit/ControlOriginAction.cpp
 # ported-to: Source/Control/Edit/ControlOriginAction.h
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
-Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::captureBeforeUndoSnapshot	L1182-L1187	fn-v1	8375780fad24b0704ce7670abbf0adc5c034c06b492d5b5debbf01283cd1ef5c
-Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::recordUndoAction	L1189-L1267	fn-v1	b6c8b0e08bdf49e683a803673ef1bc9e99a4c0eda1b5155f1d849d61f9ffb8a5
+Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::captureBeforeUndoSnapshot	L1470-L1475	fn-v1	8375780fad24b0704ce7670abbf0adc5c034c06b492d5b5debbf01283cd1ef5c
+Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::recordUndoAction	L1477-L1555	fn-v1	5c8df7c81f19c3919c76bdaa3ec96e13a7ecfbea80612899c7f4f726a2039fab
 Source/Utils/UndoManager.cpp	UndoManager::addAction	L5-L24	fn-v1	0a228a34b8121f67becac58618136faf749c9f44fe6f931857a9344a98d0425b
 Source/Utils/UndoManager.h	static constexpr int maxSize_	L40-L40	stmt-v1	8d1f7717b8f534ec84e71f396eabe39c8b6c292e20ea20ecf8ea1103ac54106a

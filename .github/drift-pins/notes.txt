@@ -2,16 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # group: notes
-# pinned-at: upstream/20261008-addb4f4
+# pinned-at: upstream/20261030-2c01847
 # ported-to: Source/Control/Edit/NoteCorrection.cpp
 # ported-to: Source/Control/Ops/ContentEditOps.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
-Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	buildNoteBasedCorrectionState	L189-L211	fn-v1	beb351d2d4a7b1b38930b0b77ceba84e89e5e0578330007f270c276abc688e1f
-Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	commitNoteBasedCorrection	L213-L240	fn-v1	e48f2d28b94f54fc6c1e6c428fe17d329ff7bfe0e18735dcd50dd645d89a56ca
-Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	PianoRollToolHandler::noteDragEditRange	L1912-L1955	fn-v1	c5b2a78ef2c6500d8486555bd257585a065e2865e0bf86515069c0dcb5ea698a
-Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	PianoRollToolHandler::dragNotePitch	L1969-L2104	fn-v1	ea8d450d86c56f6c176b0834a798ee8f9dc31728543c4b13697054bb880dc9be
-Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	PianoRollToolHandler::endNotePitchDrag	L2106-L2217	fn-v1	b95c1478a2d72ffd4920fa5b86b80e84a45e07195ebf939763459000810a1189
-Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	PianoRollToolHandler::handlePitchToolDoubleClick	L2269-L2359	fn-v1	e92dab4e48bf3aa59d2e28dd485d25924c2abecb24d9342350d51809fb529b01
-Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::editParameter	L2645-L2903	fn-v1	5d6ce786448ba93a5d6964a97f022f863b0a4033f693b4765bb58f68fdb5732b
-Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::commitEditedContentNotesAndSegments(const EditableContentSnapshot&, const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&, F0FrameRange)	L1007-L1116	fn-v1	d36905e2ce2a215252e967053a84a82f57d9ce22adbc753f030f27af85fb9eaf
+Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	buildNoteBasedCorrectionState	L57-L79	fn-v1	beb351d2d4a7b1b38930b0b77ceba84e89e5e0578330007f270c276abc688e1f
+Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	commitNoteBasedCorrection	L81-L113	fn-v1	873c030df78e46fb972b5a6e36060ae0d9f2556c7717d98af0047de34e967904
+Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	PianoRollToolHandler::noteDragEditRange	L1770-L1813	fn-v1	c5b2a78ef2c6500d8486555bd257585a065e2865e0bf86515069c0dcb5ea698a
+Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	PianoRollToolHandler::dragNotePitch	L1827-L1962	fn-v1	ea8d450d86c56f6c176b0834a798ee8f9dc31728543c4b13697054bb880dc9be
+Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	PianoRollToolHandler::endNotePitchDrag	L1964-L2075	fn-v1	ae5ff27b590ce0aad9663411013ff8dcc48b71d2ed3aeb08fb33e0c7424852e2
+Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	PianoRollToolHandler::handlePitchToolDoubleClick	L2127-L2217	fn-v1	19ee7fb85a391c7523d7d0bb37dd385d956330a0d2a1b0a3492aa6b72b0bba96
+Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::editParameter	L3047-L3277	fn-v1	9f90063dd4d283cdfe031243e475041bceb8775918b38594db8032025637494c
+Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::commitEditedContentNotesAndSegments(const EditableContentSnapshot&, const std::vector<Note>&, const std::vector<PitchCorrectionSegment>&, F0FrameRange)	L1353-L1462	fn-v1	30e1ede4ebb6d5cddef9693659f29f9168dba0c25d694303ec0a5693f90177f5

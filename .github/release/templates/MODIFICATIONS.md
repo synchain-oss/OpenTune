@@ -18,10 +18,9 @@ The unmodified upstream snapshot is `{{UPSTREAM_BASE_TAG}}`, commit `{{UPSTREAM_
 ## What changed
 
 1. **A local control API for OpenTune Standalone** (protocol OTCP v1), added as new code: `Source/Control/`, `Source/Standalone/ControlEditorBridge*`, `cmake/OpenTuneControl.cmake`, with tests in `Tests/Control/`. It is compiled in only with the CMake option `OPENTUNE_ENABLE_CONTROL_API=ON` (this build) and turned on at run time only by the command-line switch `--control-api` or `OPENTUNE_CONTROL_API=1`. It listens on `127.0.0.1` only.
-2. **Small integration hooks in existing OpenTune files**, each marked with the comment `OpenTune Control API hook`. While the control API is off, OpenTune behaves as the upstream snapshot, apart from item 5.
+2. **Small integration hooks in existing OpenTune files**, each marked with the comment `OpenTune Control API hook`. While the control API is off, OpenTune behaves as the upstream snapshot.
 3. **Build**: Release configuration of the Standalone, control API option on. The VST3 plug-in is not part of this build.
 4. **Packaging**: this zip is not the official installer. It contains no model weights, no DirectX 12 Agility runtime and no user guide; it adds `OpenTune-AI.cmd`, `opentune-control.json` and these documents.
-5. **One fix taken from upstream, applied unchanged**: reopening a saved project keeps the corrected pitch line (the correction segments and their four parameters: retune speed, pitch drift scale, vibrato depth and vibrato rate). In the upstream snapshot this build is based on, a reopened project loses them and shows only the red original line. This is upstream commit `0afb6c8`; it changes `Source/PluginProcessor.cpp`, `Source/Utils/PitchCurve.cpp`, `Source/Utils/PitchCurve.h` and `Source/Utils/ProjectSession.cpp`, and applies whether or not the control API is on. It is dropped once this build is rebased onto an upstream version that has it.
 
 ### Existing OpenTune files changed
 
@@ -50,9 +49,8 @@ The fork repository also carries {{FORK_ONLY_COUNT}} files of its own (continuou
 ### 改动内容
 
 1. **为 OpenTune Standalone 加入本机控制接口**（协议 OTCP v1），全部为新增代码：`Source/Control/`、`Source/Standalone/ControlEditorBridge*`、`cmake/OpenTuneControl.cmake`，测试在 `Tests/Control/`。只有用 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API=ON` 构建（本测试版即是）才编译进来，并且只有在运行时传入命令行参数 `--control-api` 或设置 `OPENTUNE_CONTROL_API=1` 才开启。只监听 `127.0.0.1`。
-2. **在 OpenTune 已有文件中加入少量接入钩子**，每处都带注释 `OpenTune Control API hook`。控制接口关闭时，OpenTune 的行为与上游快照相同（第 5 条的修复除外）。
+2. **在 OpenTune 已有文件中加入少量接入钩子**，每处都带注释 `OpenTune Control API hook`。控制接口关闭时，OpenTune 的行为与上游快照相同。
 3. **构建**：Standalone 的 Release 配置，控制接口选项打开。本测试版不含 VST3 插件。
 4. **打包**：本压缩包不是官方安装包。它不含任何模型权重、DirectX 12 Agility 运行库与用户指南；另外加入了 `OpenTune-AI.cmd`、`opentune-control.json` 与这些说明文件。
-5. **从上游挑入的一处修复（原样应用）**：重新打开已保存的工程时保留修正后的音高线（修正段及其 4 个参数：重调速度、音高漂移比例、颤音深度与颤音速率）。本构建所基于的上游快照里，重开的工程会丢失这些内容，只剩红色的原始音高线。对应上游提交 `0afb6c8`，改动 `Source/PluginProcessor.cpp`、`Source/Utils/PitchCurve.cpp`、`Source/Utils/PitchCurve.h` 与 `Source/Utils/ProjectSession.cpp`，无论控制接口是否开启都生效。本构建 rebase 到已含该修复的上游版本后，这一条随之去掉。
 
 修改、删除与新增的文件清单见上方英文部分（文件路径与语言无关）。fork 仓库另有 {{FORK_ONLY_COUNT}} 个自身的文件（`.github/` 下的持续集成、打包脚本与协作规则，`CLAUDE.md`，以及控制接口的用户文档），它们不属于程序本身。

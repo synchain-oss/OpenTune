@@ -1379,9 +1379,9 @@ void checkNotesEqual(const JsonValue& before, const JsonValue& after, bool expec
  * A tuned project saved and opened again keeps the tuning: the correction segments with the four parameters they were
  * written with, the notes marked as corrected, and the corrected pitch line on the voiced frames of the tuned notes.
  *
- * Opening restores the segments while the original F0 is not yet analysed again (the curve is empty); upstream
- * dropped every saved frame there (commit 0afb6c8 keeps them until the analysis is done) and the project came back
- * with the red line only. The scenario checks the project right after the open job (the segments and their
+ * Opening restores the segments while the original F0 is not yet analysed again (the curve is empty); upstream used
+ * to drop every saved frame there, and the project came back with the red line only (upstream commit 0afb6c8 keeps
+ * them until the analysis is done). The scenario checks the project right after the open job (the segments and their
  * parameters, which no analysis is needed for), waits for the analysis the open requested, completes it as the
  * processor does (completeReanalysis) where the model-less run could not, and compares what the API reports with
  * what it reported before the save.

@@ -323,6 +323,13 @@ std::shared_ptr<const EditableContentSnapshot> controlLiveSnapshot(ControlOpCont
     return processor.getContentSnapshot(key);
 }
 
+const char* controlF0FailureCode(const EditableContentSnapshot& snapshot)
+{
+    // The message of the F0 extractor's result for audio without a voiced frame (F0ExtractionService::Result::
+    // errorMessage), which requestContentRefresh stores unchanged.
+    return snapshot.originalF0FailureReason == "f0_empty_or_unvoiced" ? "f0_empty" : "f0_failed";
+}
+
 Result<ControlContentRef> controlResolveContent(ControlOpContext& context, const ControlHandle& handle)
 {
     if (!isCurrent(context, handle))

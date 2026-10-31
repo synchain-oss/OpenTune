@@ -13,7 +13,9 @@ namespace OpenTune {
 bool ControlEditorBridge::setVisibleTrackCount(int count)
 {
     // The editor's own steps when it shows more or fewer tracks (trackAddRequested, trackDeleteRequested): the track
-    // panel and the arrangement show the same count. The panel keeps 1 to MAX_TRACKS tracks.
+    // panel and the arrangement show the same count. The panel keeps 1 to MAX_TRACKS tracks. The panel's change also
+    // reaches visibleTrackCountChanged(), which saves the count in the arrangement (project state) and marks the
+    // project.
     count = std::clamp(count, 1, OpenTuneAudioProcessor::MAX_TRACKS);
     editor_.trackPanel_.setVisibleTrackCount(count);
     editor_.arrangementView_.setVisibleTrackCount(count);

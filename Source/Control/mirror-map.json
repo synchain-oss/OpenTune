@@ -2088,6 +2088,31 @@
       "noteZh": "选择声道对时只启用该对的声道（最多两个输出声道），并不再使用默认声道。"
     },
     {
+      "id": "audio-asio-system-rate",
+      "group": "audio-device",
+      "upstream": {
+        "file": "Source/Standalone/StandaloneAudioDeviceSync.cpp",
+        "symbol": "getSystemDefaultRenderSampleRate",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "0cfc2cff2fdd704bca5db590baed8cfe65ae53ca93f67e1b348ee0a1452680cb"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridgePrefs.cpp",
+          "symbols": [
+            "getSystemDefaultRenderSampleRate"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.AudioDevice",
+        "ControlProcessorTests.AudioVectors"
+      ],
+      "note": "The rate that the restore of an ASIO device aims at is the sample rate of the Windows shared mode of the default render device. The upstream function is in an unnamed namespace and cannot be called, so the bridge asks the system again with the same calls, to give the warning ASIO_RATE_NOT_RESTORED the rate that the restore tried to set.",
+      "noteZh": "ASIO 设备的恢复以 Windows 共享模式默认渲染设备的采样率为目标。上游函数在匿名命名空间里无法调用，所以桥用同样的系统调用再问一次，让告警 ASIO_RATE_NOT_RESTORED 带上恢复尝试设置的采样率。"
+    },
+    {
       "id": "track-add",
       "group": "tracks",
       "upstream": {
@@ -2109,8 +2134,8 @@
         "ControlProcessorTests.Tracks",
         "ControlProcessorTests.TrackVectors"
       ],
-      "note": "The + button shows one more track slot; track.add repeats it count times. It marks nothing as changed (the panel's menu entry trackAddRequested does).",
-      "noteZh": "+ 按钮多显示一个轨道槽位；track.add 重复 count 次。它不标脏（轨道面板菜单里的 trackAddRequested 会标脏）。"
+      "note": "The + button shows one more track slot; track.add repeats it count times. The panel's change of the count reaches visibleTrackCountChanged, which saves the count in the arrangement and marks the project, so track.add marks the project through the bridge and has no undo (no_upstream_undo, IRREVERSIBLE).",
+      "noteZh": "+ 按钮多显示一个轨道槽位；track.add 重复 count 次。面板改变数量会走到 visibleTrackCountChanged，把数量存进编排并标脏，所以 track.add 经桥标脏，且没有撤销（no_upstream_undo，IRREVERSIBLE）。"
     },
     {
       "id": "track-duplicate",

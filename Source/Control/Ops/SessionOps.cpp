@@ -7,7 +7,6 @@
 
 #include "Audio/AudioFormatRegistry.h"
 #include "PluginProcessor.h"
-#include "Utils/AccelerationDetector.h"
 #include "Utils/AppPreferences.h"
 
 #include <algorithm>
@@ -47,19 +46,6 @@ const char* archName()
 #else
     return "unknown";
 #endif
-}
-
-const char* backendName(AccelerationDetector::AccelBackend backend)
-{
-    switch (backend) {
-        case AccelerationDetector::AccelBackend::DirectML:
-            return "directml";
-        case AccelerationDetector::AccelBackend::CoreML:
-            return "coreml";
-        case AccelerationDetector::AccelBackend::CPU:
-            break;
-    }
-    return "cpu";
 }
 
 JsonValue optionalString(const std::optional<std::string>& value)
@@ -114,8 +100,10 @@ JsonValue audioDeviceJson(ControlOpContext& context)
 ControlProcessingRuntime processingRuntime()
 {
     ControlProcessingRuntime runtime;
-    // AccelerationDetector::getSelection(): the inference backend in use (CPU until one was detected).
-    runtime.backend = backendName(AccelerationDetector::getInstance().getSelection().backend);
+    // AccelerationDetector::getSelection(): the inference backend in use (CPU until one was detected). Read through
+    // controlInferenceBackendName(), which asks the detector unless a test replaced it, so that the tests of prefs.set
+    // see in session.info the backend their fake runtime ends up with.
+    runtime.backend = controlInferenceBackendName();
     // ProcessRenderRuntime::isVocoderReady() / isVocoderReconfiguring(): the process-wide vocoder, polled without a
     // hook. Read through controlVocoderState(), which asks the runtime unless a test replaced it, so that the tests of
     // prefs.set see what session.info reports while their fake runtime reloads the vocoder.

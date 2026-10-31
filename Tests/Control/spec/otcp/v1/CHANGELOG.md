@@ -2,7 +2,7 @@
 
 All notable changes to the OTCP specification are recorded here. Versions follow `MAJOR.MINOR.PATCH` (README.md, "Versions"); each released version is tagged `spec-v<version>`.
 
-## [1.0.0-rc.9] - unreleased
+## [1.0.0-rc.9] - 2026-10-31
 
 Ninth release candidate of protocol major 1, proposed as the text of 1.0.0. It records the behaviour of the OpenTune release that the control interface now builds on (OpenTune 1.8.2), which differs from the text in five places, and it adds what a review of the processing settings found missing: a warning for the case in which the GPU priority runs on the CPU, and descriptions for the processing fields of `session.info` and `prefs.get`. The wire version stays `1.0`. The change adds two warning codes and changes no method, param or result member, so a client of rc.8 keeps working: it accepts the warnings it does not know (PROTOCOL.md section 2.3), and a server of rc.8 does not send them. A client of rc.9 that talks to a server of rc.8 simply never receives them. One behaviour changes, though: `track.add` now marks the project as changed (the number of visible tracks is project state), so a client that relied on it leaving the project unchanged sees `dirty.after` true.
 

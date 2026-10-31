@@ -11,6 +11,7 @@
 #include "Control/Edit/ControlOriginAction.h"
 #include "Control/Edit/NoteCorrection.h"
 #include "PluginProcessor.h"
+#include "Utils/LocalizationManager.h"
 #include "Utils/PitchShiftEditAction.h"
 #include "Utils/PitchUtils.h"
 #include "Utils/ScaleUiMapping.h"
@@ -337,21 +338,23 @@ bool applyOp(const NoteOp& op, Note& note, const std::array<bool, 12>* scale, fl
 }
 
 /** The undo description the UI gives the same edit: the pitch move and the snap of the pitch tool
-    (PianoRollToolHandler), the parameter knobs (PianoRollComponent::editParameter()) and the drift tool. */
+    (PianoRollToolHandler), the parameter knobs (PianoRollComponent::editParameter()) and the drift tool. The UI
+    takes the text with LOC_RAW (the language of the window it belongs to) at the time of the edit; so does this,
+    on the message thread, with the same keys. */
 juce::String descriptionOf(const NoteOp& op)
 {
     switch (op.kind) {
         case NoteOpKind::SetTargetPitch:
         case NoteOpKind::ShiftCents:
-            return juce::String::fromUTF8(u8"移动音符");
+            return LOC_RAW("Move note");
         case NoteOpKind::SnapToScale:
-            return juce::String::fromUTF8(u8"音高吸附");
+            return LOC_RAW("Pitch snap");
         case NoteOpKind::SetParams:
             if (op.pitchDriftScale && !op.retuneSpeed && !op.vibratoDepth && !op.vibratoRateHz)
-                return juce::String::fromUTF8(u8"漂移修正");
-            return TRANS("Edit note parameter");
+                return LOC_RAW("Drift correction");
+            return LOC_RAW("Edit note");
     }
-    return TRANS("Edit note parameter");
+    return LOC_RAW("Edit note");
 }
 
 /** The positions of the selected notes in storage, at the notes of expectedRevision. order maps a note index

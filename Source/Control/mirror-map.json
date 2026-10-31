@@ -816,8 +816,8 @@
         "ControlProcessorTests.EditNotes",
         "ControlProcessorTests.EditVectors"
       ],
-      "note": "The parameter knobs on selected notes: the note fields they set and the undo description Edit note parameter.",
-      "noteZh": "选中音符上的参数旋钮：设置哪些音符字段，以及撤销描述 Edit note parameter。"
+      "note": "The parameter knobs on selected notes: the note fields they set and the undo description Edit note.",
+      "noteZh": "选中音符上的参数旋钮：设置哪些音符字段，以及撤销描述 Edit note。"
     },
     {
       "id": "notes-commit-range",

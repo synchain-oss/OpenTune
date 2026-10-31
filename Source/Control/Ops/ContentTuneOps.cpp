@@ -13,6 +13,7 @@
 #include "Control/Edit/NoteCorrection.h"
 #include "PluginProcessor.h"
 #include "Utils/LegacyNoteGenerator.h"
+#include "Utils/LocalizationManager.h"
 #include "Utils/NoteGeneratorTypes.h"
 #include "Utils/ScaleUiMapping.h"
 
@@ -87,20 +88,19 @@ bool reject(ControlParamReader& reader, std::string& why, std::string message)
 }
 
 /** The undo description of AUTO regenerate, the text the piano roll gives its AUTO entry
-    (PianoRollComponent::applyAutoTuneToSelection()). Built from UTF-8 here: the piano roll passes the literal
-    through TRANS(), whose juce::String(const char*) reads the bytes as Latin-1, so taking its text would put
-    mojibake into the API's history. */
+    (PianoRollComponent::applyAutoTuneToSelection()): LOC_RAW("AUTO correction"), the text in the language of the
+    window at the time of the edit. */
 juce::String autoTuneDescription()
 {
-    return juce::String::fromUTF8(u8"自动调音");
+    return LOC_RAW("AUTO correction");
 }
 
 /** The undo description of SNAP, the text the piano roll gives the AUTO button's snap
-    (PianoRollComponent::applyAutoSnapToAllNotes()) and PianoRollToolHandler its double-click snap; from UTF-8
-    for the same reason as autoTuneDescription(). */
+    (PianoRollComponent::applyAutoSnapToAllNotes()) and PianoRollToolHandler its double-click snap:
+    LOC_RAW("Pitch snap"). */
 juce::String snapDescription()
 {
-    return juce::String::fromUTF8(u8"音高吸附");
+    return LOC_RAW("Pitch snap");
 }
 
 // ---- content.setKey -------------------------------------------------------------------------------
@@ -727,7 +727,7 @@ Result<JsonValue> runNotesOnly(ControlOpContext& context, const AutoTuneParams& 
  * ported in controlPlanAutoSnap()), with the explicit key. Without ranges it snaps every note, as the button does
  * without a note selection; with ranges, each range is one pass over the notes that overlap it (resolved to frames
  * as for regenerate), as the button does with those notes selected. Every pass that changes something is one
- * commit and one PianoRollEditAction ("音高吸附"); the call is one ControlOriginAction.
+ * commit and one PianoRollEditAction ("Pitch snap"); the call is one ControlOriginAction.
  */
 Result<JsonValue> runSnapNotes(ControlOpContext& context, const AutoTuneParams& params, const ControlContentRef& ref,
                                const ControlContentVersions& versions, const DetectedKey& key)

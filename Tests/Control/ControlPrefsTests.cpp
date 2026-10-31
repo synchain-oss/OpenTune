@@ -318,7 +318,8 @@ public:
     bool generateNotes = false;
     ContentKey pianoRollKey;
     bool asioRestoreSucceeds = true;
-    /** The rate that a restore of the ASIO sample rate aims at in these tests (the rate of the fake devices is 44100). */
+    /** The rate that a restore of the ASIO sample rate aims at in these tests (the rate of the fake devices is 44100).
+     */
     double asioSystemRateHz = 48000.0;
     std::shared_ptr<ControlJobs> modalOnceJobStarted;
 
@@ -1062,7 +1063,8 @@ public:
     const char* inferenceBackend() const
     {
         ++backendReads;
-        if (pendingBackend_ != nullptr && commandAtMs && juce::Time::getMillisecondCounter() - *commandAtMs >= queuedMs) {
+        if (pendingBackend_ != nullptr && commandAtMs
+            && juce::Time::getMillisecondCounter() - *commandAtMs >= queuedMs) {
             backend_ = pendingBackend_;
             pendingBackend_ = nullptr;
         }
@@ -1111,7 +1113,8 @@ public:
     std::uint32_t loadingMs = 300;
     bool f0Accepts = true;
     std::vector<std::string> calls;
-    /** How often the backend was asked for (session.info and a prefsApply job that changed the priority to gpuFirst). */
+    /** How often the backend was asked for (session.info and a prefsApply job that changed the priority to gpuFirst).
+     */
     mutable int backendReads = 0;
 
 private:
@@ -1472,11 +1475,12 @@ void checkRenderingPriority(ApiSession& api, OpenTuneAudioProcessor& processor, 
 }
 
 /**
- * BACKEND_FALLBACK (PROTOCOL.md section 12.7 rule 7): the result of the prefsApply job carries it when this call changed
- * the rendering priority to gpuFirst and the backend that is reported when the job ends is cpu, with a null subject and
- * the data {requested: gpuFirst, actual: cpu}, after GLOBAL_PREFERENCE. It does not when the GPU runs, when the priority
- * becomes cpuFirst or does not change, and the backend is read once (and not at all by a call that does not change the
- * priority to gpuFirst). A job that does not wait for the vocoder reads the backend of before the change.
+ * BACKEND_FALLBACK (PROTOCOL.md section 12.7 rule 7): the result of the prefsApply job carries it when this call
+ * changed the rendering priority to gpuFirst and the backend that is reported when the job ends is cpu, with a null
+ * subject and the data {requested: gpuFirst, actual: cpu}, after GLOBAL_PREFERENCE. It does not when the GPU runs, when
+ * the priority becomes cpuFirst or does not change, and the backend is read once (and not at all by a call that does
+ * not change the priority to gpuFirst). A job that does not wait for the vocoder reads the backend of before the
+ * change.
  */
 void checkBackendFallback(ApiSession& api, OpenTuneAudioProcessor& processor, FakeRuntime& runtime)
 {
@@ -1560,7 +1564,8 @@ void checkBackendFallback(ApiSession& api, OpenTuneAudioProcessor& processor, Fa
     // One call that changes the tuning and the priority: the warning comes last, after those of the other preferences.
     startUnder(true, false);
     {
-        const auto job = runAsJob(api, "prefs.set", json(R"({"tuningHz":432,"renderingPriority":"gpuFirst"})"), "prefsApply");
+        const auto job =
+            runAsJob(api, "prefs.set", json(R"({"tuningHz":432,"renderingPriority":"gpuFirst"})"), "prefsApply");
         CONTROL_CHECK(jobSucceeded(job));
         const auto& result = memberOf(job, "result");
         CONTROL_CHECK((warningCodes(result)
@@ -2617,8 +2622,8 @@ bool asioWarningIs(const JsonValue& result, const char* deviceName, double sampl
 {
     const JsonValue* warning = findWarning(result, "ASIO_RATE_NOT_RESTORED");
     const auto& warnings = memberOf(result, "warnings");
-    bool ok = warning != nullptr && warnings.size() == 2 && memberOf(warnings.at(0), "code").text() == "GLOBAL_PREFERENCE"
-              && warning == &warnings.at(1)
+    bool ok = warning != nullptr && warnings.size() == 2
+              && memberOf(warnings.at(0), "code").text() == "GLOBAL_PREFERENCE" && warning == &warnings.at(1)
               && toJsonString(memberOf(*warning, "subject")) == R"({"singleton":"audioDevice"})";
     if (ok) {
         const auto& data = memberOf(*warning, "data");
@@ -2815,8 +2820,9 @@ std::string vectorSkipReason(const JsonValue& vector, const std::set<std::string
                 return reason;
             continue;
         }
-        // given.gpu (available or unavailable) is the fake runtime's gpuAvailable; given.audio, with asioRateRestoreFails,
-        // is a rig whose device type is ASIO and a bridge whose restore of the ASIO sample rate fails.
+        // given.gpu (available or unavailable) is the fake runtime's gpuAvailable; given.audio, with
+        // asioRateRestoreFails, is a rig whose device type is ASIO and a bridge whose restore of the ASIO sample rate
+        // fails.
         if (name == "dirty" || name == "editingScheme" || name == "audio")
             continue;
         if (name == "gpu") {

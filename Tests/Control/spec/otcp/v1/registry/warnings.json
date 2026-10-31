@@ -132,7 +132,7 @@
     {
       "code": "NOT_SAVED_IN_PROJECT",
       "since": "1.0",
-      "description": "The project was saved, or a copy of it was written, but some session state is not part of the project file. data.items lists it (for example the visible track count, the undo history and preferences)."
+      "description": "The project was saved, or a copy of it was written, but some session state is not part of the project file. data.items lists it (for example the undo history and preferences)."
     },
     {
       "code": "SCHEME_GENERATED_NOTES",
@@ -153,6 +153,16 @@
       "code": "IMPORT_COMMIT_REPEATED",
       "since": "1.0",
       "description": "OpenTune refused to commit an imported clip because the clip id it handed out was already used by a clip of the project (which can happen after a project was opened), so the import committed the clip again until it was accepted. The clip was imported; the same import from the OpenTune UI would have failed. subject: the imported placement; data.repeatCount: how many commits were repeated."
+    },
+    {
+      "code": "BACKEND_FALLBACK",
+      "since": "1.0",
+      "description": "The rendering priority was changed to gpuFirst, but OpenTune runs its inference on the CPU, because the GPU could not be used. The preference is set and the call succeeded; only the backend differs from the request. Sent in the result of the prefsApply job of prefs.set when the call changed renderingPriority to gpuFirst and the backend that OpenTune reports when the job ends is cpu. subject is null; data is {requested, actual}: requested is the rendering priority the call set (gpuFirst), actual is the backend that runs (cpu), the value that session.info reports in processing.backend."
+    },
+    {
+      "code": "ASIO_RATE_NOT_RESTORED",
+      "since": "1.0",
+      "description": "Before it switched the audio device type or the output device, OpenTune tried to restore the sample rate of an ASIO device and could not. The restoration is best effort, as in OpenTune's audio settings page: the switch went on and succeeded, and the ASIO driver may still run at a sample rate other than the one it had before OpenTune changed it. Sent in the result of audio.set when the call changed deviceType or outputDevice. subject is {\"singleton\": \"audioDevice\"}; data is {deviceName, sampleRateHz}: the ASIO device whose rate was to be restored and the rate in Hz that OpenTune tried to restore."
     }
   ]
 }

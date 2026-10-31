@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://otcp.invalid/v1/methods/edit.getHistory.schema.json",
   "title": "edit.getHistory",
-  "description": "Returns the tops of OpenTune's undo and redo histories: each entry's undoId (null for an entry created in the OpenTune UI that edit.undo or edit.redo has not applied, PROTOCOL.md section 15.3 rule 8), description and origin, and whether edit.undo or edit.redo would warn about it or refuse it (PROTOCOL.md sections 15.3 and 15.4).",
+  "description": "Returns the tops of OpenTune's undo and redo histories: each entry's undoId (null for an entry created in the OpenTune UI that edit.undo or edit.redo has not applied, PROTOCOL.md section 15.3 rule 8), description (the text of the undo menu of the OpenTune window, in the language of its interface, which clients do not parse) and origin, and whether edit.undo or edit.redo would warn about it or refuse it (PROTOCOL.md sections 15.3 and 15.4).",
   "x-otcp": {
     "method": "edit.getHistory",
     "layer": "L4",

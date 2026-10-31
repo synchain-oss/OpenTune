@@ -125,12 +125,23 @@
             "vocoderWeight": { "type": ["string", "null"], "maxLength": 64 },
             "f0Model": { "type": ["string", "null"], "maxLength": 64 },
             "renderingPriority": {
+              "description": "The rendering priority preference: gpuFirst makes OpenTune try the GPU for inference and use the CPU when the GPU cannot be used; cpuFirst makes it use the CPU only. It is the setting, not a report of what runs: backend says what runs, and after a fall back to the CPU the two differ. A new priority takes effect when OpenTune has reconfigured its vocoder, which it does asynchronously after prefs.set (vocoderReconfiguring), and the job of prefs.set ends when that has finished (PROTOCOL.md section 12.7).",
               "type": ["string", "null"],
               "maxLength": 64
             },
-            "backend": { "type": ["string", "null"], "maxLength": 64 },
-            "vocoderReady": { "type": "boolean" },
-            "vocoderReconfiguring": { "type": "boolean" },
+            "backend": {
+              "description": "The inference backend that OpenTune's acceleration detector has chosen at the moment of the read, for example cpu or directml. After a fall back it can differ from renderingPriority: gpuFirst together with the backend cpu means that the GPU could not be used. It reports cpu also while nothing has been detected yet, so cpu alone does not show that a detection ran.",
+              "type": ["string", "null"],
+              "maxLength": 64
+            },
+            "vocoderReady": {
+              "description": "Whether the vocoder is loaded and ready to render. false is normal before the first time a render needs the vocoder, because OpenTune loads it at that first render and not at start. It is also false while the vocoder reloads after a change of the vocoder weight or the rendering priority (vocoderReconfiguring), and it stays false when the vocoder could not load the new weight or backend (PROTOCOL.md section 12.7 rule 5).",
+              "type": "boolean"
+            },
+            "vocoderReconfiguring": {
+              "description": "true while OpenTune loads a new vocoder weight or applies a new rendering priority to its inference backend. OpenTune starts this asynchronously, so right after prefs.set the value can still be false and vocoderReady true (PROTOCOL.md section 12.7 rule 4).",
+              "type": "boolean"
+            },
             "experimentalFeatures": { "type": "boolean" },
             "nullReasons": {
               "$ref": "../schemas/common.schema.json#/$defs/nullReasons"

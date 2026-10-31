@@ -14,7 +14,7 @@ namespace OpenTune {
  *   - op moveHandles moves named handles to output times, as drags of the time tool;
  *   - op seed places the initial handles, as OpenTune does when the time tool is picked
  *     (OpenTuneAudioProcessor::ensureTimeToolAnchorSeed()). It runs as a job of kind timeGridSeed: the job asks
- *     for OpenTune's timing analysis of the content (OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures(),
+ *     for OpenTune's timing analysis of the content (OpenTuneAudioProcessor::preheatReferenceFeatures(),
  *     the analysis ensureTimeToolAnchorSeed() waits for) and seeds once it is ready. The job is cancellable until
  *     it seeds; a cancelled job leaves no deferred seeding behind, because it never registers the content for the
  *     processor's own deferred seeding. As in the UI there is no undo entry (reason ui_parity, no revert recipe,

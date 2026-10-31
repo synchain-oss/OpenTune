@@ -4,6 +4,7 @@
 #include "Content/ContentEditCommands.h"
 #include "PluginProcessor.h"
 #include "Utils/LocalizationManager.h"
+#include "Utils/TimeGridEdit.h"
 #include "Utils/TimeGridEditAction.h"
 
 #include <algorithm>
@@ -25,9 +26,11 @@ std::optional<double> limit(double lower, double upper, double value)
     return std::min(std::max(value, lower), upper);
 }
 
-/** The second pass of the time tool's group drag (PianoRollToolHandler::handleTimeToolMouseDrag): from left to
-    right, each inner handle limited to its limited left neighbour plus the spacing and its right neighbour minus
-    the spacing. False when a handle has no room; the time tool then keeps the grid as it was. */
+/** The second pass of the time tool's group drag (planTimeGridDrag(), which PianoRollToolHandler::
+    handleTimeToolMouseDrag calls): from left to right, each inner handle limited to its limited left neighbour plus
+    the spacing and its right neighbour minus the spacing. False when a handle has no room; the time tool then keeps
+    the grid as it was. Used here only for the moves of several handles to times of their own (planMoves), which
+    planTimeGridDrag() does not do: it moves a selection by one distance. */
 bool limitInOrder(std::vector<double>& outputs)
 {
     for (std::size_t i = 1; i + 1 < outputs.size(); ++i) {
@@ -80,6 +83,40 @@ TimeGridOps::Plan finish(const std::shared_ptr<const TimeGridSnapshot>& grid, co
             plan.handles.push_back(result);
     }
     return plan;
+}
+
+/**
+ * One step of the time tool's drag, by the function that the time tool itself calls (planTimeGridDrag(),
+ * Source/Utils/TimeGridEdit.h): the handle `dragged` is dragged from its output time to newOutputSec, limited to its
+ * neighbours plus and minus the minimum spacing, and the handles `together` (the others of a selection; empty for a
+ * drag of one handle) move by the same distance, each then limited from left to right. Returns the output time of
+ * every handle of the grid after the step; nullopt when the step is not made (a handle has no room, or
+ * TimeGridSnapshot::makeFromHandles() rejects the grid): the time tool then keeps the grid as it was.
+ *
+ * The caller checks first that the dragged handle has room between its neighbours (hasRoom): planTimeGridDrag()
+ * limits it with juce::jlimit(), which asserts on a lower bound above the upper one.
+ */
+std::optional<std::vector<double>> dragStep(const std::shared_ptr<const TimeGridSnapshot>& grid,
+                                            const TimeHandle& dragged, double newOutputSec,
+                                            const std::vector<std::uint64_t>& together)
+{
+    bool validationRejected = false;
+    const auto after = planTimeGridDrag(grid, dragged.id, dragged.output_seconds, newOutputSec, dragged.id, together,
+                                        false, validationRejected);
+    if (after == nullptr)
+        return std::nullopt;
+    std::vector<double> outputs;
+    outputs.reserve(after->handles().size());
+    for (const auto& handle : after->handles())
+        outputs.push_back(handle.output_seconds);
+    return outputs;
+}
+
+/** Whether the handle at index has room between its neighbours: the time tool's first limit
+    (juce::jlimit(neighbour + spacing, neighbour - spacing, ...)) has a lower bound that does not exceed the upper. */
+bool hasRoom(const std::vector<double>& outputs, std::size_t index)
+{
+    return outputs[index - 1] + TimeGridOps::kMinSpacingSec <= outputs[index + 1] - TimeGridOps::kMinSpacingSec;
 }
 
 std::vector<double> currentOutputs(const std::vector<TimeHandle>& handles)
@@ -143,24 +180,21 @@ TimeGridOps::Plan TimeGridOps::planShift(const std::shared_ptr<const TimeGridSna
     if (section.empty() || deltaSec == 0.0)
         return finish(grid, outputs, requested, true);
 
-    // First pass: the dragged handle, limited by its neighbours as they are (handleTimeToolMouseDrag's
-    // clampedOutput). The handle that leads in the direction of the move stops the section at its neighbour.
+    // The time tool's drag of the handle that leads in the direction of the move, which stops the section at its
+    // neighbour: that handle is limited by its neighbours as they are (the no-room test is ours, dragStep() needs it
+    // made), and with several handles in the section they are a group drag, each moving by the distance the dragged
+    // handle was allowed, then limited from left to right (planTimeGridDrag()).
     const std::size_t lead = deltaSec > 0.0 ? section.back() : section.front();
-    const auto limited =
-        limit(outputs[lead - 1] + kMinSpacingSec, outputs[lead + 1] - kMinSpacingSec, outputs[lead] + deltaSec);
-    if (!limited)
+    if (!hasRoom(outputs, lead))
         return finish(grid, outputs, requested, false);
-    if (section.size() == 1) {
-        outputs[lead] = *limited;
-        return finish(grid, outputs, requested, true);
-    }
-    // A group drag: every handle of the section moves by the distance the dragged handle was allowed
-    // (uniformDelta), then the second pass.
-    const double uniformDelta = *limited - handles[lead].output_seconds;
+    std::vector<std::uint64_t> together;
     for (const auto i : section)
-        outputs[i] = handles[i].output_seconds + uniformDelta;
-    const bool room = limitInOrder(outputs);
-    return finish(grid, outputs, requested, room);
+        if (i != lead)
+            together.push_back(handles[i].id);
+    const auto dragged = dragStep(grid, handles[lead], outputs[lead] + deltaSec, together);
+    if (!dragged)
+        return finish(grid, outputs, requested, false);
+    return finish(grid, *dragged, requested, true);
 }
 
 TimeGridOps::Plan TimeGridOps::planMoves(const std::shared_ptr<const TimeGridSnapshot>& grid,
@@ -181,11 +215,12 @@ TimeGridOps::Plan TimeGridOps::planMoves(const std::shared_ptr<const TimeGridSna
     if (moved.size() == 1) {
         // The time tool's drag of one handle: limited by its neighbours, which stay.
         const auto i = moved.front();
-        const auto limited = limit(outputs[i - 1] + kMinSpacingSec, outputs[i + 1] - kMinSpacingSec, *requested[i]);
-        if (!limited)
+        if (!hasRoom(outputs, i))
             return finish(grid, outputs, requested, false);
-        outputs[i] = *limited;
-        return finish(grid, outputs, requested, true);
+        const auto dragged = dragStep(grid, handles[i], *requested[i], {});
+        if (!dragged)
+            return finish(grid, outputs, requested, false);
+        return finish(grid, *dragged, requested, true);
     }
 
     // First pass: each moved handle limited by its neighbours as they are requested to be. A handle whose

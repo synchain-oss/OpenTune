@@ -59,9 +59,10 @@ The release notes of each test build list the exact commands used to build it. I
    git config core.longpaths true
    ```
 
-3. Fetch the pinned dependencies with `.github/scripts/bootstrap-deps.ps1`. These include JUCE 9.0.3, ARA SDK 2.3.0, SoundTouch 2.3.3, ONNX Runtime 1.24.4 and DirectML 1.15.4. The script verifies each one by sha256; `.github/scripts/deps.lock.json` is the authoritative list. It does **not** download any model weights.
-4. Configure with `-DOPENTUNE_ENABLE_CONTROL_API=ON`, then build the Standalone target.
-5. Delete the `models\` folder from the build output before running. It contains only placeholder files, and it would hide the models of your installed official OpenTune. The models come from the official OpenTune installed on the same machine (1.7.9 or newer on Windows).
+3. Fetch the pinned dependencies with `.github/scripts/bootstrap-deps.ps1 -LinkInto <source directory> -PatchJuce`. These include JUCE 8.0.12, ARA SDK 2.3.0, SoundTouch 2.3.2, ONNX Runtime 1.24.4 and DirectML 1.15.4. The script verifies each one by sha256; `.github/scripts/deps.lock.json` is the authoritative list. `-PatchJuce` applies the patches that the upstream build needs to JUCE (it runs upstream's `scripts/github_actions/patch-juce-ara.py`, which needs Python 3). It does **not** download any model weights.
+4. Upstream's post-build step copies two model files that the upstream repository no longer tracks: create an empty (0 byte) file at each of `pc_nsf_hifigan_44.1k_ONNX\pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx` and `models\fcpe.onnx` (both paths are ignored by upstream's `.gitignore`).
+5. Configure with `-DOPENTUNE_ENABLE_CONTROL_API=ON`, then build the Standalone target.
+6. Delete the `models\` folder from the build output before running. It contains only placeholder files, and it would hide the models of your installed official OpenTune. The models come from the official OpenTune installed on the same machine (1.7.9 or newer on Windows).
 
 ## Enabling the control API
 

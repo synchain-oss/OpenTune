@@ -986,39 +986,6 @@
       "noteZh": "移调设置参数，并把音符与音高计数器各加 1，revision 令牌扣除这一部分。"
     },
     {
-      "id": "time-tool-drag",
-      "group": "timing",
-      "upstream": {
-        "file": "Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp",
-        "symbol": "PianoRollToolHandler::handleTimeToolMouseDrag",
-        "kind": "function",
-        "normalization": "fn-v1",
-        "sha256": "380d9b4473071ad6956f47007d4be9e1f503d56e6c29ee95fab7d9301dfcd374"
-      },
-      "control": [
-        {
-          "file": "Source/Control/Edit/TimeGridOps.cpp",
-          "symbols": [
-            "TimeGridOps::planShift",
-            "TimeGridOps::planMoves",
-            "limitInOrder"
-          ]
-        },
-        {
-          "file": "Source/Control/Edit/TimeGridOps.h",
-          "symbols": [
-            "TimeGridOps::kMinSpacingSec"
-          ]
-        }
-      ],
-      "tests": [
-        "ControlProcessorTests.Timing",
-        "ControlProcessorTests.TimingVectors"
-      ],
-      "note": "The time tool's drag: the dragged handle limited to its neighbours plus and minus 30 ms, the uniform distance of a group drag, the left-to-right second pass, and no move without room.",
-      "noteZh": "时间工具的拖动：被拖手柄限制在邻点 ±30 ms 之内，组拖动的统一位移，从左到右的第二轮夹紧，没有空间时不动。"
-    },
-    {
       "id": "time-tool-mouse-up",
       "group": "timing",
       "upstream": {

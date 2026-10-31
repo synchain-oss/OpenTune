@@ -217,6 +217,26 @@ inline void holdRenderRuntimeForProcess()
 }
 
 /**
+ * The failure messages that OpenTune keeps with a content whose pitch analysis failed
+ * (EditableContentSnapshot::originalF0FailureReason, stored by requestContentRefresh through
+ * OpenTuneAudioProcessor::setContentOriginalF0FailureReason): the message of the F0 extraction for audio without a
+ * voiced frame, which the API reports as f0_empty, and any other one, reported as f0_failed.
+ */
+inline constexpr const char* kUnvoicedF0FailureMessage = "f0_empty_or_unvoiced";
+inline constexpr const char* kOtherF0FailureMessage = "F0 extraction failed";
+
+/**
+ * Fails the analysis of a content the way requestContentRefresh does: the state Failed, then the message. The state
+ * comes first because OpenTune clears the message whenever the state changes to another one.
+ */
+inline bool failAnalysis(OpenTuneAudioProcessor& processor, const ContentKey& key, bool unvoiced)
+{
+    return processor.setContentOriginalF0State(key, OriginalF0State::Failed)
+           && processor.setContentOriginalF0FailureReason(key, unvoiced ? kUnvoicedF0FailureMessage
+                                                                        : kOtherF0FailureMessage);
+}
+
+/**
  * The language that the scenarios of this process run in, bound for the rest of the process the way an editor binds
  * the language of its window (LocalizationManager::ScopedLanguageBinding). OpenTune takes the descriptions of undo
  * entries with LOC_RAW, which asks the bound language (an unbound one asserts); the API does the same, so a scenario

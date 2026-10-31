@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string_view>
 
 namespace OpenTune {
 
@@ -267,8 +268,8 @@ std::optional<Error> controlCheckContentReady(ControlOpContext& context, const C
         case OriginalF0State::Extracting:
             return controlOpError("NOT_READY", "f0_not_ready", "the pitch analysis of the content has not finished");
         case OriginalF0State::Failed:
-            // The reason the processor recorded when the analysis failed (its F0 failure hook).
-            if (context.processor().getContentF0FailureReason(content.key) == std::optional<std::string>("f0_empty"))
+            // The failure message OpenTune keeps with the content tells an analysis without voiced frames.
+            if (std::string_view(controlF0FailureCode(snapshot)) == "f0_empty")
                 return controlOpError("NOT_READY", "f0_empty", "the pitch analysis found no voiced frame");
             return controlOpError("NOT_READY", "f0_failed", "the pitch analysis of the content failed");
         case OriginalF0State::Ready:

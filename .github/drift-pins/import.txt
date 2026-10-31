@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # group: import
-# pinned-at: upstream/20261008-addb4f4
+# pinned-at: upstream/20261030-2c01847
 # ported-to: Source/Control/Ops/ImportOps.cpp
 # ported-to: Source/Control/Ops/SessionOps.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
-Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::computeTrackAppendStartSeconds	L2371-L2400	fn-v1	22325f69ac145f820bb9031d901b599f6bad14e36bf1659c8dd629eb498144ae
-Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::startPendingImport	L2205-L2356	fn-v1	00601c6aa02eaecbe2ab7237ac5fa70b8051f1c2031857a8a4cb2cc85c82de85
-Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::processNextImportInQueue	L2359-L2369	fn-v1	042d6de2ccffb8d9be9eeca57da4d7e0c38595108466a2baeeba12369a238826
-Source/PluginProcessor.cpp	OpenTuneAudioProcessor::prepareImport	L3766-L3849	fn-v1	3bef90e530e4ca53a0cb19d840ab2f65fc61d5409ccc4240709c1706ec86537e
-Source/Inference/FCPEExtractor.h	static constexpr double kMaxAudioDurationSec	L68-L68	stmt-v1	ca8a541a8bddc2ef074ee5c3a24f2c3d9b3fafb91f9ffb5a33d78b0ecc287a1e
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::computeTrackAppendStartSeconds	L2492-L2521	fn-v1	22325f69ac145f820bb9031d901b599f6bad14e36bf1659c8dd629eb498144ae
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::startPendingImport	L2316-L2477	fn-v1	ae02087ecae1c23d41a5394f3333d5a342a51adca1e5e5105f1fac7c3ef17e6d
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::processNextImportInQueue	L2480-L2490	fn-v1	042d6de2ccffb8d9be9eeca57da4d7e0c38595108466a2baeeba12369a238826
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::prepareImport	L3645-L3728	fn-v1	3bef90e530e4ca53a0cb19d840ab2f65fc61d5409ccc4240709c1706ec86537e
+Source/Inference/FCPEExtractor.h	static constexpr double kMaxAudioDurationSec	L92-L92	stmt-v1	ca8a541a8bddc2ef074ee5c3a24f2c3d9b3fafb91f9ffb5a33d78b0ecc287a1e

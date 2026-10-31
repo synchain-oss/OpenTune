@@ -778,8 +778,8 @@ void scenarioTimeGridSeedImpl()
 
     // OpenTune's own timing analysis: the job asks for it and waits. The handles lie where OpenTune puts them when
     // the time tool is picked (ensureTimeToolAnchorSeed, as the UI calls it) for a content with the same analysis.
-    // The processor finishes one such analysis per session (see the README's time-grid behaviours), so the UI's
-    // side gets the analysis the job waited for, as a finished analysis is stored.
+    // The UI's side gets the analysis the job waited for, as a finished analysis is stored, so it has none of its own
+    // to wait for.
     const auto analysed = f.add(gridSpec("analysed", false, 1));
     const auto uiSide = f.add(gridSpec("ui", false, 2));
     if (CONTROL_CHECK(analysed.has_value() && uiSide.has_value())) {
@@ -796,25 +796,13 @@ void scenarioTimeGridSeedImpl()
         CONTROL_CHECK(contentTimesOf(apiHandles) == contentTimesOf(innerOf(*f.processor, uiSide->first.key)));
     }
 
-    // OpenTune's reference analysis service runs one synchronous analysis per session: a second one stays running
-    // (ReferenceAnalysisService::workerLoop keeps its finished job as the active one). The job waits for it as for
-    // any running analysis and can be cancelled; it never seeds without the analysis.
+    // OpenTune's reference analysis service takes the analysis of every content in turn, so the seed of a later
+    // content of the same session finishes as the first ones did. The cancellation of a job that waits for an
+    // analysis is covered by the failures below, which hold the analysis as running.
     const auto second = f.add(gridSpec("second", false, 3));
     if (CONTROL_CHECK(second.has_value())) {
-        const auto job = f.startSeed(second->second);
-        CONTROL_CHECK(f.waitJobState(job, "running"));
-        pumpMessagesFor(kQuietPumpMs);
-        const auto status = f.processor->getContentSnapshot(second->first.key)->referenceFeatures.status;
-        if (status == ReferenceFeatureStatus::Extracting) {
-            CONTROL_CHECK(memberOf(f.jobOf(job), "state").text() == "running");
-            f.api.result("job.cancel", jsonOf("{\"jobId\":" + jsonQuoted(job) + "}"));
-            CONTROL_CHECK(memberOf(f.jobOnceTerminal(job), "state").text() == "cancelled");
-            CONTROL_CHECK(innerOf(*f.processor, second->first.key).empty());
-        } else {
-            // A build of OpenTune whose service runs every analysis: the job seeds as for the first content.
-            note("the second timing analysis of the session finished");
-            CONTROL_CHECK(memberOf(f.jobOnceTerminal(job), "state").text() == "succeeded");
-        }
+        CONTROL_CHECK(memberOf(f.jobOnceTerminal(f.startSeed(second->second)), "state").text() == "succeeded");
+        CONTROL_CHECK(!innerOf(*f.processor, second->first.key).empty());
     }
 }
 

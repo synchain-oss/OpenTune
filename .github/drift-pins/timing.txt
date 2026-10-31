@@ -2,14 +2,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # group: timing
-# pinned-at: upstream/20261008-addb4f4
-# ported-to: Source/Control/Edit/TimeGridOps.cpp
-# ported-to: Source/Control/Edit/TimeGridOps.h
+# pinned-at: upstream/20261030-2c01847
 # ported-to: Source/Control/Ops/TimingOps.cpp
+# ported-to: Source/Control/Edit/TimeGridOps.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
-Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	PianoRollToolHandler::handleTimeToolMouseUp	L3567-L3593	fn-v1	86eb0526c37cf75f2e231ad0486b198a6162600d736501832141de49a0ee27a4
-Source/Standalone/UI/PianoRollComponent.cpp	toolCtx.commitTimeGrid	L293-L315	stmt-v1	b6a2b19747de4b0620767daed0488f7ae9814b8ad1b3bb2cc9182fc33290e44a
-Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::setCurrentTool	L3902-L4017	fn-v1	5dea5c9a87b45ffac8a47828b080f3de98de9f7001a9884f839d180a81616f45
-Source/PluginProcessor.cpp	OpenTuneAudioProcessor::ensureTimeToolAnchorSeed	L4219-L4325	fn-v1	f5b0de0f5f5e478beacfc4a2b5f2b7dc6a11489861fb191d93afbb2547421c98
-Source/PluginProcessor.cpp	OpenTuneAudioProcessor::preheatReferenceAlignmentFeatures	L4328-L4483	fn-v1	aad66fcc5ba8434bcb6b52865f0820145b8fb259a62e6b6b4d81902ddb908b92
+Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp	PianoRollToolHandler::handleTimeToolMouseUp	L3107-L3133	fn-v1	287795ca9ec5d7cb66dec6765a954bab15711f688c46daa921a401d1a106832a
+Source/Standalone/UI/PianoRollComponent.cpp	toolCtx.commitTimeGrid	L613-L630	stmt-v1	ab8510e37a8727bba284a1653eb544d3e16843356cb43c255cd4352117afabd1
+Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::setCurrentTool	L4311-L4427	fn-v1	e33e3b4f41aae1a5c82edf8d10f0aa7491fe52d0216a9067ba7ccf685e301ce3
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::ensureTimeToolAnchorSeed	L4231-L4337	fn-v1	81a882a0362a043bb277d539e0ab5b4bce5627deb98d7a6076f4648f921dff35
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::preheatReferenceFeatures	L4340-L4445	fn-v1	8ce715f8ecf821553c0e45a8755e0882e28f57ef04e5b009b6503b6d1dd5364b

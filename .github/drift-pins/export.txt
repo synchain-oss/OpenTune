@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # group: export
-# pinned-at: upstream/20261008-addb4f4
+# pinned-at: upstream/20261030-2c01847
 # ported-to: Source/Control/Ops/ExportOps.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
-Source/PluginProcessor.cpp	OpenTuneAudioProcessor::exportPlacementAudio	L3418-L3472	fn-v1	7c7908f928fc73ae82fe50abdb285a55b971dc4ca6d05b8366382d5642901e86
-Source/PluginProcessor.cpp	OpenTuneAudioProcessor::exportTrackAudio	L3474-L3545	fn-v1	b9345f926645385c5eaf9d82653a81b9e6c8466c84e15d80f57a98b9dd529cf5
-Source/PluginProcessor.cpp	OpenTuneAudioProcessor::exportMasterMixAudio	L3547-L3605	fn-v1	b0a39a60a1331ceb7d77dfac623193e9358c9f22fc973057896854c6ca8b38bb
-Source/PluginProcessor.cpp	OpenTuneAudioProcessor::setContentTimeGrid	L5075-L5133	fn-v1	09a6c402060b6db3769552513f0dccfc042523aee23182098ac0cb7cec2bc343
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::exportPlacementAudio	L3287-L3344	fn-v1	4ce84a3afdfed2959d2f6621a90af64157d44944648c5a7538910102c2570681
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::exportTrackAudio	L3346-L3420	fn-v1	83e6804e725d242d1b729436b49e9a6a65d4fb102008946205e3766630c74911
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::exportMasterMixAudio	L3422-L3484	fn-v1	50d3d484904682b2b45346e0795c3e6cc5d1afe8299c44257497ae66a8921f4a
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::setContentTimeGrid	L5456-L5514	fn-v1	d5a091615e9c238e86fc3e5977d7322cf0deda59b96a29a77a07f49111e808b1

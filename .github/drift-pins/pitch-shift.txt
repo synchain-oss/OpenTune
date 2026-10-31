@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # group: pitch-shift
-# pinned-at: upstream/20261008-addb4f4
+# pinned-at: upstream/20261030-2c01847
 # ported-to: Source/Control/Ops/ContentEditOps.cpp
 # ported-to: Source/Control/Edit/ControlOriginAction.cpp
 # ported-to: Source/Control/Edit/PitchShiftLedger.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
-Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::pitchShiftRequested	L3498-L3547	fn-v1	45978577677ef625442d9158614d1766864696fc6a7987efde859ef616915d3d
-Source/PluginProcessor.cpp	OpenTuneAudioProcessor::commitPitchShiftEdit	L5273-L5313	fn-v1	850ca4359099e1e4ab10486260cf4bcb783e588dff3404cacc626a25bda85d04
-Source/Content/StandaloneClipContent.cpp	StandaloneClipContent::applyPitchShiftState	L127-L139	fn-v1	3596954e736e6121ad0b286f3938d843dfc47a14c7e82007b09e068e5db2d485
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::pitchShiftRequested	L3647-L3696	fn-v1	885ede8f5164bb960c8f7bceab0b952d111a7d7ac030ce4cc74c55acd1417c89
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::commitPitchShiftEdit	L5729-L5769	fn-v1	850ca4359099e1e4ab10486260cf4bcb783e588dff3404cacc626a25bda85d04
+Source/Content/StandaloneClipContent.cpp	StandaloneClipContent::applyPitchShiftState	L142-L154	fn-v1	3596954e736e6121ad0b286f3938d843dfc47a14c7e82007b09e068e5db2d485

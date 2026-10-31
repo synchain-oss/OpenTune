@@ -4,9 +4,12 @@
 #include "Control/ControlUiBridge.h"
 #include "ControlEditorBridgeViewSwitch.h"
 
+#include <memory>
+
 namespace OpenTune {
 
 class OpenTuneAudioProcessorEditor;
+class ControlTrackColourWatch;
 
 /**
  * The Standalone editor's side of ControlUiBridge: a thin adapter that reads the editor's own state and
@@ -100,6 +103,9 @@ private:
     std::uint64_t activeSelection() const;
 
     OpenTuneAudioProcessorEditor& editor_;
+
+    /** Tells which track the colour picker that is open is for (ControlEditorBridgeColour.h). */
+    std::unique_ptr<ControlTrackColourWatch> colourWatch_;
 };
 
 } // namespace OpenTune

@@ -376,7 +376,7 @@ ControlJobError jobErrorOf(const Error& error)
  *   still ready (the readiness gate); a grid that has handles by now is not seeded again (a no-op);
  * - it asks for OpenTune's timing analysis of the content (preheatReferenceFeatures(), which does
  *   nothing while that analysis runs or is ready) and waits for it; an analysis that failed or found no onset
- *   ends the job with INTERNAL, as the time tool then places no handle;
+ *   ends the job with ANALYSIS_FAILED(timing_analysis_failed), as the time tool then places no handle;
  * - once the analysis is ready it checks the busy state and seeds with ensureTimeToolAnchorSeed(), which places
  *   the handles at once when the analysis is ready, then marks the project as changed and tells the editor.
  *

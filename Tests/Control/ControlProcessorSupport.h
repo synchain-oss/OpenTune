@@ -576,6 +576,10 @@ void scenarioExport();
     the file is written, NOT_READY after the wait limit, and cancellation while it waits; the target is
     never touched and the export lock is released. */
 void scenarioExportFailures();
+/** A deferred render retry in the render runtime keeps the export job waiting although every content is ready: it
+    ends with NOT_READY(export_wait_timeout) at the wait limit, leaving the target as it was, and writes the file once
+    the retry is gone. */
+void scenarioExportDeferredRetry();
 /** The specification's vectors of export.start, against the real dispatcher. */
 void scenarioExportVectors();
 /** Edits through the API followed at once by an export, with the render of the new revision held back or published,

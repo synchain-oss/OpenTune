@@ -549,6 +549,7 @@ const Scenario kScenarios[] = {
     {"ImportFailures", scenarioImportFailures, false},
     {"Export", scenarioExport, false},
     {"ExportFailures", scenarioExportFailures, false},
+    {"ExportDeferredRetry", scenarioExportDeferredRetry, false},
     {"ExportVectors", scenarioExportVectors, false},
     {"ExportTimeStretch", scenarioExportTimeStretch, false},
     {"ExportAfterEdit", scenarioExportAfterEdit, false},

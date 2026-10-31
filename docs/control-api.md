@@ -59,9 +59,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
    git config core.longpaths true
    ```
 
-3. 用 `.github/scripts/bootstrap-deps.ps1` 拉取锁定版本的依赖，例如 JUCE 9.0.3、ARA SDK 2.3.0、SoundTouch 2.3.3、ONNX Runtime 1.24.4 与 DirectML 1.15.4。脚本会逐个校验 sha256；完整清单以 `.github/scripts/deps.lock.json` 为准。脚本**不会**下载任何模型权重。
-4. 配置时打开 CMake 选项 `-DOPENTUNE_ENABLE_CONTROL_API=ON`，然后构建 Standalone。
-5. 构建输出目录里的 `models\` 文件夹只有占位文件，它会遮住已安装官方版的模型，运行前请删除。模型来自本机已安装的官方 OpenTune（Windows 上为 1.7.9 或更新版本）。
+3. 用 `.github/scripts/bootstrap-deps.ps1 -LinkInto <源码目录> -PatchJuce` 拉取锁定版本的依赖，例如 JUCE 8.0.12、ARA SDK 2.3.0、SoundTouch 2.3.2、ONNX Runtime 1.24.4 与 DirectML 1.15.4。脚本会逐个校验 sha256；完整清单以 `.github/scripts/deps.lock.json` 为准。`-PatchJuce` 在 JUCE 上打上游构建所需的补丁（运行上游的 `scripts/github_actions/patch-juce-ara.py`，需要 Python 3）。脚本**不会**下载任何模型权重。
+4. 上游的构建后步骤会复制两个模型文件，而上游仓库已不再跟踪它们：在 `pc_nsf_hifigan_44.1k_ONNX\pc_nsf_hifigan_44.1k_hop512_128bin_2025.02.onnx` 与 `models\fcpe.onnx` 各放一个 0 字节的空文件（两个路径都被上游的 `.gitignore` 忽略）。
+5. 配置时打开 CMake 选项 `-DOPENTUNE_ENABLE_CONTROL_API=ON`，然后构建 Standalone。
+6. 构建输出目录里的 `models\` 文件夹只有占位文件，它会遮住已安装官方版的模型，运行前请删除。模型来自本机已安装的官方 OpenTune（Windows 上为 1.7.9 或更新版本）。
 
 ## 开启控制接口
 

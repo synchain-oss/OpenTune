@@ -333,7 +333,7 @@ build CMakeFiles/OpenTuneStandalone_Standalone.dir/Source/Main.cpp.o: CXX_COMPIL
 build CMakeFiles/OpenTuneStandalone_Standalone.dir/juce_core.mm.o: OBJCXX_COMPILER__OpenTuneStandalone_Standalone_unscanned_Release /src/JUCE-master/modules/juce_core/juce_core.mm
   DEFINES = -DJUCE_USE_FLAC=0
 build libSoundTouch.a: CXX_STATIC_LIBRARY_LINKER__SoundTouch_Release CMakeFiles/SoundTouch.dir/SoundTouch.cpp.o
-build CMakeFiles/SoundTouch.dir/SoundTouch.cpp.o: CXX_COMPILER__SoundTouch_unscanned_Release /src/ThirdParty/soundtouch-2.3.3/source/SoundTouch/SoundTouch.cpp
+build CMakeFiles/SoundTouch.dir/SoundTouch.cpp.o: CXX_COMPILER__SoundTouch_unscanned_Release /src/ThirdParty/soundtouch-2.3.2/source/SoundTouch/SoundTouch.cpp
 build OpenTuneStandalone_artefacts/Release/Standalone/OpenTune.app/Contents/MacOS/OpenTune: CXX_EXECUTABLE_LINKER__OpenTuneStandalone_Standalone_Release CMakeFiles/OpenTuneStandalone_Standalone.dir/Source/Main.cpp.o CMakeFiles/OpenTuneStandalone_Standalone.dir/juce_core.mm.o | libSoundTouch.a
   LINK_FLAGS = -Wl,-dead_strip
   LINK_LIBRARIES = libSoundTouch.a -framework CoreAudio /src/ThirdParty/onnx/lib/libonnxruntime.1.20.0.dylib
@@ -343,7 +343,7 @@ describe('Ninja graph of a macOS build', () => {
   it('follows Objective-C++ objects and static libraries named lib*.a into the executable', () => {
     const c = linkClosure(parseNinja(NINJA_MAC), { target: 'OpenTuneStandalone_Standalone', config: 'Release' });
     assert.equal(c.exe, 'OpenTuneStandalone_artefacts/Release/Standalone/OpenTune.app/Contents/MacOS/OpenTune');
-    assert.deepEqual(c.objects.map((o) => o.source), ['/src/Source/Main.cpp', '/src/JUCE-master/modules/juce_core/juce_core.mm', '/src/ThirdParty/soundtouch-2.3.3/source/SoundTouch/SoundTouch.cpp']);
+    assert.deepEqual(c.objects.map((o) => o.source), ['/src/Source/Main.cpp', '/src/JUCE-master/modules/juce_core/juce_core.mm', '/src/ThirdParty/soundtouch-2.3.2/source/SoundTouch/SoundTouch.cpp']);
     assert.deepEqual(c.libraries, ['libSoundTouch.a']);
   });
 });

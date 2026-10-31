@@ -325,7 +325,7 @@ describe('Ninja build graph and ARA link check', () => {
 
 describe('notices collector', () => {
   const roots = { repo: REPO_ROOT, juce: '/nonexistent', deps: '/nonexistent' };
-  const closure = { exe: 'App.exe', linkFlags: '', libraries: [], objects: [{ output: 'a.obj', source: 'C:/src/ThirdParty/soundtouch-2.3.3/source/SoundTouch/AAFilter.cpp', defines: {}, includes: [] }] };
+  const closure = { exe: 'App.exe', linkFlags: '', libraries: [], objects: [{ output: 'a.obj', source: 'C:/src/ThirdParty/soundtouch-2.3.2/source/SoundTouch/AAFilter.cpp', defines: {}, includes: [] }] };
   const catalogue = {
     components: [
       { id: 'opentune', name: 'OpenTune', license: 'AGPL-3.0', probe: { kind: 'always' } },

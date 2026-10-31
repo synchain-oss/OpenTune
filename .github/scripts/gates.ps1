@@ -743,7 +743,9 @@ try {
     }
 
     # 8. staged state
-    $idx = Invoke-NodeJson @((Join-Path $scripts 'fork-checks.mjs'), '--json', '--index', '--only', 'delta,ignored-paths,path-guard')
+    $idxArgs = @((Join-Path $scripts 'fork-checks.mjs'), '--json', '--index', '--only', 'delta,ignored-paths,path-guard')
+    if ($Mirror) { $idxArgs += @('--mirror', $Mirror) }
+    $idx = Invoke-NodeJson $idxArgs
     if ($null -eq $idx.Data) { Add-Row 'check-ignored-delta' 'FAIL' "fork-checks.mjs --index 运行失败（exit $($idx.Code)）：$($idx.Stderr)" }
     else { Add-CheckRows 'check-ignored-delta（暂存区）' $idx.Data }
 } catch {

@@ -11,8 +11,8 @@ namespace OpenTune {
  *   setParams on notes selected by index (at expectedRevision), by a content-clock range or all of them. Each op
  *   that changes a note is committed as one gesture of the piano roll: the notes it changed, the correction
  *   segments rebuilt over their frame range (Edit/NoteCorrection.h), ContentEditCommands::commitNotesAndSegments()
- *   and a PianoRollEditAction with the UI's description ("移动音符", "音高吸附", "Edit note parameter",
- *   "漂移修正"). The actions of one call are one ControlOriginAction, so one call is one undo step; the step's
+ *   and a PianoRollEditAction with the UI's description (LOC_RAW keys "Move note", "Pitch snap", "Edit note",
+ *   "Drift correction", in the language of the window). The actions of one call are one ControlOriginAction, so one call is one undo step; the step's
  *   description is the first committed op's. dryRun predicts the same changes and side effects and commits
  *   nothing.
  * - content.setPitchShift (methods/content.setPitchShift.schema.json): ContentEditCommands::commitPitchShiftEdit()

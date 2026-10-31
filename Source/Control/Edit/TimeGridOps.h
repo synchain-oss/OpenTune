@@ -112,8 +112,8 @@ public:
      */
     static Plan planMoves(const std::shared_ptr<const TimeGridSnapshot>& grid, const std::vector<Move>& moves);
 
-    /** The description of the undo entry of a handle move, the text the time tool means for its drag ("drag time
-        handle"; the time tool's own literal is stored with a broken encoding upstream). */
+    /** The description of the undo entry of a handle move, the text the time tool gives its drag
+        (PianoRollToolHandler: LOC_RAW("Drag time handle"), in the language of the window). Message thread. */
     static juce::String moveDescription();
 
     /**

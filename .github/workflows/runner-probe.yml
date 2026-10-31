@@ -4,7 +4,7 @@
 # fork 专用（L0）：上游 .gitignore 忽略 `.*/`，本文件以 git add -f 入库，永不进入上游 PR。
 name: Runner Probe
 
-# 记录 GitHub 托管 runner（windows-2022、macos-14）的核数、内存、磁盘，以及预装的 VS 与 CMake 版本，
+# 记录 GitHub 托管 runner（windows-2022、macos-15）的核数、内存、磁盘，以及预装的 VS 与 CMake 版本，
 # 写进 job summary。用来判断构建时间盒、--parallel 与缓存大小是否合理，只读、不编译、无 secrets。
 # 触发：手动；PR → feature/** 改到本 workflow 自身时。
 on:
@@ -54,14 +54,14 @@ jobs:
           $lines -join "`n" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
 
   macos:
-    name: macos-14
-    runs-on: macos-14
+    name: macos-15
+    runs-on: macos-15
     timeout-minutes: 10
     steps:
       - name: Probe
         run: |
           {
-            echo "### runner：macos-14"
+            echo "### runner：macos-15"
             echo
             echo "- 系统：$(sw_vers -productName) $(sw_vers -productVersion)（$(uname -m)）"
             echo "- CPU：$(sysctl -n machdep.cpu.brand_string)；逻辑核数 $(sysctl -n hw.logicalcpu)；物理核数 $(sysctl -n hw.physicalcpu)"

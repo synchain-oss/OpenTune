@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 **English** | [简体中文](#简体中文)
 
-This fork develops a local control API for OpenTune Standalone (see [docs/control-api.en.md](../docs/control-api.en.md)). Nothing has been released yet.
+This fork develops a local control API for OpenTune Standalone (see [docs/control-api.en.md](../docs/control-api.en.md)). Unofficial test builds are published as pre-releases on the [Releases page](https://github.com/synchain-oss/OpenTune/releases).
 
 ## Reporting a vulnerability
 

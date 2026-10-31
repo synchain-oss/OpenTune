@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 中文 | [English](control-api.en.md)
 
-> **状态：预发布，开发中。** 目前没有发布任何东西：既没有测试版构建，也没有 npm 包。在贡献回上游之前，接口与协议仍可能变化。
+> **状态：预发布。** 非官方测试版和 MCP 服务都已发布。在贡献回上游之前，接口与协议仍可能变化。
 
 ## 这是什么
 
@@ -22,13 +22,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 | 项 | 状态 |
 |---|---|
-| 控制接口 | 开发中，尚无可用构建 |
+| 控制接口 | 非官方测试版里可用 |
 | 官方 OpenTune 发布版 | 不含此接口，需要本 fork 的补丁版构建 |
-| Windows x64 | 首先支持（开发中） |
-| macOS | 仅 Apple 芯片（arm64）的非官方测试版（计划，随 Windows 测试版一起发布）；不支持 Intel Mac。测试包使用临时签名（ad hoc），没有经过 Apple 公证，第一次启动需要手动放行；需要已安装官方 OpenTune 1.8.0 或更新版本（位于 /Applications）。也可自行从源码构建 |
+| Windows x64 | 有非官方测试版 |
+| macOS | 仅 Apple 芯片（arm64）的非官方测试版，还没在真机上测过；不支持 Intel Mac。测试包使用临时签名（ad hoc），没有经过 Apple 公证，第一次启动需要手动放行；需要已安装官方 OpenTune 1.8.0 或更新版本（位于 /Applications）。也可自行从源码构建 |
 | Linux | 不支持（OpenTune 本身没有 Linux 版本） |
-| 非官方测试版 | 尚未发布 |
-| MCP 服务（npm `@synchain/opentune-mcp`） | 尚未发布 |
+| 非官方测试版 | 以预发布形式放在 [Releases 页面](https://github.com/synchain-oss/OpenTune/releases) |
+| MCP 服务（npm `@synchain/opentune-mcp`） | [已发布](https://www.npmjs.com/package/@synchain/opentune-mcp) |
 
 **已知限制（参考轨道）**：本测试版里 OpenTune 自带的实验性参考轨道仍然存在（在首选项「实验功能」打开后出现）。控制接口既不读取也不修改它，唯一的例外是 `content.getDetails` 的 `autoModes.uiButtonRuns`：它如实报告 AUTO 按钮此刻会运行什么（片段有可用的参考绑定时是 `reference`），而 `autoModes.available` 永远不含 `reference`，`content.autoTune` 也没有这个模式。rebase 到最新上游之后，参考轨道会随上游一起消失。
 
@@ -42,11 +42,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   - `dev`（默认分支）：上游基点 + 我们的新增；
   - `feature/control-api`：开发主线。
 - 贡献回上游之前，我们会把全部改动一次性 rebase 到上游最新版本，并重新跑完全部检查。
-- 每个测试版对应的上游提交，会记录在 MCP 仓库的 COMPATIBILITY 文档中。
+- 每个测试版对应的上游提交，都记录在 MCP 仓库的 COMPATIBILITY 文档中。
 
-## 从源码构建（计划）
+## 从源码构建
 
-构建说明会在构建脚本合入后补全。目前的计划如下：
+每个测试版的发布说明都列出了构建它用的确切命令。大致步骤如下：
 
 1. 工具链与依赖要求见上游的 [BUILDING.md](../BUILDING.md)（[English](../BUILDING.en.md)）：Windows 10 1903+ x64、Visual Studio 2022、CMake 3.22+。
 2. 克隆时跳过 Git LFS。模型由官方安装包提供，不需要下载：
@@ -59,11 +59,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
    git config core.longpaths true
    ```
 
-3. 用我们的依赖脚本拉取锁定版本的依赖，例如 JUCE 9.0.3、ARA SDK 2.3.0、SoundTouch 2.3.3、ONNX Runtime 1.24.4 与 DirectML 1.15.4。脚本会逐个校验 sha256；完整清单以 `deps.lock.json` 为准。脚本**不会**下载任何模型权重。
-4. 配置时打开 CMake 选项 `-DOPENTUNE_ENABLE_CONTROL_API=ON`，然后构建 Standalone。依赖脚本与确切的构建命令会在构建脚本加入后写在这里。
-5. 构建输出目录里的 `models\` 文件夹只有占位文件，它会遮住已安装官方版的模型，运行前请删除。模型来自本机已安装的官方 OpenTune（最低版本待定）。这一步会在测试版发布前验证，并补成完整步骤。
+3. 用 `.github/scripts/bootstrap-deps.ps1` 拉取锁定版本的依赖，例如 JUCE 9.0.3、ARA SDK 2.3.0、SoundTouch 2.3.3、ONNX Runtime 1.24.4 与 DirectML 1.15.4。脚本会逐个校验 sha256；完整清单以 `.github/scripts/deps.lock.json` 为准。脚本**不会**下载任何模型权重。
+4. 配置时打开 CMake 选项 `-DOPENTUNE_ENABLE_CONTROL_API=ON`，然后构建 Standalone。
+5. 构建输出目录里的 `models\` 文件夹只有占位文件，它会遮住已安装官方版的模型，运行前请删除。模型来自本机已安装的官方 OpenTune（Windows 上为 1.7.9 或更新版本）。
 
-## 开启控制接口（计划）
+## 开启控制接口
 
 控制接口**默认关闭**。只有同时满足以下两个条件才会开启：
 
@@ -113,18 +113,16 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 ## 与 OpenTune MCP Server 的关系
 
-- [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server) 是一个 stdio MCP 服务，采用 MIT 许可。它连接本接口，让 Claude Code、Claude Desktop、Cursor 等 MCP 客户端操作 OpenTune。它的 npm 包 `@synchain/opentune-mcp`（命令 `opentune-mcp`）尚未发布。
+- [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server) 是一个 stdio MCP 服务，采用 MIT 许可。它连接本接口，让 Claude Code、Claude Desktop、Cursor 等 MCP 客户端操作 OpenTune。它的 npm 包是 `@synchain/opentune-mcp`（命令 `opentune-mcp`）。
 - 协议 OTCP v1 的规范正本在 MCP 仓库的 `spec/otcp/v1/`（MIT 许可）。本 fork 在 `Tests/Control/spec/otcp/v1/` 保存一份逐字节相同的副本。
 
-## 非官方测试版（计划）
+## 非官方测试版
 
-上游合入之前，我们计划在本 fork 的 Releases 中发布**非官方测试版**（预发布）：
+上游合入之前，**非官方测试版**以预发布形式放在本 fork 的 [Releases 页面](https://github.com/synchain-oss/OpenTune/releases)：
 
-- 提供 Windows x64 的 zip 和 macOS Apple 芯片（arm64）的 zip，tag 形如 `synchain-test/v<版本>-ctl.<n>`。macOS 包里有 `OpenTune-ctl.app`、`OpenTune-AI.command`（以开启控制接口的方式启动应用）和 `opentune-control.json`（OpenTune MCP Server 要求它放在被启动的程序旁边，所以它在包的顶层、紧挨着 `.command`）；包使用临时签名，没有经过 Apple 公证，并且不支持 Intel Mac。
+- 提供 Windows x64 的 zip 和 macOS Apple 芯片（arm64）的 zip，tag 形如 `synchain-test/v<版本>-ctl.<n>`。macOS 包里有 `OpenTune-ctl.app`、`OpenTune-AI.command`（以开启控制接口的方式启动应用）和 `opentune-control.json`（OpenTune MCP Server 要求它放在被启动的程序旁边，所以它在包的顶层、紧挨着 `.command`）；包使用临时签名，没有经过 Apple 公证，并且不支持 Intel Mac。这个包还没在真机上测过。
 - **不含任何模型权重**。需要本机已安装官方 OpenTune，由它提供模型。
-- 每个测试版都会注明对应的源码（fork tag 与源码归档）和构建方法，并注明 YuFeng926/OpenTune 是唯一的官方渠道。
-
-目前尚未发布任何测试版。
+- 每个测试版都注明了对应的源码（fork tag 与源码归档）和构建方法，并注明 YuFeng926/OpenTune 是唯一的官方渠道。
 
 ## 首次启动与首次引导对话框
 
@@ -138,7 +136,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 - OpenTune 采用 AGPL-3.0。本 fork 及我们的全部改动同样按 AGPL-3.0 提供，唯一的例外是 `Tests/Control/spec/otcp/v1/` 中的 OTCP 规范副本，它与正本一样采用 MIT 许可。我们新增的源文件标注 `SPDX-License-Identifier: AGPL-3.0-or-later`。
 - 我们**不分发任何模型权重**。其中 OpenVPI 声码器权重与 GAME 预训练权重采用 CC BY-NC-SA 4.0（禁止商用），我们从不打包、上传或转发它们。运行所需的模型来自你自己安装的官方 OpenTune。
-- 测试版会附带第三方许可声明，内容按二进制的实际组成生成。
+- 测试版附带第三方许可声明，内容按二进制的实际组成生成。
 - MCP 服务与协议规范在各自仓库中以 MIT 许可提供。
 
 ## 反馈与安全

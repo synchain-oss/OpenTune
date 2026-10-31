@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 [中文](control-api.md) | English
 
-> **Status: pre-release, work in progress.** Nothing is published yet. There are no test builds and no npm package. The API and protocol may still change before they are contributed upstream.
+> **Status: pre-release.** Unofficial test builds and the MCP server are published. The API and protocol may still change before they are contributed upstream.
 
 ## What this is
 
@@ -22,13 +22,13 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 | Item | Status |
 |---|---|
-| Control API | In development; no usable build yet |
+| Control API | Available in the unofficial test builds |
 | Official OpenTune releases | Do not include this API; a patched build from this fork is required |
-| Windows x64 | First target (in development) |
-| macOS | An unofficial test build for Apple silicon (arm64) only (planned, published together with the Windows test build); Intel Macs are not supported. The package is ad hoc signed and not notarized by Apple, so the first launch has to be allowed by hand; it requires an installed official OpenTune 1.8.0 or newer (in /Applications). A build from source also works |
+| Windows x64 | Unofficial test build |
+| macOS | An unofficial test build for Apple silicon (arm64) only, not yet tested on a real Mac; Intel Macs are not supported. The package is ad hoc signed and not notarized by Apple, so the first launch has to be allowed by hand; it requires an installed official OpenTune 1.8.0 or newer (in /Applications). A build from source also works |
 | Linux | Not supported (OpenTune itself has no Linux build) |
-| Unofficial test builds | Not published yet |
-| MCP server (npm `@synchain/opentune-mcp`) | Not published yet |
+| Unofficial test builds | Published as pre-releases on the [Releases page](https://github.com/synchain-oss/OpenTune/releases) |
+| MCP server (npm `@synchain/opentune-mcp`) | [Published](https://www.npmjs.com/package/@synchain/opentune-mcp) |
 
 **Known limitation (reference track).** OpenTune's own experimental reference track is still present in this test build (it appears once "Experimental features" is turned on in the preferences). The control API neither reads nor writes it, with one exception: `autoModes.uiButtonRuns` of `content.getDetails` truthfully reports what the AUTO button would run right now (`reference` when the clip has a usable reference binding), while `autoModes.available` never contains `reference` and `content.autoTune` has no such mode. After the rebase onto the latest upstream the reference track disappears together with upstream.
 
@@ -42,11 +42,11 @@ During development, this fork is pinned to a single upstream commit and does not
   - `dev` (default branch): the upstream base plus our additions.
   - `feature/control-api`: the development mainline.
 - Before contributing upstream, we will rebase all of our changes onto the latest upstream once, then rerun every check.
-- The upstream commit behind each test build will be recorded in the COMPATIBILITY document of the MCP repository.
+- The upstream commit behind each test build is recorded in the COMPATIBILITY document of the MCP repository.
 
-## Building from source (planned)
+## Building from source
 
-Build instructions will be completed once the build scripts land. The current plan:
+The release notes of each test build list the exact commands used to build it. In outline:
 
 1. For the toolchain and dependency requirements, see upstream's [BUILDING.en.md](../BUILDING.en.md) ([中文](../BUILDING.md)): Windows 10 1903+ x64, Visual Studio 2022, CMake 3.22+.
 2. Clone with Git LFS smudging disabled. You do not need to download the models; they come from the official installer.
@@ -59,11 +59,11 @@ Build instructions will be completed once the build scripts land. The current pl
    git config core.longpaths true
    ```
 
-3. Fetch the pinned dependencies with our dependency bootstrap script. These include JUCE 9.0.3, ARA SDK 2.3.0, SoundTouch 2.3.3, ONNX Runtime 1.24.4 and DirectML 1.15.4. The script verifies each one by sha256; `deps.lock.json` is the authoritative list. It does **not** download any model weights.
-4. Configure with `-DOPENTUNE_ENABLE_CONTROL_API=ON`, then build the Standalone target. The dependency bootstrap script and the exact build commands will be documented here when the build scripts are added.
-5. Delete the `models\` folder from the build output before running. It contains only placeholder files, and it would hide the models of your installed official OpenTune. The models come from the official OpenTune installed on the same machine (minimum version to be determined). We will verify this step before the first test build and document it in full.
+3. Fetch the pinned dependencies with `.github/scripts/bootstrap-deps.ps1`. These include JUCE 9.0.3, ARA SDK 2.3.0, SoundTouch 2.3.3, ONNX Runtime 1.24.4 and DirectML 1.15.4. The script verifies each one by sha256; `.github/scripts/deps.lock.json` is the authoritative list. It does **not** download any model weights.
+4. Configure with `-DOPENTUNE_ENABLE_CONTROL_API=ON`, then build the Standalone target.
+5. Delete the `models\` folder from the build output before running. It contains only placeholder files, and it would hide the models of your installed official OpenTune. The models come from the official OpenTune installed on the same machine (1.7.9 or newer on Windows).
 
-## Enabling the control API (planned)
+## Enabling the control API
 
 The control API is **off by default**. It is enabled only when both of these are true:
 
@@ -113,18 +113,16 @@ Notes:
 
 ## Relationship to OpenTune MCP Server
 
-- [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server) is a stdio MCP server under the MIT license. It connects to this API so that MCP clients such as Claude Code, Claude Desktop and Cursor can operate OpenTune. Its npm package `@synchain/opentune-mcp` (command `opentune-mcp`) is not published yet.
+- [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server) is a stdio MCP server under the MIT license. It connects to this API so that MCP clients such as Claude Code, Claude Desktop and Cursor can operate OpenTune. Its npm package is `@synchain/opentune-mcp` (command `opentune-mcp`).
 - The authoritative OTCP v1 protocol specification lives in the MCP repository under `spec/otcp/v1/` (MIT). This fork keeps a byte-identical copy in `Tests/Control/spec/otcp/v1/`.
 
-## Unofficial test builds (planned)
+## Unofficial test builds
 
-Until upstream merges the API, we plan to publish **unofficial test builds** as pre-releases on this fork's Releases page:
+Until upstream merges the API, **unofficial test builds** are published as pre-releases on this fork's [Releases page](https://github.com/synchain-oss/OpenTune/releases):
 
-- They will be a Windows x64 zip and a macOS Apple silicon (arm64) zip, tagged like `synchain-test/v<version>-ctl.<n>`. The macOS package holds `OpenTune-ctl.app`, `OpenTune-AI.command` (starts the app with the control API turned on) and `opentune-control.json` (OpenTune MCP Server requires it next to the program it starts, so it sits at the top level of the package next to the `.command`); the package is ad hoc signed, not notarized by Apple, and does not support Intel Macs.
-- They will contain **no model weights**. They require an installed official OpenTune, which provides the models.
-- Each test build will state its corresponding source (fork tag and source archive) and how it was built. Each will also state that YuFeng926/OpenTune is the only official channel.
-
-No test build has been published yet.
+- There is a Windows x64 zip and a macOS Apple silicon (arm64) zip, tagged like `synchain-test/v<version>-ctl.<n>`. The macOS package holds `OpenTune-ctl.app`, `OpenTune-AI.command` (starts the app with the control API turned on) and `opentune-control.json` (OpenTune MCP Server requires it next to the program it starts, so it sits at the top level of the package next to the `.command`); the package is ad hoc signed, not notarized by Apple, and does not support Intel Macs. It has not yet been tested on a real Mac.
+- They contain **no model weights**. They require an installed official OpenTune, which provides the models.
+- Each test build states its corresponding source (fork tag and source archive) and how it was built. Each also states that YuFeng926/OpenTune is the only official channel.
 
 ## First launch and the onboarding dialog
 
@@ -138,7 +136,7 @@ The effects scenario in the smoke run (which checks that what the API says it ch
 
 - OpenTune is licensed under AGPL-3.0. This fork and all of our changes are also provided under AGPL-3.0, except the OTCP specification copy in `Tests/Control/spec/otcp/v1/`, which is MIT-licensed like its source. New source files we add carry `SPDX-License-Identifier: AGPL-3.0-or-later`.
 - We **do not redistribute any model weights**. In particular, the OpenVPI vocoder weights and the GAME pretrained weights are licensed under CC BY-NC-SA 4.0 (non-commercial). We never bundle, upload or re-host them. The models you need come from the official OpenTune that you install yourself.
-- Test builds will include third-party notices generated from the actual contents of the binaries.
+- Test builds include third-party notices generated from the actual contents of the binaries.
 - The MCP server and the protocol specification are provided under the MIT license in their own repository.
 
 ## Feedback and security

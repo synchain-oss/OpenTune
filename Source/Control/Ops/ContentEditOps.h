@@ -12,9 +12,9 @@ namespace OpenTune {
  *   that changes a note is committed as one gesture of the piano roll: the notes it changed, the correction
  *   segments rebuilt over their frame range (Edit/NoteCorrection.h), ContentEditCommands::commitNotesAndSegments()
  *   and a PianoRollEditAction with the UI's description (LOC_RAW keys "Move note", "Pitch snap", "Edit note",
- *   "Drift correction", in the language of the window). The actions of one call are one ControlOriginAction, so one call is one undo step; the step's
- *   description is the first committed op's. dryRun predicts the same changes and side effects and commits
- *   nothing.
+ *   "Drift correction", in the language of the window). The actions of one call are one ControlOriginAction, so one
+ * call is one undo step; the step's description is the first committed op's. dryRun predicts the same changes and side
+ * effects and commits nothing.
  * - content.setPitchShift (methods/content.setPitchShift.schema.json): ContentEditCommands::commitPitchShiftEdit()
  *   and its PitchShiftEditAction in a ControlOriginAction, as the pitch-shift dialog
  *   (PluginEditor::pitchShiftRequested()) pushes it; the key is not transposed (warning KEY_NOT_TRANSPOSED). The

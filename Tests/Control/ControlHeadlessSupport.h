@@ -5,7 +5,7 @@
 // pump, the isolated data directory of the test process and the process environment.
 //
 // The pump loops over a platform-specific "dispatch one round of messages" step. It does not use
-// MessageManager::runDispatchLoop() with callAsync(stopDispatchLoop): in JUCE 9.0.3 stopDispatchLoop()
+// MessageManager::runDispatchLoop() with callAsync(stopDispatchLoop): in JUCE 8.0.12 stopDispatchLoop()
 // latches for the rest of the process (every later posted message is dropped and runDispatchLoop()
 // returns at once), so that pattern works only once per process. Both implementations only ever set the
 // flag behind hasStopMessageBeenSent() (quitMessagePosted) and never reset it: the generic one in

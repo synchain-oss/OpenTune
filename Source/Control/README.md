@@ -1582,7 +1582,7 @@ the call itself with `UNSUPPORTED`.
   stops the marshalling; the service is already stopping, and the log says nothing is left to stop), and the message
   queue refuses the step while the token is alive (the observer calls `juce::MessageManager::stopDispatchLoop()`, as
   `JUCEApplicationBase::quit()` does; the log says the listener and the discovery file stay until the application closes
-  itself). The second latches for the rest of the process in JUCE 9.0.3, so it runs last.
+  itself). The second latches for the rest of the process in JUCE 8.0.12, so it runs last.
 - `AppQuitVectors`: all nine `app/quit-*` vectors, with their `given` established; a vector that ends the instance
   (`endsSession`) is checked as `vectors/README.md` says as far as a headless process can: the connection closes
   (15 s), the port refuses, the discovery file is gone and the test bridge saw one quit request. The exit status of the
@@ -1662,7 +1662,7 @@ device: one process per scenario, each with its own `OPENTUNE_DATA_DIR`, the lif
 the upstream `Tests/LifecycleWatchdog.h`. Its target copies the SharedCode's compile definitions and
 include directories, because `PluginProcessor.h` changes its class layout with them, and pumps messages
 with `juce::detail::dispatchNextMessageOnSystemQueue` rather than `runDispatchLoop()`, whose stop latches
-for the rest of the process in JUCE 9.0.3. Run them with `ctest -R Control`.
+for the rest of the process in JUCE 8.0.12. Run them with `ctest -R Control`.
 
 Every runner of the specification's vectors (`Vectors`, `JobVectors`, `ExportVectors`, `EditVectors`, `TimingVectors`,
 `ProjectVectors`, `TrackVectors`, `UiVectors`, `PrefsVectors`, `AudioVectors`,

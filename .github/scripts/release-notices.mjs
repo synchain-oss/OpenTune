@@ -12,7 +12,9 @@
 //     source and -D macros: JUCE modules, SoundTouch, r8brain, the ARA link check.
 //   - Data embedded in the executable (font, cursor images, piano samples) is found by searching the
 //     executable for a sample of each repository file.
-//   - Packages vendored inside JUCE come from JUCE.spdx.json, filtered by module and switches.
+//   - Packages vendored inside JUCE come from JUCE.spdx.json of the JUCE checkout, or, when the checkout has none
+//     (JUCE 8.0.12 has none), from the fork's list for that version (.github/release/juce-<version>.spdx.json),
+//     filtered by module and switches.
 //   - The catalogue is .github/release/notices.json.
 //
 // Release blockers (fail closed): a component with unverified redistribution terms that is in the
@@ -51,6 +53,34 @@ const THIN = '-'.repeat(78);
 const LICENSE_FILE_RE = /^(?:licen[cs]e|copying|[^/]*licen[cs]e[^/]*)(?:\.(?:txt|md))?$/i;
 
 /** Read `NAME:TYPE=VALUE` entries of CMakeCache.txt. */
+/** The version a JUCE checkout declares (the module declaration of juce_core), or null. */
+export function juceVersionOf(juceDir) {
+  try {
+    const header = fs.readFileSync(path.join(juceDir, 'modules', 'juce_core', 'juce_core.h'), 'utf8');
+    return /BEGIN_JUCE_MODULE_DECLARATION[\s\S]*?\n\s*version:\s*(\S+)/.exec(header)?.[1] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The list of packages vendored inside JUCE: JUCE.spdx.json of the checkout when it has one, else the fork's list
+ * for the version the checkout declares (.github/release/juce-<version>.spdx.json, kept by hand from JUCE's
+ * LICENSE.md). With neither, or a fork list for another version, it is an error: a stale list would name the wrong
+ * components.
+ */
+export function readJuceSbom({ juceDir, repoDir }) {
+  const own = path.join(juceDir, 'JUCE.spdx.json');
+  if (fs.existsSync(own)) return JSON.parse(fs.readFileSync(own, 'utf8'));
+  const version = juceVersionOf(juceDir);
+  if (!version) throw new Error(`${juceDir} has no JUCE.spdx.json and its version cannot be read from modules/juce_core/juce_core.h`);
+  const fork = path.join(repoDir, '.github', 'release', `juce-${version}.spdx.json`);
+  if (!fs.existsSync(fork)) throw new Error(`${juceDir} has no JUCE.spdx.json and the fork has no list for JUCE ${version} (expected ${path.relative(repoDir, fork).replaceAll('\\', '/')})`);
+  const sbom = JSON.parse(fs.readFileSync(fork, 'utf8'));
+  if (sbom.packages?.[0]?.versionInfo !== version) throw new Error(`${path.basename(fork)} lists JUCE ${sbom.packages?.[0]?.versionInfo}, not ${version}`);
+  return sbom;
+}
+
 export function readCmakeCache(text) {
   const out = {};
   for (const line of String(text).split(/\r?\n/)) {
@@ -391,7 +421,7 @@ function main(argv) {
     const facts = mac ? macosFacts({ exe, exeBuf, cache }) : windowsFacts({ exe, closure, cache });
     const { appFiles } = facts;
     const lock = JSON.parse(fs.readFileSync(path.join(repo, '.github', 'scripts', 'deps.lock.json'), 'utf8'));
-    const sbom = JSON.parse(fs.readFileSync(path.join(roots.juce, 'JUCE.spdx.json'), 'utf8'));
+    const sbom = readJuceSbom({ juceDir: roots.juce, repoDir: repo });
     const catalogue = JSON.parse(fs.readFileSync(o.catalogue ?? path.join(repo, '.github', 'release', 'notices.json'), 'utf8'));
     const got = collectComponents({ catalogue, closure, exeBuf, appFiles, roots, lock, sbom, platform });
     const gpl3Text = got.needsGpl3 ? readText(path.join(repo, '.github', 'release', 'licenses', 'GPL-3.0.txt')) : null;
@@ -418,7 +448,7 @@ function main(argv) {
       ara: got.ara,
       notices: {
         included: got.included,
-        juceVendored: got.vendored.included.map((v) => `${v.name} ${v.version}`),
+        juceVendored: got.vendored.included.map((v) => [v.name, v.version].filter(Boolean).join(' ')),
         excluded: got.excluded,
         juceVendoredExcluded: got.vendored.excluded,
         gpl3Appendix: Boolean(gpl3Text),

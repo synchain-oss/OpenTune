@@ -227,7 +227,7 @@ std::shared_ptr<PitchCurve> correctedCurve(double durationSec)
  * Imports a clip of a tone (silence for Unvoiced) the way the editor imports (prepareImport, then
  * commitPreparedImportAsPlacement) and gives its content the analysis state: Ready with a synthetic curve
  * (StandaloneClipContent::applyOriginalF0, as the processor's completion of a finished analysis), Running,
- * or Failed with the reason the processor records (f0_empty for an analysis without voiced frames).
+ * or Failed with the message OpenTune stores (the one for an analysis without voiced frames reads f0_empty).
  */
 TestClip addClip(OpenTuneAudioProcessor& processor, const std::filesystem::path& directory, const std::string& name,
                  int trackId, double startSec, double durationSec, Analysis analysis)
@@ -271,8 +271,7 @@ TestClip addClip(OpenTuneAudioProcessor& processor, const std::filesystem::path&
             break;
         case Analysis::Failed:
         case Analysis::Unvoiced:
-            CONTROL_CHECK(processor.setContentOriginalF0State(clip.key, OriginalF0State::Failed));
-            processor.recordF0FailureReason(clip.key, analysis == Analysis::Unvoiced ? "f0_empty" : "f0_failed");
+            CONTROL_CHECK(failAnalysis(processor, clip.key, analysis == Analysis::Unvoiced));
             break;
     }
     return clip;

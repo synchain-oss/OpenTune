@@ -24,9 +24,9 @@ namespace OpenTune {
 namespace {
 
 /** The sample rate of the Windows shared mode of the default render device, in Hz; 0 when it cannot be read. It is the
-    rate that restoreAsioSampleRateToSystem() moves an ASIO device to (its getSystemDefaultRenderSampleRate(), a function
-    of an unnamed namespace of StandaloneAudioDeviceSync.cpp that cannot be called from here, so the query is made
-    again, with the same calls). Message thread. */
+    rate that restoreAsioSampleRateToSystem() moves an ASIO device to (its getSystemDefaultRenderSampleRate(), a
+   function of an unnamed namespace of StandaloneAudioDeviceSync.cpp that cannot be called from here, so the query is
+   made again, with the same calls). Message thread. */
 double getSystemDefaultRenderSampleRate()
 {
 #if JUCE_WINDOWS
@@ -40,8 +40,8 @@ double getSystemDefaultRenderSampleRate()
         IMMDevice* device = nullptr;
         if (SUCCEEDED(enumerator->GetDefaultAudioEndpoint(eRender, eMultimedia, &device))) {
             IAudioClient* client = nullptr;
-            if (SUCCEEDED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr,
-                                           reinterpret_cast<void**>(&client)))) {
+            if (SUCCEEDED(
+                    device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, reinterpret_cast<void**>(&client)))) {
                 WAVEFORMATEX* mixFormat = nullptr;
                 if (SUCCEEDED(client->GetMixFormat(&mixFormat)) && mixFormat != nullptr) {
                     result = static_cast<double>(mixFormat->nSamplesPerSec);
@@ -83,8 +83,8 @@ std::optional<bool> ControlEditorBridge::editingSchemeApplied(bool notesPrimary)
     return AudioEditingScheme::usesNotesPrimaryScheme(editor_.appliedAudioEditingScheme_) == notesPrimary;
 }
 
-std::optional<ControlUiBridge::AsioRateRestoreFailure> ControlEditorBridge::prepareAudioDeviceSwitch(
-    juce::AudioDeviceManager& manager, const std::string& reason)
+std::optional<ControlUiBridge::AsioRateRestoreFailure>
+ControlEditorBridge::prepareAudioDeviceSwitch(juce::AudioDeviceManager& manager, const std::string& reason)
 {
     // The device the restore is about to act on, named as audio.get names it (the output device of the setup), and the
     // rate it runs at: read before the restore, which reopens the device.

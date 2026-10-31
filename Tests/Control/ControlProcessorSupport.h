@@ -217,6 +217,21 @@ inline void holdRenderRuntimeForProcess()
 }
 
 /**
+ * The language that the scenarios of this process run in, bound for the rest of the process the way an editor binds
+ * the language of its window (LocalizationManager::ScopedLanguageBinding). OpenTune takes the descriptions of undo
+ * entries with LOC_RAW, which asks the bound language (an unbound one asserts); the API does the same, so a scenario
+ * that compares a description takes the expected text from this state, and one that checks that the description
+ * follows the window sets the language here and puts it back. English until a scenario changes it.
+ */
+inline std::shared_ptr<LocalizationManager::LanguageState> testLanguageState()
+{
+    static const auto state =
+        std::make_shared<LocalizationManager::LanguageState>(LocalizationManager::LanguageState{Language::English});
+    static const LocalizationManager::ScopedLanguageBinding binding(state);
+    return state;
+}
+
+/**
  * Constructs a processor with the API enabled and pumps messages until it listens.
  *
  * Fails the scenario when juce::MessageManager::stopDispatchLoop() was called earlier in this process: the flag it sets
@@ -233,6 +248,7 @@ inline std::unique_ptr<OpenTuneAudioProcessor> startedProcessor()
                  "which the queue never recovers from; exitStepRefusedByQueue() must run last in its process");
     }
     holdRenderRuntimeForProcess();
+    testLanguageState();
     auto processor = std::make_unique<OpenTuneAudioProcessor>();
     auto& service = processor->getControlService();
     const auto started = Clock::now();

@@ -250,14 +250,17 @@ jobs:
 
       # 与 `ctest -C RelWithDebInfo --output-on-failure` 等价，但每个测试有独立的
       # OPENTUNE_DATA_DIR（run-ctest.ps1，与本地 gates 同一份脚本）。失败测试的输出打印到日志。
-      - name: ctest (all tests, per-test OPENTUNE_DATA_DIR)
+      # 排除上游测试 RenderRuntimeLifecycleTests（与本地 gates.ps1 的 $ExcludedTests 一致）：它的断言有竞态
+      # （Tests/RenderRuntimeLifecycleTests.cpp 646-654 行：enqueueRender() 之后立刻断言 pending==1，渲染线程可能已经取走任务），
+      # 控制接口关闭的构建里 30 次运行失败 3 次，与本 fork 的钩子无关；上游 issue 候选第 7 条。不改测试本身，仍然编译它，只是不运行。
+      - name: ctest (all tests but RenderRuntimeLifecycleTests, per-test OPENTUNE_DATA_DIR)
         id: ctest
         if: env.OT_PACKAGE != 'true'
         run: |
           $summary = "$env:RUNNER_TEMP\ot-ctest-summary.json"
           pwsh -NoProfile -File .github/scripts/with-build-slot.ps1 -VsDevShell -MinFreeMB 1024 -WaitMinutes 10 -- `
             pwsh -NoProfile -File .github/scripts/run-ctest.ps1 -BuildDir $env:OT_BUILD -Config $env:OT_CONFIG `
-            -DataRoot $env:OT_TEST_DATA -SummaryPath $summary
+            -Exclude 'RenderRuntimeLifecycleTests' -DataRoot $env:OT_TEST_DATA -SummaryPath $summary
           $code = $LASTEXITCODE
           if (Test-Path -LiteralPath $summary) {
             $s = Get-Content -LiteralPath $summary -Raw | ConvertFrom-Json

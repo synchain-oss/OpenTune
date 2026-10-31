@@ -513,7 +513,7 @@ fails when one changes:
 | `buildNoteBasedCorrectionState()` and `commitNoteBasedCorrection()` (`Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp:189-240`) | `controlNoteBasedCorrection()` (`Edit/NoteCorrection.cpp`) |
 | `PianoRollToolHandler::noteDragEditRange()`, `dragNotePitch()`, `endNotePitchDrag()` (`PianoRollToolHandler.cpp:1912-2217`) | `controlNotesFrameRange()`; ops `setTargetPitch` and `shiftCents` (`Ops/ContentEditOps.cpp`), description |
 | `PianoRollToolHandler::handlePitchToolDoubleClick()` (`PianoRollToolHandler.cpp:2269-2359`) | op `snapToScale` (description), the drift and modulation descriptions of `setParams` |
-| `PianoRollComponent::editParameter()`, the selected-notes target (`Source/Standalone/UI/PianoRollComponent.cpp:2645-2903`) | op `setParams` (`Edit note parameter`) |
+| `PianoRollComponent::editParameter()`, the selected-notes target (`Source/Standalone/UI/PianoRollComponent.cpp:2645-2903`) | op `setParams` (`Edit note`) |
 | `PianoRollComponent::commitEditedContentNotesAndSegments()` (`PianoRollComponent.cpp:1007-1116`) | `controlCommitCorrection()` |
 | `PianoRollComponent::applyAutoSnapToAllNotes()` and `isFullyCorrectedInRange()` (`PianoRollComponent.cpp:5344-5524`, `:49-61`) | `controlPlanAutoSnap()`; `content.autoTune` mode `snapNotes` |
 | `OpenTuneAudioProcessorEditor::pitchShiftRequested()` (`Source/Standalone/PluginEditor.cpp:3532-3581`) | `content.setPitchShift`: the no-op, the undo entry, the dirty flag |
@@ -529,10 +529,11 @@ Known OpenTune behaviours, reported as they are:
 - A pitch shift whose total cents equal the current ones (for example −1 semitone +50 cents and 0 semitones −50
   cents) is refused by `commitPitchShiftEdit()`; `content.setPitchShift` reports a no-op, as the dialog commits
   nothing.
-- The piano roll passes the Chinese undo texts of its AUTO entry and of the button's SNAP through `TRANS()`, whose
-  `juce::String(const char*)` reads the UTF-8 bytes as Latin-1, so OpenTune's own entries carry mojibake. The API
-  builds the same texts from UTF-8 (`content.autoTune` regenerate and snapNotes); `edit.getHistory` lists entries
-  made in the UI with OpenTune's text as it is.
+- OpenTune gives the undo entries of the piano roll and the time tool their descriptions with `LOC_RAW(key)`
+  (the language of the window at the time of the edit): "AUTO correction", "Pitch snap", "Move note", "Drift
+  correction", "Edit note", "Drag time handle". The API takes the same keys the same way on the message thread
+  (`content.autoTune` regenerate and snapNotes, `content.editNotes`, `content.editTimeGrid`), so an entry has
+  the text the UI would have given it in that language; `edit.getHistory` lists entries made in the UI as they are.
 
 ## Readiness gate
 
@@ -795,8 +796,8 @@ changes the content's `revision`.
 - **Commit and undo**, as the piano roll's `commitTimeGrid`: a `TimeGridEditAction` with the grid before and
   after, `ContentEditCommands::setTimeGrid()` (the processor's `setContentTimeGrid()`, which publishes the grid
   for playback and queues the time-stretch rebuild), and one undo entry per call, wrapped in a
-  `ControlOriginAction` (aspect time grid). The description is "拖动时间手柄" ("drag time handle"), the text the
-  time tool means for its drag (see "Known OpenTune behaviours" below). The project is marked as changed (the
+  `ControlOriginAction` (aspect time grid). The description is the text of the key "Drag time handle" in the language of
+  the window, as the time tool takes it for its drag (`LOC_RAW`). The project is marked as changed (the
   UI does not mark it after a time-grid edit), `reRenderQueued` names the content, and the editor is told
   through `ControlUiBridge::onTimeGridChanged()`.
 - **Seed** (`content.editTimeGrid` op `seed`) places the initial handles as OpenTune does when the time tool is picked
@@ -833,9 +834,7 @@ when one of them changes). A change of these functions upstream needs the same c
 
 Known OpenTune behaviours, reported as they are:
 
-- The time tool's own description literal of its drag ("拖动时间手柄") is stored in
-  `PianoRollToolHandler.cpp` with a broken encoding, so the UI's entries carry garbled text; the API's entries
-  carry the intended text. The UI never shows the description.
+- The UI never shows the description of the time tool's drag.
 - The UI does not mark the project as changed after a time-grid edit or a seed; the API does (section 15.5).
 - `ensureTimeToolAnchorSeed()` replaces a grid whose handles are all of kind `UserAdded` and that is the identity;
   the API never calls it for a grid that has handles.

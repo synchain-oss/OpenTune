@@ -3,6 +3,7 @@
 
 #include "Content/ContentEditCommands.h"
 #include "PluginProcessor.h"
+#include "Utils/LocalizationManager.h"
 #include "Utils/TimeGridEditAction.h"
 
 #include <algorithm>
@@ -202,7 +203,7 @@ TimeGridOps::Plan TimeGridOps::planMoves(const std::shared_ptr<const TimeGridSna
 
 juce::String TimeGridOps::moveDescription()
 {
-    return juce::String::fromUTF8(u8"拖动时间手柄");
+    return LOC_RAW("Drag time handle");
 }
 
 std::optional<ControlOriginAction::Inner> TimeGridOps::commit(OpenTuneAudioProcessor& processor, const ContentKey& key,

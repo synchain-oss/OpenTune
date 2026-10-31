@@ -55,8 +55,12 @@ struct SeedWaitLimitGuard
 constexpr double kOutputTolerance = 1e-9;
 /** Tolerance of output times read back from results, which round seconds to 6 decimals. */
 constexpr double kResultTolerance = 1e-6;
-/** The description of a handle move, the text the time tool means for its drag. */
-const char* const kMoveDescription = u8"拖动时间手柄";
+/** The description of a handle move, the text the time tool gives its drag: LOC_RAW("Drag time handle"), in the
+    language of the window. */
+std::string moveDescription()
+{
+    return Loc::get(testLanguageState()->language, "Drag time handle").toStdString();
+}
 
 JsonValue jsonOf(const std::string& text)
 {
@@ -453,7 +457,7 @@ void runGridCase(TimingFixture& f, const GridCase& gridCase)
     CONTROL_CHECK(memberOf(result, "applied").asBoolean() && !memberOf(result, "noOp").asBoolean());
     const auto& undo = memberOf(result, "undo");
     CONTROL_CHECK(memberOf(undo, "undoable").asBoolean() && memberOf(undo, "steps").asDouble() == 1
-                  && memberOf(undo, "description").text() == kMoveDescription
+                  && memberOf(undo, "description").text() == moveDescription()
                   && toJsonString(memberOf(undo, "innerActions")) == R"(["TimeGridEditAction"])");
     CONTROL_CHECK(f.processor->getUndoManager().cursor() == undoCursor + 1);
     const auto& diff = memberOf(memberOf(result, "revisionDiff"), "contents");

@@ -11,10 +11,10 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 This fork is maintained by [Synchain](https://www.synchain.ca). It exists to develop a local control API for OpenTune Standalone, for use by [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server), and to propose that API to the upstream project. It adds new code and a small number of integration hooks; while the API is off, OpenTune behaves the same as upstream.
 
-- **Status**: pre-release, work in progress. Nothing is published yet: no test builds, no npm package.
+- **Status**: pre-release. Unofficial test builds and the MCP server are published; the API and protocol may still change before they are contributed upstream.
 - **OpenTune's own README**: [README.md](../README.md) ([English](../README.en.md)), unchanged from upstream.
 - **The control API**: [docs/control-api.en.md](../docs/control-api.en.md) ([中文](../docs/control-api.md)).
-- **Test builds (planned)**: until the API is part of an official OpenTune release, we plan to publish unofficial Windows x64 test builds as pre-releases of this fork. They will be free of charge and will contain no model weights; the models come from your own installation of official OpenTune.
+- **Test builds**: until the API is part of an official OpenTune release, unofficial test builds are published as pre-releases on [this fork's Releases page](https://github.com/synchain-oss/OpenTune/releases): Windows x64, and macOS on Apple silicon (not yet tested on a real Mac). They are free of charge and contain no model weights; the models come from your own installation of official OpenTune.
 - **Reporting problems**: problems with this fork, the control API or test builds go to [synchain-oss/opentune-mcp-server issues](https://github.com/synchain-oss/opentune-mcp-server/issues). Problems that also reproduce in official OpenTune releases belong to OpenTune itself; please report those through upstream's channels.
 - **Security**: see [SECURITY.md](SECURITY.md). Please do not report vulnerabilities in public issues.
 
@@ -24,9 +24,9 @@ This fork is maintained by [Synchain](https://www.synchain.ca). It exists to dev
 
 本 fork 由 [Synchain](https://www.synchain.ca) 维护，目的是为 OpenTune Standalone 开发本机控制接口，供 [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server) 使用，并计划向上游项目提交。它只新增代码和少量接入钩子；接口关闭时，OpenTune 的行为与上游相同。
 
-- **状态**：预发布，开发中。目前没有发布任何东西：既没有测试版，也没有 npm 包。
+- **状态**：预发布。非官方测试版和 MCP 服务都已发布；在贡献回上游之前，接口与协议仍可能变化。
 - **OpenTune 自己的说明**：[README.md](../README.md)（[English](../README.en.md)），与上游一致，未作改动。
 - **控制接口说明**：[docs/control-api.md](../docs/control-api.md)（[English](../docs/control-api.en.md)）。
-- **测试版（计划）**：在控制接口进入 OpenTune 官方发布版之前，我们计划在本 fork 以预发布形式提供 Windows x64 非官方测试版。测试版免费，不含任何模型权重；模型来自你自己安装的官方 OpenTune。
+- **测试版**：在控制接口进入 OpenTune 官方发布版之前，非官方测试版以预发布形式放在[本 fork 的 Releases 页面](https://github.com/synchain-oss/OpenTune/releases)：Windows x64，以及还没在真机上测过的 macOS Apple 芯片版。测试版免费，不含任何模型权重；模型来自你自己安装的官方 OpenTune。
 - **反馈问题**：本 fork、控制接口与测试版的问题，请到 [synchain-oss/opentune-mcp-server issues](https://github.com/synchain-oss/opentune-mcp-server/issues) 反馈。在官方 OpenTune 发布版中也能复现的问题属于 OpenTune 本身，请按上游的方式反馈。
 - **安全**：见 [SECURITY.md](SECURITY.md)。请不要在公开 issue 中报告漏洞。

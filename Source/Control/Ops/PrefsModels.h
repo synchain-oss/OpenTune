@@ -55,6 +55,9 @@ struct ControlPrefsBackend
     std::function<void(OpenTuneAudioProcessor&, bool)> resetInferenceBackend;
     /** OpenTuneAudioProcessor::setF0ModelType(): true when the processor switched the pitch model. */
     std::function<bool(OpenTuneAudioProcessor&, F0ModelType)> setF0Model;
+    /** The inference backend in use by its wire name (cpu, directml, coreml); a pointer to a string literal. The real
+        one is the selection of AccelerationDetector. */
+    std::function<const char*()> inferenceBackend;
 };
 
 /**
@@ -86,6 +89,12 @@ std::string controlF0ModelName(F0ModelType type);
 
 /** The state of the process-wide vocoder. Any thread. */
 ControlVocoderState controlVocoderState();
+
+/** The inference backend that OpenTune's acceleration detector has chosen at this moment, by its wire name: cpu,
+    directml or coreml. cpu also while nothing has been detected yet. It is what session.info reports as
+    processing.backend and what a prefsApply job reads once, when it ends, to tell whether a request for gpuFirst fell
+    back to the CPU (warning BACKEND_FALLBACK). Any thread. */
+const char* controlInferenceBackendName();
 
 /** The call the preferences window makes when the vocoder weight changes: processor.setVocoderModelWeight(). The
     switch runs on the runtime's control worker; the call returns at once. */

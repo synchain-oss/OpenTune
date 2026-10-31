@@ -287,6 +287,18 @@ bool hasWarning(const JsonValue& result, const std::string& code)
     return false;
 }
 
+/** data.items of the warning NOT_SAVED_IN_PROJECT of a result, as JSON text; "none" without the warning. The state that
+    a project file does not hold: the undo history and the preferences (the number of visible tracks is saved with the
+    project). */
+std::string notSavedItems(const JsonValue& result)
+{
+    const auto& warnings = memberOf(result, "warnings");
+    for (std::size_t i = 0; i < warnings.size(); ++i)
+        if (memberOf(warnings.at(i), "code").text() == "NOT_SAVED_IN_PROJECT")
+            return toJsonString(memberOf(memberOf(warnings.at(i), "data"), "items"));
+    return "none";
+}
+
 /** The target pitches of a content's notes, in order, as content.getNotes reports them. */
 std::vector<double> targetsOf(ApiSession& api, const std::string& contentId)
 {
@@ -365,6 +377,7 @@ void scenarioProjectRoundTrip()
                       && !memberOf(memberOf(result, "dirty"), "after").asBoolean());
         CONTROL_CHECK(hasWarning(result, "IRREVERSIBLE") && hasWarning(result, "NOT_SAVED_IN_PROJECT")
                       && !hasWarning(result, "OVERWROTE_OTHER_PROJECT"));
+        CONTROL_CHECK(notSavedItems(result) == R"(["undoHistory","preferences"])");
         CONTROL_CHECK(juceFileOf(fileA).existsAsFile());
         CONTROL_CHECK(
             juceFileOf(fileA).getParentDirectory().getChildFile(mediaDirectoryNameOf(juceFileOf(fileA))).isDirectory());
@@ -821,8 +834,8 @@ std::string projectFacts(OpenTuneAudioProcessor& processor, EditorParts& editor,
     return facts;
 }
 
-/** The warning NOT_SAVED_IN_PROJECT of a copy: the only warning, without a subject, with the three names of state that
-   a project file does not hold. */
+/** The warning NOT_SAVED_IN_PROJECT of a copy: the only warning, without a subject, with the two names of state that a
+   project file does not hold (the number of visible tracks is not among them: the project file stores it). */
 void checkCopyWarnings(const JsonValue& result)
 {
     const auto& warnings = memberOf(result, "warnings");
@@ -831,7 +844,7 @@ void checkCopyWarnings(const JsonValue& result)
     const auto& warning = warnings.at(0);
     CONTROL_CHECK(memberOf(warning, "code").text() == "NOT_SAVED_IN_PROJECT" && memberOf(warning, "subject").isNull());
     CONTROL_CHECK(toJsonString(memberOf(memberOf(warning, "data"), "items"))
-                  == R"(["visibleTrackCount","undoHistory","preferences"])");
+                  == R"(["undoHistory","preferences"])");
 }
 
 } // namespace

@@ -286,15 +286,28 @@ public:
         which case the control API takes the scheme as applied once the preference is set. */
     virtual std::optional<bool> editingSchemeApplied(bool /*notesPrimary*/) const { return std::nullopt; }
 
-    /** What the audio settings page does before it closes an ASIO device for another device type or output
-        device (restoreAsioSampleRateToSystem), as best effort: returns false when the restore failed or could not be
-        verified. The change goes on all the same, as on the page, which shows kAudioDeviceRestoreWarning and continues;
-        the control API reports the warning ASIO_RATE_NOT_RESTORED. manager is the one the call works on
-        (audioDevice()), so that the restore acts on the device the call is about to close. Default: true (nothing to
-        restore). */
-    virtual bool prepareAudioDeviceSwitch(juce::AudioDeviceManager& /*manager*/, const std::string& /*reason*/)
+    /** The sample rate restore of an ASIO device that failed (prepareAudioDeviceSwitch()): the data of the warning
+        ASIO_RATE_NOT_RESTORED (registry/warnings.json). */
+    struct AsioRateRestoreFailure
     {
-        return true;
+        /** The ASIO device whose sample rate was to be restored (the name its driver reports). */
+        std::string deviceName;
+        /** The rate in Hz that the restore tried to set: the sample rate of the Windows shared mode, which is what the
+            audio settings page moves an ASIO device to. When that rate could not be read, no rate was tried, and this
+            is the rate the ASIO device was running at. */
+        double sampleRateHz = 0.0;
+    };
+
+    /** What the audio settings page does before it closes an ASIO device for another device type or output
+        device (restoreAsioSampleRateToSystem), as best effort: returns nullopt when the restore succeeded or there was
+        nothing to restore, and the device and the rate when it failed or could not be verified. The change goes on all
+        the same, as on the page, which shows kAudioDeviceRestoreWarning and continues; the control API reports the
+        warning ASIO_RATE_NOT_RESTORED with the returned values. manager is the one the call works on (audioDevice()),
+        so that the restore acts on the device the call is about to close. Default: nullopt (nothing to restore). */
+    virtual std::optional<AsioRateRestoreFailure> prepareAudioDeviceSwitch(juce::AudioDeviceManager& /*manager*/,
+                                                                           const std::string& /*reason*/)
+    {
+        return std::nullopt;
     }
 };
 

@@ -408,14 +408,15 @@ Result<JsonValue> runAdd(ControlOpContext& context, const AddParams& params)
         return controlOpError("UNSUPPORTED", "capability_missing", "the editor cannot show more tracks");
     const auto after = controlCaptureTracks(context, shownTracks(context));
     describeTracks(before, after, envelope);
-    for (int trackId = visible.value(); trackId < target; ++trackId)
-        envelope.addWarning("NOT_PERSISTED", controlTrackRef(trackId));
-    // No undo entry and nothing to revert. Since upstream 2c01847 the track count is saved with the project: the
-    // editor's panel writes it to the arrangement and marks the project when it changes (visibleTrackCountChanged),
-    // as the + button does, so in the real editor the result's dirty flag turns true. The warning NOT_PERSISTED and
-    // the undo reason follow the locked specification (vectors/track/add-ok.json), which still calls the count view
-    // state; the next specification sync should change both.
-    envelope.setNotUndoable("not_persisted_state");
+    // No undo entry and nothing to revert (PROTOCOL.md section 15.2 rule 6): the + button has no undo, and no request
+    // restores the previous count (track.delete removes the track with its clips, one track per request, and needs the
+    // end user's consent, so it is no revert recipe). The count is project state (saved with the project since upstream
+    // 2c01847): the editor's panel writes it to the arrangement and marks the project when it changes
+    // (visibleTrackCountChanged, reached through the bridge's setVisibleTrackCount()), as the + button does, so the
+    // result's dirty flag turns true without this operation marking the project itself. Hence IRREVERSIBLE, with the
+    // first track shown as its subject (vectors/track/add-ok.json).
+    envelope.setNotUndoable("no_upstream_undo");
+    envelope.addWarning("IRREVERSIBLE", controlTrackRef(visible.value()));
     auto result = envelope.committed(context);
     auto counts = JsonValue::object();
     counts.appendMember("before", JsonValue::integer(visible.value()));

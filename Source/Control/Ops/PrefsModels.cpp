@@ -4,6 +4,7 @@
 #include "PluginProcessor.h"
 #include "Inference/ModelFactory.h"
 #include "Runtime/ProcessRenderRuntime.h"
+#include "Utils/AccelerationDetector.h"
 #include "Utils/ModelPathResolver.h"
 
 #include <algorithm>
@@ -126,6 +127,23 @@ ControlVocoderState controlVocoderState()
     state.reconfiguring = render.isVocoderReconfiguring();
     state.ready = render.isVocoderReady();
     return state;
+}
+
+const char* controlInferenceBackendName()
+{
+    const auto backend = currentBackend();
+    if (backend.inferenceBackend)
+        return backend.inferenceBackend();
+    // AccelerationDetector::getSelection(): the inference backend in use (CPU until one was detected).
+    switch (AccelerationDetector::getInstance().getSelection().backend) {
+        case AccelerationDetector::AccelBackend::DirectML:
+            return "directml";
+        case AccelerationDetector::AccelBackend::CoreML:
+            return "coreml";
+        case AccelerationDetector::AccelBackend::CPU:
+            break;
+    }
+    return "cpu";
 }
 
 void controlSetVocoderWeight(OpenTuneAudioProcessor& processor, const std::string& weight)

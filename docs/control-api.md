@@ -108,7 +108,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - 还原配方：`prefs.set` 的结果没有撤销条目（`ui_parity`），还原配方是用原来的值再调一次 `prefs.set`。原来的声码器权重名若无法放上线路（不是合法 UTF-8、为空或超过 64 个码点），配方里省略这一项；这次调用只改了它时，配方为 null（原因仍是 `ui_parity`，结果带警告 `IRREVERSIBLE`），不会给出没有参数的 `prefs.set`。
 - 与规范的关系：`processing.options`、`vocoderWeight`、`renderingPriority`、`f0Model` 以及原因码 `option_unavailable`、`vocoder_not_ready`、`vocoder_load_failed` 随规范 rc.6 登记（rc.7 去掉了 `referenceAlignMode`），仓库里的规范副本是 rc.7；与向量的差别（目前没有）记录在 `Source/Control/README.md` 的「Deviations from the vectors」。
 - `audio.set` 只接受 `audio.get` 的 `available` 里列出的值，否则返回 `INVALID_ARGUMENT(audio_setting_unavailable)`。设备类型和输出设备在动手之前就按清单检查，不在清单里时什么都不改；采样率、缓冲区大小和输出声道对要等将要运行的设备打开之后才能检查，所以同一次调用里前面的步骤（换设备类型、换输出设备）可能已经改过设备：这时服务端像设置页一样先把原来的设置恢复回去，再返回这个错误。设备打不开时，服务端同样恢复原来的设置，调用以 `IO_ERROR(device_open_failed)` 失败，`executed` 为 false；原来的设置也打不开时，`executed` 为 true，且没有设备在运行（`audio.get` 会如实报告）。前面的步骤已经改过设备、后面的值又不在清单里、原来的设置也恢复不了时同样如此：返回的是 `IO_ERROR(device_open_failed)`，`executed` 为 true，而不是 `INVALID_ARGUMENT`。失败信息会说明是哪一步出了问题，以及原设置是否已恢复。
-- 在 ASIO 设备上切换设备类型或输出设备之前，服务端会像设置页一样先把 ASIO 采样率恢复为系统共享渲染率。恢复失败或无法确认时切换照常进行（设置页也是如此），结果带告警 `ASIO_RATE_NOT_RESTORED`。
+- 在 ASIO 设备上切换设备类型或输出设备之前，服务端会像设置页一样先把 ASIO 采样率恢复为系统共享渲染率。恢复失败或无法确认时切换照常进行（设置页也是如此），结果带告警 `ASIO_RATE_NOT_RESTORED`（subject 为 `{"singleton": "audioDevice"}`，data 为 `{deviceName, sampleRateHz}`：那个 ASIO 设备，以及恢复时要设回的采样率，单位 Hz）。
+- `renderingPriority` 只是请求。`prefs.set` 把它改成 `gpuFirst`，而 OpenTune 此刻报告的推理后端（`session.info` 的 `processing.backend`）是 `cpu` 时，结果带告警 `BACKEND_FALLBACK`（subject 为 null，data 为 `{requested: "gpuFirst", actual: "cpu"}`）。后端只读一次，调用不等它稳定下来，所以没有等待声码器的任务可能仍读到改动之前的后端；要看最终的后端，之后再读 `session.info`。改成 `cpuFirst`，或没有改动优先级的调用，都没有这条告警。
 
 ## 与 OpenTune MCP Server 的关系
 

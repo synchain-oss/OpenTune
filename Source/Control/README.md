@@ -14,6 +14,9 @@ without this directory.
 **Review / 审核.** [`REVIEW-CHECKLIST.md`](REVIEW-CHECKLIST.md) is the checklist for reviewing a change of the control API, and the common basis on which OpenTune's maintainers and the API's contributors review it; each item says which file to read, which test to run or what to grep.
 [`REVIEW-CHECKLIST.md`](REVIEW-CHECKLIST.md) 是控制接口改动的审核清单，也是 OpenTune 维护者与接口贡献者双方审核的共同依据；每一条都写明看哪个文件、跑哪个测试、grep 什么。
 
+**Maintaining / 维护.** [`MAINTAINING.md`](MAINTAINING.md) says what to do on the API side when an OpenTune feature is added, changed or removed, and how to tell the MCP server's maintainers so that they can adapt; it is written for OpenTune's maintainers and their AI agents.
+[`MAINTAINING.md`](MAINTAINING.md) 说明 OpenTune 的功能新增、改变或删除时，接口这边要做什么，以及怎样通知 MCP Server 的维护者让它适配；面向 OpenTune 的维护者及其 AI agent。
+
 ## Quick rules for AI agents / AI agent 快速规则
 
 Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant to keep the control API intact.

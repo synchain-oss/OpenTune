@@ -856,7 +856,7 @@ is always a mode of `content.autoTune`. It follows the editing scheme of the pre
 
 `project.save`, `project.saveAs`, `project.open` and `project.clearRecent` (`Ops/ProjectOps.cpp`, capability
 `project.io`, reported only because all four are registered) and `project.saveCopy` (same file, capability
-`project.copy`, since specification 1.0.0-rc.8). The project session and its worker pool belong to the
+`project.copy`). The project session and its worker pool belong to the
 editor (`ProjectSession` stays inside it, as the processor takes over no project state), so the methods reach them
 through `ControlUiBridge::projectSession()` and `projectWorkerPool()`; without an editor the save and open methods
 answer `UNSUPPORTED(no_editor_window)`, and `project.clearRecent`, which is a preference, still works.
@@ -882,7 +882,7 @@ title and `refreshAllUIFromProject()`), `onRecentProjectsChanged()` and `setProj
   brought back), `OVERWROTE_OTHER_PROJECT` for another project file that was replaced, and `NOT_SAVED_IN_PROJECT`.
   The warning's `data.items` lists what the project file does not hold: `["undoHistory", "preferences"]` (the undo
   history and the preferences stay with the instance). The number of shown tracks is no longer in the list: since
-  upstream 2c01847 the project file holds it (specification 1.0.0-rc.9).
+  upstream 2c01847 the project file holds it (specification 1.0.0).
 - **Copy (`projectCopy`, not cancellable).** `project.saveCopy` writes the project to a new file and changes nothing of
   the project. It is the first half of the save: the snapshot on the message thread (`prepareSave()`), the write and the
   media copy on a worker (`executeSaveToFile()`) into a temporary file in the target directory, and the final rename of
@@ -1001,7 +1001,7 @@ without one); `track.set` works on the arrangement alone.
   2c01847 the number of shown tracks is project state: the panel's change reaches
   `OpenTuneAudioProcessorEditor::visibleTrackCountChanged()`, which saves the count in the arrangement and marks the
   project (unless a loaded project is being applied), so with the editor the `dirty` flag of the result turns true, as
-  with the context menu entry (`trackAddRequested`). Specification 1.0.0-rc.9 says the same: the result is not
+  with the context menu entry (`trackAddRequested`). Specification 1.0.0 says the same: the result is not
   undoable (undo reason `no_upstream_undo`: OpenTune creates no undo entry for it), the revert is null (no request
   hides a track again that `track.add` showed) and the warning `IRREVERSIBLE` has the first track that was shown as its
   subject (`vectors/track/add-ok.json`). The op does not mark the project itself: the panel's change does, once. The
@@ -1462,14 +1462,14 @@ The tuning does not recompute existing results (`NOT_RETROACTIVE`).
 **Backend fallback.** `renderingPriority` is a request. When a call changes it to `gpuFirst` and the inference backend
 that OpenTune reports at that moment (`controlInferenceBackendName()`: the selection of `AccelerationDetector`, the value
 that `session.info` reports as `processing.backend`) is `cpu`, the result carries `BACKEND_FALLBACK` with the subject
-null and the data `{requested: "gpuFirst", actual: "cpu"}` (specification 1.0.0-rc.9, PROTOCOL.md section 12.7 rule 7).
+null and the data `{requested: "gpuFirst", actual: "cpu"}` (specification 1.0.0, PROTOCOL.md section 12.7 rule 7).
 The backend is read once, when the changes are made, and the call never waits for it to settle: the runtime applies
 the new priority on its control worker a little later, and a job that did not wait for the vocoder reads the backend
 from before the change, which the rule allows (a client that needs the final backend reads `session.info` later). A
 change to `cpuFirst` and a call that leaves the priority as it is never carry the warning. Tests replace the reading
 with `ControlPrefsBackend::inferenceBackend`.
 
-**Deviations from the vectors.** None for `prefs.set`, `prefs.get` and `audio.set`. The specification copy (rc.9) has
+**Deviations from the vectors.** None for `prefs.set`, `prefs.get` and `audio.set`. The specification copy (1.0.0) has
 the three members `vocoderWeight`, `renderingPriority` and `f0Model`, `processing.options`, the
 reasons `option_unavailable` (`INVALID_ARGUMENT`, not retryable), `vocoder_not_ready` (`MODEL_UNAVAILABLE`, retryable)
 and `vocoder_load_failed` (`MODEL_UNAVAILABLE`, not retryable), the `MODEL_UNAVAILABLE` errors of a `prefsApply` job
@@ -1481,7 +1481,7 @@ weight files and the pitch model files in a models directory under the test's da
 `setVocoderModelWeight()` and `resetInferenceBackend()`, so no model is loaded and no inference backend is reset;
 `given.audio.alternatives` binds `audio.deviceType`, `audio.outputDevice`, `audio.otherDeviceType` and
 `audio.otherOutputDevice` to the names of the fake device manager, which always offers a second device type and a
-second output device. The rc.9 members run for real as well: `given.gpu` (`available` or `unavailable`) makes the
+second output device. The `given` members for the rendering priority and the ASIO rate run for real as well: `given.gpu` (`available` or `unavailable`) makes the
 test double report the GPU backend (`directml`) or the CPU after `renderingPriority` is set to `gpuFirst`, and
 `given.audio.asioRateRestoreFails` sets the device manager's type to the fake "ASIO" type and makes the test bridge's
 `prepareAudioDeviceSwitch()` fail (`PrefsBridge`; the vector's own restore state is the only thing the runner reads). The vectors
@@ -1519,7 +1519,7 @@ existing `ControlUiBridge::onPreferencesChanged()`.
   bridge's `prepareAudioDeviceSwitch()`. Since upstream 2c01847 the page treats it as best effort
   (`restoreAsioSampleRateToSystem()` is called with `setAudioDeviceSetupTemporarily()`): a restore that fails shows
   `kAudioDeviceRestoreWarning` and the switch goes on, and so does the call, whose result carries the warning
-  `ASIO_RATE_NOT_RESTORED` (specification 1.0.0-rc.9) with the subject `{"singleton": "audioDevice"}` and the data
+  `ASIO_RATE_NOT_RESTORED` (specification 1.0.0) with the subject `{"singleton": "audioDevice"}` and the data
   `{deviceName, sampleRateHz}`. The bridge returns the failure as a value (the device name and the rate the restore
   was after, see below), not as a bool, so that the op can fill the data; a call that restores more than once reports
   the first failure. If a later step of the call fails, the call fails as before (without the warning) and the

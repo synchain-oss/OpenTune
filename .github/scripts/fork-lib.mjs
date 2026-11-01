@@ -99,6 +99,13 @@ export const CPP_EXTENSIONS = ['.h', '.hh', '.hpp', '.hxx', '.c', '.cc', '.cpp',
 /** Words that must not appear in upstreamable paths (the upstream review would reject them). */
 export const FORBIDDEN_UPSTREAM_WORDS = /synchain|dlsnows|opentune-mcp/i;
 
+/**
+ * Exact repository paths exempt from the forbidden-words check, in addition to the spec copy. Source/Control/MAINTAINING.md
+ * tells the upstream author how to reach the maintainers (the maintainer agreed it may name the companion repository and a
+ * contact address). Compared as whole strings, never as a glob: another directory or another letter case stays checked.
+ */
+export const UPSTREAM_WORDS_EXEMPT_PATHS = ['Source/Control/MAINTAINING.md'];
+
 /** Actions allowed by the organisation policy (GitHub official + a short list). */
 export const ALLOWED_ACTION_OWNERS = ['actions/', 'github/'];
 export const ALLOWED_ACTIONS = [

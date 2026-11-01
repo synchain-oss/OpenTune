@@ -67,7 +67,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 - `Source/Control/**`、`Tests/Control/**`、`ControlEditorBridge*` 的新文件用 clang-format 18.1.8 格式化（fork 专用配置）。
 - **绝不格式化上游文件。** 只写需要的那几行。不改上游文件的缩进、空白、include 顺序、换行符或编码；部分上游文件带 UTF-8 BOM，必须保留。fork-gate 会检查上游文件新增行的空白。
 - `Source/Control/**` 里每个公开类与函数都要有英文 doc 注释，写明职责、线程要求和错误语义。调用上游函数的地方，注明调用的是哪个函数、为什么调用。
-- 规范副本之外，可上游路径中不得出现 `Synchain`、`DLsnows`、`opentune-mcp` 等字样（上游 PR 审查 job 会拒绝）。这些字样只能出现在 L0 路径里。
+- 规范副本之外，可上游路径中不得出现 `Synchain`、`DLsnows`、`opentune-mcp` 等字样（上游 PR 审查 job 会拒绝）。这些字样只能出现在 L0 路径里。唯一例外是 `Source/Control/MAINTAINING.md` 这一个精确路径：它给上游作者写明配套仓库与联系方式，维护者已同意（fork-gate `upstream-words` 只豁免这个路径，别的目录、大小写或文件名照查）。
 
 ## 3. 层与可上游路径
 

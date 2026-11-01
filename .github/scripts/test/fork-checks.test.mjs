@@ -8,7 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { after, afterEach, before, describe, test } from 'node:test';
 import { parseLayerFromBody, runChecks, workflowTriggerBlock, actionRefProblem } from '../fork-checks.mjs';
-import { filePatchId, makeTempDir, overallStatus, removeDir } from '../fork-lib.mjs';
+import { UPSTREAM_WORDS_EXEMPT_PATHS, filePatchId, makeTempDir, overallStatus, removeDir } from '../fork-lib.mjs';
 import {
   FORK, GITHUB, PINNED_WORKFLOW, SCRIPTS, STRANGER, TestRepo, UPSTREAM, UPSTREAM_FILES, WEB,
   aiGeneratedLine, aiTrailer, byId, fakeClangFormat, forkBaseFiles, msg, realTool,
@@ -851,6 +851,41 @@ describe('upstream-words', () => {
     const who = ['DL', 'snows'].join('');
     await expectStatus('upstream-words', repo.change({ 'CMakeLists.txt': `cmake_minimum_required(VERSION 3.22)\nproject(Upstream)\n# ${who}\n` }), 'FAIL', { layer: 'L2' });
     await expectStatus('upstream-words', repo.change({ 'CMakeLists.txt': 'cmake_minimum_required(VERSION 3.22)\nproject(Upstream)\noption(X "x" OFF)\n' }), 'PASS', { layer: 'L2' });
+  });
+
+  // The words in these tests are assembled at run time so this file itself stays clean.
+  const contact = () => `Questions go to ${['Syn', 'chain'].join('')} (${['DL', 'snows'].join('')}), repository ${['opentune', 'mcp', 'server'].join('-')}\n`;
+
+  test('Source/Control/MAINTAINING.md is exempt from the content check, Source/Control/README.md is not', async () => {
+    assert.deepEqual(UPSTREAM_WORDS_EXEMPT_PATHS, ['Source/Control/MAINTAINING.md']);
+    const text = contact();
+    const exempt = await expectStatus('upstream-words', repo.change({ 'Source/Control/MAINTAINING.md': text }), 'PASS', { layer: 'L2' });
+    assert.match(exempt.detail, /豁免/);
+    const readme = await expectStatus('upstream-words', repo.change({ 'Source/Control/README.md': text }), 'FAIL', { layer: 'L2' });
+    assert.ok(readme.problems.some((p) => p.startsWith('Source/Control/README.md:1')), readme.problems.join('\n'));
+  });
+
+  test('in one change only the exempt file is skipped', async () => {
+    const text = contact();
+    const r = await expectStatus('upstream-words', repo.change({ 'Source/Control/MAINTAINING.md': text, 'Source/Control/README.md': text }), 'FAIL', { layer: 'L2' });
+    assert.ok(r.problems.length > 0);
+    assert.ok(r.problems.every((p) => p.startsWith('Source/Control/README.md')), r.problems.join('\n'));
+  });
+
+  test('the exemption is the exact path: other directories, letter cases and names stay checked', async () => {
+    const text = contact();
+    for (const p of [
+      'Source/Control/sub/MAINTAINING.md',
+      'Source/Control/maintaining.md',
+      'Source/Control/Maintaining.md',
+      'Source/Control/MAINTAINING.MD',
+      'Source/Control/MAINTAINING.md.bak',
+      'Source/Control/OLD-MAINTAINING.md',
+      'Tests/Control/MAINTAINING.md',
+    ]) {
+      const r = await expectStatus('upstream-words', repo.change({ [p]: text }), 'FAIL', { layer: 'L2' });
+      assert.ok(r.problems.some((q) => q.startsWith(`${p}:1`)), `${p}: ${r.problems.join('\n')}`);
+    }
   });
 });
 

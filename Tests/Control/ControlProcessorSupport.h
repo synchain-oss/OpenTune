@@ -564,7 +564,7 @@ void scenarioVectors();
     the real dispatcher, with the clips, analysis failures and preferences they report. */
 void scenarioDetails();
 /** Every method of every capability the instance reports is registered in OpsRegistry, apart from an
-    explicit list of exemptions that must be empty before dev is merged. */
+    explicit list of exemptions that must stay empty. */
 void scenarioCompleteness();
 /** The methods run off the message thread exactly when their schema says mainThread false, and
     app.getLog answers while the message thread is held, without TIMEOUT. */

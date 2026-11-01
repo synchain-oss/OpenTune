@@ -1572,7 +1572,7 @@ std::vector<std::string> withoutCapabilitiesOf(const JsonValue& vector)
 std::string projectVectorSkipReason(const JsonValue& vector)
 {
     if (kProjectVectorCapabilities.count(memberOf(vector, "capability").text()) == 0)
-        return "needs capability " + memberOf(vector, "capability").text() + ", which a later part implements";
+        return "needs capability " + memberOf(vector, "capability").text() + ", which this runner does not cover";
     // The vectors of project.io and project.copy are this runner's; so is a vector of an instance that does not
     // report one of them (capability session.v1, given.withoutCapabilities), such as one of release candidate 7.
     const auto capability = memberOf(vector, "capability").text();
@@ -1584,7 +1584,7 @@ std::string projectVectorSkipReason(const JsonValue& vector)
     const auto& extra = memberOf(vector, "extraCapabilities");
     for (std::size_t i = 0; i < extra.size(); ++i)
         if (kProjectVectorCapabilities.count(extra.at(i).text()) == 0)
-            return "needs capability " + extra.at(i).text() + ", which a later part implements";
+            return "needs capability " + extra.at(i).text() + ", which this runner does not cover";
     if (memberOf(vector, "session").text() != "authenticated")
         return "unauthenticated vectors test the listener (ControlUnitTests)";
     std::vector<std::string> methods;

@@ -1168,11 +1168,11 @@ const std::set<std::string> kExportVectorCapabilities = {"session.v1", "read.v1"
 std::string exportVectorSkipReason(const JsonValue& vector)
 {
     if (kExportVectorCapabilities.count(memberOf(vector, "capability").text()) == 0)
-        return "needs capability " + memberOf(vector, "capability").text() + ", which a later part implements";
+        return "needs capability " + memberOf(vector, "capability").text() + ", which this runner does not cover";
     const auto& extra = memberOf(vector, "extraCapabilities");
     for (std::size_t i = 0; i < extra.size(); ++i)
         if (kExportVectorCapabilities.count(extra.at(i).text()) == 0)
-            return "needs capability " + extra.at(i).text() + ", which a later part implements";
+            return "needs capability " + extra.at(i).text() + ", which this runner does not cover";
     if (memberOf(vector, "session").text() != "authenticated")
         return "unauthenticated vectors test the listener (ControlUnitTests)";
     std::vector<std::string> methods;

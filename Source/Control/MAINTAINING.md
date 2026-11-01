@@ -27,19 +27,19 @@
 |---|---|---|
 | **A. 只通知我们（默认，最省事）** | 新增或修改功能，你不想管接口 | 照第 4 节开一个 issue。我们来写规范、MCP 工具和这边的 C++ 代码，并给 OpenTune 提 PR 供你审 |
 | **B. 顺手把接口也做了** | 改动小，你或你的 agent 有余力 | 照 `README.md`「Adding a method」实现；规范改动先照第 5 节提给 MCP 仓库（PR 或附上建议 schema 的 issue）；本仓库的规范副本不要直接改 |
-| **C. 删除功能** | 某个功能退役 | 把 `Source/Control` 里对应的方法、Ops、镜像登记、测试、README 方法表一起删掉，保证接口开关 ON / OFF 都能编译。删掉的方法所属的能力（capability）从此不再上报，客户端收到 `UNSUPPORTED(capability_missing)`，所以 `Tests/Control/ControlDispatcherTests.cpp` 里 `scenarioCompleteness` 的能力清单也要去掉它；只删一个能力里的部分方法会让整个能力不再上报，这种情况请先开 issue 商量。然后开一个 issue，让我们下线 MCP 那边的工具，并在规范里把这个能力标为退役（规范从 1.0.0 起只追加、不删方法）。先例：实验性参考轨退役后，候选版 1.0.0-rc.7 去掉了参考对齐 |
+| **C. 删除功能** | 某个功能退役 | 把 `Source/Control` 里对应的方法、Ops、镜像登记、测试、README 方法表一起删掉，保证接口开关 ON / OFF 都能编译。删掉的方法所属的能力（capability）从此不再上报，客户端收到 `UNSUPPORTED(capability_missing)`，所以 `README.md`「Adding a method」一节列出的各处能力清单（`kMethods`、`Tests/Control/ControlDispatcherTests.cpp` 里 `scenarioCompleteness` 的能力清单、`session.info` 与 `session.hello` 的能力断言等）也要同步去掉它；只删一个能力里的部分方法会让整个能力不再上报，这种情况请先开 issue 商量。然后开一个 issue，让我们下线 MCP 那边的工具，并在规范里把这个能力标为退役（规范从 1.0.0 起只追加、不删方法） |
 
 来不及处理时，可以先让受影响的方法返回 `UNSUPPORTED`，然后开 issue 说明（不要取消注册：那样整个能力都不再上报，`scenarioCompleteness` 会失败）——接口坏掉比不报告好处理，我们来修。
 
 ## 3. 每次改动都要做的检查
 
 1. 两种配置都要能编译、行为不变：接口开关 `OPENTUNE_ENABLE_CONTROL_API` 默认 OFF；OFF 时 OpenTune 必须与没有本目录时完全一样。
-2. 跑控制接口的测试（只在打开接口与测试的构建里存在）：
+2. 跑控制接口的测试（只在打开接口与测试的构建里存在）。用你平常的 configure（`CMakePresets.json` 里的 preset 或自己的命令），加上 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON`，然后构建并运行测试。`<配置>` 是你构建的配置（例如 `Release`）；多配置生成器（Visual Studio、Xcode、Ninja Multi-Config）必须带 `-C`，单配置生成器会忽略它。没有这两个选项的构建里 `ctest -R Control` 找不到测试，不加 `--no-tests=error` 时退出码仍是 0：
 
    ```
-   cmake -S . -B build-control -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON
-   cmake --build build-control --config RelWithDebInfo
-   ctest --test-dir build-control -C RelWithDebInfo -R Control --no-tests=error
+   cmake <你平常的 configure 参数> -DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON
+   cmake --build <构建目录> --config <配置>
+   ctest --test-dir <构建目录> -C <配置> -R Control --no-tests=error
    ```
 
 3. `ControlMirrorDriftTests` 失败时：按它打印的提示和 `MIRRORS.md`，把 `Source/Control` 里的镜像代码改成与新版上游函数一致，跑它指定的测试，再用 `--update` 记录新哈希。做不到就走第 2 节的 A：开 issue，写明是哪个函数变了。
@@ -122,19 +122,19 @@ Changes of appearance only (theme, colours, layout, fonts, wording) need nothing
 |---|---|---|
 | **A. Just tell us (default, least work)** | A new or changed feature, and you would rather not touch the API | Open an issue as in section 4. We write the spec, the MCP tool and the C++ side here, and send OpenTune a pull request for you to review |
 | **B. Do the API part as well** | The change is small and you or your agent have time | Follow "Adding a method" in `README.md`; propose the spec change to the MCP repository first (section 5: a PR, or an issue with the proposed schema); never edit the spec copy here directly |
-| **C. Remove a feature** | A feature is retired | Remove its methods, Ops, mirror entries, tests and method-table rows in `Source/Control`, keeping the build working with the API option ON and OFF. The capability of the removed methods is then no longer reported and clients receive `UNSUPPORTED(capability_missing)`, so also remove it from the list of capabilities in `scenarioCompleteness` in `Tests/Control/ControlDispatcherTests.cpp`; removing only some methods of a capability stops the whole capability from being reported, so please open an issue first in that case. Then open an issue so that we take the tools on our side out of service and mark the capability as retired in the spec (from 1.0.0 on the spec only adds and never removes a method). Precedent: after the experimental reference track was retired, release candidate 1.0.0-rc.7 removed the reference alignment |
+| **C. Remove a feature** | A feature is retired | Remove its methods, Ops, mirror entries, tests and method-table rows in `Source/Control`, keeping the build working with the API option ON and OFF. The capability of the removed methods is then no longer reported and clients receive `UNSUPPORTED(capability_missing)`, so also remove it from every list of capabilities that "Adding a method" in `README.md` names (`kMethods`, the capabilities in `scenarioCompleteness` in `Tests/Control/ControlDispatcherTests.cpp`, the capability checks of `session.info` and `session.hello`, and so on); removing only some methods of a capability stops the whole capability from being reported, so please open an issue first in that case. Then open an issue so that we take the tools on our side out of service and mark the capability as retired in the spec (from 1.0.0 on the spec only adds and never removes a method) |
 
 If you have no time, it is fine to make an affected method return `UNSUPPORTED` and open an issue (do not unregister it: the whole capability would no longer be reported and `scenarioCompleteness` fails): a reported break is easy for us to fix.
 
 ## 3. Checks for every change
 
 1. Both configurations build and behave as before: `OPENTUNE_ENABLE_CONTROL_API` is OFF by default, and with it OFF OpenTune must behave exactly as without this directory.
-2. Run the control API tests (they exist only in a build with the API and tests on):
+2. Run the control API tests (they exist only in a build with the API and tests on). Configure the way you usually do (a preset from `CMakePresets.json` or your own command) with `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` added, then build and run the tests. `<config>` is the configuration you built (for example `Release`); a multi-config generator (Visual Studio, Xcode, Ninja Multi-Config) needs `-C`, and a single-config generator ignores it. In a build without the two options `ctest -R Control` finds no test, and without `--no-tests=error` it still exits 0:
 
    ```
-   cmake -S . -B build-control -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo -DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON
-   cmake --build build-control --config RelWithDebInfo
-   ctest --test-dir build-control -C RelWithDebInfo -R Control --no-tests=error
+   cmake <your usual configure arguments> -DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON
+   cmake --build <build directory> --config <config>
+   ctest --test-dir <build directory> -C <config> -R Control --no-tests=error
    ```
 
 3. When `ControlMirrorDriftTests` fails: bring the mirrored code in `Source/Control` in line with the new upstream function as its message and `MIRRORS.md` say, run the tests it names, then record the new hash with `--update`. If you cannot, take option A and name the function that changed.

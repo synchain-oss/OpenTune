@@ -883,7 +883,7 @@ void scenarioUiWorkspace()
 
 namespace {
 
-/** Why the runner does not run a vector, and whether it waits for a method of a later part. */
+/** Why the runner does not run a vector, and whether the vector is pending on a method that is not registered. */
 struct UiVectorSkip
 {
     std::string reason;
@@ -905,7 +905,7 @@ UiVectorSkip uiVectorSkip(const JsonValue& vector, const std::vector<std::string
     const auto& extra = memberOf(vector, "extraCapabilities");
     for (std::size_t i = 0; i < extra.size(); ++i)
         if (!reports(reported, extra.at(i).text()))
-            return {"needs capability " + extra.at(i).text() + ", which a later part implements"};
+            return {"needs capability " + extra.at(i).text() + ", which this build does not report"};
     const auto& given = memberOf(vector, "given");
     for (std::size_t i = 0; i < given.size(); ++i) {
         const auto& name = given.keyAt(i);

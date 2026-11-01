@@ -48,9 +48,9 @@ constexpr double kSampleGridTolerance = 1.0e-9;
 /** mergePlacements(): gains this close are equal. */
 constexpr float kGainTolerance = 1.0e-6f;
 /** The largest clip gain OpenTune's interface offers, as a linear factor. The interface's one bounded gain range is the
-    volume knob (Source/Standalone/UI/TrackPanelComponent.h, setRange(0.0, 4.0, 0.001) at L313-L314); the clip-gain drag
-    (ArrangementViewComponent.cpp, mouseDrag at L2446-L2447) has no bound of its own, so the API applies the interface's
-    bounded range here, mirrored by the drift pin `track-volume-range`. Zero is the lower end: the params schema keeps
+    volume knob (Source/Standalone/UI/TrackPanelComponent.h, setRange(0.0, 4.0, 0.001)); the clip-gain drag
+    (ArrangementViewComponent.cpp, mouseDrag) has no bound of its own, so the API applies the interface's
+    bounded range here, mirrored by the mirror entry `track-volume-range`. Zero is the lower end: the params schema keeps
     gainLinear at 0 or more and StandaloneArrangement::setPlacementGain() floors the stored value at 0. */
 constexpr double kMaxClipGainLinear = 4.0;
 
@@ -1021,8 +1021,8 @@ Result<JsonValue> runInPlace(ControlOpContext& context, const EditParams& params
                 break;
             }
             case OpKind::SetGain: {
-                // OpenTune's interface offers the gain range 0 to 4 linear (the volume knob, TrackPanelComponent.h
-                // L313-L314); the clip-gain drag itself has no bound (ArrangementViewComponent.cpp L2446-L2447), so the
+                // OpenTune's interface offers the gain range 0 to 4 linear (the volume knob, TrackPanelComponent.h);
+                // the clip-gain drag itself has no bound (ArrangementViewComponent.cpp, mouseDrag), so the
                 // API applies the interface's bounded range and reports CLAMPED in the unit the caller named. The
                 // lower end 0 is kept by the params schema (gainLinear minimum 0) and setPlacementGain()'s floor.
                 double linear = op.gainLinear ? *op.gainLinear : std::pow(10.0, *op.gainDb / 20.0);

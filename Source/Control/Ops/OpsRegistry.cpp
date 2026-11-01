@@ -86,8 +86,9 @@ Error makeOpError(std::string_view prefix, std::string_view kind, std::string_vi
 
 void registerControlMethods(ControlMethodTable& table)
 {
-    // One line per group, in the order of the layers. A method that is not registered is answered with
-    // UNSUPPORTED(capability_missing). Groups that later parts add have a placeholder line.
+    // One line per group. The order matters: session.hello and session.info list the capabilities in the order
+    // of the first method registered for each. A method that is not registered is answered with
+    // UNSUPPORTED(capability_missing).
     registerSessionOps(table);        // session.info (ControlServer answers session.hello itself)
     registerProjectReadOps(table);    // project.get, transport.get
     registerContentReadOps(table);    // content.getNotes, content.getPitchCurve, content.segmentNotes
@@ -290,8 +291,8 @@ std::vector<std::string> ControlMethodTable::capabilities() const
 
 bool controlCapabilityIsIncomplete(std::string_view capability)
 {
-    // Every capability of which this build registers a method has all its methods registered (ui.bridge since
-    // ui.setSelection). A part that registers only some methods of a capability names it here.
+    // Every capability of which this build registers a method has all its methods registered. A capability
+    // whose methods are registered in several steps names itself here until the last step.
     juce::ignoreUnused(capability);
     return false;
 }

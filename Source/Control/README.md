@@ -2,14 +2,15 @@
 
 # OpenTune control API (OTCP v1)
 
-> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、撤销历史（撤销识别、ControlOriginAction、没有撤销条目的写入）、ContentEditTransaction 与它镜像的上游函数、音符编辑与移调（content.editNotes、content.setPitchShift、AUTO 的 SNAP，修正段按钢琴卷帘的步骤重建，令牌扣除移调步骤）、内容写入的就绪门、忙碌检查、编辑器 bridge、导入、导出（界面与接口共用的导出锁、逐内容的就绪判定、等待伸缩重建、临时文件与最终改名）、时间网格（照时间工具的两轮夹紧移动手柄、整段平移、以 job 种子锚点、TimeGridEditAction 撤销步、它镜像的上游函数）、对话框与首次引导（ui.getState、ui.dismiss：模态窗口的分类、照 Esc 关闭、系统文件选择器、阻止或关闭首次引导、不能压下的 F0 诊断）、应用退出（app.quit：检查顺序、先回复再退出——回复写出之后才进入退出步骤，退出走窗口关闭按钮自己的路径、exitDeadlineMs 的量测依据）、镜像登记（MIRRORS.md、mirror-map.json、ControlMirrorDriftTests）、AI agent 快速规则、如何新增方法与方法表；其余章节随后续实现补全。规范在 `Tests/Control/spec/otcp/v1/`。
+> **概述（中文）**：本目录是 OpenTune Standalone 的本机控制接口（OTCP v1）。它只监听 `127.0.0.1`，编译期由 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`（默认 OFF）控制，运行期默认关闭，只有设置 `OPENTUNE_CONTROL_API=1` 或传入 `--control-api` 才会启动。接口关闭时 OpenTune 的行为与没有本目录时完全相同。它支持 Windows 与 macOS 的 Standalone；在 iPadOS 构建里打开该选项，CMake 会报错并停止。对上游已有文件的改动只有下文「Hooks」一节列出的几处接入钩子，每处都带 `// OpenTune Control API hook:` 标记。本文件面向 OpenTune 的维护者及其 AI agent：文件地图、线程规则、生命周期、钩子清单、请求处理流程（dispatcher）、job 模式、写结果（写信封）的构建、撤销描述与还原、撤销历史（撤销识别、ControlOriginAction、没有撤销条目的写入）、ContentEditTransaction 与它镜像的上游函数、音符编辑与移调（content.editNotes、content.setPitchShift、AUTO 的 SNAP，修正段按钢琴卷帘的步骤重建，令牌扣除移调步骤）、内容写入的就绪门、忙碌检查、编辑器 bridge、导入、导出（界面与接口共用的导出锁、逐内容的就绪判定、等待伸缩重建、临时文件与最终改名）、时间网格（照时间工具的两轮夹紧移动手柄、整段平移、以 job 种子锚点、TimeGridEditAction 撤销步、它镜像的上游函数）、对话框与首次引导（ui.getState、ui.dismiss：模态窗口的分类、照 Esc 关闭、系统文件选择器、阻止或关闭首次引导、不能压下的 F0 诊断）、应用退出（app.quit：检查顺序、先回复再退出——回复写出之后才进入退出步骤，退出走窗口关闭按钮自己的路径、exitDeadlineMs 的量测依据）、镜像登记（MIRRORS.md、mirror-map.json、ControlMirrorDriftTests）、AI agent 快速规则、如何新增方法与方法表。规范在 `Tests/Control/spec/otcp/v1/`。
 
 This directory holds the local control API of OpenTune Standalone: a JSON-RPC protocol over a loopback
 TCP connection (OTCP v1, specified in `Tests/Control/spec/otcp/v1/PROTOCOL.md`), with which another
 program on the same machine, for example an assistant, can read and edit the open project the way the
 UI does. It is compiled only with the CMake option `OPENTUNE_ENABLE_CONTROL_API` (default OFF) and runs
 only when enabled at run time. With the option OFF, or ON but not enabled, OpenTune behaves exactly as
-without this directory.
+without this directory. It supports the Standalone application on Windows and macOS; configuring an iPadOS
+build with the option ON stops with an error.
 
 **Review / 审核.** [`REVIEW-CHECKLIST.md`](REVIEW-CHECKLIST.md) is the checklist for reviewing a change of the control API, and the common basis on which OpenTune's maintainers and the API's contributors review it; each item says which file to read, which test to run or what to grep.
 [`REVIEW-CHECKLIST.md`](REVIEW-CHECKLIST.md) 是控制接口改动的审核清单，也是 OpenTune 维护者与接口贡献者双方审核的共同依据；每一条都写明看哪个文件、跑哪个测试、grep 什么。
@@ -22,7 +23,7 @@ without this directory.
 Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant to keep the control API intact.
 如果希望你的 AI agent 不破坏控制接口，可以原样粘进你自己的 `CLAUDE.md` 或 `AGENTS.md`。
 
-1. If you change an upstream function that is listed in `MIRRORS.md`, you must run `ControlMirrorDriftTests` and bring the mirrored code in `Source/Control` in line as `MIRRORS.md` says before you update the hash. The test exists only in a build configured with `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` (both are OFF by default), for example `cmake -S . -B build-control -G Ninja -DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON`, then build it and run `ctest --test-dir build-control -C RelWithDebInfo -R ControlMirrorDrift --no-tests=error`; in a default build `ctest -R Control` finds no test, and without `--no-tests=error` that still exits 0. / 改了 `MIRRORS.md` 里列出的上游函数，必须运行 `ControlMirrorDriftTests`，并按 `MIRRORS.md` 同步 `Source/Control` 里的镜像代码，然后才能更新哈希。这个测试只存在于用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` configure 的构建里（两者默认都是 OFF），例如 `cmake -S . -B build-control -G Ninja -DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON`，构建后运行 `ctest --test-dir build-control -C RelWithDebInfo -R ControlMirrorDrift --no-tests=error`；默认构建里 `ctest -R Control` 找不到任何测试，不加 `--no-tests=error` 时退出码仍是 0。
+1. If you change an upstream function that is listed in `MIRRORS.md`, you must run `ControlMirrorDriftTests` and bring the mirrored code in `Source/Control` in line as `MIRRORS.md` says before you update the hash. The test exists only in a build configured with `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` (both are OFF by default): configure the way you usually do (a preset from `CMakePresets.json` or your own command) with those two options added, build, then run `ctest --test-dir <build directory> -C <config> -R ControlMirrorDrift --no-tests=error` (`<config>` is the configuration you built, for example `Release`; a multi-config generator needs `-C`). In a build without the two options `ctest -R Control` finds no test, and without `--no-tests=error` that still exits 0. / 改了 `MIRRORS.md` 里列出的上游函数，必须运行 `ControlMirrorDriftTests`，并按 `MIRRORS.md` 同步 `Source/Control` 里的镜像代码，然后才能更新哈希。这个测试只存在于用 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` configure 的构建里（两者默认都是 OFF）：用你平常的 configure（`CMakePresets.json` 里的 preset 或自己的命令），加上这两个选项，构建后运行 `ctest --test-dir <构建目录> -C <配置> -R ControlMirrorDrift --no-tests=error`（`<配置>` 是你构建的配置，例如 `Release`；多配置生成器必须带 `-C`）。没有这两个选项的构建里 `ctest -R Control` 找不到任何测试，不加 `--no-tests=error` 时退出码仍是 0。
 2. Do not delete or move code marked `// OpenTune Control API hook`; the list is in "Hooks". / 不要删除或挪动标有 `// OpenTune Control API hook` 的代码，清单见「Hooks」。
 3. With `OPENTUNE_ENABLE_CONTROL_API` OFF, or ON but not enabled at run time, OpenTune must behave as before. / 选项关闭，或开启但运行时未启用时，OpenTune 的行为必须与原来一致。
 4. The control API reads and writes content only on the message thread, through `ControlMessageThread`: `post()` queues a function for the message thread and returns at once, `call()` runs it there and waits for it to return (the dispatcher uses `call()`); never from the network thread. / 控制接口只在消息线程、经 `ControlMessageThread` 读写内容：`post()` 把函数排到消息线程上就返回，`call()` 在那里执行它并等它返回（dispatcher 用的是 `call()`）；绝不在网络线程。
@@ -71,8 +72,8 @@ Copy these into your own `CLAUDE.md` or `AGENTS.md` if you want your assistant t
 | `../Standalone/ControlEditorBridge.*`, `../Standalone/ControlEditorBridgeProject.cpp`, `../Standalone/ControlEditorBridgeModals.cpp`, `../Standalone/ControlEditorBridgeColour.h`, `../Standalone/ControlEditorBridgePrefs.cpp` | The editor's side of `ControlUiBridge`, a friend of the Standalone editor (the project flows in the second file, the dialogs and the onboarding in the third, the track panel listener that tells which track a colour picker is for in the fourth, the preferences and the audio device in the fifth); compiled into the application wrapper only. |
 
 The channel files (options to server) use only the standard library and the operating system; the
-unit tests (`Tests/Control/ControlUnitTests.cpp`) compile them on their own. The service files and every
-later part use JUCE and the processor. `cmake/OpenTuneControl.cmake` lists all files in order.
+unit tests (`Tests/Control/ControlUnitTests.cpp`) compile them on their own. All the other files
+use JUCE and the processor. `cmake/OpenTuneControl.cmake` lists all files in order.
 
 ## Threading rules
 
@@ -177,9 +178,9 @@ option, so a build with the option OFF compiles exactly the upstream code.
 | `Source/Standalone/UI/ArrangementViewComponent.h` (end of the public section; 4 lines: `#if`, marker, declaration, `#endif`) | Public `commitControlSelection(trackId, placementId)` | The editor bridge selects a clip (`ui.setSelection`) as a plain click on it does, so that the view's own selection (the highlight and the target of its keyboard commands, private members) follows. No data member, so the class layout is the same with the option OFF. | A selection through the API would leave the view highlighting, and its Delete, split and nudge keys acting on, the clips selected before. |
 | `Source/Standalone/UI/ArrangementViewComponent.cpp` (after `commitEmptyPlacementSelection()`; 17 lines) | The definition: with a clip, the steps of `mouseDown` for a click on a clip that is not selected (only that clip in the view's selection, the shift anchor, `commitPlacementSelection()`); with 0, `commitEmptyPlacementSelection()`, as a click on an empty area | Calls only the view's own private functions in the order its mouse handler calls them; the listener (the editor) is told as after a click. | As above. |
 | `Source/PluginProcessor.h` (the control block at the end of the class; 5 lines: one marker comment, `tryAcquireExportLock()`, `releaseExportLock()`, `isExportLockHeld()`, member `exportLockHeld_`) | The export lock that the editor's export and `export.start` share (an atomic flag; any thread) | One export at a time, whoever starts it: `export.start` and every other write answer `BUSY(export_in_progress)` while it is held, also without an editor. | The API could export while the UI exports (both write through `OpenTuneAudioProcessor::export*Audio` and its `lastExportError_`), and writes would not see an export of the other side. |
-| `Source/Standalone/PluginEditor.cpp` (`exportAudioRequested`: 11 lines before `exportInProgress_` is set, 4 lines in the export thread before the result is posted) | The editor takes the lock when it starts its export thread, with its own "An export task is already in progress" message when the lock is taken, and releases it once the file is written | The UI and the API share the lock; the UI shows what it always shows when an export runs. | As above. |
+| `Source/Standalone/PluginEditor.cpp` (`exportAudioRequested`: 11 lines before `exportInProgress_` is set, 4 lines in the export thread before the result is posted) | The editor takes the lock when it starts its export thread, and releases it once the file is written. When the lock is taken (by `export.start`) it shows the message it shows while its own export runs, `LOC(kExportInProgress)` under the title `LOC(kExportAudio)`, so the text is the same in every language | The UI and the API share the lock; the UI shows the same localised message whoever holds it. | As above. |
 | `Source/Utils/UndoManager.h` (public section; 8 lines: `#if`, marker, five inline functions, `#endif`) | `peekUndo()`, `peekRedo()`, `size()`, `cursor()` and `clearRedo()` | Reads the tops and the counts of OpenTune's history (`edit.getHistory`, the entry checks of `edit.undo` and `edit.redo`); `clearRedo()` discards the redo history after a change without an undo entry (PROTOCOL.md section 15.3 rule 9), as `addAction()` discards it. No data member, so the class layout is the same with the option OFF. | The API cannot tell which entry is on top, so it cannot refuse a step the client did not expect; a change without an undo entry leaves older redo steps that would write over it. |
-| `Source/Standalone/PluginEditor.cpp` (`performUndoRedoAction`; 8 lines) | The steps after an undo or redo moved into `afterUndoRedo()` (a pure refactor: with the option OFF the function reads as upstream) | The editor bridge runs the same steps after an undo or redo applied through the API (`ControlUiBridge::onUndoRedoApplied()`): mark the project as changed, redraw the arrangement, refresh the reference context. | After an API undo the editor would not redraw or refresh until the next user action. |
+| `Source/Standalone/PluginEditor.cpp` (`performUndoRedoAction`; 8 lines, none removed) | The function is split in two after its early `return`: the added lines end the first half with a call to the new `afterUndoRedo()` and begin that function, whose body is the upstream's own last two lines, `projectSession_.markDirty()` and `arrangementView_.requestContentRedraw()`. With the option OFF the preprocessor removes the added lines and the function reads as upstream | The editor bridge runs the same steps after an undo or redo applied through the API (`ControlUiBridge::onUndoRedoApplied()`): mark the project as changed (`markDirty()`) and redraw the arrangement (`requestContentRedraw()`). | After an API undo the editor would not redraw the arrangement until the next user action. |
 | `Source/Standalone/PluginEditor.h` (the control block at the end of the class; 2 lines: marker and declaration) | Private `afterUndoRedo()`, reached by the friend `ControlEditorBridge` | As above. | As above. |
 
 ## Request handling
@@ -193,7 +194,7 @@ hello). For each request the dispatcher then:
    check just before its flag is set and reach the handler afterwards; it must not start a wait that
    nothing will end.
 2. looks the method up in the method table. A defined method of a reported capability that this build
-   does not implement yet gets `UNSUPPORTED(capability_missing)` with `executed` false.
+   has not registered gets `UNSUPPORTED(capability_missing)` with `executed` false.
 3. checks `params` on the connection thread against the method's params schema: shape and ranges only,
    never OpenTune state (case 12, `INVALID_ARGUMENT(invalid_params)`). Handles get their form check
    here; whether they name something is decided on the message thread.
@@ -505,20 +506,20 @@ OpenTune scales the stored notes and segments and renders the original F0 with t
 reports the targets and `content.getPitchCurve` the `correctedMidi` moved by the shift, at the same `revision`; the
 cursors of both are therefore bound to the pitch shift as well, so a page is never continued across a shift.
 
-The upstream functions these follow (lines of the locked upstream base). A change of these functions upstream
-needs the same change here; they are registered in `MIRRORS.md` (see "Mirrors") and `ControlMirrorDriftTests`
-fails when one changes:
+The upstream functions these follow. A change of these functions upstream needs the same change here; they are
+registered in `MIRRORS.md` (see "Mirrors"; `mirror-map.json` holds their symbols and hashes) and
+`ControlMirrorDriftTests` fails when one changes:
 
 | Upstream function | Followed in |
 |---|---|
-| `buildNoteBasedCorrectionState()` and `commitNoteBasedCorrection()` (`Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp:57-113`) | `controlNoteBasedCorrection()` (`Edit/NoteCorrection.cpp`) |
-| `PianoRollToolHandler::noteDragEditRange()`, `dragNotePitch()`, `endNotePitchDrag()` (`PianoRollToolHandler.cpp:1770-2075`) | `controlNotesFrameRange()`; ops `setTargetPitch` and `shiftCents` (`Ops/ContentEditOps.cpp`), description |
-| `PianoRollToolHandler::handlePitchToolDoubleClick()` (`PianoRollToolHandler.cpp:2127-2217`) | op `snapToScale` (description), the drift and modulation descriptions of `setParams` |
-| `PianoRollComponent::editParameter()`, the selected-notes target (`Source/Standalone/UI/PianoRollComponent.cpp:3047-3277`) | op `setParams` (`Edit note`) |
-| `PianoRollComponent::commitEditedContentNotesAndSegments()` (`PianoRollComponent.cpp:1353-1462`) | `controlCommitCorrection()` |
-| `PianoRollComponent::applyAutoSnapToAllNotes()` and `isFullyCorrectedInRange()` (`PianoRollComponent.cpp:5997-6177`, `:53-65`) | `controlPlanAutoSnap()`; `content.autoTune` mode `snapNotes` |
-| `OpenTuneAudioProcessorEditor::pitchShiftRequested()` (`Source/Standalone/PluginEditor.cpp:3681-3730`) | `content.setPitchShift`: the no-op, the undo entry, the dirty flag |
-| `OpenTuneAudioProcessor::commitPitchShiftEdit()` and `StandaloneClipContent::applyPitchShiftState()` (`Source/PluginProcessor.cpp:5741-5781`, `Source/Content/StandaloneClipContent.cpp:142-154`) | `ControlPitchShiftLedger`: the counters a pitch-shift step advances |
+| `buildNoteBasedCorrectionState()` and `commitNoteBasedCorrection()` (`Source/Standalone/UI/PianoRoll/PianoRollToolHandler.cpp`) | `controlNoteBasedCorrection()` (`Edit/NoteCorrection.cpp`) |
+| `PianoRollToolHandler::noteDragEditRange()`, `dragNotePitch()`, `endNotePitchDrag()` | `controlNotesFrameRange()`; ops `setTargetPitch` and `shiftCents` (`Ops/ContentEditOps.cpp`), description |
+| `PianoRollToolHandler::handlePitchToolDoubleClick()` | op `snapToScale` (description), the drift and modulation descriptions of `setParams` |
+| `PianoRollComponent::editParameter()`, the selected-notes target (`Source/Standalone/UI/PianoRollComponent.cpp`) | op `setParams` (`Edit note`) |
+| `PianoRollComponent::commitEditedContentNotesAndSegments()` | `controlCommitCorrection()` |
+| `PianoRollComponent::applyAutoSnapToAllNotes()` and `isFullyCorrectedInRange()` | `controlPlanAutoSnap()`; `content.autoTune` mode `snapNotes` |
+| `OpenTuneAudioProcessorEditor::pitchShiftRequested()` (`Source/Standalone/PluginEditor.cpp`) | `content.setPitchShift`: the no-op, the undo entry, the dirty flag |
+| `OpenTuneAudioProcessor::commitPitchShiftEdit()` and `StandaloneClipContent::applyPitchShiftState()` (`Source/PluginProcessor.cpp`, `Source/Content/StandaloneClipContent.cpp`) | `ControlPitchShiftLedger`: the counters a pitch-shift step advances |
 
 Known OpenTune behaviours, reported as they are:
 
@@ -1212,7 +1213,7 @@ notes of a clip are generated when the clip is selected or opened (`setEditedCon
 not when the view changes. So the result has an empty `revisionDiff`, the dirty state is as it was (see below), and the undo
 reason is `not_persisted_state`; the revert recipe is `ui.setWorkspace` with the previous workspace, and it is given only
 when `ui.workspace` is reported (the capability the recipe needs). A function in the chain that starts changing content
-would be caught by the mirrors below (drift pins) and by the vectors `ui/set-workspace-*`, which expect an empty
+would be caught by the mirror hashes below and by the vectors `ui/set-workspace-*`, which expect an empty
 `revisionDiff`.
 
 The result: one change `{entity: "ui", ref: {singleton: "workspace"}}` with `fields.workspace {before, after}`, the side
@@ -1332,7 +1333,7 @@ does what the arrangement view does when the user clicks:
   on a clip that is not selected: the clip alone in the view's selection, which it highlights and which its keyboard
   commands act on, then `commitPlacementSelection()`, which selects it in the arrangement and tells the editor
   (`placementSelectionChanged`: `applyPlacementSelectionContext`, which makes its track the active track, shows the clip
-  in the piano roll and the clip's key in the transport bar, then `refreshReferenceContext`). With `openEditor`
+  in the piano roll and the clip's key in the transport bar). With `openEditor`
   `placementDoubleClicked()` follows, as with a double click, which switches to the piano roll when the arrangement is
   shown (and leaves the project unchanged as `ui.setWorkspace` does, see "Workspace", the changed mark). The clip becomes the only selected clip even when it was part of a multi-selection (a click there keeps the
   others for a drag).
@@ -1370,10 +1371,10 @@ Tests: `Tests/Control/ControlSelectionTests.cpp` with a test bridge that selects
 processor (`generateNotesOnlyByContentKey` for the piano roll's notes; and the same note generation when `prefs.set` makes the
 scheme openDyne while the piano roll shows a clip, see "Workspace"). `Selection` checks the capability, the params, `NOT_FOUND`, `UNSUPPORTED`, busy, dryRun leaving the
 state as it was, a clip, `openEditor`, the scale with `ui.getState`, the no-op, the revert recipe sent back and a track.
-`SelectionMatrix` runs both schemes with a clip with and without notes and with and without a reference binding: the
-prediction of dryRun equals the committed result (a binding adds no side effect and no warning), and dryRun leaves every field of the state as it was. The test bridge
+`SelectionMatrix` runs both schemes with a clip with and without notes: the
+prediction of dryRun equals the committed result, and dryRun leaves every field of the state as it was. The test bridge
 and the prediction follow the same rules, so this shows that the two copies agree, not that the prediction agrees with
-the real editor; drift of the real editor is caught by the drift pins ("Mirrors") and by checks in the real Standalone.
+the real editor; drift of the real editor is caught by the mirror hashes ("Mirrors") and by checks in the real Standalone.
 `SelectionVectors` runs the vectors `ui/set-selection-*` and the three scenarios of `ui.setWorkspace` (see "Workspace"; it establishes `given.keyboardFocus`, and skips a vector with a `given` member it cannot establish). The view's highlight and keyboard target, and the real piano
 roll, run only in the Standalone application.
 
@@ -1587,7 +1588,7 @@ their bounded flush and close, the listener closes, the discovery file is delete
 The editor's side, `ControlEditorBridge::requestQuit()`, calls `closeButtonPressed()` of the top-level
 `juce::StandaloneFilterWindow` through its `juce::DocumentWindow` base. That is the close button's own handler, which
 does the two steps (`StandalonePluginHolder::savePluginState()` and `JUCEApplicationBase::quit()`), so nothing of it is
-repeated in `Source/Control` and there is no mirror, drift pin or hook to register: the function that would drift is the
+repeated in `Source/Control` and there is no mirror or hook to register: the function that would drift is the
 one called. The processor's destructor then runs the normal shutdown, with `ControlService::stop()` already done (it is
 idempotent). `canQuit()` is true when a standalone holder and that window exist. If `requestQuit()` fails after the reply
 (the window is gone) the control API stays stopped, the application keeps running and the failure is logged. If the exit
@@ -1695,13 +1696,35 @@ mirror" in `MIRRORS.md`) and name the upstream function in a comment of the mirr
    processor or the bridge (it has no way to reach them), may call only OpenTune functions documented as
    thread-safe, and must return within a fixed bound. `ControlProcessorTests.OffMainThread` checks that
    every registered method's `mainThread` matches its schema. A new group gets its line in
-   `registerControlMethods()` (`Ops/OpsRegistry.cpp`), where the groups of later parts already have a
-   placeholder line. The capability of a registered method is reported by `session.hello` and
-   `session.info`.
-4. Add the files to `cmake/OpenTuneControl.cmake` in the part's block.
-5. Test it in `Tests/Control/` (a scenario of `OpenTuneControlProcessorTests`, one process per scenario)
-   and add it to the methods whose vectors `ControlProcessorTests.Vectors` runs.
-6. Add a row to the method table below.
+   `registerControlMethods()` (`Ops/OpsRegistry.cpp`); `session.hello` and `session.info` list the
+   capabilities in the order of those lines. The capability of a registered method is reported by
+   `session.hello` and `session.info`.
+4. Add the method with its capability to `kMethods` in `ControlProtocol.cpp`, the protocol's method
+   table: `ControlMethodTable::add()` asserts that a registered name is in it, and the listener refuses
+   a method of an unreported capability with it.
+5. Add the files to `cmake/OpenTuneControl.cmake`, in the block of their topic.
+6. Test it in `Tests/Control/` (a scenario of `OpenTuneControlProcessorTests`, one process per scenario:
+   add it to `kScenarios` in `ControlProcessorTests.cpp` and to `_opentune_control_scenarios` in
+   `cmake/OpenTuneControl.cmake`) and add it to the methods whose vectors `ControlProcessorTests.Vectors`
+   runs.
+7. A new or removed capability changes the lists of capabilities that the code and the tests spell out.
+   They are written out on purpose, so that each test states what it expects on its own; do not merge them
+   into one constant. Search for the capability names (`git grep -n "<capability>" -- Source Tests`) and
+   bring all of these in line:
+   - `kMethods` (step 4);
+   - `scenarioCompleteness()` in `Tests/Control/ControlDispatcherTests.cpp`: the capabilities that must be
+     reported, and the lower bound of the number of indexed methods (`indexed.size() >= N`, with the
+     comment above it that counts the methods);
+   - `checkSessionInfo()` in `Tests/Control/ControlDispatcherTests.cpp`: the capabilities of `session.info`,
+     compared as one JSON array, in registration order;
+   - `scenarioStartAndHello()` (ctest name `ControlProcessorTests.StartAndHello`) in
+     `Tests/Control/ControlProcessorTests.cpp`: the same comparison for the capabilities of `session.hello`;
+   - the capability set of the runner of the group's vectors, for example `kEditVectorCapabilities` in
+     `ControlEditTests.cpp` or `kTimingVectorCapabilities` in `ControlTimingTests.cpp`.
+   Removing a method or a capability is the reverse: remove the registration, the `kMethods` entry, the
+   files in `cmake/OpenTuneControl.cmake`, the scenarios and mirror entries that belong to it and its row
+   in the method table, and update these lists as well.
+8. Add a row to the method table below.
 
 ## Tests
 
@@ -1712,7 +1735,14 @@ device: one process per scenario, each with its own `OPENTUNE_DATA_DIR`, the lif
 the upstream `Tests/LifecycleWatchdog.h`. Its target copies the SharedCode's compile definitions and
 include directories, because `PluginProcessor.h` changes its class layout with them, and pumps messages
 with `juce::detail::dispatchNextMessageOnSystemQueue` rather than `runDispatchLoop()`, whose stop latches
-for the rest of the process in JUCE 8.0.12. Run them with `ctest -R Control`.
+for the rest of the process in JUCE 8.0.12.
+
+The tests exist only in a build configured with `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` (both
+are OFF by default). Configure the way you usually do (a preset from `CMakePresets.json` or your own command) with
+those two options added, build, then run `ctest --test-dir <build directory> -C <config> -R Control --no-tests=error`.
+`<config>` is the configuration you built (for example `Release`); a multi-config generator (Visual Studio, Xcode,
+Ninja Multi-Config) needs `-C`, and a single-config generator ignores it. In a build without the two options
+`ctest -R Control` finds no test, and without `--no-tests=error` it still exits 0.
 
 Every runner of the specification's vectors (`Vectors`, `JobVectors`, `ExportVectors`, `EditVectors`, `TimingVectors`,
 `ProjectVectors`, `TrackVectors`, `UiVectors`, `PrefsVectors`, `AudioVectors`,
@@ -1721,7 +1751,7 @@ vector it considers. When the environment variable `OTCP_VECTOR_REPORT_DIR` name
 runner writes `<directory>/<test name>.json` there, e.g. `ControlProcessorTests.TrackVectors.json`:
 `{"runner": "cpp-headless:<test name>", "commit": "<OTCP_VECTOR_REPORT_COMMIT or empty>", "vectors": [{"id", "status":
 "PASS"|"FAIL"|"SKIP", "reason"}]}`, with `id` the path of the vector file below `vectors/` without `.json`. This lets a
-gate require that every vector passes in at least one runner. The writing is `VectorReport` in
+script check that every vector passes in at least one runner. The writing is `VectorReport` in
 `Tests/Control/ControlTestSupport.h`; without the variable nothing changes, and a failure to write is one line of
 output and never fails a test. A failed job of a vector's `given.jobs[].error` is made by `establishFailedJobs()`
 (`ControlProcessorSupport.h`).
@@ -1730,7 +1760,7 @@ A request of a scenario (`ApiSession::request`) waits `kReadTimeoutMs` for the l
 without a response in time fails the scenario with the longest single message dispatch on the message thread
 meanwhile and the open modal windows, which tell a message thread kept busy by another message from a slow
 method; its response, if it comes later, is discarded with a note on how late it was, so later requests read
-their own responses. Without the models (as on the build machines) the render that an import requests fails,
+their own responses. Without the model files installed the render that an import requests fails,
 and upstream `ProcessRenderRuntime::notifyApplicationRenderFailure()` builds a diagnostic dialog on the message
 thread; a scenario whose first requests must not race with that calls `settleBackgroundWork()` after its
 setup (render work idle, then the messages posted until then dispatched).
@@ -1758,11 +1788,11 @@ contents get a pitch analysis made of synthetic F0, committed the way OpenTune c
 analysis, so no model is needed. `Reads` covers the methods with and without an editor bridge, pagination
 and cursors, every analysis state, the errors and a reopened project; `ThreadProbe` the message-thread
 check; `DispatchShutdown` and `DispatchTimeout` a request that waits for the message thread when the
-service stops or its dispatch timeout passes; `Details` covers `content.getDetails` (time grid, AUTO modes with and
-without a reference binding, analysis failures), `transport.get`, `prefs.get` and `app.getLog` including the
+service stops or its dispatch timeout passes; `Details` covers `content.getDetails` (time grid, AUTO modes in both
+editing schemes, with the experimental features on and off, analysis failures), `transport.get`, `prefs.get` and `app.getLog` including the
 redaction of a log with the session token, the server proof and the home directory planted in it;
 `Completeness` checks that every method of every reported capability is registered (an exemption list
-exists and must be empty before dev is merged; `read.v1` may never be on it); `Vectors` runs the
+exists and must stay empty; `read.v1` may never be on it); `Vectors` runs the
 specification's vectors of the implemented methods against the real dispatcher and requires every vector of
 an explicit list (`kMustRunVectors`) to run and pass, instead of counting; the others are listed as
 skipped, with the reason. `OffMainThread` checks that each registered method runs on or off the message
@@ -1836,7 +1866,7 @@ hand-computed SNAP of every note, ranges as selections, one undo step for severa
 over corrected notes, `clipKey`, and a note without a base pitch; `EditCapability` that `edit.v1` is reported with its
 four methods; `EditVectors` the specification's vectors of `edit/`, `content/set-key-*`, `content/auto-tune-*`,
 `content/edit-notes-*` and `content/set-pitch-shift-*` (`given.history` is established with the same actions, a running
-export of `given.jobs` holds the export lock; vectors of later parts are listed as skipped, with the reason). The shared
+export of `given.jobs` holds the export lock; vectors of other methods are listed as skipped, with the reason). The shared
 contents with synthetic F0 are in `ControlContentFixtures.h`, defined in `ControlDispatcherTests.cpp`.
 
 `Tests/Control/ControlTimingTests.cpp` holds the scenarios of the time grid, on contents with synthetic F0 whose
@@ -1923,18 +1953,16 @@ The instance serves protocol 1.0 (`kControlProtocolVersion`). The capabilities i
 method table: `session.v1` always, and the capability of every registered method (now `read.v1`,
 `jobs.v1`, `import.v1`, `export.v1`, `ui.bridge` with `ui.onboardingClose`, `ui.workspace`, `edit.v1`, `history.v1`, `timing.v1`, `transport.v1`, `arrangement.v1`, `tracks.v1`, `project.io`, `project.copy`, `prefs.write`, `audio.device` and `app.quit`). The listener answers a method of an unreported capability itself with
 `UNSUPPORTED(capability_missing)`; the dispatcher answers the same for a method of a reported capability
-that is not registered yet. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
+that is not registered. PROTOCOL.md section 3.3 rule 5 case 10 expects an instance to implement every
 method of a capability it reports: `read.v1` is complete (all eight reads are registered), and
 `ControlProcessorTests.Completeness` fails when a reported capability has a method that is not registered.
 
 A capability of which only some methods are registered is not reported (`controlCapabilityIsIncomplete`); its
 methods are refused by the listener until the last one is registered, and the headless tests report it with the
-test seam `controlSetReportIncompleteCapabilitiesForTesting()` to run them. `edit.v1` is reported since all four of
-its methods are registered, and `ui.bridge` since `ui.setSelection` joined `ui.getState` and `ui.dismiss`; none is
-incomplete now (`controlSetWithheldCapabilitiesForTesting()` leaves a reported capability out, for the vectors'
-precondition `withoutCapabilities`). The mechanism stays for the method
-groups that are still placeholder lines in `registerControlMethods()`, whose capabilities may be registered in more
-than one step.
+test seam `controlSetReportIncompleteCapabilitiesForTesting()` to run them. No capability is incomplete in this
+build (`controlCapabilityIsIncomplete()` returns false); the mechanism is there for a capability whose methods are
+registered in more than one step. `controlSetWithheldCapabilitiesForTesting()` leaves a reported capability out of
+what an instance reports, for the vectors' precondition `withoutCapabilities`.
 
 ## Method table
 

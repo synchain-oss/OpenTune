@@ -167,7 +167,7 @@ Result<JsonValue> runStep(ControlOpContext& context, const StepParams& params, b
     if (params.force)
         history.value()->confirmStale(manager, *top, index, epoch, context.instanceShort());
     // As after the UI's own undo: the project is marked as changed (also when the step changed nothing), and
-    // the editor redraws and refreshes its derived state (the editor's afterUndoRedo()).
+    // the editor runs its afterUndoRedo() (it marks the project as changed and redraws the arrangement).
     controlMarkDirty(context);
     if (auto* bridge = context.bridge())
         bridge->onUndoRedoApplied();

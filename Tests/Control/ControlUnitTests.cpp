@@ -7,7 +7,7 @@
 // stand-in request handler. The rule by which the editor's bridge takes the changed mark of a view switch back is a
 // plain function of values, and is tested here as well.
 //
-// Every file goes to a fresh directory under OPENTUNE_DATA_DIR (set per test by the gates) or under
+// Every file goes to a fresh directory under OPENTUNE_DATA_DIR when that variable is set, or under
 // the build directory, never to the user's real data directories.
 
 #include "ControlTestSupport.h"

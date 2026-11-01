@@ -1188,7 +1188,7 @@ not reflected.
 **Deviations from the vectors.** The titles of `ConfirmDialogContent` dialogs are empty (above).
 `ui/dismiss-confirm-commit` needs `tracks.v1` for its revert recipe: the runner runs it where that capability is
 reported (it is, and the vector passes) and `UiDismiss` covers the same commit without it. (OpenTune always has an active track, track 0 in a new project, so the
-UI snapshot reports `activeTrackId` 0; since spec rc.4 `ui/get-state-ok` expects this, and so does the runner.)
+UI snapshot reports `activeTrackId` 0; `ui/get-state-ok` expects this, and so does the runner.)
 
 Tests: `Tests/Control/ControlUiTests.cpp` (`UiState`, `UiDismiss`, `UiOnboardingWithheld`, `UiVectors`) against the
 test bridge's dialogs and overlay (`TestUiBridge`); `UiVectors` requires an explicit list of `ui/*` vectors to pass and
@@ -1283,7 +1283,7 @@ member `bpm {before, after, unit: "bpm"}`) and the side effect `tempoRounded {fr
 (PROTOCOL.md section 15.2 rule 2). The time signature is not touched (the field commits the tempo only) and not
 reported. Whether the rewrite happens depends on where the keyboard focus is, so a call can also leave the tempo as it
 was, and then nothing about the tempo is reported; `dryRun` of `ui.setSelection` does not predict it for the same
-reason. The specification (PROTOCOL.md section 14.6, rc.7) says the same: the field rounds only while it holds the
+reason. The specification (PROTOCOL.md section 14.6) says the same: the field rounds only while it holds the
 keyboard focus, as in a window in the foreground that has just started, and the instance reports `tempoRounded` and the
 change of the tempo only when the tempo differs before and after the switch (a result without them says only that the
 tempo did not change). The test bridge models both states (`TestUiBridge::focusTempoField()`, `focusElsewhere()` and
@@ -1303,7 +1303,7 @@ against the test bridge; the three scenarios `ui/set-workspace-arrangement`, `ui
 it), and a `keyboardFocus` value or any other `given` member that the runner cannot establish is reported as skipped
 with that reason (`selectionVectorSkip()`), never run in another state. A runner that does not establish the focus
 leaves `ui/set-workspace-tempo-rounded` red, which `kMustRunSelectionVectors` turns into a failure of the test.
-Since spec rc.7, `ui/set-workspace-piano-roll-opendyne` selects the clip in the openTune scheme, where a selection
+`ui/set-workspace-piano-roll-opendyne` selects the clip in the openTune scheme, where a selection
 generates nothing, and then switches the scheme with `prefs.set`: a selection loads the clip into the piano roll even
 while the arrangement is shown (`ui.getState` reports it as `pianoRollContentId`), so the switch to openDyne generates
 the notes of that clip (`SCHEME_GENERATED_NOTES`, the revision of the clip's notes changes), and `ui.setWorkspace` after
@@ -1362,10 +1362,10 @@ switches the window back. Generated notes have no undo entry (as in OpenTune), s
 Selecting what is selected, with no other effect, is a no-op. The order of the checks: the editor (`UNSUPPORTED`
 without one), the handle (`NOT_FOUND`), busy (also for dryRun).
 
-**Vectors.** Since spec rc.4 the vectors state what OpenTune does, and the runner expects their responses unchanged.
+**Vectors.** The vectors state what OpenTune does, and the runner expects their responses unchanged.
 OpenTune always has an active track (track 0 in a new project), so a selection that leaves it lists no `activeTrackId`
-and the revert recipe selects the previous track (`{trackId: 0}` when no clip was selected). OpenTune has no reference context after a selection any more, and the interface has no
-reference alignment since spec rc.7, so a selection lists no `reference` component and no reference side effect or warning.
+and the revert recipe selects the previous track (`{trackId: 0}` when no clip was selected). OpenTune has no reference context after a selection, and the interface has no
+reference alignment, so a selection lists no `reference` component and no reference side effect or warning.
 
 Tests: `Tests/Control/ControlSelectionTests.cpp` with a test bridge that selects as the editor does on the real
 processor (`generateNotesOnlyByContentKey` for the piano roll's notes; and the same note generation when `prefs.set` makes the
@@ -1485,7 +1485,8 @@ weight files and the pitch model files in a models directory under the test's da
 `setVocoderModelWeight()` and `resetInferenceBackend()`, so no model is loaded and no inference backend is reset;
 `given.audio.alternatives` binds `audio.deviceType`, `audio.outputDevice`, `audio.otherDeviceType` and
 `audio.otherOutputDevice` to the names of the fake device manager, which always offers a second device type and a
-second output device. The `given` members for the rendering priority and the ASIO rate run for real as well: `given.gpu` (`available` or `unavailable`) makes the
+second output device. The `given` members for the rendering priority and the ASIO rate run for real as well:
+`given.gpu` (`available` or `unavailable`) makes the
 test double report the GPU backend (`directml`) or the CPU after `renderingPriority` is set to `gpuFirst`, and
 `given.audio.asioRateRestoreFails` sets the device manager's type to the fake "ASIO" type and makes the test bridge's
 `prepareAudioDeviceSwitch()` fail (`PrefsBridge`; the vector's own restore state is the only thing the runner reads). The vectors

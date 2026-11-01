@@ -696,7 +696,7 @@ void scenarioAppQuitWithoutWindow()
         f.bridge.quits = true;
         checkQuitResult(quitAndWait(f), false, nullptr);
     }
-    // An instance that does not report app.quit (one of release candidate 6): the listener answers, nothing runs.
+    // An instance that does not report app.quit: the listener answers, nothing runs.
     {
         QuitFixture f(std::vector<std::string>{"app.quit"});
         if (!f.open())

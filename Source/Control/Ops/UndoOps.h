@@ -16,8 +16,9 @@ namespace OpenTune {
  *   merge or delete on top is refused (UNSUPPORTED(undo_unsafe_build)), also with force. The step is
  *   applied with UndoManager::undo() / redo(), exactly as the UI's Ctrl+Z applies it; then the project is
  *   marked as changed and the editor redraws the arrangement as after its own undo
- *   (ControlUiBridge::onUndoRedoApplied(), the editor's afterUndoRedo()). The result describes the effect from snapshots before and after the step
- *   (controlDescribeEffect); a step that changed nothing is a success with noOp and UNDO_NO_EFFECT.
+ *   (ControlUiBridge::onUndoRedoApplied(), the editor's afterUndoRedo()). The result describes the effect
+ *   from snapshots before and after the step (controlDescribeEffect); a step that changed nothing is a
+ *   success with noOp and UNDO_NO_EFFECT.
  *
  * Track deletion barrier (section 15.3 rule 6, ControlHistory::onTrackDeleted()): an entry recorded before a track
  * deletion is possibly stale (edit.getHistory possiblyStale). Without force, an entry recorded through the API

@@ -401,12 +401,12 @@ void testProtocol()
     CONTROL_CHECK(controlErrorCode("INVALID_ARGUMENT", "invalid_params") == -32602);
     CONTROL_CHECK(controlErrorCode("UNSUPPORTED", "unknown_method") == -32601);
     CONTROL_CHECK(controlErrorCode("UNSUPPORTED", "capability_missing") == -32000);
-    // no_editor_window (rc.5): UNSUPPORTED is not retryable by default, and the registry says the same of this reason.
+    // no_editor_window: UNSUPPORTED is not retryable by default, and the registry says the same of this reason.
     CONTROL_CHECK(controlErrorCode("UNSUPPORTED", "no_editor_window") == -32000);
     CONTROL_CHECK(!controlErrorRetryable("UNSUPPORTED", "no_editor_window"));
     CONTROL_CHECK(controlErrorCode("INTERNAL", "") == -32603);
-    // Retryability of the rc.3 reasons: a stretched grid is not cured by a retry, a dropped rebuild and a timed-out
-    // timing analysis are, and a failed timing analysis is not.
+    // Retryability of the time-grid reasons: a stretched grid is not cured by a retry, a dropped rebuild and a
+    // timed-out timing analysis are, and a failed timing analysis is not.
     CONTROL_CHECK(!controlErrorRetryable("NOT_READY", "export_dry_stretched"));
     CONTROL_CHECK(controlErrorRetryable("NOT_READY", "export_stretch_dropped"));
     CONTROL_CHECK(controlErrorRetryable("NOT_READY", "timing_analysis_timeout"));

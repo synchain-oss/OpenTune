@@ -50,8 +50,9 @@ constexpr float kGainTolerance = 1.0e-6f;
 /** The largest clip gain OpenTune's interface offers, as a linear factor. The interface's one bounded gain range is the
     volume knob (Source/Standalone/UI/TrackPanelComponent.h, setRange(0.0, 4.0, 0.001)); the clip-gain drag
     (ArrangementViewComponent.cpp, mouseDrag) has no bound of its own, so the API applies the interface's
-    bounded range here, mirrored by the mirror entry `track-volume-range`. Zero is the lower end: the params schema keeps
-    gainLinear at 0 or more and StandaloneArrangement::setPlacementGain() floors the stored value at 0. */
+    bounded range here, mirrored by the mirror entry `track-volume-range`. Zero is the lower end: the params
+    schema keeps gainLinear at 0 or more and StandaloneArrangement::setPlacementGain() floors the stored value
+    at 0. */
 constexpr double kMaxClipGainLinear = 4.0;
 
 // ---- Shared pieces ------------------------------------------------------------------------------

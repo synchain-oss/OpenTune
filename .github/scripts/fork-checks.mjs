@@ -59,6 +59,7 @@ import {
   SPEC_COPY_PATTERNS,
   SPEC_PATTERNS,
   UPSTREAM_BACKPORTS_PATH,
+  UPSTREAM_WORDS_EXEMPT_PATHS,
   branchNameOfRef,
   classifyPath,
   currentBranch,
@@ -624,8 +625,13 @@ export async function runChecks(opts = {}) {
     if (want('upstream-words')) {
       const problems = [];
       let checked = 0;
+      let exempt = 0;
       for (const f of present) {
         if (classifyPath(f.path) !== 'upstreamable' || matchesAny(f.path, SPEC_COPY_PATTERNS)) continue;
+        if (UPSTREAM_WORDS_EXEMPT_PATHS.includes(f.path)) {
+          exempt++;
+          continue;
+        }
         checked++;
         if (FORBIDDEN_UPSTREAM_WORDS.test(f.path)) problems.push(`${f.path}：路径含禁用字样`);
         if (f.status === 'A') {
@@ -644,7 +650,8 @@ export async function runChecks(opts = {}) {
       }
       add(problems.length
         ? result('upstream-words', titleOf('upstream-words'), 'FAIL', '可上游路径中出现了 fork 专用字样', problems)
-        : result('upstream-words', titleOf('upstream-words'), 'PASS', checked ? `${checked} 个可上游路径文件无 Synchain/DLsnows/opentune-mcp 字样` : '增量未触碰可上游路径'));
+        : result('upstream-words', titleOf('upstream-words'), 'PASS', (checked ? `${checked} 个可上游路径文件无 Synchain/DLsnows/opentune-mcp 字样` : '增量未触碰可上游路径')
+          + (exempt ? `（另有 ${exempt} 个豁免的精确路径文件：${UPSTREAM_WORDS_EXEMPT_PATHS.join('、')}）` : '')));
     }
   }
 

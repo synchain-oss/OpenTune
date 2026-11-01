@@ -4,7 +4,7 @@ OTCP is the local control interface built into OpenTune Standalone: JSON-RPC 2.0
 
 This directory is the complete specification of protocol major 1. It is licensed under the MIT License ([LICENSE](LICENSE)) so that it can be copied unchanged into any repository that implements it. Copies MUST be byte-identical; all files use UTF-8 without a byte order mark and LF line endings.
 
-Current version: `1.0.0-rc.9` (draft, see [CHANGELOG.md](CHANGELOG.md)).
+Current version: `1.0.0` (see [CHANGELOG.md](CHANGELOG.md)).
 
 ## Files
 
@@ -50,4 +50,4 @@ Implementers of a server read all of it. Implementers of a client can skip secti
 
 ## How to cite
 
-Refer to a released version by its tag and this directory, for example: "OpenTune Control Protocol (OTCP) 1.0.0-rc.1, `spec/otcp/v1/` at tag `spec-v1.0.0-rc.1`". To pin an exact copy, record the tag and the SHA-256 of each file. Sections of PROTOCOL.md are cited by number, for example "OTCP 1.0, section 14.4".
+Refer to a released version by its tag and this directory, for example: "OpenTune Control Protocol (OTCP) 1.0.0, `spec/otcp/v1/` at tag `spec-v1.0.0`". To pin an exact copy, record the tag and the SHA-256 of each file. Sections of PROTOCOL.md are cited by number, for example "OTCP 1.0, section 14.4".

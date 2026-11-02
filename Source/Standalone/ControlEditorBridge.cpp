@@ -72,9 +72,9 @@ void ControlEditorBridge::onStructureChanged()
 
 void ControlEditorBridge::onUndoRedoApplied()
 {
-    // The editor's own steps after its undo and redo (performUndoRedoAction): mark the project as changed,
-    // redraw the arrangement and refresh what depends on it. The piano roll follows the new revisions on
-    // the editor's next heartbeat, as after the UI's own undo.
+    // The editor's own steps after its undo and redo (performUndoRedoAction): mark the project as changed and
+    // redraw the arrangement. The piano roll follows the new revisions on the editor's next heartbeat, as after
+    // the UI's own undo.
     editor_.afterUndoRedo();
 }
 

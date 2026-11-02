@@ -12,8 +12,8 @@
 // juce_events/messages/juce_MessageManager.cpp, used on Windows and Linux (juce_Messaging_linux.cpp defines
 // none), and the macOS one in juce_events/native/juce_MessageManager_mac.mm. They differ in when it is set:
 // the generic one sets it before the call returns, on any thread; on macOS a call from another thread only
-// posts a callback, and the message thread sets it when it dispatches that callback. Windows is observed by
-// the local gates, macOS by the control-sanitizers CI jobs.
+// posts a callback, and the message thread sets it when it dispatches that callback. The difference was
+// observed by running these tests on Windows and on macOS.
 //
 // Windows and Linux: juce::detail::dispatchNextMessageOnSystemQueue(true), which dispatches one message
 // and returns false at once when none is pending. JUCE defines it only for those platforms, so it

@@ -24,7 +24,7 @@ struct NoteGeneratorParams;
  * ControlService::setUiBridge(). Without an editor the pointer is null.
  *
  * Every function has a default that reports "not supported" (an empty optional or nullptr) or does
- * nothing, so that each part of the control API overrides only what it needs, and a missing editor
+ * nothing, so that each group of methods overrides only what it needs, and a missing editor
  * reduces results instead of breaking them. The sections follow the domains of the API.
  *
  * Threading: message thread only, like the editor itself. The owner unregisters the bridge
@@ -79,7 +79,7 @@ public:
     virtual void onStructureChanged() {}
 
     /** An undo or redo step was applied through the control API: the editor does what it does after its own
-        undo or redo (marks the project as changed, redraws the arrangement, refreshes derived state).
+        undo or redo (marks the project as changed and redraws the arrangement).
         Default: nothing. */
     virtual void onUndoRedoApplied() {}
 

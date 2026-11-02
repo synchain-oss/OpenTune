@@ -1208,11 +1208,11 @@ const std::set<std::string> kImplementedMethods = {"session.info",
 const std::set<std::string> kReportedCapabilities = {"session.v1", "read.v1"};
 
 /**
- * Methods of a capability the instance reports that are not registered in OpsRegistry yet. An instance
+ * Methods of a capability the instance reports that are not registered in OpsRegistry. An instance
  * must implement every method of every capability it reports (PROTOCOL.md section 3.3 rule 5 case 10), so
- * this list is a debt: it must be empty before dev is merged, and read.v1 may never be on it. A method is
- * removed from the list when it is registered (scenarioCompleteness fails on a stale entry). An entry is
- * written with a comment that names why the method is missing. There is none now.
+ * this list must stay empty, and read.v1 may never be on it. A method that gets registered is removed from
+ * the list (scenarioCompleteness fails on a stale entry). An entry would carry a comment that names why the
+ * method is missing. There is none.
  */
 const std::set<std::string> kUnimplementedReportedMethods = {};
 
@@ -1260,18 +1260,18 @@ std::string vectorSkipReason(const JsonValue& vector)
             return "runs in ControlProcessorTests.AppQuitVectors: the vector needs a bridge that quits, and some end "
                    "the instance";
     if (kReportedCapabilities.count(memberOf(vector, "capability").text()) == 0)
-        return "needs capability " + memberOf(vector, "capability").text() + ", which a later part implements";
+        return "needs capability " + memberOf(vector, "capability").text() + ", which this runner does not cover";
     const auto& extra = memberOf(vector, "extraCapabilities");
     for (std::size_t i = 0; i < extra.size(); ++i)
         if (kReportedCapabilities.count(extra.at(i).text()) == 0)
-            return "needs capability " + extra.at(i).text() + ", which a later part implements";
+            return "needs capability " + extra.at(i).text() + ", which this runner does not cover";
     const auto methods = methodsOf(vector);
     bool usesImplemented = false;
     for (const auto& method : methods) {
         if (kImplementedMethods.count(method) != 0)
             usesImplemented = true;
         else if (controlMethodCapability(method) != nullptr && method != "session.hello")
-            return "uses " + method + ", which a later part implements";
+            return "uses " + method + ", which this runner does not cover";
     }
     if (!usesImplemented)
         return "tests the listener only (ControlUnitTests runs it against the channel)";
@@ -1923,11 +1923,11 @@ void scenarioCompleteness()
     // Every method the build registers except session.hello (which the listener answers): session.info, the eight
     // reads, job.get, job.cancel, import.start, export.start, ui.getState, ui.dismiss, ui.setSelection,
     // ui.setWorkspace, the four methods of edit.v1, the three of the undo history, the two of timing.v1, the three of
-    // transport.v1, the two of arrangement.v1, the four of tracks.v1, the four of project.io, prefs.set and the two of
-    // audio.device and app.quit: 43 in all.
-    CONTROL_CHECK(indexed.size() >= 43);
+    // transport.v1, the two of arrangement.v1, the four of tracks.v1, the four of project.io, project.saveCopy,
+    // prefs.set, the two of audio.device and app.quit: 44 in all.
+    CONTROL_CHECK(indexed.size() >= 44);
     if (!kUnimplementedReportedMethods.empty())
-        note("exempt methods remain; the list must be empty before dev is merged");
+        note("exempt methods remain; the list must stay empty");
     note(std::to_string(indexed.size()) + " methods of the reported capabilities are registered");
 }
 

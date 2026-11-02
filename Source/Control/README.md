@@ -1698,8 +1698,9 @@ mirror" in `MIRRORS.md`) and name the upstream function in a comment of the mirr
    thread-safe, and must return within a fixed bound. `ControlProcessorTests.OffMainThread` checks that
    every registered method's `mainThread` matches its schema. A new group gets its line in
    `registerControlMethods()` (`Ops/OpsRegistry.cpp`); `session.hello` and `session.info` list the
-   capabilities in the order of those lines. The capability of a registered method is reported by
-   `session.hello` and `session.info`.
+   capabilities in the order of those lines (`session.v1` first; a feature capability such as
+   `ui.onboardingClose` follows the capability it extends). The capability of a registered method is
+   reported by `session.hello` and `session.info`.
 4. Add the method with its capability to `kMethods` in `ControlProtocol.cpp`, the protocol's method
    table: `ControlMethodTable::add()` asserts that a registered name is in it, and the listener refuses
    a method of an unreported capability with it.

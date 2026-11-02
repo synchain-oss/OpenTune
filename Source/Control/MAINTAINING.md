@@ -29,7 +29,7 @@
 | **B. 顺手把接口也做了** | 改动小，你或你的 agent 有余力 | 照 `README.md`「Adding a method」实现；规范改动先照第 5 节提给 MCP 仓库（PR 或附上建议 schema 的 issue）；本仓库的规范副本不要直接改 |
 | **C. 删除功能** | 某个功能退役 | 把 `Source/Control` 里对应的方法、Ops、镜像登记、测试、README 方法表一起删掉，保证接口开关 ON / OFF 都能编译。删掉的方法所属的能力（capability）从此不再上报，客户端收到 `UNSUPPORTED(capability_missing)`，所以 `README.md`「Adding a method」一节列出的各处能力清单（`kMethods`、`Tests/Control/ControlDispatcherTests.cpp` 里 `scenarioCompleteness` 的能力清单、`session.info` 与 `session.hello` 的能力断言等）也要同步去掉它；只删一个能力里的部分方法会让整个能力不再上报，这种情况请先开 issue 商量。然后开一个 issue，让我们下线 MCP 那边的工具，并在规范里把这个能力标为退役（规范从 1.0.0 起只追加、不删方法） |
 
-来不及处理时，可以先让受影响的方法返回 `UNSUPPORTED`，然后开 issue 说明（不要取消注册：那样整个能力都不再上报，`scenarioCompleteness` 会失败）——接口坏掉比不报告好处理，我们来修。
+来不及处理时，可以先让受影响的方法返回 `UNSUPPORTED`，然后开 issue 说明（不要取消注册：那样整个能力都不再上报，`scenarioCompleteness` 会失败）——报告出来的问题，我们修起来很容易。
 
 ## 3. 每次改动都要做的检查
 

@@ -87,7 +87,8 @@ Error makeOpError(std::string_view prefix, std::string_view kind, std::string_vi
 void registerControlMethods(ControlMethodTable& table)
 {
     // One line per group. The order matters: session.hello and session.info list the capabilities in the order
-    // of the first method registered for each. A method that is not registered is answered with
+    // of the first method registered for each (session.v1 first; a feature capability such as ui.onboardingClose
+    // follows the capability it extends). A method that is not registered is answered with
     // UNSUPPORTED(capability_missing).
     registerSessionOps(table);        // session.info (ControlServer answers session.hello itself)
     registerProjectReadOps(table);    // project.get, transport.get

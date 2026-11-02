@@ -1244,7 +1244,7 @@ std::string vectorSkipReason(const JsonValue& vector)
     const auto& extra = memberOf(vector, "extraCapabilities");
     for (std::size_t i = 0; i < extra.size(); ++i)
         if (kVectorCapabilities.count(extra.at(i).text()) == 0)
-            return "needs capability " + extra.at(i).text() + ", which a later part implements";
+            return "needs capability " + extra.at(i).text() + ", which this runner does not cover";
     if (memberOf(vector, "session").text() != "authenticated")
         return "unauthenticated vectors test the listener (ControlUnitTests)";
     std::vector<const JsonValue*> requests;

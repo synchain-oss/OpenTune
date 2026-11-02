@@ -10,7 +10,7 @@
 // arguments from the real process command line, as in the application. The lifecycle scenarios run
 // under the upstream lifecycle watchdog (Tests/LifecycleWatchdog.h), which bounds the whole process.
 //
-// Every scenario requires OPENTUNE_DATA_DIR (set per test by CMake and by the gates): without it the
+// Every scenario requires OPENTUNE_DATA_DIR (set per test by CMake): without it the
 // processor would write the user's real preferences and logs.
 
 #if defined(_MSC_VER)

@@ -1426,7 +1426,7 @@ std::string vectorSkipReason(const JsonValue& vector)
     const auto& extra = memberOf(vector, "extraCapabilities");
     for (std::size_t i = 0; i < extra.size(); ++i)
         if (kVectorCapabilities.count(extra.at(i).text()) == 0)
-            return "needs capability " + extra.at(i).text() + ", which a later part implements";
+            return "needs capability " + extra.at(i).text() + ", which this runner does not cover";
     if (memberOf(vector, "session").text() != "authenticated")
         return "unauthenticated vectors test the listener (ControlUnitTests)";
     std::vector<const JsonValue*> requests;
@@ -1444,7 +1444,7 @@ std::string vectorSkipReason(const JsonValue& vector)
     for (const auto* request : requests) {
         const auto method = memberOf(*request, "method").text();
         if (kVectorMethods.count(method) == 0)
-            return "uses " + method + ", which another part implements";
+            return "uses " + method + ", which this runner does not cover";
         usesTracksOrTransport =
             usesTracksOrTransport || method.rfind("track.", 0) == 0 || method.rfind("transport.", 0) == 0;
     }

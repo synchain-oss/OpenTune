@@ -240,7 +240,7 @@ std::string controlTrackStateVersion(ControlOpContext& context);
 /** The geometryHash of a placement: its track, timeline start, length and source window. */
 std::string controlGeometryHash(const ControlPlacementRef& placement);
 /** Captures the whole world revision vector, on the message thread, from one consistent state. Shared
-    by the reads (asOf) and the write envelopes of later parts (revisionDiff). */
+    by the reads (asOf) and the write envelopes (revisionDiff). */
 ControlWorldVersions controlCaptureWorldVersions(ControlOpContext& context);
 
 /** The asOf member of a read result (common.schema.json#/$defs/asOf). */

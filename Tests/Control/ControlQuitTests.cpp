@@ -490,8 +490,8 @@ void exitStepNotQueued()
  *
  * Run it last in its process: quitMessagePosted is set only by the two stopDispatchLoop() implementations above (and by
  * ~MessageManager()) and nothing resets it, so on every platform it stays set for the rest of the process: every
- * message posted afterwards is dropped (MessageBase::post() checks it) and runDispatchLoop() returns at once. Windows
- * is observed by the local gates, macOS by the control-sanitizers CI jobs. startedProcessor() fails the scenario when a
+ * message posted afterwards is dropped (MessageBase::post() checks it) and runDispatchLoop() returns at once. This
+ * was observed by running the tests on Windows and on macOS. startedProcessor() fails the scenario when a
  * case starts after the flag was set. The pump of the tests dispatches what was posted before, which is all this case
  * needs.
  */
@@ -696,7 +696,7 @@ void scenarioAppQuitWithoutWindow()
         f.bridge.quits = true;
         checkQuitResult(quitAndWait(f), false, nullptr);
     }
-    // An instance that does not report app.quit (one of release candidate 6): the listener answers, nothing runs.
+    // An instance that does not report app.quit: the listener answers, nothing runs.
     {
         QuitFixture f(std::vector<std::string>{"app.quit"});
         if (!f.open())

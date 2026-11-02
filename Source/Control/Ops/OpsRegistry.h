@@ -313,12 +313,11 @@ private:
 };
 
 /**
- * True for a capability of which this build registers some methods but not all yet. The instance does not
+ * True for a capability of which this build registers some methods but not all. The instance does not
  * report it, because an instance implements every method of a capability it reports (PROTOCOL.md section 3.3
- * rule 5 case 10); the listener therefore answers its methods with UNSUPPORTED(capability_missing). None is
- * incomplete now (ui.bridge was until ui.setSelection was registered). A part that registers only some methods of a
- * capability lists it here until its last method is registered, so that the instance never reports a capability it
- * implements only in part.
+ * rule 5 case 10); the listener therefore answers its methods with UNSUPPORTED(capability_missing). No capability
+ * is incomplete in this build. A capability whose methods are registered in several steps is listed here until its
+ * last method is registered, so that the instance never reports a capability it implements only in part.
  */
 bool controlCapabilityIsIncomplete(std::string_view capability);
 
@@ -332,8 +331,7 @@ void controlSetReportIncompleteCapabilitiesForTesting(bool report);
 void controlSetWithheldCapabilitiesForTesting(std::vector<std::string> capabilities);
 
 /**
- * Registers every method this build implements, one group per line (Ops/OpsRegistry.cpp). Groups that
- * later parts of the control API add have a placeholder line there.
+ * Registers every method this build implements, one group per line (Ops/OpsRegistry.cpp).
  */
 void registerControlMethods(ControlMethodTable& table);
 

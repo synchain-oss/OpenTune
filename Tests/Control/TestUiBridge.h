@@ -2,7 +2,7 @@
 #pragma once
 
 // A ControlUiBridge for the headless processor tests: reports what a test injects and counts the
-// notifications it receives. Later parts of the control API extend it with what their tests need.
+// notifications it receives. The tests of each group of methods extend it with what they need.
 
 #include "Control/ControlUiBridge.h"
 #include "PluginProcessor.h"

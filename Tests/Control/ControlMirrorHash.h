@@ -17,7 +17,7 @@
 // LF at the end), and the sha256 of the UTF-8 bytes is written as 64 lower-case hexadecimal digits.
 // Comments are kept: a change of a comment shows up as a change and is reviewed like one. A change of
 // formatting only (indentation, line breaks between lines, blank lines, line endings, trailing blanks) does
-// not. fn-v1 is the same rule as the fork's drift-pins tool (the hashes are interchangeable).
+// not.
 
 #include <algorithm>
 #include <array>

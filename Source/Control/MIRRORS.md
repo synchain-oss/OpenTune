@@ -24,11 +24,13 @@ from the UI.
 ## If you changed a function in the table / 改了表里的函数怎么办
 
 1. Run `ControlMirrorDriftTests`. It exists only in a build configured with both options ON (both are OFF
-   by default), for example `cmake -S . -B build-control -G Ninja -DOPENTUNE_ENABLE_CONTROL_API=ON
-   -DOPENTUNE_BUILD_TESTS=ON`; build it, then run
-   `ctest --test-dir build-control -C RelWithDebInfo -R ControlMirrorDrift --no-tests=error`. In a default
-   build there is no such test, and without `--no-tests=error` ctest would still exit 0. A red result names the function you
-   changed, the file of `Source/Control` to bring in line, and the tests to run.
+   by default): configure the way you usually do (a preset from `CMakePresets.json` or your own command)
+   with `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON` added, build, then run
+   `ctest --test-dir <build directory> -C <config> -R ControlMirrorDrift --no-tests=error` (`<config>` is
+   the configuration you built, for example `Release`; a multi-config generator needs `-C`). In a build
+   without the two options there is no such test, and without `--no-tests=error` ctest would still exit 0.
+   A red result names the function you changed, the file of `Source/Control` to bring in line, and the
+   tests to run.
 2. Read the change, and make the same change in the mirrored code in the "Control API" column. If the
    change is meant to alter what the UI does, the API must do the same; if it does not, say so in the commit.
 3. Run the tests of the "Tests" column (the failure message prints the `ctest -R` expression).
@@ -36,7 +38,7 @@ from the UI.
    `mirror-map.json` and regenerates the table in this file. Commit all three files together. Updating the
    hash without step 2 defeats the purpose.
 
-1. 运行 `ControlMirrorDriftTests`。它只存在于两个选项都为 ON 的构建里（默认都是 OFF），例如 `cmake -S . -B build-control -G Ninja -DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON`；构建后运行 `ctest --test-dir build-control -C RelWithDebInfo -R ControlMirrorDrift --no-tests=error`。默认构建里没有这个测试，不加 `--no-tests=error` 时 ctest 仍返回 0。变红时，输出会写明你改了哪个函数、要同步 `Source/Control` 的哪个文件、要跑哪些测试。
+1. 运行 `ControlMirrorDriftTests`。它只存在于两个选项都为 ON 的构建里（默认都是 OFF）：用你平常的 configure（`CMakePresets.json` 里的 preset 或自己的命令），加上 `-DOPENTUNE_ENABLE_CONTROL_API=ON -DOPENTUNE_BUILD_TESTS=ON`，构建后运行 `ctest --test-dir <构建目录> -C <配置> -R ControlMirrorDrift --no-tests=error`（`<配置>` 是你构建的配置，例如 `Release`；多配置生成器必须带 `-C`）。没有这两个选项的构建里没有这个测试，不加 `--no-tests=error` 时 ctest 仍返回 0。变红时，输出会写明你改了哪个函数、要同步 `Source/Control` 的哪个文件、要跑哪些测试。
 2. 读懂改动，在「Control API」一列的镜像代码里做同样的改动。若这次改动本来就要改变界面的行为，接口也必须一样；若不是，在提交里说明。
 3. 跑「Tests」一列的测试（失败信息里有现成的 `ctest -R` 表达式）。
 4. 记录新哈希：用 `--update` 运行测试可执行文件。它会改写 `mirror-map.json` 里的哈希并重新生成本文件的表。三个文件一起提交。没做第 2 步就更新哈希，等于白锁。

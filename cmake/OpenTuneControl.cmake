@@ -10,7 +10,14 @@
 # they must not reference symbols that exist only in the application wrapper target.
 
 if(OPENTUNE_ENABLE_CONTROL_API)
-    # Explicit, ordered source list. Each part of the control API adds its own block.
+    # OPENTUNE_IOS is set by the top-level CMakeLists.txt before this file is included.
+    if(OPENTUNE_IOS)
+        message(FATAL_ERROR
+            "OPENTUNE_ENABLE_CONTROL_API supports the Standalone application on Windows and macOS only; "
+            "it is not available for iPadOS builds. Configure with -DOPENTUNE_ENABLE_CONTROL_API=OFF.")
+    endif()
+
+    # Explicit, ordered source list, in blocks by topic.
     # Channel: run-time options, path rules, CSPRNG, JSON, protocol framing, sockets, discovery file and
     # the listener with authentication and limits. Standard library and operating system only: the unit
     # tests compile these files on their own.
@@ -36,7 +43,7 @@ if(OPENTUNE_ENABLE_CONTROL_API)
         ${OPENTUNE_CONTROL_CHANNEL_SOURCES}
         # Service, processor start/stop and data-directory redirection: the service facade, the
         # message-thread marshalling with its liveness token, the editor bridge interface and
-        # OPENTUNE_DATA_DIR. These and every later part use JUCE and the processor.
+        # OPENTUNE_DATA_DIR. These and all the files below use JUCE and the processor.
         Source/Control/ControlDataDirectory.cpp
         Source/Control/ControlDataDirectory.h
         Source/Control/ControlMessageThread.cpp

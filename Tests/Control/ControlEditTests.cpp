@@ -2453,11 +2453,11 @@ std::vector<const JsonValue*> sentRequests(const JsonValue& vector)
 std::string editVectorSkipReason(const JsonValue& vector)
 {
     if (kEditVectorCapabilities.count(memberOf(vector, "capability").text()) == 0)
-        return "needs capability " + memberOf(vector, "capability").text() + ", which another runner or part covers";
+        return "needs capability " + memberOf(vector, "capability").text() + ", which another runner covers";
     const auto& extra = memberOf(vector, "extraCapabilities");
     for (std::size_t i = 0; i < extra.size(); ++i)
         if (kEditVectorCapabilities.count(extra.at(i).text()) == 0)
-            return "needs capability " + extra.at(i).text() + ", which a later part implements";
+            return "needs capability " + extra.at(i).text() + ", which this runner does not cover";
     if (memberOf(vector, "session").text() != "authenticated")
         return "unauthenticated vectors test the listener (ControlUnitTests)";
     if (const JsonValue* steps = vector.find("steps"))
@@ -2468,7 +2468,7 @@ std::string editVectorSkipReason(const JsonValue& vector)
     for (const auto* request : sentRequests(vector)) {
         const auto method = memberOf(*request, "method").text();
         if (kEditVectorMethods.count(method) == 0)
-            return "uses " + method + ", which a later part implements";
+            return "uses " + method + ", which this runner does not cover";
     }
     const auto& given = memberOf(vector, "given");
     for (std::size_t i = 0; i < given.size(); ++i) {

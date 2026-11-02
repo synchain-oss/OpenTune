@@ -185,8 +185,8 @@ inline bool mustRunHolds(const std::set<std::string>& passedIds, const std::stri
     return passedIds.count(id) == 1;
 }
 
-/** Root for test files: OPENTUNE_DATA_DIR when set (ctest through the gates), otherwise a directory
-    under the build tree. Never the user's real data directories. */
+/** Root for test files: OPENTUNE_DATA_DIR when set (CMake sets one per processor scenario), otherwise a
+    directory under the build tree. Never the user's real data directories. */
 inline std::filesystem::path testDataRoot()
 {
     if (const auto fromEnvironment = controlSystemEnvironment("OPENTUNE_DATA_DIR");

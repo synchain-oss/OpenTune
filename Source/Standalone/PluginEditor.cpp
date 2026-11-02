@@ -2694,8 +2694,8 @@ void OpenTuneAudioProcessorEditor::exportAudioRequested(MenuBarComponent::Export
             {
                 ConfirmDialogContent::showMessage(
                     &safeThis->contentRoot_,
-                    juce::String("Export Audio"),
-                    juce::String("An export task is already in progress. Please try again later."));
+                    LOC(kExportAudio),
+                    LOC(kExportInProgress));
                 return;
             }
 #endif

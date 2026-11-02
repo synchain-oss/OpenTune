@@ -11,7 +11,7 @@
 //
 // What SelectionMatrix proves: the test bridge and the prediction in SelectionOps.cpp follow the same rules, so a
 // passing matrix shows that the two copies agree, not that the prediction agrees with the real editor. Drift of the
-// real editor is caught by the drift pins (Source/Control/mirror-map.json) and by checks in the real Standalone.
+// real editor is caught by the mirror hashes (Source/Control/mirror-map.json) and by checks in the real Standalone.
 
 #include "ControlContentFixtures.h"
 #include "ControlProcessorSupport.h"

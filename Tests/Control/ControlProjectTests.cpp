@@ -1196,7 +1196,7 @@ void scenarioProjectSaveCopyCapability()
         CONTROL_CHECK(api.fails("project.saveCopy", pathParams(target), "UNSUPPORTED", "capability_missing"));
         CONTROL_CHECK(!juceFileOf(target).exists());
     }
-    // An instance that does not report project.copy (release candidate 7 and before): the listener answers, and the
+    // An instance that does not report project.copy: the listener answers, and the
     // methods of project.io are not affected.
     {
         ScopedWithheldCapabilities withheld({"project.copy"});
@@ -1572,9 +1572,9 @@ std::vector<std::string> withoutCapabilitiesOf(const JsonValue& vector)
 std::string projectVectorSkipReason(const JsonValue& vector)
 {
     if (kProjectVectorCapabilities.count(memberOf(vector, "capability").text()) == 0)
-        return "needs capability " + memberOf(vector, "capability").text() + ", which a later part implements";
+        return "needs capability " + memberOf(vector, "capability").text() + ", which this runner does not cover";
     // The vectors of project.io and project.copy are this runner's; so is a vector of an instance that does not
-    // report one of them (capability session.v1, given.withoutCapabilities), such as one of release candidate 7.
+    // report one of them (capability session.v1, given.withoutCapabilities).
     const auto capability = memberOf(vector, "capability").text();
     const auto withheld = withoutCapabilitiesOf(vector);
     const bool withholdsOwn = std::any_of(withheld.begin(), withheld.end(),
@@ -1584,7 +1584,7 @@ std::string projectVectorSkipReason(const JsonValue& vector)
     const auto& extra = memberOf(vector, "extraCapabilities");
     for (std::size_t i = 0; i < extra.size(); ++i)
         if (kProjectVectorCapabilities.count(extra.at(i).text()) == 0)
-            return "needs capability " + extra.at(i).text() + ", which a later part implements";
+            return "needs capability " + extra.at(i).text() + ", which this runner does not cover";
     if (memberOf(vector, "session").text() != "authenticated")
         return "unauthenticated vectors test the listener (ControlUnitTests)";
     std::vector<std::string> methods;
@@ -1817,8 +1817,7 @@ const char* const kMustRunProjectVectors[] = {
     "project/save-ok",
 };
 
-/** The vectors of project.saveCopy (specification 1.0.0-rc.8 on). The locked copy of the specification has them once it
-    has the method: from then on they must run and pass; before that it has none of them, and they are not required. */
+/** The vectors of project.saveCopy: they must run and pass. */
 const char* const kMustRunSaveCopyVectors[] = {
     "project/save-copy-bad-extension",      "project/save-copy-busy-modal",
     "project/save-copy-capability-missing", "project/save-copy-exists",
@@ -1868,14 +1867,8 @@ void scenarioProjectVectors()
     report.write();
     for (const char* id : kMustRunProjectVectors)
         CONTROL_CHECK(passedIds.count(id) == 1);
-    if (std::filesystem::exists(std::filesystem::u8path(OPENTUNE_CONTROL_SPEC_DIR) / "methods"
-                                / "project.saveCopy.schema.json")) {
-        for (const char* id : kMustRunSaveCopyVectors)
-            CONTROL_CHECK(passedIds.count(id) == 1);
-    } else {
-        note("the locked specification has no project.saveCopy yet (it comes with 1.0.0-rc.8): its vectors are not "
-             "required");
-    }
+    for (const char* id : kMustRunSaveCopyVectors)
+        CONTROL_CHECK(passedIds.count(id) == 1);
     note(std::to_string(passed) + " vectors passed, " + std::to_string(skipped) + " skipped");
 }
 

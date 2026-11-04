@@ -37,6 +37,9 @@ void ControlEditorBridge::setProjectOperationRunning(bool running)
     // The flag that rejectProjectOperationIfBusy() checks, which saveProject, openProjectFile and the file commands set
     // for the duration of their own project operation.
     editor_.projectOperationBusy_ = running;
+    // As at the ends of startOpenProject: a first-run overlay that the operation held back can start now.
+    if (!running)
+        editor_.maybeStartOnboarding();
 }
 
 } // namespace OpenTune

@@ -1159,8 +1159,17 @@ component modal while the system dialog runs), so `queryBusy()` reports `modalOp
 is checked headlessly only; whether a native chooser on macOS appears in the modal stack is still to be confirmed in a
 real window.
 
-**Onboarding.** `onboarding.shown` is the preference `onboardingShown` (`AppPreferences`), which the editor's timer
-checks before it starts the overlay; `onboarding.showing` is `OnboardingOverlayComponent::isActive()`. With target
+**Demo project.** On a first run OpenTune opens a demo project after the onboarding
+(`startDemoTourIfFirstRun()`). A run with the API enabled does not: the bridge sets the editor's `demoTourSettled_` when
+it is created, because the demo would replace the project the client starts from and it writes outside
+`OPENTUNE_DATA_DIR` (a marker file in the per-user folder, the project file in the documents folder). It changes no
+preference, so a later run without the API still shows the tour. Only a real window shows this; the fork's E2E run
+keeps the demo files next to the executable and checks that nothing was opened or written.
+
+**Onboarding.** `onboarding.shown` is the preference `onboardingShown` (`AppPreferences`), which
+`maybeStartOnboarding()` checks before it starts the overlay (the editor calls it when it becomes visible, when a
+modal window closes and when a project operation ends; so does the bridge for a project operation of the API);
+`onboarding.showing` is `OnboardingOverlayComponent::isActive()`. With target
 `onboarding`:
 - Not showing and never shown: sets the preference, which keeps the overlay from starting (`no_upstream_undo`,
   `IRREVERSIBLE`). Preventing it is the client's call before the work that the overlay would interrupt; the API never

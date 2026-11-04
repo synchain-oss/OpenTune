@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # group: audio-device
-# pinned-at: upstream/20261030-2c01847
+# pinned-at: upstream/20261103-4f2f7cf
 # ported-to: Source/Control/Ops/AudioDeviceOps.cpp
 # ported-to: Source/Standalone/ControlEditorBridgePrefs.cpp
 #

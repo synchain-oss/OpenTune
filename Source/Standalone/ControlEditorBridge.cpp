@@ -24,6 +24,11 @@ ControlEditorBridge::ControlEditorBridge(OpenTuneAudioProcessorEditor& editor)
     // OpenTuneAudioProcessor::getControlService(): the processor's control service reaches the editor only
     // through the bridge it has registered.
     editor_.processorRef_.getControlService().setUiBridge(this);
+    // OpenTuneAudioProcessorEditor::startDemoTourIfFirstRun(): the first-run demo project would replace the project the
+    // client starts from, and it writes outside OPENTUNE_DATA_DIR. The flag stops it for this run only; the preference
+    // stays as it is, so a later run without the API still shows the tour.
+    if (editor_.processorRef_.getControlService().options().enabled)
+        editor_.demoTourSettled_ = true;
 }
 
 ControlEditorBridge::~ControlEditorBridge()

@@ -141,6 +141,17 @@ jobs:
           Move-Item -LiteralPath $src -Destination $env:E2E_APP
           Write-Host "our build: $(Get-ChildItem -LiteralPath $env:E2E_APP | ForEach-Object Name | Join-String -Separator ', '); no models\ and no onnx files"
 
+      # 官方版带演示工程，首次运行会自动打开它（标记文件和工程文件都写在 OPENTUNE_DATA_DIR 之外）。这里把它放到
+      # 我们的构建旁边，让「开启接口的运行不打开它」真的受检：见后面的 Assert the demo project was not opened。
+      - name: Put the demo project next to our build
+        run: |
+          $demo = Join-Path $env:E2E_APP 'Demo'
+          New-Item -ItemType Directory -Force -Path $demo | Out-Null
+          $audio = @(Get-ChildItem -LiteralPath 'assets' -File -Filter '*.wav')
+          if ($audio.Count -ne 1) { throw "expected exactly one demo wav in assets, found $($audio.Count)" }
+          Copy-Item -LiteralPath 'assets/Demo.otproj' -Destination (Join-Path $demo 'Demo.otproj')
+          Copy-Item -LiteralPath $audio[0].FullName -Destination (Join-Path $demo 'Demo.wav')
+
       # 启动合同：MCP 的 opentune_launch 要求 exe 旁边有协议主版本匹配的 opentune-control.json，否则 NO_API_BUILD 而不启动。
       # 测试版 zip 里的这份文件由出包脚本生成；这里调用出包脚本的同一个函数（取值同 prerelease 的演练构建：CMake VERSION、
       # 协议主版本、官方仓库与 D3D12 信息来自 release.json / build-info.json，tag 为空），写入前已校验，不合法即失败。
@@ -321,6 +332,16 @@ jobs:
           node $env:E2E_SCRIPT check-log --data-root $env:E2E_KEEP --models-dir $env:E2E_MODELS `
             --out-dir "$env:E2E_OUT\logs" --report "$env:E2E_OUT\log-report.json"
           if ($LASTEXITCODE -ne 0) { throw "log check failed" }
+
+      # 开启接口的运行不打开演示工程：只要走过 startDemoTourIfFirstRun，就会写下面两个文件之一。
+      - name: Assert the demo project was not opened
+        run: |
+          $written = @(
+            (Join-Path $env:APPDATA 'OpenTune\DemoTourShown'),
+            (Join-Path ([Environment]::GetFolderPath('MyDocuments')) 'OpenTune\Projects\Demo.otproj')
+          ) | Where-Object { Test-Path -LiteralPath $_ }
+          if ($written.Count) { throw "the demo project was opened in a run with the API: $($written -join ', ')" }
+          Write-Host 'no demo marker and no demo project file'
 
       # 保留的各次启动数据目录（日志、首选项）：只复制文本文件（不含 control\instances 里带 token 的发现文件），随结果上传前再脱敏。
       - name: Collect the kept data directories

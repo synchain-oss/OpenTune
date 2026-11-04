@@ -2,16 +2,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # group: auto
-# pinned-at: upstream/20261030-2c01847
+# pinned-at: upstream/20261103-4f2f7cf
 # ported-to: Source/Control/Ops/ContentTuneOps.cpp
 # ported-to: Source/Control/Ops/SelectionOps.cpp
 # ported-to: Source/Control/Edit/NoteCorrection.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
-Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::applyAutoTuneToSelection	L5890-L5995	fn-v1	f8884f028aeba305cd16ed65885a44cb0df68c7d61fba41e7393348a8b745f56
+Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::applyAutoTuneToSelection	L5992-L6097	fn-v1	f8884f028aeba305cd16ed65885a44cb0df68c7d61fba41e7393348a8b745f56
 Source/Utils/PitchCurve.cpp	PitchCurve::expandNoteBasedCorrectionRange	L214-L230	fn-v1	4527890747fbf3d3378ddecbda02b797d330be55f37f0d3eb4f09f247c249e66
-Source/PluginProcessor.cpp	OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey	L5861-L5949	fn-v1	f1d15057d62041ce4dd09c5171e67510e9c4c3f07e46f7578c5ba517f7ca71d3
-Source/PluginProcessor.cpp	OpenTuneAudioProcessor::autoTuneContentRangeByContentKey	L5831-L5859	fn-v1	b114bedd8e81d5aeea752aa654836e40b22687e68cf970dd2f38bec4b8d97e11
-Source/PluginProcessor.cpp	OpenTuneAudioProcessor::generateNotesOnlyByContentKey	L5790-L5829	fn-v1	3a889b38094b27280dbc2bbbd1ed2b53234816366b4edde74f91b0fbc95b559f
-Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::applyAutoSnapToAllNotes	L5997-L6177	fn-v1	f4d0c4cbe4be786f5aa6ca6a66b056e1fc9fe28e3af148c98610b9718848e02c
-Source/Standalone/UI/PianoRollComponent.cpp	isFullyCorrectedInRange	L53-L65	fn-v1	33f0a8aa4a04cd8b94353797ad6c47ea7f13db05d99b8aa9160bbc5b587773bc
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::commitAutoTuneGeneratedNotesByContentKey	L6101-L6189	fn-v1	f1d15057d62041ce4dd09c5171e67510e9c4c3f07e46f7578c5ba517f7ca71d3
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::autoTuneContentRangeByContentKey	L6071-L6099	fn-v1	b114bedd8e81d5aeea752aa654836e40b22687e68cf970dd2f38bec4b8d97e11
+Source/PluginProcessor.cpp	OpenTuneAudioProcessor::generateNotesOnlyByContentKey	L6030-L6069	fn-v1	3a889b38094b27280dbc2bbbd1ed2b53234816366b4edde74f91b0fbc95b559f
+Source/Standalone/UI/PianoRollComponent.cpp	PianoRollComponent::applyAutoSnapToAllNotes	L6099-L6279	fn-v1	f4d0c4cbe4be786f5aa6ca6a66b056e1fc9fe28e3af148c98610b9718848e02c
+Source/Standalone/UI/PianoRollComponent.cpp	isFullyCorrectedInRange	L54-L66	fn-v1	33f0a8aa4a04cd8b94353797ad6c47ea7f13db05d99b8aa9160bbc5b587773bc

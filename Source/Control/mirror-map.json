@@ -601,7 +601,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::startOpenProject",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "46265de57414ec5f139cabea8959c17d7cf3bdbb942610da0d735c02a83ff7d8"
+        "sha256": "0adf4d9f0623d5f15f0d40c81874f6a28fb9a816d8a3b4f9b6459b57c90c5e8c"
       },
       "control": [
         {
@@ -609,6 +609,13 @@
           "symbols": [
             "OpenJob::step",
             "OpenJob::commit"
+          ]
+        },
+        {
+          "file": "Source/Standalone/ControlEditorBridgeProject.cpp",
+          "symbols": [
+            "ControlEditorBridge::onProjectReloaded",
+            "ControlEditorBridge::setProjectOperationRunning"
           ]
         }
       ],
@@ -703,7 +710,7 @@
         "symbol": "PianoRollToolHandler::dragNotePitch",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "ea8d450d86c56f6c176b0834a798ee8f9dc31728543c4b13697054bb880dc9be"
+        "sha256": "c203e0db567b9689aad4f4758231cadd0a81ead20255a22351be4626c3769e85"
       },
       "control": [
         {
@@ -728,7 +735,7 @@
         "symbol": "PianoRollToolHandler::endNotePitchDrag",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "ae5ff27b590ce0aad9663411013ff8dcc48b71d2ed3aeb08fb33e0c7424852e2"
+        "sha256": "f0dce1d927b9d0c930510dd4df069cf926ccbb5f721d657fb3c3758b98430180"
       },
       "control": [
         {
@@ -1029,7 +1036,7 @@
         "symbol": "PianoRollComponent::setCurrentTool",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "e33e3b4f41aae1a5c82edf8d10f0aa7491fe52d0216a9067ba7ccf685e301ce3"
+        "sha256": "ac01710bdd40401d844ac1736f762ce4ac83a84f77d4508069972ad83f5b4b08"
       },
       "control": [
         {
@@ -1212,10 +1219,10 @@
       "group": "ui",
       "upstream": {
         "file": "Source/Standalone/PluginEditor.cpp",
-        "symbol": "!appPreferences_.getState().shared.onboardingShown",
-        "kind": "statement",
-        "normalization": "stmt-v1",
-        "sha256": "aa372e4e3b474aec2bd953e43763d5913c600367ca33a3c994b0b83bab486d57"
+        "symbol": "OpenTuneAudioProcessorEditor::maybeStartOnboarding",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "193eb010fef4beb9ab4e8ed949af23d5b1a43206840517d327d838b98787be1a"
       },
       "control": [
         {
@@ -1229,8 +1236,32 @@
         "ControlProcessorTests.UiDismiss",
         "ControlProcessorTests.UiOnboardingWithheld"
       ],
-      "note": "The editor's timer starts the overlay only while onboardingShown is false (and no modal window, project operation, import or export is running); ui.dismiss prevents the overlay by setting that preference.",
-      "noteZh": "编辑器的定时器只在 onboardingShown 为假时启动引导层（且没有模态窗口、工程操作、导入或导出）；ui.dismiss 通过设置这个首选项阻止引导层出现。"
+      "note": "The editor starts the overlay only while onboardingShown is false (and no modal window, project operation, import or export is running); ui.dismiss prevents the overlay by setting that preference.",
+      "noteZh": "编辑器只在 onboardingShown 为假时启动引导层（且没有模态窗口、工程操作、导入或导出）；ui.dismiss 通过设置这个首选项阻止引导层出现。"
+    },
+    {
+      "id": "ui-demo-tour-start",
+      "group": "ui",
+      "upstream": {
+        "file": "Source/Standalone/PluginEditor.cpp",
+        "symbol": "OpenTuneAudioProcessorEditor::startDemoTourIfFirstRun",
+        "kind": "function",
+        "normalization": "fn-v1",
+        "sha256": "8c8debc7d0ffb0b070e19ccd344467dde97113e1e0d07d784503f52716c96a70"
+      },
+      "control": [
+        {
+          "file": "Source/Standalone/ControlEditorBridge.cpp",
+          "symbols": [
+            "ControlEditorBridge::ControlEditorBridge"
+          ]
+        }
+      ],
+      "tests": [
+        "ControlProcessorTests.UiDismiss"
+      ],
+      "note": "The first-run demo project opens only while demoTourSettled_ is false; the bridge sets it for a run with the API enabled. This needs a real window, so the headless tests do not reach it.",
+      "noteZh": "首次运行的演示工程只在 demoTourSettled_ 为假时打开；开启接口的这次运行由 bridge 把它置真。这要真实窗口才能看到，无界面测试覆盖不到。"
     },
     {
       "id": "ui-scale",
@@ -1335,7 +1366,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::viewToggled",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "0d1a0ccd12186da1ad5fefa16a1e44ea9782bc70fb00b108233bc538a5ac6fe5"
+        "sha256": "7da052dbc9d4b7764f30107ae1b12faf9cb62f1d4179eed53167794e3912df68"
       },
       "control": [
         {
@@ -1476,7 +1507,7 @@
         "symbol": "OpenTuneAudioProcessorEditor::placementDoubleClicked",
         "kind": "function",
         "normalization": "fn-v1",
-        "sha256": "f2a155a6ad6b179a18d781c63ac5570d6bba691683ac5c7d5b11411f628b785c"
+        "sha256": "3db774edf26157a40272a62366fcc88e4186d8c3c2be3a7387a2f472a8b13c08"
       },
       "control": [
         {

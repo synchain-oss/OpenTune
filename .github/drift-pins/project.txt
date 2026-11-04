@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 #
 # group: project
-# pinned-at: upstream/20261030-2c01847
+# pinned-at: upstream/20261103-4f2f7cf
 # ported-to: Source/Control/Ops/AppReadOps.cpp
 # ported-to: Source/Control/Ops/ProjectOps.cpp
+# ported-to: Source/Standalone/ControlEditorBridgeProject.cpp
 #
 # Generated from Source/Control/mirror-map.json by .github/scripts/drift-pins.mjs --write. Do not edit by hand.
 Source/Utils/ProjectSession.cpp	ProjectSession::getRecentProjects	L826-L835	fn-v1	50a8852a690ecf6acf066f41a464ea6fb0aa067e9cb687b5fb88c9f220d6f7e9
-Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::saveProject	L964-L1019	fn-v1	7b1b24d878527c27f1485e3038a618431c99f3c9f334eeede3d706b334d51dfc
-Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::startOpenProject	L1030-L1073	fn-v1	46265de57414ec5f139cabea8959c17d7cf3bdbb942610da0d735c02a83ff7d8
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::saveProject	L1113-L1168	fn-v1	7b1b24d878527c27f1485e3038a618431c99f3c9f334eeede3d706b334d51dfc
+Source/Standalone/PluginEditor.cpp	OpenTuneAudioProcessorEditor::startOpenProject	L1376-L1425	fn-v1	0adf4d9f0623d5f15f0d40c81874f6a28fb9a816d8a3b4f9b6459b57c90c5e8c

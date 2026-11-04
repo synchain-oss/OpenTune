@@ -461,6 +461,14 @@ bool isTerminal(const JsonValue& job)
     return state == "succeeded" || state == "failed" || state == "cancelled";
 }
 
+/** True when the job runs and waits for its contents. A job's first step comes from a timer, and how late that timer
+    fires on a loaded machine has no short bound, so tests pump until this holds instead of assuming a time. */
+bool isWaiting(const JsonValue& job)
+{
+    return memberOf(job, "state").text() == "running"
+           && memberOf(memberOf(job, "progress"), "phase").text() == "waiting";
+}
+
 /** True when the job failed with that error kind and reason, with executed false (the target untouched). */
 bool failedWith(const JsonValue& job, const std::string& kind, const std::string& reason)
 {
@@ -1125,10 +1133,7 @@ void scenarioExportDeferredRetry()
     {
         const ScopedWaitLimit limit(kShortWaitLimitMs * 3);
         const auto jobId = startExport(api, clipParams(placement, target, overwrite));
-        pumpMessagesFor(kQuietPumpMs / 2);
-        const auto waiting = jobOf(service, jobId);
-        CONTROL_CHECK(memberOf(waiting, "state").text() == "running"
-                      && memberOf(memberOf(waiting, "progress"), "phase").text() == "waiting");
+        CONTROL_CHECK(pumpMessagesUntil([&] { return isWaiting(jobOf(service, jobId)); }, kDriveTimeoutMs));
         const auto job = waitJob(api, jobId);
         CONTROL_CHECK(failedWith(job, "NOT_READY", "export_wait_timeout"));
         CONTROL_CHECK(memberOf(memberOf(memberOf(job, "error"), "data"), "retryable").asBoolean());
@@ -1142,10 +1147,9 @@ void scenarioExportDeferredRetry()
     {
         const ScopedWaitLimit limit(kDriveTimeoutMs);
         const auto jobId = startExport(api, clipParams(placement, target, overwrite));
+        CONTROL_CHECK(pumpMessagesUntil([&] { return isWaiting(jobOf(service, jobId)); }, kDriveTimeoutMs));
         pumpMessagesFor(kQuietPumpMs);
-        const auto waiting = jobOf(service, jobId);
-        CONTROL_CHECK(memberOf(waiting, "state").text() == "running"
-                      && memberOf(memberOf(waiting, "progress"), "phase").text() == "waiting");
+        CONTROL_CHECK(isWaiting(jobOf(service, jobId)));
         CONTROL_CHECK(bytesOf(target) == original);
         retry.release();
         CONTROL_CHECK(!retry.active());
@@ -1594,10 +1598,9 @@ void scenarioExportTimeStretch()
     CONTROL_CHECK(!stretchOutputCurrent(*processor, queued.key));
     const auto queuedPath = (out / "queued.wav").u8string();
     const auto queuedJob = startExport(api, clipParams(handles.placement(queued.placementId), queuedPath));
+    CONTROL_CHECK(pumpMessagesUntil([&] { return isWaiting(jobOf(service, queuedJob)); }, kDriveTimeoutMs));
     pumpMessagesFor(kQuietPumpMs);
-    const auto waiting = jobOf(service, queuedJob);
-    CONTROL_CHECK(memberOf(waiting, "state").text() == "running"
-                  && memberOf(memberOf(waiting, "progress"), "phase").text() == "waiting");
+    CONTROL_CHECK(isWaiting(jobOf(service, queuedJob)));
     CONTROL_CHECK(filesIn(out).empty());
     renderService->resumeRenderWorker();
     const auto written = waitJob(api, queuedJob);

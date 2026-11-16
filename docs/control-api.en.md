@@ -11,7 +11,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 ## What this is
 
-`synchain-oss/OpenTune` is an **unofficial** fork of OpenTune, maintained by Synchain. It exists for one purpose: to develop a **local control API** for OpenTune Standalone. The API listens on `127.0.0.1` only. It lets local tools perform operations that already exist in the OpenTune UI and get structured results back. One such tool is [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server). Supported operations include reading notes and pitch curves, import, AUTO tuning, note edits, undo/redo, and export. The API has been contributed upstream as a pull request and merged (see the status above).
+`synchain-oss/OpenTune` is an **unofficial** fork of OpenTune that was maintained by Synchain. It existed for one purpose: to develop a **local control API** for OpenTune Standalone. The API listens on `127.0.0.1` only. It lets local tools perform operations that already exist in the OpenTune UI and get structured results back. One such tool is [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server). Supported operations include reading notes and pitch curves, import, AUTO tuning, note edits, undo/redo, and export. The API has been contributed upstream as a pull request and merged (see the status above).
 
 - OpenTune is a project of DAYA STUDIO (author: 风语), licensed under AGPL-3.0.
 - **The official repository is [YuFeng926/OpenTune](https://github.com/YuFeng926/OpenTune). Its [Releases page](https://github.com/YuFeng926/OpenTune/releases) is the only official distribution channel.** No build from this fork is an official release.

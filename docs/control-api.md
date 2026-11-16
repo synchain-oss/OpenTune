@@ -11,7 +11,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 ## 这是什么
 
-`synchain-oss/OpenTune` 是 Synchain 维护的 OpenTune **非官方** fork。它只有一个目的：为 OpenTune Standalone 开发一个**本机控制接口**（只监听 `127.0.0.1`），让本机工具能执行界面里已有的操作，并得到结构化的结果。这类本机工具包括 [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server)。支持的操作包括读取音符与音高曲线、导入、AUTO 修音、编辑音符、撤销/重做、导出等。这个接口已经以 PR 的形式贡献回上游并被合入（见上方状态）。
+`synchain-oss/OpenTune` 是 OpenTune 的**非官方** fork，曾由 Synchain 维护。它的目的只有一个：为 OpenTune Standalone 开发一个**本机控制接口**（只监听 `127.0.0.1`），让本机工具能执行界面里已有的操作，并得到结构化的结果。这类本机工具包括 [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server)。支持的操作包括读取音符与音高曲线、导入、AUTO 修音、编辑音符、撤销/重做、导出等。这个接口已经以 PR 的形式贡献回上游并被合入（见上方状态）。
 
 - OpenTune 是 DAYA STUDIO 的项目（作者 风语），采用 AGPL-3.0 许可。
 - **官方仓库是 [YuFeng926/OpenTune](https://github.com/YuFeng926/OpenTune)，它的 [Releases 页面](https://github.com/YuFeng926/OpenTune/releases) 是唯一的官方发布渠道。** 本 fork 的任何构建都不是官方版本。

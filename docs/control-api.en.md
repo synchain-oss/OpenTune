@@ -7,30 +7,32 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 [中文](control-api.md) | English
 
-> **Status: pre-release.** Unofficial test builds and the MCP server are published. The API and protocol may still change before they are contributed upstream.
+> **Status: no longer maintained.** The control API was merged upstream on 2026-11-16 ([YuFeng926/OpenTune#52](https://github.com/YuFeng926/OpenTune/pull/52)) and is maintained there from now on. The author changed it after the merge, and this fork does not follow those changes: it no longer syncs with upstream and will publish no new test builds. This document describes the version from before the merge. The existing unofficial test builds stay available until an official OpenTune release includes the control API.
 
 ## What this is
 
-`synchain-oss/OpenTune` is an **unofficial** fork of OpenTune, maintained by Synchain. It exists for one purpose: to develop a **local control API** for OpenTune Standalone. The API listens on `127.0.0.1` only. It lets local tools perform operations that already exist in the OpenTune UI and get structured results back. One such tool is [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server). Planned operations include reading notes and pitch curves, import, AUTO tuning, note edits, undo/redo, and export. Once it works, we plan to contribute it to upstream as a pull request.
+`synchain-oss/OpenTune` is an **unofficial** fork of OpenTune, maintained by Synchain. It exists for one purpose: to develop a **local control API** for OpenTune Standalone. The API listens on `127.0.0.1` only. It lets local tools perform operations that already exist in the OpenTune UI and get structured results back. One such tool is [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server). Supported operations include reading notes and pitch curves, import, AUTO tuning, note edits, undo/redo, and export. The API has been contributed upstream as a pull request and merged (see the status above).
 
 - OpenTune is a project of DAYA STUDIO (author: 风语), licensed under AGPL-3.0.
 - **The official repository is [YuFeng926/OpenTune](https://github.com/YuFeng926/OpenTune). Its [Releases page](https://github.com/YuFeng926/OpenTune/releases) is the only official distribution channel.** No build from this fork is an official release.
 - This fork does not change OpenTune's own logic. It only adds the API code and a small number of integration hooks. When the API is not enabled, OpenTune behaves the same as upstream.
-- Problems with this fork, the control API or test builds: please report them at [synchain-oss/opentune-mcp-server](https://github.com/synchain-oss/opentune-mcp-server/issues). Problems that also reproduce in official OpenTune releases belong to OpenTune itself (see [Feedback and security](#feedback-and-security)).
+- Problems with the test builds from this fork: please report them at [synchain-oss/opentune-mcp-server](https://github.com/synchain-oss/opentune-mcp-server/issues). Problems with upstream OpenTune (including the control API in upstream's code), and problems that also reproduce in official OpenTune releases, belong to OpenTune itself (see [Feedback and security](#feedback-and-security)).
 
 ## Current status
 
 | Item | Status |
 |---|---|
-| Control API | Available in the unofficial test builds |
-| Official OpenTune releases | Do not include this API; a patched build from this fork is required |
+| Control API | Merged into upstream's `standalone` branch, off by default at build time (CMake option `OPENTUNE_ENABLE_CONTROL_API`); available in this fork's unofficial test builds |
+| Official OpenTune releases | No release so far (up to 1.8.2) includes this API |
 | Windows x64 | Unofficial test build |
 | macOS | An unofficial test build for Apple silicon (arm64) only, not yet tested on a real Mac; Intel Macs are not supported. The package is ad hoc signed and not notarized by Apple, so the first launch has to be allowed by hand; it requires an installed official OpenTune 1.8.0 or newer (in /Applications). A build from source also works |
 | Linux | Not supported (OpenTune itself has no Linux build) |
-| Unofficial test builds | Published as pre-releases on the [Releases page](https://github.com/synchain-oss/OpenTune/releases) |
+| Unofficial test builds | The existing ones stay as pre-releases on the [Releases page](https://github.com/synchain-oss/OpenTune/releases); no new ones will be published |
 | MCP server (npm `@synchain/opentune-mcp`) | [Published](https://www.npmjs.com/package/@synchain/opentune-mcp) |
 
 ## Pinned upstream base
+
+This section describes how the fork worked during development. Since the API was merged upstream, this fork no longer syncs with upstream, and the branches below stay as they were before the merge.
 
 During development, this fork is pinned to a single upstream commit and does not follow upstream:
 
@@ -39,7 +41,7 @@ During development, this fork is pinned to a single upstream commit and does not
   - `upstream-mirror`: an unmodified copy of that commit.
   - `dev` (default branch): the upstream base plus our additions.
   - `feature/control-api`: the development mainline.
-- Before contributing upstream, we will rebase all of our changes onto the latest upstream once, then rerun every check.
+- To contribute the API, we rebased all of our changes onto the latest upstream of the time, reran every check and opened the pull request; the version we submitted is on branch `upstream-pr/1`. `dev` was not rebased.
 - The upstream commit behind each test build is recorded in the COMPATIBILITY document of the MCP repository.
 
 ## Building from source
@@ -66,7 +68,7 @@ The release notes of each test build list the exact commands used to build it. I
 
 The control API is **off by default**. It is enabled only when both of these are true:
 
-1. The build was configured with the CMake option `OPENTUNE_ENABLE_CONTROL_API`. Upstream's default build and the official releases contain no API code.
+1. The build was configured with the CMake option `OPENTUNE_ENABLE_CONTROL_API`. The option is off by default, and no official release so far contains the API code.
 2. It is explicitly enabled at launch, in one of two ways:
    - set the environment variable `OPENTUNE_CONTROL_API=1`, or
    - pass the command-line flag `--control-api`, for example `OpenTune.exe --control-api`.
@@ -114,11 +116,11 @@ Notes:
 ## Relationship to OpenTune MCP Server
 
 - [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server) is a stdio MCP server under the MIT license. It connects to this API so that MCP clients such as Claude Code, Claude Desktop and Cursor can operate OpenTune. Its npm package is `@synchain/opentune-mcp` (command `opentune-mcp`).
-- The authoritative OTCP v1 protocol specification lives in the MCP repository under `spec/otcp/v1/` (MIT). This fork keeps a byte-identical copy in `Tests/Control/spec/otcp/v1/`.
+- The authoritative OTCP v1 protocol specification lives in the MCP repository under `spec/otcp/v1/` (MIT). This fork keeps a byte-identical copy in `Tests/Control/spec/otcp/v1/`. Upstream did not keep this copy when it merged the API, so the specification is maintained only in the MCP repository.
 
 ## Unofficial test builds
 
-Until upstream merges the API, **unofficial test builds** are published as pre-releases on this fork's [Releases page](https://github.com/synchain-oss/OpenTune/releases):
+Until an official OpenTune release includes the control API, the existing **unofficial test builds** stay available as pre-releases on this fork's [Releases page](https://github.com/synchain-oss/OpenTune/releases). This fork is no longer maintained and will publish no new test builds:
 
 - There is a Windows x64 zip and a macOS Apple silicon (arm64) zip, tagged like `synchain-test/v<version>-ctl.<n>`. The macOS package holds `OpenTune-ctl.app`, `OpenTune-AI.command` (starts the app with the control API turned on) and `opentune-control.json` (OpenTune MCP Server requires it next to the program it starts, so it sits at the top level of the package next to the `.command`); the package is ad hoc signed, not notarized by Apple, and does not support Intel Macs. It has not yet been tested on a real Mac.
 - They contain **no model weights**. They require an installed official OpenTune, which provides the models.

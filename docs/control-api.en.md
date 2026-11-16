@@ -143,7 +143,7 @@ The effects scenario in the smoke run (which checks that what the API says it ch
 
 ## Feedback and security
 
-- Problems and suggestions for this fork, the control API or test builds: [synchain-oss/opentune-mcp-server issues](https://github.com/synchain-oss/opentune-mcp-server/issues).
+- Problems and suggestions for the test builds from this fork: [synchain-oss/opentune-mcp-server issues](https://github.com/synchain-oss/opentune-mcp-server/issues). For the control API in upstream's code (including the changes made after the merge), please use upstream's channels.
 - Security issues: please use Private Vulnerability Reporting on this repository or on [synchain-oss/opentune-mcp-server](https://github.com/synchain-oss/opentune-mcp-server/security); both reach the same maintainers. Fallback: contact@synchain.ca. Please do not disclose them publicly. See also [SECURITY.md](../.github/SECURITY.md).
 - Problems that also reproduce in the official OpenTune releases belong to OpenTune itself. Please report those through upstream's channels.
 

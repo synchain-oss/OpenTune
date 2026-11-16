@@ -143,7 +143,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 ## 反馈与安全
 
-- 本 fork、控制接口与测试版的问题与建议：[synchain-oss/opentune-mcp-server issues](https://github.com/synchain-oss/opentune-mcp-server/issues)。
+- 本 fork 测试版的问题与建议：[synchain-oss/opentune-mcp-server issues](https://github.com/synchain-oss/opentune-mcp-server/issues)。上游代码里的控制接口（包括合入后的修改），请按上游的方式反馈。
 - 安全问题：请通过本仓库或 [synchain-oss/opentune-mcp-server](https://github.com/synchain-oss/opentune-mcp-server/security) 的私密漏洞报告（Private Vulnerability Reporting）提交，两处都由同一批维护者处理；备用联系方式为 contact@synchain.ca。请勿公开披露。另见 [SECURITY.md](../.github/SECURITY.md)。
 - 在官方 OpenTune 发布版中也能复现的问题，属于 OpenTune 本身的问题，请按上游的方式反馈。
 

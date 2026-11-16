@@ -5,6 +5,8 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 # CLAUDE.md —— synchain-oss/OpenTune（fork）协作规范
 
+> **状态（2026-11-16）**：控制接口已合入上游（YuFeng926/OpenTune#52），本 fork 停止开发：不再同步上游、不再发布测试版、不再开新的实现卡。下文是开发期间的规则，仍适用于对本 fork 的任何改动（目前只剩说明文字）。
+>
 > 本文件是 AI 编码代理与贡献者在本 fork 内的常驻法条。它只存在于 fork（`dev` 及其派生分支），**永不进入上游 PR**。上游 `.gitignore` 忽略 `CLAUDE.md`，本文件以 `git add -f -- CLAUDE.md` 入库。与维护者书面指令冲突时以维护者为准。
 >
 > fork 专用脚本一律放在 `.github/scripts/`（上游已经跟踪 `scripts/`）。本地 gates、`check-ignored-delta.ps1`、署名规则副本、fork-gate、branch-gate、`build-windows.yml`、`asan.yml`、`build-macos.yml`、`control-sanitizers.yml`、`sync-dryrun.yml`（试 rebase 脚本 `try-rebase.mjs`）与 `runner-probe.yml` 已经就位；文中其余脚本与检查随后续 PR 陆续加入，路径以合入后为准，加入之前以本机护栏与人工检查代替。

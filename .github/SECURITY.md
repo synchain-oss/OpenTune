@@ -7,7 +7,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 **English** | [简体中文](#简体中文)
 
-This fork develops a local control API for OpenTune Standalone (see [docs/control-api.en.md](../docs/control-api.en.md)). Unofficial test builds are published as pre-releases on the [Releases page](https://github.com/synchain-oss/OpenTune/releases).
+This fork was used to develop a local control API for OpenTune Standalone (see [docs/control-api.en.md](../docs/control-api.en.md)). The API has been merged upstream ([YuFeng926/OpenTune#52](https://github.com/YuFeng926/OpenTune/pull/52), 2026-11-16), and this fork is no longer maintained. Its existing unofficial test builds stay on the [Releases page](https://github.com/synchain-oss/OpenTune/releases).
 
 ## Reporting a vulnerability
 
@@ -17,10 +17,12 @@ Response targets, the threat model and the full scope are in the [security polic
 
 ## Scope
 
-- In scope: the control API code and integration hooks that we add in this fork, and our unofficial test builds.
-- Out of scope: OpenTune's own code. Report those issues to [YuFeng926/OpenTune](https://github.com/YuFeng926/OpenTune). If you are unsure which side is affected, report to us and we will route it.
+- In scope: the control API code and integration hooks as they are in this fork, and our unofficial test builds.
+- Out of scope: OpenTune's own code, including the control API as merged and changed upstream. Report those issues to [YuFeng926/OpenTune](https://github.com/YuFeng926/OpenTune). If you are unsure which side is affected, report to us and we will route it.
 
 ## 简体中文
+
+本 fork 曾用于为 OpenTune Standalone 开发本机控制接口（见 [docs/control-api.md](../docs/control-api.md)）。接口已合入上游（[YuFeng926/OpenTune#52](https://github.com/YuFeng926/OpenTune/pull/52)，2026-11-16），本 fork 已停止维护；现有的非官方测试版仍保留在 [Releases 页面](https://github.com/synchain-oss/OpenTune/releases)。
 
 ### 报告漏洞
 
@@ -30,5 +32,5 @@ Response targets, the threat model and the full scope are in the [security polic
 
 ### 范围
 
-- 在范围内：我们在本 fork 中新增的控制接口代码与接入钩子，以及我们的非官方测试版。
-- 不在范围内：OpenTune 自身的代码，请报告给 [YuFeng926/OpenTune](https://github.com/YuFeng926/OpenTune)。不确定属于哪一方时，报给我们，我们来转交。
+- 在范围内：本 fork 中现有的控制接口代码与接入钩子，以及我们的非官方测试版。
+- 不在范围内：OpenTune 自身的代码，包括合入上游并被修改后的控制接口，请报告给 [YuFeng926/OpenTune](https://github.com/YuFeng926/OpenTune)。不确定属于哪一方时，报给我们，我们来转交。

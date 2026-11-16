@@ -7,30 +7,32 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 中文 | [English](control-api.en.md)
 
-> **状态：预发布。** 非官方测试版和 MCP 服务都已发布。在贡献回上游之前，接口与协议仍可能变化。
+> **状态：已停止维护。** 控制接口已于 2026-11-16 合入上游（[YuFeng926/OpenTune#52](https://github.com/YuFeng926/OpenTune/pull/52)），此后由上游维护。作者合入后对它做了修改，本 fork 不再跟进：不再同步上游，也不再发布新的测试版。本文描述的是合入之前的版本。现有的非官方测试版继续保留，直到 OpenTune 官方发布版带上控制接口。
 
 ## 这是什么
 
-`synchain-oss/OpenTune` 是 Synchain 维护的 OpenTune **非官方** fork。它只有一个目的：为 OpenTune Standalone 开发一个**本机控制接口**（只监听 `127.0.0.1`），让本机工具能执行界面里已有的操作，并得到结构化的结果。这类本机工具包括 [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server)。计划支持的操作包括读取音符与音高曲线、导入、AUTO 修音、编辑音符、撤销/重做、导出等。接口跑通后，我们会以 PR 的形式把它贡献回上游。
+`synchain-oss/OpenTune` 是 OpenTune 的**非官方** fork，曾由 Synchain 维护。它的目的只有一个：为 OpenTune Standalone 开发一个**本机控制接口**（只监听 `127.0.0.1`），让本机工具能执行界面里已有的操作，并得到结构化的结果。这类本机工具包括 [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server)。支持的操作包括读取音符与音高曲线、导入、AUTO 修音、编辑音符、撤销/重做、导出等。这个接口已经以 PR 的形式贡献回上游并被合入（见上方状态）。
 
 - OpenTune 是 DAYA STUDIO 的项目（作者 风语），采用 AGPL-3.0 许可。
 - **官方仓库是 [YuFeng926/OpenTune](https://github.com/YuFeng926/OpenTune)，它的 [Releases 页面](https://github.com/YuFeng926/OpenTune/releases) 是唯一的官方发布渠道。** 本 fork 的任何构建都不是官方版本。
 - 本 fork 不修改 OpenTune 自身的逻辑，只新增接口代码和少量接入钩子。接口未开启时，行为与上游相同。
-- 本 fork、控制接口与测试版的问题，请到 [synchain-oss/opentune-mcp-server](https://github.com/synchain-oss/opentune-mcp-server/issues) 反馈。在官方 OpenTune 发布版中也能复现的问题属于 OpenTune 本身（见[反馈与安全](#反馈与安全)）。
+- 本 fork 测试版的问题，请到 [synchain-oss/opentune-mcp-server](https://github.com/synchain-oss/opentune-mcp-server/issues) 反馈。上游 OpenTune 的问题（包括上游代码里的控制接口），以及在官方 OpenTune 发布版中也能复现的问题，属于 OpenTune 本身（见[反馈与安全](#反馈与安全)）。
 
 ## 当前状态
 
 | 项 | 状态 |
 |---|---|
-| 控制接口 | 非官方测试版里可用 |
-| 官方 OpenTune 发布版 | 不含此接口，需要本 fork 的补丁版构建 |
+| 控制接口 | 已合入上游 `standalone` 分支，构建时默认关闭（CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`）；本 fork 的非官方测试版里可用 |
+| 官方 OpenTune 发布版 | 目前的发布版（截至 1.8.2）都不含此接口 |
 | Windows x64 | 有非官方测试版 |
 | macOS | 仅 Apple 芯片（arm64）的非官方测试版，还没在真机上测过；不支持 Intel Mac。测试包使用临时签名（ad hoc），没有经过 Apple 公证，第一次启动需要手动放行；需要已安装官方 OpenTune 1.8.0 或更新版本（位于 /Applications）。也可自行从源码构建 |
 | Linux | 不支持（OpenTune 本身没有 Linux 版本） |
-| 非官方测试版 | 以预发布形式放在 [Releases 页面](https://github.com/synchain-oss/OpenTune/releases) |
+| 非官方测试版 | 现有的几个以预发布形式保留在 [Releases 页面](https://github.com/synchain-oss/OpenTune/releases)，不再发布新的 |
 | MCP 服务（npm `@synchain/opentune-mcp`） | [已发布](https://www.npmjs.com/package/@synchain/opentune-mcp) |
 
 ## 锁定的上游基点
+
+本节描述开发期间的做法。接口合入上游之后，本 fork 不再同步上游，下面的分支保持合入前的状态。
 
 开发期间，本 fork 固定在一个上游提交上，不随上游同步：
 
@@ -39,7 +41,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
   - `upstream-mirror`：该提交的原样副本；
   - `dev`（默认分支）：上游基点 + 我们的新增；
   - `feature/control-api`：开发主线。
-- 贡献回上游之前，我们会把全部改动一次性 rebase 到上游最新版本，并重新跑完全部检查。
+- 贡献回上游时，我们把全部改动 rebase 到了当时的上游最新版本，重新跑完全部检查后提交了 PR；提交的版本在分支 `upstream-pr/1`。`dev` 没有再 rebase。
 - 每个测试版对应的上游提交，都记录在 MCP 仓库的 COMPATIBILITY 文档中。
 
 ## 从源码构建
@@ -66,7 +68,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 控制接口**默认关闭**。只有同时满足以下两个条件才会开启：
 
-1. 构建时打开了 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`。上游的默认构建与官方发布版都不含接口代码。
+1. 构建时打开了 CMake 选项 `OPENTUNE_ENABLE_CONTROL_API`。这个选项默认关闭；目前的官方发布版都不含接口代码。
 2. 启动时显式开启，二选一：
    - 设置环境变量 `OPENTUNE_CONTROL_API=1`；
    - 传入命令行参数 `--control-api`，例如 `OpenTune.exe --control-api`。
@@ -114,11 +116,11 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 ## 与 OpenTune MCP Server 的关系
 
 - [OpenTune MCP Server (by Synchain)](https://github.com/synchain-oss/opentune-mcp-server) 是一个 stdio MCP 服务，采用 MIT 许可。它连接本接口，让 Claude Code、Claude Desktop、Cursor 等 MCP 客户端操作 OpenTune。它的 npm 包是 `@synchain/opentune-mcp`（命令 `opentune-mcp`）。
-- 协议 OTCP v1 的规范正本在 MCP 仓库的 `spec/otcp/v1/`（MIT 许可）。本 fork 在 `Tests/Control/spec/otcp/v1/` 保存一份逐字节相同的副本。
+- 协议 OTCP v1 的规范正本在 MCP 仓库的 `spec/otcp/v1/`（MIT 许可）。本 fork 在 `Tests/Control/spec/otcp/v1/` 保存一份逐字节相同的副本。上游合入时没有保留这份副本，规范只在 MCP 仓库继续维护。
 
 ## 非官方测试版
 
-上游合入之前，**非官方测试版**以预发布形式放在本 fork 的 [Releases 页面](https://github.com/synchain-oss/OpenTune/releases)：
+在 OpenTune 官方发布版带上控制接口之前，现有的**非官方测试版**继续以预发布形式保留在本 fork 的 [Releases 页面](https://github.com/synchain-oss/OpenTune/releases)。本 fork 已停止维护，不再发布新的测试版：
 
 - 提供 Windows x64 的 zip 和 macOS Apple 芯片（arm64）的 zip，tag 形如 `synchain-test/v<版本>-ctl.<n>`。macOS 包里有 `OpenTune-ctl.app`、`OpenTune-AI.command`（以开启控制接口的方式启动应用）和 `opentune-control.json`（OpenTune MCP Server 要求它放在被启动的程序旁边，所以它在包的顶层、紧挨着 `.command`）；包使用临时签名，没有经过 Apple 公证，并且不支持 Intel Mac。这个包还没在真机上测过。
 - **不含任何模型权重**。需要本机已安装官方 OpenTune，由它提供模型。
@@ -141,7 +143,7 @@ SPDX-License-Identifier: AGPL-3.0-or-later
 
 ## 反馈与安全
 
-- 本 fork、控制接口与测试版的问题与建议：[synchain-oss/opentune-mcp-server issues](https://github.com/synchain-oss/opentune-mcp-server/issues)。
+- 本 fork 测试版的问题与建议：[synchain-oss/opentune-mcp-server issues](https://github.com/synchain-oss/opentune-mcp-server/issues)。上游代码里的控制接口（包括合入后的修改），请按上游的方式反馈。
 - 安全问题：请通过本仓库或 [synchain-oss/opentune-mcp-server](https://github.com/synchain-oss/opentune-mcp-server/security) 的私密漏洞报告（Private Vulnerability Reporting）提交，两处都由同一批维护者处理；备用联系方式为 contact@synchain.ca。请勿公开披露。另见 [SECURITY.md](../.github/SECURITY.md)。
 - 在官方 OpenTune 发布版中也能复现的问题，属于 OpenTune 本身的问题，请按上游的方式反馈。
 
